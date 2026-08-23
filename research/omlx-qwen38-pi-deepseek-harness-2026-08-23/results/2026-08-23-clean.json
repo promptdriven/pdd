@@ -1,0 +1,1737 @@
+{
+  "analysis": {
+    "dsh_pair_wins": 0,
+    "harnesses": {
+      "dsh": {
+        "aggregate_generation_tokens_per_second": 11.380034229591816,
+        "aggregate_prompt_tokens_per_second": 382.5536049180439,
+        "completed_responses": 76,
+        "failed_requests": 4,
+        "mean_score": 0.68,
+        "mean_time_to_first_token_seconds": 38.86868421052632,
+        "median_output_tokens": 2981.5,
+        "median_wall_seconds": 1055.189674541587,
+        "passes": 4,
+        "runs": 8,
+        "timeouts": 4,
+        "total_input_tokens": 1130071,
+        "total_output_tokens": 30520,
+        "total_requests": 80,
+        "total_wall_seconds": 7356.517695955932
+      },
+      "pi": {
+        "aggregate_generation_tokens_per_second": 12.738362176354473,
+        "aggregate_prompt_tokens_per_second": 387.47093625543863,
+        "completed_responses": 83,
+        "failed_requests": 3,
+        "mean_score": 0.825,
+        "mean_time_to_first_token_seconds": 31.401686746987952,
+        "median_output_tokens": 3012.0,
+        "median_wall_seconds": 906.5454277296085,
+        "passes": 6,
+        "runs": 8,
+        "timeouts": 3,
+        "total_input_tokens": 1009881,
+        "total_output_tokens": 26587,
+        "total_requests": 86,
+        "total_wall_seconds": 6455.4844062086195
+      }
+    },
+    "mean_paired_delta_dsh_minus_pi": -0.145,
+    "pair_ties": 6,
+    "pairs": [
+      {
+        "dsh_passed": true,
+        "dsh_score": 1.0,
+        "output_token_delta_dsh_minus_pi": 2392,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "add-feature",
+        "trial": 1,
+        "wall_delta_seconds_dsh_minus_pi": 277.33584929117933
+      },
+      {
+        "dsh_passed": true,
+        "dsh_score": 1.0,
+        "output_token_delta_dsh_minus_pi": 1449,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "add-feature",
+        "trial": 2,
+        "wall_delta_seconds_dsh_minus_pi": 291.81381179206073
+      },
+      {
+        "dsh_passed": true,
+        "dsh_score": 1.0,
+        "output_token_delta_dsh_minus_pi": 1246,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "make-ci-green",
+        "trial": 1,
+        "wall_delta_seconds_dsh_minus_pi": 144.32167295878753
+      },
+      {
+        "dsh_passed": true,
+        "dsh_score": 1.0,
+        "output_token_delta_dsh_minus_pi": 1494,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "make-ci-green",
+        "trial": 2,
+        "wall_delta_seconds_dsh_minus_pi": 182.52521779062226
+      },
+      {
+        "dsh_passed": false,
+        "dsh_score": 0.28,
+        "output_token_delta_dsh_minus_pi": -2107,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": -0.72,
+        "task": "taskflow",
+        "trial": 1,
+        "wall_delta_seconds_dsh_minus_pi": 5.833271582610905
+      },
+      {
+        "dsh_passed": false,
+        "dsh_score": 0.56,
+        "output_token_delta_dsh_minus_pi": -1555,
+        "pi_passed": true,
+        "pi_score": 1.0,
+        "score_delta_dsh_minus_pi": -0.43999999999999995,
+        "task": "taskflow",
+        "trial": 2,
+        "wall_delta_seconds_dsh_minus_pi": 0.19323508301749825
+      },
+      {
+        "dsh_passed": false,
+        "dsh_score": 0.3,
+        "output_token_delta_dsh_minus_pi": 499,
+        "pi_passed": false,
+        "pi_score": 0.3,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "webcore",
+        "trial": 1,
+        "wall_delta_seconds_dsh_minus_pi": -0.23757629189640284
+      },
+      {
+        "dsh_passed": false,
+        "dsh_score": 0.3,
+        "output_token_delta_dsh_minus_pi": 515,
+        "pi_passed": false,
+        "pi_score": 0.3,
+        "score_delta_dsh_minus_pi": 0.0,
+        "task": "webcore",
+        "trial": 2,
+        "wall_delta_seconds_dsh_minus_pi": -0.7521924590691924
+      }
+    ],
+    "pi_pair_wins": 2,
+    "runs": 16,
+    "tasks": {
+      "add-feature": {
+        "dsh": {
+          "aggregate_generation_tokens_per_second": 12.081233678595101,
+          "aggregate_prompt_tokens_per_second": 453.6301330635154,
+          "completed_responses": 21,
+          "failed_requests": 0,
+          "mean_score": 1.0,
+          "mean_time_to_first_token_seconds": 24.94333333333333,
+          "median_output_tokens": 7564.0,
+          "median_wall_seconds": 892.6112445415929,
+          "passes": 2,
+          "runs": 2,
+          "timeouts": 0,
+          "total_input_tokens": 237616,
+          "total_output_tokens": 15128,
+          "total_requests": 21,
+          "total_wall_seconds": 1785.2224890831858
+        },
+        "pi": {
+          "aggregate_generation_tokens_per_second": 14.421516642177219,
+          "aggregate_prompt_tokens_per_second": 395.43994560757744,
+          "completed_responses": 26,
+          "failed_requests": 0,
+          "mean_score": 1.0,
+          "mean_time_to_first_token_seconds": 16.404999999999998,
+          "median_output_tokens": 5643.5,
+          "median_wall_seconds": 608.0364139999729,
+          "passes": 2,
+          "runs": 2,
+          "timeouts": 0,
+          "total_input_tokens": 168667,
+          "total_output_tokens": 11287,
+          "total_requests": 26,
+          "total_wall_seconds": 1216.0728279999457
+        }
+      },
+      "make-ci-green": {
+        "dsh": {
+          "aggregate_generation_tokens_per_second": 15.358247638157343,
+          "aggregate_prompt_tokens_per_second": 473.12292193935787,
+          "completed_responses": 16,
+          "failed_requests": 0,
+          "mean_score": 1.0,
+          "mean_time_to_first_token_seconds": 25.18875,
+          "median_output_tokens": 2755.5,
+          "median_wall_seconds": 385.115908103995,
+          "passes": 2,
+          "runs": 2,
+          "timeouts": 0,
+          "total_input_tokens": 190678,
+          "total_output_tokens": 5511,
+          "total_requests": 16,
+          "total_wall_seconds": 770.23181620799
+        },
+        "pi": {
+          "aggregate_generation_tokens_per_second": 14.710410362584277,
+          "aggregate_prompt_tokens_per_second": 203.86797730360425,
+          "completed_responses": 12,
+          "failed_requests": 0,
+          "mean_score": 1.0,
+          "mean_time_to_first_token_seconds": 20.855,
+          "median_output_tokens": 1385.5,
+          "median_wall_seconds": 221.69246272929013,
+          "passes": 2,
+          "runs": 2,
+          "timeouts": 0,
+          "total_input_tokens": 51020,
+          "total_output_tokens": 2771,
+          "total_requests": 12,
+          "total_wall_seconds": 443.38492545858026
+        }
+      },
+      "taskflow": {
+        "dsh": {
+          "aggregate_generation_tokens_per_second": 8.17994118751173,
+          "aggregate_prompt_tokens_per_second": 332.25536730798467,
+          "completed_responses": 22,
+          "failed_requests": 2,
+          "mean_score": 0.42000000000000004,
+          "mean_time_to_first_token_seconds": 53.81909090909091,
+          "median_output_tokens": 3268.5,
+          "median_wall_seconds": 1200.3753542914055,
+          "passes": 0,
+          "runs": 2,
+          "timeouts": 2,
+          "total_input_tokens": 393397,
+          "total_output_tokens": 6537,
+          "total_requests": 24,
+          "total_wall_seconds": 2400.750708582811
+        },
+        "pi": {
+          "aggregate_generation_tokens_per_second": 10.846653691946102,
+          "aggregate_prompt_tokens_per_second": 476.4415473391749,
+          "completed_responses": 33,
+          "failed_requests": 1,
+          "mean_score": 1.0,
+          "mean_time_to_first_token_seconds": 42.536363636363646,
+          "median_output_tokens": 5099.5,
+          "median_wall_seconds": 1197.3621009585913,
+          "passes": 2,
+          "runs": 2,
+          "timeouts": 1,
+          "total_input_tokens": 668781,
+          "total_output_tokens": 10199,
+          "total_requests": 34,
+          "total_wall_seconds": 2394.7242019171827
+        }
+      },
+      "webcore": {
+        "dsh": {
+          "aggregate_generation_tokens_per_second": 12.306786397762401,
+          "aggregate_prompt_tokens_per_second": 365.7388189807512,
+          "completed_responses": 17,
+          "failed_requests": 2,
+          "mean_score": 0.3,
+          "mean_time_to_first_token_seconds": 49.59823529411765,
+          "median_output_tokens": 1672.0,
+          "median_wall_seconds": 1200.1563410409726,
+          "passes": 0,
+          "runs": 2,
+          "timeouts": 2,
+          "total_input_tokens": 308380,
+          "total_output_tokens": 3344,
+          "total_requests": 19,
+          "total_wall_seconds": 2400.3126820819452
+        },
+        "pi": {
+          "aggregate_generation_tokens_per_second": 13.249928916690362,
+          "aggregate_prompt_tokens_per_second": 230.88903679756584,
+          "completed_responses": 12,
+          "failed_requests": 2,
+          "mean_score": 0.3,
+          "mean_time_to_first_token_seconds": 43.82083333333333,
+          "median_output_tokens": 1165.0,
+          "median_wall_seconds": 1200.6512254164554,
+          "passes": 0,
+          "runs": 2,
+          "timeouts": 2,
+          "total_input_tokens": 121413,
+          "total_output_tokens": 2330,
+          "total_requests": 14,
+          "total_wall_seconds": 2401.302450832911
+        }
+      }
+    }
+  },
+  "checker_revalidation": {
+    "all_scores_passes_and_exits_match_original": true,
+    "interpreter_policy": "benchmark_orchestrator_sys.executable",
+    "policy": "pinned task hash; minimal allowlisted environment; network-denied Seatbelt; direct benchmark-orchestrator sys.executable invocation; task/workspace/system reads; workspace/temp writes",
+    "python_version": "3.12.12",
+    "results": [
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "01-make-ci-green-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "01-make-ci-green-dsh",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "01-add-feature-dsh",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "01-add-feature-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "01-taskflow-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "01-taskflow-dsh",
+        "score": 0.28
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "01-webcore-dsh",
+        "score": 0.3
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "01-webcore-pi",
+        "score": 0.3
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "02-make-ci-green-dsh",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "02-make-ci-green-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "02-add-feature-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "02-add-feature-dsh",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "02-taskflow-dsh",
+        "score": 0.56
+      },
+      {
+        "checker_exit": 0,
+        "matched_original": true,
+        "passed": true,
+        "run_id": "02-taskflow-pi",
+        "score": 1.0
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "02-webcore-pi",
+        "score": 0.3
+      },
+      {
+        "checker_exit": 1,
+        "matched_original": true,
+        "passed": false,
+        "run_id": "02-webcore-dsh",
+        "score": 0.3
+      }
+    ],
+    "rows": 16,
+    "verified_at": "2026-08-23T16:15:57-0700"
+  },
+  "consistency": {
+    "complete_balanced_matrix": true,
+    "exact_endpoint_and_model_verified": true,
+    "exact_request_settings_verified": true,
+    "passed": true,
+    "serial_request_telemetry_verified": true,
+    "task_hashes_match": true,
+    "unique_run_ids": true
+  },
+  "manifest": {
+    "access_date": "2026-08-23",
+    "dsh": {
+      "commit": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+      "license": "MIT",
+      "tag": "dsh-v0.1.1-rc.2",
+      "version": "0.1.1-rc.2"
+    },
+    "endpoint": "http://127.0.0.1:8000/v1",
+    "memory_guard_during_trials": "aggressive",
+    "memory_guard_required_final_tier": "balanced",
+    "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+    "operational_notes_not_measurements": [
+      "Qwen3.6-35B-A3B-bf16 unloaded before trials; oMLX logged 65.39 GB freed.",
+      "First orchestration preflight failed at the hard memory watermark before any trial.",
+      "Second orchestration preflight failed the balanced prefill guard before any trial.",
+      "Global Memory Guard changed from balanced to aggressive for benchmark traffic."
+    ],
+    "pi_version": "0.73.1",
+    "post_run_verification": {
+      "active_requests": 0,
+      "memory_guard_final_tier": "balanced",
+      "two_consecutive_idle_samples": true,
+      "verified_at": "2026-08-23T15:40:16-0700",
+      "waiting_requests": 0
+    },
+    "runtime": {
+      "model_loaded": true,
+      "model_settings": {
+        "dflash_enabled": false,
+        "enable_thinking": true,
+        "guided_grammar_enabled": false,
+        "max_context_window": 98304,
+        "max_tokens": 32768,
+        "mtp_enabled": true,
+        "mtp_num_draft_tokens": 4,
+        "preserve_thinking": null,
+        "qwen35_ane_prefill_enabled": false,
+        "repetition_penalty": 1.0,
+        "specprefill_enabled": false,
+        "temperature": 0.6,
+        "thinking": "medium",
+        "thinking_budget_enabled": false,
+        "top_k": 20,
+        "top_p": 0.95,
+        "trust_remote_code": false,
+        "turboquant_kv_enabled": false,
+        "vlm_mtp_enabled": false
+      },
+      "omlx_version": "0.6.1"
+    },
+    "schema_version": 2,
+    "smoke_timeout_seconds": 600,
+    "started_at": "2026-08-23T11:34:41-0700",
+    "task_hashes": {
+      "add-feature": "d38f578795043c0f10f139647374d3d2563fbea21161ae978ce3c3297f9dbfba",
+      "make-ci-green": "4a32fed72b90141fe985416c4b7d44d4f7b34c453fde69773e326b3994f9ce21",
+      "taskflow": "6ed568c66534b0f7839438bfd34c0696a2b6f4a07d2f9469c1541c7e0be074bb",
+      "webcore": "a5119ebfed497c749d2d0c93ea41b85dc1fbcd35d22fb0377a836ffa411f4dde"
+    },
+    "task_source": {
+      "commit": "9e26c96a7df012ca9173e9725211c4cc58e11948",
+      "repository": "https://github.com/minghinmatthewlam/openbench"
+    },
+    "tasks": [
+      "make-ci-green",
+      "add-feature",
+      "taskflow",
+      "webcore"
+    ],
+    "timeout_seconds": 1200,
+    "tool_policy": {
+      "dsh": "official headless native tools; web, skills, context files, model-spawning tools, and model title generation disabled",
+      "dsh_retry_max_retries": 0,
+      "outer_sandbox": "macOS Seatbelt; exact tool roots; workspace/home/temp writes; proxy-only network",
+      "pi": "stock built-ins; extensions, skills, prompt templates, context files disabled"
+    },
+    "trials": 2
+  },
+  "results": [
+    {
+      "changes": {
+        "changed_files": 6,
+        "diff_bytes": 2074,
+        "diff_sha256": "2ec1d8d2a5334768fab7f7088df1c12fed5840bbca90695651c1207780b2f070",
+        "status": [
+          " M catalog/books.py",
+          " M catalog/factory.py",
+          " M catalog/fees.py",
+          " M catalog/inventory.py",
+          " M catalog/members.py",
+          " M catalog/search.py"
+        ]
+      },
+      "finished_at": "2026-08-23T11:49:35-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 576692,
+        "timed_out": false,
+        "wall_seconds": 229.7266768333502
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 6,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 12288,
+        "cache_write_tokens": 0,
+        "completed_responses": 6,
+        "failures": 0,
+        "generation_duration_seconds": 109.20999999999998,
+        "input_tokens": 23302,
+        "output_tokens": 1253,
+        "prompt_eval_duration_seconds": 117.57,
+        "requests": 6,
+        "response_bytes": 44666,
+        "time_to_first_token_seconds": 117.57
+      },
+      "run_id": "01-make-ci-green-pi",
+      "schema_version": 2,
+      "task": "make-ci-green",
+      "task_sha256": "4a32fed72b90141fe985416c4b7d44d4f7b34c453fde69773e326b3994f9ce21",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 6,
+        "diff_bytes": 2074,
+        "diff_sha256": "2ec1d8d2a5334768fab7f7088df1c12fed5840bbca90695651c1207780b2f070",
+        "status": [
+          " M catalog/books.py",
+          " M catalog/factory.py",
+          " M catalog/fees.py",
+          " M catalog/inventory.py",
+          " M catalog/members.py",
+          " M catalog/search.py"
+        ]
+      },
+      "finished_at": "2026-08-23T11:55:52-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 942,
+        "timed_out": false,
+        "wall_seconds": 374.04834979213774
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 7,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 57344,
+        "cache_write_tokens": 0,
+        "completed_responses": 7,
+        "failures": 0,
+        "generation_duration_seconds": 192.11,
+        "input_tokens": 73740,
+        "output_tokens": 2499,
+        "prompt_eval_duration_seconds": 177.19,
+        "requests": 7,
+        "response_bytes": 64906,
+        "time_to_first_token_seconds": 177.19
+      },
+      "run_id": "01-make-ci-green-dsh",
+      "schema_version": 2,
+      "task": "make-ci-green",
+      "task_sha256": "4a32fed72b90141fe985416c4b7d44d4f7b34c453fde69773e326b3994f9ce21",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 1,
+        "diff_bytes": 2356,
+        "diff_sha256": "0aa661d805611ffcde133aa042f5b07fc49a27b9b159e72eaff64a20b59668f1",
+        "status": [
+          " M miniconf/loader.py"
+        ]
+      },
+      "finished_at": "2026-08-23T12:10:29-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 1843,
+        "timed_out": false,
+        "wall_seconds": 874.9371989159845
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 11,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 98304,
+        "cache_write_tokens": 0,
+        "completed_responses": 11,
+        "failures": 0,
+        "generation_duration_seconds": 619.6,
+        "input_tokens": 121567,
+        "output_tokens": 7875,
+        "prompt_eval_duration_seconds": 250.33999999999997,
+        "requests": 11,
+        "response_bytes": 294594,
+        "time_to_first_token_seconds": 250.33999999999997
+      },
+      "run_id": "01-add-feature-dsh",
+      "schema_version": 2,
+      "task": "add-feature",
+      "task_sha256": "d38f578795043c0f10f139647374d3d2563fbea21161ae978ce3c3297f9dbfba",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 2,
+        "diff_bytes": 5824,
+        "diff_sha256": "5c9cf7fc407780afa80ed2aea0d4b3c916b853754b92bc2818f28d38b4c9c1e7",
+        "status": [
+          " M miniconf/loader.py",
+          " M tests/test_loader.py"
+        ]
+      },
+      "finished_at": "2026-08-23T12:20:29-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 1935534,
+        "timed_out": false,
+        "wall_seconds": 597.6013496248052
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 12,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 43008,
+        "cache_write_tokens": 0,
+        "completed_responses": 12,
+        "failures": 0,
+        "generation_duration_seconds": 391.24,
+        "input_tokens": 62527,
+        "output_tokens": 5483,
+        "prompt_eval_duration_seconds": 201.77999999999997,
+        "requests": 12,
+        "response_bytes": 137296,
+        "time_to_first_token_seconds": 201.77999999999997
+      },
+      "run_id": "01-add-feature-pi",
+      "schema_version": 2,
+      "task": "add-feature",
+      "task_sha256": "d38f578795043c0f10f139647374d3d2563fbea21161ae978ce3c3297f9dbfba",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 7,
+        "diff_bytes": 3190,
+        "diff_sha256": "7ce8d32f7dc35633818a07ee8c997ba32dcfd78b7d0d43cad64f151d4443feb5",
+        "status": [
+          " M taskflow/config.py",
+          " M taskflow/events.py",
+          " M taskflow/queue.py",
+          " M taskflow/resources.py",
+          " M taskflow/retry.py",
+          " M taskflow/scheduler.py",
+          " M taskflow/statemachine.py"
+        ]
+      },
+      "finished_at": "2026-08-23T12:40:26-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 4983014,
+        "timed_out": false,
+        "wall_seconds": 1194.6193770840764
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 17,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 303104,
+        "cache_write_tokens": 0,
+        "completed_responses": 17,
+        "failures": 0,
+        "generation_duration_seconds": 503.5299999999999,
+        "input_tokens": 361686,
+        "output_tokens": 5693,
+        "prompt_eval_duration_seconds": 682.88,
+        "requests": 17,
+        "response_bytes": 240969,
+        "time_to_first_token_seconds": 682.88
+      },
+      "run_id": "01-taskflow-pi",
+      "schema_version": 2,
+      "task": "taskflow",
+      "task_sha256": "6ed568c66534b0f7839438bfd34c0696a2b6f4a07d2f9469c1541c7e0be074bb",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 0,
+        "diff_bytes": 0,
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": []
+      },
+      "finished_at": "2026-08-23T13:00:29-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.28
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 4,
+        "timed_out": true,
+        "wall_seconds": 1200.4526486666873
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 12,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 159744,
+        "cache_write_tokens": 0,
+        "completed_responses": 11,
+        "failures": 1,
+        "generation_duration_seconds": 431.61,
+        "input_tokens": 210077,
+        "output_tokens": 3586,
+        "prompt_eval_duration_seconds": 582.99,
+        "requests": 12,
+        "response_bytes": 169491,
+        "time_to_first_token_seconds": 582.99
+      },
+      "run_id": "01-taskflow-dsh",
+      "schema_version": 2,
+      "task": "taskflow",
+      "task_sha256": "6ed568c66534b0f7839438bfd34c0696a2b6f4a07d2f9469c1541c7e0be074bb",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 0,
+        "diff_bytes": 0,
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": []
+      },
+      "finished_at": "2026-08-23T13:20:33-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.3
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 4,
+        "timed_out": true,
+        "wall_seconds": 1200.2186231659725
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 10,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 124928,
+        "cache_write_tokens": 0,
+        "completed_responses": 9,
+        "failures": 1,
+        "generation_duration_seconds": 151.44,
+        "input_tokens": 159400,
+        "output_tokens": 1619,
+        "prompt_eval_duration_seconds": 387.39,
+        "requests": 10,
+        "response_bytes": 56246,
+        "time_to_first_token_seconds": 387.39
+      },
+      "run_id": "01-webcore-dsh",
+      "schema_version": 2,
+      "task": "webcore",
+      "task_sha256": "a5119ebfed497c749d2d0c93ea41b85dc1fbcd35d22fb0377a836ffa411f4dde",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 0,
+        "diff_bytes": 0,
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": []
+      },
+      "finished_at": "2026-08-23T13:40:36-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.3
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 143,
+        "stderr_bytes": 0,
+        "stdout_bytes": 112360007,
+        "timed_out": true,
+        "wall_seconds": 1200.456199457869
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 6,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 28672,
+        "cache_write_tokens": 0,
+        "completed_responses": 5,
+        "failures": 1,
+        "generation_duration_seconds": 63.900000000000006,
+        "input_tokens": 49414,
+        "output_tokens": 1120,
+        "prompt_eval_duration_seconds": 228.19000000000003,
+        "requests": 6,
+        "response_bytes": 26125,
+        "time_to_first_token_seconds": 228.19000000000003
+      },
+      "run_id": "01-webcore-pi",
+      "schema_version": 2,
+      "task": "webcore",
+      "task_sha256": "a5119ebfed497c749d2d0c93ea41b85dc1fbcd35d22fb0377a836ffa411f4dde",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 1
+    },
+    {
+      "changes": {
+        "changed_files": 6,
+        "diff_bytes": 2074,
+        "diff_sha256": "2ec1d8d2a5334768fab7f7088df1c12fed5840bbca90695651c1207780b2f070",
+        "status": [
+          " M catalog/books.py",
+          " M catalog/factory.py",
+          " M catalog/fees.py",
+          " M catalog/inventory.py",
+          " M catalog/members.py",
+          " M catalog/search.py"
+        ]
+      },
+      "finished_at": "2026-08-23T13:47:15-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 1004,
+        "timed_out": false,
+        "wall_seconds": 396.1834664158523
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 9,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 94208,
+        "cache_write_tokens": 0,
+        "completed_responses": 9,
+        "failures": 0,
+        "generation_duration_seconds": 166.72000000000003,
+        "input_tokens": 116938,
+        "output_tokens": 3012,
+        "prompt_eval_duration_seconds": 225.82999999999998,
+        "requests": 9,
+        "response_bytes": 73011,
+        "time_to_first_token_seconds": 225.82999999999998
+      },
+      "run_id": "02-make-ci-green-dsh",
+      "schema_version": 2,
+      "task": "make-ci-green",
+      "task_sha256": "4a32fed72b90141fe985416c4b7d44d4f7b34c453fde69773e326b3994f9ce21",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 6,
+        "diff_bytes": 2074,
+        "diff_sha256": "2ec1d8d2a5334768fab7f7088df1c12fed5840bbca90695651c1207780b2f070",
+        "status": [
+          " M catalog/books.py",
+          " M catalog/factory.py",
+          " M catalog/fees.py",
+          " M catalog/inventory.py",
+          " M catalog/members.py",
+          " M catalog/search.py"
+        ]
+      },
+      "finished_at": "2026-08-23T13:50:51-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 847215,
+        "timed_out": false,
+        "wall_seconds": 213.65824862523004
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 6,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 12288,
+        "cache_write_tokens": 0,
+        "completed_responses": 6,
+        "failures": 0,
+        "generation_duration_seconds": 79.16,
+        "input_tokens": 27718,
+        "output_tokens": 1518,
+        "prompt_eval_duration_seconds": 132.69000000000003,
+        "requests": 6,
+        "response_bytes": 59545,
+        "time_to_first_token_seconds": 132.69000000000003
+      },
+      "run_id": "02-make-ci-green-pi",
+      "schema_version": 2,
+      "task": "make-ci-green",
+      "task_sha256": "4a32fed72b90141fe985416c4b7d44d4f7b34c453fde69773e326b3994f9ce21",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 2,
+        "diff_bytes": 6386,
+        "diff_sha256": "8f8d4fb040b4fe28d1db6d63455ebcc2f78bc7d508d55a7b2b2f7d4ca729b51a",
+        "status": [
+          " M miniconf/loader.py",
+          " M tests/test_loader.py"
+        ]
+      },
+      "finished_at": "2026-08-23T14:01:11-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 1544490,
+        "timed_out": false,
+        "wall_seconds": 618.4714783751406
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 14,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 81920,
+        "cache_write_tokens": 0,
+        "completed_responses": 14,
+        "failures": 0,
+        "generation_duration_seconds": 391.40999999999997,
+        "input_tokens": 106140,
+        "output_tokens": 5804,
+        "prompt_eval_duration_seconds": 224.75000000000003,
+        "requests": 14,
+        "response_bytes": 123336,
+        "time_to_first_token_seconds": 224.75000000000003
+      },
+      "run_id": "02-add-feature-pi",
+      "schema_version": 2,
+      "task": "add-feature",
+      "task_sha256": "d38f578795043c0f10f139647374d3d2563fbea21161ae978ce3c3297f9dbfba",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 2,
+        "diff_bytes": 7281,
+        "diff_sha256": "a89e33f1c7121246f7dc099f2b7337c1e821e52da4709ccf68a9626b61a39678",
+        "status": [
+          " M miniconf/loader.py",
+          " M tests/test_loader.py"
+        ]
+      },
+      "finished_at": "2026-08-23T14:16:24-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 1917,
+        "timed_out": false,
+        "wall_seconds": 910.2852901672013
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 10,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 90112,
+        "cache_write_tokens": 0,
+        "completed_responses": 10,
+        "failures": 0,
+        "generation_duration_seconds": 632.59,
+        "input_tokens": 116049,
+        "output_tokens": 7253,
+        "prompt_eval_duration_seconds": 273.47,
+        "requests": 10,
+        "response_bytes": 280054,
+        "time_to_first_token_seconds": 273.47
+      },
+      "run_id": "02-add-feature-dsh",
+      "schema_version": 2,
+      "task": "add-feature",
+      "task_sha256": "d38f578795043c0f10f139647374d3d2563fbea21161ae978ce3c3297f9dbfba",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 3,
+        "diff_bytes": 1415,
+        "diff_sha256": "5305f8c02b0ec109a7da5f92f21c72fe4df261840593c8bf9759e5d749f8f012",
+        "status": [
+          " M taskflow/config.py",
+          " M taskflow/queue.py",
+          " M taskflow/retry.py"
+        ]
+      },
+      "finished_at": "2026-08-23T14:36:35-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.56
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 273,
+        "timed_out": true,
+        "wall_seconds": 1200.2980599161237
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 12,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 135168,
+        "cache_write_tokens": 0,
+        "completed_responses": 11,
+        "failures": 1,
+        "generation_duration_seconds": 367.54,
+        "input_tokens": 183320,
+        "output_tokens": 2951,
+        "prompt_eval_duration_seconds": 601.03,
+        "requests": 12,
+        "response_bytes": 103975,
+        "time_to_first_token_seconds": 601.03
+      },
+      "run_id": "02-taskflow-dsh",
+      "schema_version": 2,
+      "task": "taskflow",
+      "task_sha256": "6ed568c66534b0f7839438bfd34c0696a2b6f4a07d2f9469c1541c7e0be074bb",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 7,
+        "diff_bytes": 3190,
+        "diff_sha256": "7ce8d32f7dc35633818a07ee8c997ba32dcfd78b7d0d43cad64f151d4443feb5",
+        "status": [
+          " M taskflow/config.py",
+          " M taskflow/events.py",
+          " M taskflow/queue.py",
+          " M taskflow/resources.py",
+          " M taskflow/retry.py",
+          " M taskflow/scheduler.py",
+          " M taskflow/statemachine.py"
+        ]
+      },
+      "finished_at": "2026-08-23T14:56:38-0700",
+      "grade": {
+        "checker_exit": 0,
+        "passed": true,
+        "score": 1.0
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 143,
+        "stderr_bytes": 0,
+        "stdout_bytes": 2691086,
+        "timed_out": true,
+        "wall_seconds": 1200.1048248331062
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 17,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 247808,
+        "cache_write_tokens": 0,
+        "completed_responses": 16,
+        "failures": 1,
+        "generation_duration_seconds": 436.76,
+        "input_tokens": 307095,
+        "output_tokens": 4506,
+        "prompt_eval_duration_seconds": 720.8200000000002,
+        "requests": 17,
+        "response_bytes": 176747,
+        "time_to_first_token_seconds": 720.8200000000002
+      },
+      "run_id": "02-taskflow-pi",
+      "schema_version": 2,
+      "task": "taskflow",
+      "task_sha256": "6ed568c66534b0f7839438bfd34c0696a2b6f4a07d2f9469c1541c7e0be074bb",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 0,
+        "diff_bytes": 0,
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": []
+      },
+      "finished_at": "2026-08-23T15:16:43-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.3
+      },
+      "harness": "pi",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 143,
+        "stderr_bytes": 0,
+        "stdout_bytes": 46344901,
+        "timed_out": true,
+        "wall_seconds": 1200.846251375042
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 8,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          4
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 47104,
+        "cache_write_tokens": 0,
+        "completed_responses": 7,
+        "failures": 1,
+        "generation_duration_seconds": 111.94999999999999,
+        "input_tokens": 71999,
+        "output_tokens": 1210,
+        "prompt_eval_duration_seconds": 297.65999999999997,
+        "requests": 8,
+        "response_bytes": 35454,
+        "time_to_first_token_seconds": 297.65999999999997
+      },
+      "run_id": "02-webcore-pi",
+      "schema_version": 2,
+      "task": "webcore",
+      "task_sha256": "a5119ebfed497c749d2d0c93ea41b85dc1fbcd35d22fb0377a836ffa411f4dde",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    },
+    {
+      "changes": {
+        "changed_files": 0,
+        "diff_bytes": 0,
+        "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "status": []
+      },
+      "finished_at": "2026-08-23T15:36:45-0700",
+      "grade": {
+        "checker_exit": 1,
+        "passed": false,
+        "score": 0.3
+      },
+      "harness": "dsh",
+      "harness_result": {
+        "forced_residual_pids": [],
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stdout_bytes": 5,
+        "timed_out": true,
+        "wall_seconds": 1200.0940589159727
+      },
+      "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+      "phase": "benchmark",
+      "proxy_identity": {
+        "base_url": "http://127.0.0.1:8000",
+        "chat_template_kwargs": [
+          {
+            "enable_thinking": true,
+            "preserve_thinking": true
+          }
+        ],
+        "completion_requests": 9,
+        "max_tokens": [
+          32000
+        ],
+        "model": "Qwen3.8-27B-MLX-oQ8e-mtp",
+        "path": "/v1/chat/completions",
+        "reasoning_effort": [
+          null
+        ],
+        "serial_requests": true,
+        "temperature": [
+          null
+        ],
+        "tool_counts": [
+          19
+        ],
+        "top_p": [
+          null
+        ],
+        "verified": true
+      },
+      "proxy_totals": {
+        "cache_read_tokens": 114688,
+        "cache_write_tokens": 0,
+        "completed_responses": 8,
+        "failures": 1,
+        "generation_duration_seconds": 120.28,
+        "input_tokens": 148980,
+        "output_tokens": 1725,
+        "prompt_eval_duration_seconds": 455.78000000000003,
+        "requests": 9,
+        "response_bytes": 52394,
+        "time_to_first_token_seconds": 455.78000000000003
+      },
+      "run_id": "02-webcore-dsh",
+      "schema_version": 2,
+      "task": "webcore",
+      "task_sha256": "a5119ebfed497c749d2d0c93ea41b85dc1fbcd35d22fb0377a836ffa411f4dde",
+      "thinking": "medium",
+      "timeout_seconds": 1200,
+      "trial": 2
+    }
+  ],
+  "study": "Pi versus official DeepSeek Harness on local oMLX"
+}
