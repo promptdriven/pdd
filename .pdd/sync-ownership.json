@@ -14976,15 +14976,15 @@
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-prime/analyze.py", "role": "human-maintained", "preauthorize_absent": true},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-prime/benchmark.py", "role": "human-maintained", "preauthorize_absent": true},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-prime/results/2026-08-19-clean.json", "role": "human-maintained", "preauthorize_absent": true},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/README.md", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/analyze.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/benchmark.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/results/2026-08-23-clean.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/revalidate_checkers.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package-lock.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package-lock.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package.json", "role": "human-maintained"},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/README.md", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/analyze.py", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/benchmark.py", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/results/2026-08-23-clean.json", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/revalidate_checkers.py", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package-lock.json", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package.json", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package-lock.json", "role": "human-maintained", "preauthorize_absent": true},
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package.json", "role": "human-maintained", "preauthorize_absent": true},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-quantization/README.md", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-quantization/analyze_results.py", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-quantization/artifact-sha256.txt", "role": "human-maintained"},
@@ -14994,6 +14994,6 @@
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-quantization/results/bf16_mtp_pre.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "research/omlx-qwen38-quantization/results/oq8e_mtp.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_omlx_pi_prime_benchmark.py", "role": "human-maintained", "preauthorize_absent": true},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_omlx_pi_deepseek_harness_benchmark.py", "role": "human-maintained"}
+    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_omlx_pi_deepseek_harness_benchmark.py", "role": "human-maintained", "preauthorize_absent": true}
   ]
 }

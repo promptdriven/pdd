@@ -391,6 +391,16 @@ PREAUTHORIZED_CHILD_PATHS = (
         "research/omlx-qwen38-pi-prime/benchmark.py",
         "research/omlx-qwen38-pi-prime/results/2026-08-19-clean.json",
         "tests/test_omlx_pi_prime_benchmark.py",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/README.md",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/analyze.py",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/benchmark.py",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/results/2026-08-23-clean.json",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/revalidate_checkers.py",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package-lock.json",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/dsh/package.json",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package-lock.json",
+        "research/omlx-qwen38-pi-deepseek-harness-2026-08-23/tool-lock/pi/package.json",
+        "tests/test_omlx_pi_deepseek_harness_benchmark.py",
     }
 )
 PREAUTHORIZED_CHILD_OWNERSHIP = {
