@@ -9,7 +9,7 @@ two paired task/trial comparisons, six tied, and DSH won none. Both separating
 pairs were `taskflow`: Pi passed both; DSH timed out with partial scores of
 0.28 and 0.56.
 
-Pi also used 12.2% less total wall time (6,455.5 versus 7,356.5 seconds). DSH
+DSH also used 14.0% more total wall time (7,356.5 versus 6,455.5 seconds). It
 produced 14.8% more completed-response output tokens and had 10.7% lower
 aggregate generation throughput. These are whole-harness outcomes on one local
 model/runtime, not evidence that Pi is universally better. Four fixtures, two
@@ -19,6 +19,18 @@ statistically persuasive winner claim.
 This is a separate follow-up to the checked-in
 [`Pi versus Prime`](../omlx-qwen38-pi-prime/README.md) study. It does not replace
 or modify that study.
+
+### What this benchmark can and can't tell you
+
+Of the four tasks, two were at ceiling for both harnesses (`make-ci-green` and
+`add-feature`, 2/2 each) and one was at floor for both (`webcore`, 0/2 each,
+neither harness changing a file). Exactly one, `taskflow`, separated them. The
+entire pass-rate and mean-score margin therefore comes from a single fixture,
+and only two of eight paired cells were non-tied. That supports a lead on the
+measured sample and the cost/latency observations, not a general harness
+ranking; no confidence interval or significance claim is warranted. The floor
+task also argues against fixture curation in Pi's favor. See
+[Limitations](#limitations) for the full list.
 
 ## Aggregate result
 
@@ -174,6 +186,12 @@ and native remaining tools, but the overlay disabled:
 - subagent, fork, workflow, and Ralph model fan-out, enforcing the no-concurrent
   oMLX rule.
 
+The fan-out restriction is not a handicap specific to DSH. With one model loaded
+on a single oMLX server, concurrent subagent requests would serialize on that
+endpoint anyway, so fan-out buys no wall-clock parallelism here. Allowing it
+would also break the metering invariant that no two requests overlap inside a
+cell, which the analyzer enforces.
+
 DSH retained 19 model-facing tool schemas per request; Pi retained its four
 stock built-ins. DSH ran `danger-full-access` only inside the stricter outer
 Seatbelt policy, removing headless approval prompts without broadening actual
@@ -310,6 +328,16 @@ latency, but this benchmark does not isolate a single causal mechanism.
 Reported token throughput is also workload-weighted: prompt length, cache reuse,
 and generation length differ because the harnesses chose different trajectories
 on the same model. It should not be read as a pure oMLX kernel benchmark.
+
+## Disclosure
+
+The author has no affiliation with earendil-works (Pi) or deepseek-ai (DSH).
+Neither harness is a dependency of pdd, and pdd itself is not an arm of this
+benchmark. Pi is the harness the author uses day to day, which is why it is the
+reference arm here and in the Pi-versus-Prime study; readers should treat that
+as a bias to check rather than a disclosed-and-therefore-settled detail. The
+reverse experiment, the same protocol run by someone whose daily driver is DSH,
+is invited. The pinned locks and repro commands below exist to make that cheap.
 
 ## Limitations
 
