@@ -338,7 +338,7 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
-    "89bec04d2ba39d36bd909cdb43226a3843fff23053172283fa8767de8b9941a0",
+    "02ec8e64eb1009a03070d8236ee44943250df4f6d6aab0ef09be5252d983d2fb",
 )
 # Re-pinning above only tracks the current head. The repair is also replayed
 # across its own protected range, whose head predates every later edit to the
