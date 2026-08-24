@@ -196,6 +196,16 @@ def test_grade_task_invokes_current_python_directly(
     workspace = tmp_path / "workspace"
     (task_dir / "checker_data").mkdir(parents=True)
     workspace.mkdir()
+    checker_temp = tmp_path / "checker-temp"
+    checker_temp.mkdir()
+    temporary_directory = Mock()
+    temporary_directory.return_value.__enter__ = Mock(
+        return_value=str(checker_temp)
+    )
+    temporary_directory.return_value.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr(
+        MODULE, "tempfile", Mock(TemporaryDirectory=temporary_directory)
+    )
     completed = Mock(returncode=0, stdout="SCORE: 1.0\n", stderr="")
     run = Mock(return_value=completed)
     monkeypatch.setattr(MODULE.subprocess, "run", run)
@@ -205,6 +215,7 @@ def test_grade_task_invokes_current_python_directly(
         sys.executable,
         str(task_dir / "checker_data" / "run_score.py"),
     ]
+    temporary_directory.assert_called_once_with(prefix="checker-", dir="/private/tmp")
     assert result["passed"] is True
 
 
