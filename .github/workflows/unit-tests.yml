@@ -25,9 +25,52 @@ on:
     types: [opened, synchronize, ready_for_review]
 
 jobs:
-  unit-tests:
-    if: github.event.pull_request.draft != true
-    name: Run Unit Tests
+  changes:
+    name: Classify Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.classify.outputs.code_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify pull request paths
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          code_changed=false
+          paths_file=$(mktemp)
+          trap 'rm -f "$paths_file"' EXIT
+          git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$paths_file"
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              docs/*|*.md) ;;
+              *)
+                code_changed=true
+                break
+                ;;
+            esac
+          done < "$paths_file"
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+
+  full-unit-tests:
+    needs: changes
+    if: |
+      needs.changes.outputs.code_changed == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
+    name: Full Unit Tests
     runs-on: ubuntu-latest
     # The broad protected suite reached 93% without an assertion failure at the
     # former 45-minute limit; retain bounded headroom for variable runner load.
@@ -236,7 +279,10 @@ jobs:
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
 
   public-cli-regression:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    needs: changes
+    if: |
+      needs.changes.outputs.code_changed == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
     name: Public CLI Regression
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -269,7 +315,10 @@ jobs:
         run: make regression-public
 
   story-regression:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    needs: changes
+    if: |
+      needs.changes.outputs.code_changed == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
     name: Story Regression
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -302,7 +351,10 @@ jobs:
         run: make regression-stories
 
   package-preprocess-smoke:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    needs: changes
+    if: |
+      needs.changes.outputs.code_changed == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
     name: Package Preprocess Smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -532,7 +584,10 @@ jobs:
           grep -q "PDD Mental Model" preprocessed.txt
 
   repo-bloat-docker-e2e:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    needs: changes
+    if: |
+      needs.changes.outputs.code_changed == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
     name: Repo Bloat Docker E2E
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -567,3 +622,36 @@ jobs:
       - name: Stop hard-tier containers
         if: always()
         run: docker compose down -v
+
+  unit-tests:
+    name: Run Unit Tests
+    needs: [changes, full-unit-tests]
+    if: |
+      always() &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve required unit-test check
+        env:
+          CODE_CHANGED: ${{ needs.changes.outputs.code_changed }}
+          CLASSIFY_RESULT: ${{ needs.changes.result }}
+          FULL_RESULT: ${{ needs.full-unit-tests.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CLASSIFY_RESULT" != "success" ]; then
+            echo "::error::Change classification concluded: $CLASSIFY_RESULT"
+            exit 1
+          fi
+          if [ "$CODE_CHANGED" = "false" ]; then
+            echo "Documentation-only change; heavyweight test jobs skipped."
+            exit 0
+          fi
+          if [ "$CODE_CHANGED" != "true" ]; then
+            echo "::error::Change classification returned: $CODE_CHANGED"
+            exit 1
+          fi
+          if [ "$FULL_RESULT" != "success" ]; then
+            echo "::error::Full Unit Tests concluded: $FULL_RESULT"
+            exit 1
+          fi
+          echo "Full Unit Tests passed."
