@@ -411,32 +411,155 @@ def _extract_json_candidates(output: str) -> List[str]:
     return candidates
 
 
+def _strip_markdown_fence(body: str) -> str:
+    """Remove a surrounding markdown code fence from a marker body."""
+    body = body.strip()
+    if not body.startswith("```"):
+        return body
+    lines = body.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_trailing_balanced_json(text: str) -> Optional[str]:
+    """Return the trailing balanced ``{...}`` or ``[...]`` ending at ``text``.
+
+    Used when a prompt marker's ``*_BEGIN`` line was lost (e.g. only the final
+    assistant message was captured) but the matching ``*_END`` and a complete
+    JSON value remain. Scans backwards from the last closing brace/bracket.
+    """
+    text = text.rstrip()
+    if not text:
+        return None
+    close_idx = len(text) - 1
+    while close_idx >= 0 and text[close_idx] not in "}]":
+        close_idx -= 1
+    if close_idx < 0:
+        return None
+    close_char = text[close_idx]
+    open_char = "{" if close_char == "}" else "["
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(close_idx, -1, -1):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == close_char:
+            depth += 1
+        elif ch == open_char:
+            depth -= 1
+            if depth == 0:
+                candidate = text[i:close_idx + 1]
+                try:
+                    json.loads(candidate)
+                except json.JSONDecodeError:
+                    return None
+                return candidate
+    return None
+
+
+_ORPHAN_END_MARKER_RE = re.compile(r"^([A-Z][A-Z0-9_]*)_END\s*$", re.MULTILINE)
+
+
+def _extract_orphan_end_marker_json(output: str) -> List[str]:
+    """Recover JSON preceding a ``NAME_END`` marker when ``NAME_BEGIN`` is absent.
+
+    Issue #2372: multi-part agent responses sometimes persist only the final
+    message, which can start mid-payload and keep a trailing ``*_END`` without
+    its matching ``*_BEGIN``. Scanning backwards for a balanced JSON value
+    recovers ``SELECTED_OPTION`` (and similar) blocks that would otherwise be
+    discarded.
+    """
+    candidates: List[str] = []
+    seen_names: set[str] = set()
+    for match in _ORPHAN_END_MARKER_RE.finditer(output):
+        name = match.group(1)
+        # Skip names that already have a complete BEGIN/END pair — those are
+        # handled by `_MARKER_BLOCK_RE`.
+        if re.search(rf"^{name}_BEGIN\s*$", output, re.MULTILINE):
+            continue
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        prefix = output[: match.start()]
+        recovered = _extract_trailing_balanced_json(prefix)
+        if recovered:
+            candidates.append(_strip_markdown_fence(recovered))
+    return candidates
+
+
+def _normalize_options_considered_payload(data: Any) -> Any:
+    """Coerce step-4 payloads into ``{"options": [...]}`` when needed.
+
+    Accepts:
+    - a bare JSON array of options (``OPTIONS_BEGIN`` contract)
+    - a single selected option object (``SELECTED_OPTION_BEGIN`` contract),
+      including the orphan-END recovery path from Issue #2372
+    """
+    if isinstance(data, list):
+        return {"options": data}
+    if (
+        isinstance(data, dict)
+        and "options" not in data
+        and ("plan" in data or "name" in data or "score" in data)
+    ):
+        return {"options": [data]}
+    return data
+
+
+def _persist_unparseable_step_output(
+    state_dir: Path,
+    split_id: int,
+    step_num: str,
+    output: str,
+) -> Optional[Path]:
+    """Write raw agent output next to split state so a failed parse is not a total loss."""
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / f"split_{split_id}_step{step_num}_unparsed.txt"
+        path.write_text(output or "", encoding="utf-8")
+        return path
+    except OSError:
+        return None
+
+
 def _parse_step_output(output: str, dataclass_type: type) -> Any:
     """Parse agent output JSON into a dataclass. Returns None on failure.
 
     Strategy:
     1. If the output contains ``NAME_BEGIN ... NAME_END`` marker blocks,
        parse JSON from within those blocks first (per the prompt contracts).
-    2. Otherwise, collect all top-level ``{...}`` and ``[...]`` blocks and
+    2. If a ``NAME_END`` appears without ``NAME_BEGIN``, recover the trailing
+       balanced JSON before that END (Issue #2372 multipart-capture loss).
+    3. Otherwise, collect all top-level ``{...}`` and ``[...]`` blocks and
        try the largest first.
 
     ``OptionsConsidered`` is a special case: the prompt emits a JSON *array*
-    (``OPTIONS_BEGIN [...] OPTIONS_END``), which this function wraps as
-    ``{"options": [...]}`` before dataclass conversion.
+    (``OPTIONS_BEGIN [...] OPTIONS_END``) and a selected object
+    (``SELECTED_OPTION_BEGIN {...} SELECTED_OPTION_END``). Either form is
+    accepted; a bare selected object is wrapped as a one-element options list.
     """
     candidates: List[str] = []
     # Prefer marker-block JSON
     for match in _MARKER_BLOCK_RE.finditer(output):
-        body = match.group("body").strip()
-        # Strip markdown code fences if present
-        if body.startswith("```"):
-            lines = body.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            body = "\n".join(lines).strip()
+        body = _strip_markdown_fence(match.group("body"))
         candidates.append(body)
+
+    # Recover orphan END markers (BEGIN lost / multipart capture truncated).
+    candidates.extend(_extract_orphan_end_marker_json(output))
 
     # Also collect top-level JSON objects/arrays as fallback
     candidates.extend(_extract_json_candidates(output))
@@ -448,11 +571,18 @@ def _parse_step_output(output: str, dataclass_type: type) -> Any:
         except json.JSONDecodeError:
             continue
         try:
-            # Special case: OptionsConsidered from a bare JSON array
-            if dataclass_type is OptionsConsidered and isinstance(data, list):
-                data = {"options": data}
+            if dataclass_type is OptionsConsidered:
+                data = _normalize_options_considered_payload(data)
             result = _dict_to_dataclass(dataclass_type, data)
             if result is not None:
+                # Reject empty OptionsConsidered so orphan prose JSON doesn't
+                # short-circuit recovery of a later SELECTED_OPTION block.
+                if (
+                    dataclass_type is OptionsConsidered
+                    and isinstance(result, OptionsConsidered)
+                    and not result.options
+                ):
+                    continue
                 return result
         except (TypeError, KeyError):
             continue
@@ -1701,21 +1831,106 @@ def run_agentic_split_orchestrator(
                     and '"shared_layer_candidates": []' not in step3_raw
                 )
 
-                # Retry loop: if shared-layer is required but dropped,
-                # re-invoke step 4 with a corrective instruction. This
-                # converts the prior "soft warning" into a HARD gate.
+                # Retry loop: re-invoke step 4 with a corrective instruction when
+                # (a) options cannot be parsed (Issue #2372) or (b) shared-layer
+                # is required but dropped. Parse failures used to `break`
+                # immediately and discard a recoverable proposal.
                 step4_retry = 0
                 max_step4_retries = 2
+
+                def _rerun_step4(
+                    retry_reason: str, notice_title: str
+                ) -> Optional[Tuple[bool, str, float, str, List[str]]]:
+                    """Re-invoke step 4; update ``output``/state on success.
+
+                    Returns a budget-abort tuple when ``--max-cost`` is crossed,
+                    otherwise ``None`` (caller should ``continue`` the loop).
+                    """
+                    nonlocal output, total_cost, model_used
+                    context["step4_retry_reason"] = retry_reason
+                    retry_prompt = substitute_template_variables(
+                        preprocess(
+                            prompt_template, recursive=True,
+                            double_curly_brackets=True,
+                            exclude=list(context.keys()),
+                        ),
+                        context,
+                    )
+                    retry_prompt += (
+                        f"\n\n% RETRY NOTICE — {notice_title}\n"
+                        f"{retry_reason}"
+                    )
+                    r_success, r_output, r_cost, r_model = run_agentic_task(
+                        instruction=retry_prompt,
+                        cwd=current_work_dir,
+                        verbose=verbose, quiet=quiet,
+                        timeout=SPLIT_STEP_TIMEOUTS.get(
+                            "4_propose_options", 900.0
+                        ) + timeout_adder,
+                        label=f"4_propose_options_retry_{step4_retry}",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += r_cost
+                    model_used = r_model
+                    if r_success:
+                        output = r_output
+                        state["step_outputs"]["4"] = output
+                        context["step4_output"] = output
+                        # Persist updated cost/output before checking
+                        # budget so resume picks up correctly.
+                        state["last_completed_step"] = step
+                    # Budget-check after every retry attempt so cost burned on
+                    # a failed retry cannot push past --max-cost silently.
+                    return _check_budget(step)
+
                 while True:
                     parsed_options = _parse_step_output(output, OptionsConsidered)
                     if (
                         not isinstance(parsed_options, OptionsConsidered)
                         or not parsed_options.options
                     ):
+                        dump_path = _persist_unparseable_step_output(
+                            state_dir, split_id, "4", output
+                        )
+                        if step4_retry < max_step4_retries:
+                            step4_retry += 1
+                            if not quiet:
+                                dump_note = (
+                                    f" Raw output saved to {dump_path}."
+                                    if dump_path is not None
+                                    else ""
+                                )
+                                console.print(
+                                    f"[yellow]Step 4 retry {step4_retry}/"
+                                    f"{max_step4_retries}: could not parse "
+                                    f"OPTIONS_BEGIN/SELECTED_OPTION markers "
+                                    f"from agent output.{dump_note} "
+                                    f"Re-invoking step 4 with a format "
+                                    f"correction.[/yellow]"
+                                )
+                            budget_abort = _rerun_step4(
+                                (
+                                    "Your previous output could not be parsed. "
+                                    "Emit ALL FOUR markers in a single final "
+                                    "message, with no prose outside the markers:\n"
+                                    "OPTIONS_BEGIN\n[...json array...]\nOPTIONS_END\n"
+                                    "SELECTED_OPTION_BEGIN\n{...json object...}\n"
+                                    "SELECTED_OPTION_END"
+                                ),
+                                "emit the four step-4 markers",
+                            )
+                            if budget_abort is not None:
+                                return budget_abort
+                            continue
                         if not quiet:
+                            dump_note = (
+                                f" (raw output: {dump_path})"
+                                if dump_path is not None
+                                else ""
+                            )
                             console.print(
                                 "[yellow]Warning: could not parse options "
-                                "from agent output[/yellow]"
+                                f"from agent output{dump_note}[/yellow]"
                             )
                         break
 
@@ -1732,9 +1947,39 @@ def run_agentic_split_orchestrator(
                     for opt in options:
                         _sanitize_split_paths(opt)
                     if not options:
+                        dump_path = _persist_unparseable_step_output(
+                            state_dir, split_id, "4", output
+                        )
+                        if step4_retry < max_step4_retries:
+                            step4_retry += 1
+                            if not quiet:
+                                console.print(
+                                    f"[yellow]Step 4 retry {step4_retry}/"
+                                    f"{max_step4_retries}: parsed options "
+                                    f"list was empty. Re-invoking step 4.[/yellow]"
+                                )
+                            budget_abort = _rerun_step4(
+                                (
+                                    "Your previous output parsed but contained "
+                                    "no valid options. Emit a non-empty JSON "
+                                    "array between OPTIONS_BEGIN/OPTIONS_END "
+                                    "and the selected object between "
+                                    "SELECTED_OPTION_BEGIN/SELECTED_OPTION_END."
+                                ),
+                                "non-empty options required",
+                            )
+                            if budget_abort is not None:
+                                return budget_abort
+                            continue
                         if not quiet:
+                            dump_note = (
+                                f" (raw output: {dump_path})"
+                                if dump_path is not None
+                                else ""
+                            )
                             console.print(
-                                "[yellow]Warning: no valid options parsed[/yellow]"
+                                "[yellow]Warning: no valid options parsed"
+                                f"{dump_note}[/yellow]"
                             )
                         break
 
@@ -1759,62 +2004,21 @@ def run_agentic_split_orchestrator(
                                     f"surfacing candidates. Re-invoking step 4 "
                                     f"with corrective instruction.[/yellow]"
                                 )
-                            # Augment the context with a retry reason, then
-                            # re-run step 4 with the same prompt template.
-                            context["step4_retry_reason"] = (
-                                "Your previous output's selected option had "
-                                "no shared_layer_children, but step 3 "
-                                "surfaced non-empty shared_layer_candidates. "
-                                "Every valid option MUST include a "
-                                "shared_layer_children list that extracts the "
-                                "cross-worker duplication step 3 identified. "
-                                "Produce a corrected options set."
-                            )
-                            retry_prompt = substitute_template_variables(
-                                preprocess(
-                                    prompt_template, recursive=True,
-                                    double_curly_brackets=True,
-                                    exclude=list(context.keys()),
+                            budget_abort = _rerun_step4(
+                                (
+                                    "Your previous output's selected option had "
+                                    "no shared_layer_children, but step 3 "
+                                    "surfaced non-empty shared_layer_candidates. "
+                                    "Every valid option MUST include a "
+                                    "shared_layer_children list that extracts the "
+                                    "cross-worker duplication step 3 identified. "
+                                    "Produce a corrected options set."
                                 ),
-                                context,
+                                "shared_layer_children required",
                             )
-                            retry_prompt += (
-                                "\n\n% RETRY NOTICE — shared_layer_children required\n"
-                                f"{context['step4_retry_reason']}"
-                            )
-                            r_success, r_output, r_cost, r_model = run_agentic_task(
-                                instruction=retry_prompt,
-                                cwd=current_work_dir,
-                                verbose=verbose, quiet=quiet,
-                                timeout=SPLIT_STEP_TIMEOUTS.get(
-                                    "4_propose_options", 900.0
-                                ) + timeout_adder,
-                                label=f"4_propose_options_retry_{step4_retry}",
-                                max_retries=DEFAULT_MAX_RETRIES,
-                            )
-                            total_cost += r_cost
-                            model_used = r_model
-                            if r_success:
-                                output = r_output
-                                state["step_outputs"]["4"] = output
-                                context["step4_output"] = output
-                                # Persist updated cost/output before checking
-                                # budget so resume picks up correctly.
-                                state["last_completed_step"] = step
-                                budget_abort = _check_budget(step)
-                                if budget_abort is not None:
-                                    return budget_abort
-                                continue  # reparse with new output
-                            # Retry failed — still budget-check before next
-                            # iteration so cost burned on a failed retry
-                            # cannot push past --max-cost silently.
-                            budget_abort = _check_budget(step)
                             if budget_abort is not None:
                                 return budget_abort
-                            # Retry failed — loop again so the retry counter
-                            # check at line top triggers the next attempt or
-                            # the >= max_step4_retries branch records failure.
-                            continue
+                            continue  # reparse with new output
                         elif not slc and step4_retry >= max_step4_retries:
                             # After retries, still missing. Record as a hard
                             # verify_failure so the improvement gate sees it.
