@@ -7,9 +7,13 @@ from pdd.story_regression_gate import (
     STATUS_MISSING,
     STATUS_PASSING,
     STATUS_STALE,
+    STATUS_STORY_REGRESSION_TRACEABILITY_ONLY,
     evaluate_story_regression,
 )
-from pdd.story_test_generation import generate_story_regression_test
+from pdd.story_test_generation import (
+    STORY_TEST_MODE_TRACEABILITY,
+    generate_story_regression_test,
+)
 
 
 def _story(tmp_path: Path) -> Path:
@@ -153,7 +157,15 @@ def test_story_regression_gate_detects_missing_passing_and_stale(tmp_path: Path)
     generated = generate_story_regression_test(story)
     story_map = build_story_map(tmp_path / "tests")
     passing = evaluate_story_regression(story, tests_dir=tmp_path / "tests", story_map=story_map)
-    assert passing.status == STATUS_PASSING
+    # This contract declares no ## Entry Point, so the generated test is
+    # traceability-only. It is present and fresh -- but reported distinctly from
+    # STATUS_PASSING so it cannot be mistaken for behavioural cover (#2392).
+    assert passing.status == STATUS_STORY_REGRESSION_TRACEABILITY_ONLY
+    assert passing.status != STATUS_PASSING
+    # ...and it still counts as present, so no caller's gate silently tightens.
+    assert passing.passed is True
+    assert passing.has_regression_test is True
+    assert generated.mode == STORY_TEST_MODE_TRACEABILITY
     assert generated.story_hash == passing.current_hash
 
     story.write_text(

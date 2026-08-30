@@ -596,6 +596,47 @@ def test_evaluate_story_regression_fresh_wins_over_earlier_stale_in_same_file(
     assert ev.status == STATUS_PASSING
 
 
+def test_evaluate_story_regression_ignores_stale_behavioral_sibling_for_mode(
+    tmp_path: Path,
+):
+    """A stale behavioural test does not make a current text-pin behavioural.
+
+    The lightweight evaluator powers `pdd checkup coverage`, so its mode must
+    agree with the full AST gate: only fresh linked tests describe the current
+    story's protection level.
+    """
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import (
+        STATUS_STORY_REGRESSION_TRACEABILITY_ONLY,
+        evaluate_story_regression,
+    )
+
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    story = _write(stories / "story__refund.md", FRESH_STORY)
+    fresh_hash = _story_content_hash(FRESH_STORY)
+    _write(
+        tests / "test_traceability.py",
+        _test_module(
+            'PDD_STORY_TEST_MODE = "traceability"',
+            f'PDD_STORY_HASH = "{fresh_hash}"',
+            '@pytest.mark.story(story_id="refund")\n'
+            "def test_refund_traceability():\n    assert True",
+        ),
+    )
+    _write(
+        tests / "test_stale_behavioral.py",
+        _test_module(_marked("refund", "0000000000000000", "test_refund")),
+    )
+
+    smap = build_story_map(tests)
+    evaluation = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
+    gate_result = evaluate_stories(stories_dir=str(stories), tests_dir=str(tests))[0]
+
+    assert evaluation.status == STATUS_STORY_REGRESSION_TRACEABILITY_ONLY
+    assert gate_result.status == STATUS_STORY_REGRESSION_TRACEABILITY_ONLY
+
+
 def test_evaluate_story_regression_stale_on_bogus_marker_kwarg_hash(tmp_path: Path):
     """Direction B (false PASS): a test recording only a bogus ``story_hash=``
     marker kwarg (no module constant) is genuinely stale and must be reported

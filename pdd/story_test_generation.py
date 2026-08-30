@@ -14,6 +14,24 @@ from .user_story_tests import _normalized_story_for_hash, story_id
 _HEADING_RE = re.compile(r"^(?P<marks>#{2,6})\s+(?P<title>.+?)\s*$", re.MULTILINE)
 _RULE_RE = re.compile(r"\bR-?\d+\b", re.IGNORECASE)
 
+# Name of the module-level constant every generated test declares. The story
+# regression gate reads it with the same AST scan it already uses for story
+# hashes, so a documentary test can be told apart from a behavioural one
+# without executing anything.
+STORY_TEST_MODE_CONSTANT = "PDD_STORY_TEST_MODE"
+# The test imports the contract's entry point, invokes it, and asserts the
+# Oracle / Negative Cases over the return value.
+STORY_TEST_MODE_BEHAVIORAL = "behavioral"
+# The test pins the story+contract bundle hash only. It does NOT execute the
+# code the story is about, so it detects edits to the story text rather than
+# regressions in behaviour.
+STORY_TEST_MODE_TRACEABILITY = "traceability"
+
+TRACEABILITY_FALLBACK_WARNING = (
+    "contract declares no ## Entry Point; generating a traceability-only test "
+    "that will not exercise the code"
+)
+
 
 @dataclass(frozen=True)
 class GeneratedStoryTest:
@@ -25,6 +43,14 @@ class GeneratedStoryTest:
     story_hash: str
     changed: bool
     test_count: int
+    # Defaulted so existing positional construction keeps working; every
+    # generator path sets it explicitly.
+    mode: str = STORY_TEST_MODE_TRACEABILITY
+
+    @property
+    def is_behavioral(self) -> bool:
+        """Whether the generated test actually exercises the code under test."""
+        return self.mode == STORY_TEST_MODE_BEHAVIORAL
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -34,6 +60,7 @@ class GeneratedStoryTest:
             "story_hash": self.story_hash,
             "changed": self.changed,
             "test_count": self.test_count,
+            "mode": self.mode,
         }
 
 
@@ -154,7 +181,6 @@ def _render_test(
     story_rel = _relative_literal(story_path, output_path)
     contract_rel = _relative_literal(contract_path, output_path) if contract_path else None
     oracle_name = _test_name(slug, "oracle_contract")
-    negative_name = _test_name(slug, "negative_cases")
     rules_suffix = "_".join(rule_ids[:3]).replace("-", "").lower()
     if rules_suffix:
         oracle_name = _test_name(slug, f"{rules_suffix}_oracle_contract")
@@ -165,6 +191,12 @@ def _render_test(
         '"""Generated story-backed regression tests.',
         "",
         "This file is deterministic and safe to run without LLM/cloud credentials.",
+        "",
+        "TRACEABILITY ONLY: this test pins the story+contract bundle hash. It does",
+        "NOT import or execute the code the story is about, so it cannot catch a",
+        "behavioural regression -- deleting the module under test leaves it green.",
+        "Add a machine-readable ## Entry Point to the contract and regenerate to",
+        "get a behavioural test instead.",
         '"""',
         "from pathlib import Path",
         "",
@@ -172,6 +204,7 @@ def _render_test(
         "",
         f'PDD_STORY_ID = "{slug}"',
         f'PDD_STORY_HASH = "{bundle_hash}"',
+        f'{STORY_TEST_MODE_CONSTANT} = "{STORY_TEST_MODE_TRACEABILITY}"',
         f'STORY_PATH = Path(__file__).resolve().parent / "{story_rel}"',
     ]
     if contract_rel:
@@ -180,13 +213,8 @@ def _render_test(
         lines.append("CONTRACT_PATH = None")
     lines.extend(
         [
-            "",
-            "",
-            "def _story_bundle() -> str:",
-            "    story = STORY_PATH.read_text(encoding=\"utf-8\")",
-            "    if CONTRACT_PATH is not None and CONTRACT_PATH.exists():",
-            "        return story + \"\\n\\n\" + CONTRACT_PATH.read_text(encoding=\"utf-8\")",
-            "    return story",
+            f"PDD_STORY_ORACLE_CLAUSES = {oracle_list}",
+            f"PDD_STORY_NEGATIVE_CLAUSES = {negative_list}",
             "",
             "",
             "def _bundle_hash() -> str:",
@@ -200,29 +228,21 @@ def _render_test(
             "",
             "@pytest.mark.story(story_id=PDD_STORY_ID)",
             f"def {oracle_name}():",
-            "    assert _bundle_hash() == PDD_STORY_HASH",
-            f"    expected = {oracle_list}",
-            "    bundle = _story_bundle()",
-            "    assert expected, \"story has no Oracle or Acceptance Criteria clauses\"",
-            "    for clause in expected:",
-            "        assert clause in bundle",
+            "    # The only assertion a traceability test can honestly make: the",
+            "    # story+contract bundle is unchanged since this test was generated.",
+            "    #",
+            "    # It deliberately does NOT assert that each clause appears in the",
+            "    # bundle. `_bundle_hash()` covers the same bytes those clauses were",
+            "    # extracted from, so such a check can never fail while the hash",
+            "    # matches, and never runs when it does not. The clauses are kept",
+            "    # above as documentation of what this story claims.",
+            "    assert _bundle_hash() == PDD_STORY_HASH, (",
+            "        \"Story or contract changed since this test was generated; \"",
+            "        \"re-run: pdd test --from-story \" + str(STORY_PATH)",
+            "    )",
             "",
         ]
     )
-    if negative_items:
-        lines.extend(
-            [
-                "",
-                "@pytest.mark.story(story_id=PDD_STORY_ID)",
-                f"def {negative_name}():",
-                "    assert _bundle_hash() == PDD_STORY_HASH",
-                f"    expected = {negative_list}",
-                "    bundle = _story_bundle()",
-                "    for clause in expected:",
-                "        assert clause in bundle",
-                "",
-            ]
-        )
     return "\n".join(lines) + "\n"
 
 
@@ -251,6 +271,7 @@ def _generate_behavioral_test(
         story_hash=result.story_hash,
         changed=before != after,
         test_count=result.test_count,
+        mode=STORY_TEST_MODE_BEHAVIORAL,
     )
 
 
@@ -331,5 +352,6 @@ def generate_story_regression_test(
         test_file=output_path,
         story_hash=bundle_hash,
         changed=changed,
-        test_count=2 if negative_items else 1,
+        test_count=1,
+        mode=STORY_TEST_MODE_TRACEABILITY,
     )
