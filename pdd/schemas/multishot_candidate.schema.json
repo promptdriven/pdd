@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "multishot_candidate.schema.json",
+  "title": "CandidateRecord",
+  "description": "One row in candidate_records.jsonl for multi-shot candidate selection (Issue #1475).",
+  "type": "object",
+  "required": [
+    "task_id",
+    "arm_id",
+    "candidate_index",
+    "model",
+    "harness",
+    "public_signals",
+    "selected"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Unique identifier for the task being solved."
+    },
+    "arm_id": {
+      "type": "string",
+      "description": "Configuration arm identifier (model/harness combination)."
+    },
+    "candidate_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based index of this candidate within the task's shot pool."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier used to generate this candidate."
+    },
+    "harness": {
+      "type": "string",
+      "description": "Harness identifier used to run this candidate."
+    },
+    "public_signals": {
+      "type": "object",
+      "description": "Public verifier signals used for selection (lint, parse, test, etc.).",
+      "additionalProperties": true
+    },
+    "selected": {
+      "type": "boolean",
+      "description": "True for the winner selected by public signals; false for all other candidates."
+    },
+    "hidden_status": {
+      "type": "string",
+      "description": "Hidden scoring result, present only after selection is frozen."
+    }
+  },
+  "additionalProperties": false
+}
