@@ -2991,12 +2991,26 @@ def sync_orchestration(
                                             skip_tests=skip_tests,
                                             skip_verify=skip_verify,
                                         )
+                                        prompt_path = pdd_files.get("prompt")
+                                        output_files = [
+                                            candidate.resolve()
+                                            for candidate in (
+                                                pdd_files.get(key)
+                                                for key in ("code", "test", "example")
+                                            )
+                                            if candidate is not None and candidate.is_file()
+                                        ]
                                         write_evidence_manifest(
                                             basename=basename,
-                                            language=language,
                                             command="sync",
                                             validation=validation,
-                                            pdd_files=pdd_files,
+                                            prompt_file=(
+                                                prompt_path.resolve()
+                                                if prompt_path is not None
+                                                and prompt_path.is_file()
+                                                else None
+                                            ),
+                                            output_files=output_files,
                                         )
                                     except Exception as e:
                                         logger.warning(f"Failed to write evidence manifest: {e}")
