@@ -355,6 +355,8 @@ PREAUTHORIZED_CHILD_PATHS = (
         "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
         "user_stories/issues/conformance-gate-split.md",
         "user_stories/story__pdd_generation_gates_preserved.md",
+        "user_stories/contracts/provider_attempt_outcome.contract.md",
+        "user_stories/story__provider_attempt_outcome.md",
         ".pdd/meta/agentic_architecture_python.json",
         ".pdd/meta/commands_generate_python.json",
         ".pdd/meta/user_story_tests_python.json",

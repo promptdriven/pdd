@@ -146,6 +146,21 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         "pdd-maintainers",
         True,
     ),
+    # Issue #2422: provider-attempt outcome story and generated contract.
+    OwnershipRule(
+        "user_stories/contracts/provider_attempt_outcome.contract.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/story__provider_attempt_outcome.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
     OwnershipRule(
         ".pdd/meta/agentic_architecture_python.json",
         InventoryStatus.HUMAN_OWNED,
