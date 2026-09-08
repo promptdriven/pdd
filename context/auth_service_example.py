@@ -128,14 +128,25 @@ async def verify_auth() -> Dict[str, Any]:
 
 def get_cached_jwt() -> Optional[str]:
     """
-    Get the cached JWT token if it exists and is valid.
+    Get the cached JWT token if it exists, is not expired, and matches the expected audience.
 
     Reads from JWT_CACHE_FILE, checks expiration with 5-minute buffer,
-    and returns the token if valid. Supports both 'id_token' (new format)
-    and 'jwt' (legacy format) keys for backwards compatibility.
+    and validates the JWT audience when PDD_ENV or PDD_JWT_EXPECTED_AUD is set.
+    Supports both 'id_token' (new format) and 'jwt' (legacy format) keys for
+    backwards compatibility.
+
+    Audience validation: when PDD_ENV is set, the cached JWT's ``aud`` claim
+    (or ``firebase.aud`` sub-claim) is compared against the expected audience
+    for the selected environment:
+    - PDD_ENV=staging  → ``prompt-driven-development-stg`` (or STAGING_PROJECT_ID)
+    - PDD_ENV=prod/production → ``prompt-driven-development``
+    - PDD_JWT_EXPECTED_AUD → explicit override that takes precedence
+
+    A cached token with the wrong audience is treated as invalid and None is
+    returned, even if the token is not yet expired.
 
     Returns:
-        The JWT token string if valid, None otherwise.
+        The JWT token string if valid and audience-matched, None otherwise.
     """
     ...
 
