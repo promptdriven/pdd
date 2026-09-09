@@ -102,10 +102,13 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
             payload = json.load(handle, object_pairs_hook=_reject_duplicate_json_keys)
     except json.JSONDecodeError:
         raise ValueError("scope:MANIFEST_INVALID_JSON") from None
+    except (OSError, UnicodeError):
+        # UnicodeError is a subclass of ValueError, so this must precede the
+        # generic ``except ValueError`` below; otherwise a non-UTF-8 manifest
+        # leaks a raw UnicodeDecodeError instead of scope:MANIFEST_UNREADABLE.
+        raise ValueError("scope:MANIFEST_UNREADABLE") from None
     except ValueError:
         raise
-    except (OSError, UnicodeError):
-        raise ValueError("scope:MANIFEST_UNREADABLE") from None
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA
