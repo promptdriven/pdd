@@ -57,6 +57,59 @@ def test_docs_only_diff_skips_build_smoke(monkeypatch, tmp_path):
     assert called is False
 
 
+def test_build_smoke_gate_failure_includes_stdout_diagnostics(monkeypatch, tmp_path):
+    from pdd.checkup_gates import Gate, GateResult
+
+    gate = Gate(
+        name="git-diff-check",
+        cmd=["git", "diff", "--check", "origin/main...HEAD"],
+        source="git:origin/main...HEAD",
+    )
+    result = GateResult(
+        gate=gate,
+        exit_code=2,
+        stdout_excerpt="extensions/app.py:12: trailing whitespace.",
+        stderr_excerpt="",
+        duration_seconds=0.01,
+        started_at_iso="2026-06-30T00:00:00Z",
+    )
+
+    monkeypatch.setattr(
+        pre_checkup_gate, "discover_gates", lambda *_args, **_kwargs: [gate]
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate, "run_gates", lambda *_args, **_kwargs: [result]
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate, "_check_python_imports", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate, "_check_route_probe", lambda *_args, **_kwargs: []
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "_check_caller_compatibility",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        pre_checkup_gate, "_run_targeted_tests", lambda *_args, **_kwargs: ([], [])
+    )
+
+    outcome = pre_checkup_gate._run_build_smoke(
+        tmp_path,
+        ["extensions/app.py"],
+        base_ref="origin/main",
+        issue_number=2647,
+        timeout_per_check=1.0,
+    )
+
+    assert outcome.ok is False
+    message = " ".join(outcome.messages)
+    assert "gate git-diff-check failed for git:origin/main...HEAD" in message
+    assert "stderr=" in message
+    assert "stdout=extensions/app.py:12: trailing whitespace." in message
+
+
 def test_metadata_sync_failure_hard_blocks(monkeypatch, tmp_path):
     prompt_dir = tmp_path / "pdd" / "prompts"
     prompt_dir.mkdir(parents=True)
