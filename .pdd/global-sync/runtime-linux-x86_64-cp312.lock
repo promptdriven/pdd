@@ -1,0 +1,4 @@
+filelock==3.29.5 \
+    --hash=sha256:8af830889ba3a0ffcefbd6c7d2af8a54012058103771f2e10848222f476a1693
+PyYAML==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
