@@ -2270,7 +2270,7 @@ def _anthropic_is_complete_zero_work_rejection(data: Mapping[str, Any]) -> bool:
     if data.get("is_error") is not True or data.get("terminal_reason") != "api_error":
         return False
     status = data.get("api_error_status")
-    if isinstance(status, bool) or status not in {401, 403}:
+    if isinstance(status, bool) or status not in {401, 403, 429}:
         return False
     if data.get("num_turns") != 1:
         return False
@@ -2286,7 +2286,15 @@ def _anthropic_is_complete_zero_work_rejection(data: Mapping[str, Any]) -> bool:
     if _nested_value(data, ("subagent_stats", "by_type")) != {}:
         return False
     detail = data.get("result")
-    return isinstance(detail, str) and bool(_ANTHROPIC_CREDENTIAL_ERROR_RE.search(detail))
+    if not isinstance(detail, str):
+        return False
+    if status == 429:
+        # Reuse the guarded subscription/session-cap classifier. A generic API
+        # 429 remains ambiguous even when every currently reviewed counter is
+        # zero; only the provider-owned "hit your limit · resets …" shape is a
+        # reviewed account-bound rejection that can safely advance a pool.
+        return _classify_permanent_error(detail) == "credential-limit"
+    return bool(_ANTHROPIC_CREDENTIAL_ERROR_RE.search(detail))
 
 
 def _new_provider_attempt_receipt(
@@ -2419,8 +2427,11 @@ def _create_provider_attempt_receipt(
             not stderr_text.strip()
             and _anthropic_is_complete_zero_work_rejection(parsed)
         ):
+            zero_work_kind: ProviderFailureKind = (
+                "provider_limit" if status == 429 else "credential_or_account"
+            )
             return _new_provider_attempt_receipt(
-                safe_provider, attempt_number, "credential_or_account", "not_started"
+                safe_provider, attempt_number, zero_work_kind, "not_started"
             )
         if status == 429:
             failure_kind: ProviderFailureKind = "provider_limit"

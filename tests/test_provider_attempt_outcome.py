@@ -352,6 +352,40 @@ def test_complete_private_envelope_returns_not_started_and_blocks_fallback(tmp_p
     assert '"duration_api_ms"' not in result.output_text
 
 
+def test_complete_private_subscription_limit_returns_not_started(tmp_path):
+    envelope = _zero_work_rejection()
+    envelope["api_error_status"] = 429
+    envelope["result"] = "You've hit your usage limit · resets May 18, 11pm (UTC)"
+
+    result, run_mock, _ = _run_public(
+        tmp_path,
+        providers=["anthropic", "google"],
+        boundary_result=_completed(json.dumps(envelope)),
+    )
+
+    assert run_mock.call_count == 1
+    assert _receipt_dict(result) == {
+        "schema_version": "pdd.provider_attempt.v1",
+        "provider": "anthropic",
+        "attempt_number": 1,
+        "failure_kind": "provider_limit",
+        "work_disposition": "not_started",
+    }
+
+
+def test_generic_429_with_zero_counters_remains_ambiguous():
+    envelope = _zero_work_rejection()
+    envelope["api_error_status"] = 429
+    envelope["result"] = "Too many requests"
+
+    receipt = ac._create_provider_attempt_receipt(
+        "anthropic", 1, 1, json.dumps(envelope), ""
+    )
+
+    assert receipt.failure_kind == "provider_limit"
+    assert receipt.work_disposition == "ambiguous"
+
+
 def test_single_attempt_unstructured_diagnostic_never_echoes_private_text(tmp_path):
     private_text = (
         "authentication failed password=hunter2 "
