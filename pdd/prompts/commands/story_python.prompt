@@ -82,8 +82,9 @@ R9 - Story list rendering
 When `--with-regression-status` is supplied, an additional regression status column MUST be
 included. That column MUST report a **presence/freshness-honest** label derived from the story
 regression gate's classification (never "passing" — the list surface does not execute any test):
-`missing` when no linked regression test exists, `has-test` when a linked test is present, and
-`stale` when a linked test records a mismatched story hash. The tests directory MUST be resolved
+`missing` when no linked regression test exists, `has-test` when a fresh behavioural or unknown-mode
+test is present, `has-traceability-test` when only fresh generated traceability tests are present,
+and `stale` when no linked test records a current story hash. The tests directory MUST be resolved
 from the *stories-dir root* (the parent of `--stories-dir` / `PDD_USER_STORIES_DIR`), NOT each
 story file's immediate parent, so a nested story (`user_stories/<sub>/story__*.md`) still anchors
 back to the project `tests/` directory rather than a spurious `user_stories/<sub>/tests`. Without

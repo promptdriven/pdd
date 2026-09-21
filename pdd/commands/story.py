@@ -11,6 +11,7 @@ from ..story_regression import build_story_map
 from ..story_regression_gate import (
     STATUS_MISSING,
     STATUS_PASSING,
+    STATUS_STORY_REGRESSION_TRACEABILITY_ONLY,
     STATUS_STALE,
     evaluate_story_regression,
 )
@@ -304,6 +305,10 @@ _REGRESSION_STATUS_LABELS = {
     STATUS_MISSING: "missing",
     STATUS_STALE: "stale",
     STATUS_PASSING: "has-test",
+    # Present and fresh, but the test never executes the code under test
+    # (pdd#2392). Labelled distinctly so a documentary story is not read as
+    # protected.
+    STATUS_STORY_REGRESSION_TRACEABILITY_ONLY: "has-traceability-test",
 }
 
 

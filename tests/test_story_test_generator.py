@@ -188,14 +188,18 @@ def test_pdd_test_from_story_cli_without_entry_point_writes_text_pin(tmp_path: P
     assert "checkout_app" not in text  # no entry-point import in text-pin mode
     assert "import importlib" not in text
     assert "_bundle_hash() == PDD_STORY_HASH" in text  # pins the bundle hash
-    assert "Eligible checkout refunds are accepted." in text  # pins clauses
+    # Clauses are recorded as documentation constants, not asserted: a
+    # clause-in-bundle check can never fail while the hash matches (#2392).
+    assert "Eligible checkout refunds are accepted." in text
     assert "Ineligible checkout refunds are rejected." in text
     assert "@pytest.mark.story(story_id=PDD_STORY_ID)" in text
+    # The mode is declared so the gate can tell this apart from a behavioural test.
+    assert 'PDD_STORY_TEST_MODE = "traceability"' in text
 
-    # The text-pin tests run green against the current story bundle...
+    # The text-pin test runs green against the current story bundle...
     passing = _run_generated_test(tmp_path, output)
     assert passing.returncode == 0, passing.stdout + passing.stderr
-    assert "2 passed" in passing.stdout
+    assert "1 passed" in passing.stdout
 
     # ...and go stale-red when the story text changes under the pinned hash.
     story.write_text(
