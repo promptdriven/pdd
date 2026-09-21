@@ -41,10 +41,13 @@ from pdd.agentic_split_orchestrator import (
     _child_state_keys,
     _detect_language,
     _dict_to_dataclass,
+    _extract_orphan_end_marker_json,
+    _extract_trailing_balanced_json,
     _first_nonverified_child_index,
     _initialize_child_extraction_state,
     _parse_file_markers,
     _parse_step_output,
+    _persist_unparseable_step_output,
     _run_split_checkup,
     _stable_split_id,
     _target_path_in_worktree,
@@ -191,6 +194,47 @@ OPTIONS_END"""
         assert len(result.options) == 2
         assert all(isinstance(o, SplitOption) for o in result.options)
 
+    def test_selected_option_alone_wraps_as_options_considered(self):
+        """SELECTED_OPTION block alone is enough to recover OptionsConsidered."""
+        output = """SELECTED_OPTION_BEGIN
+{"name": "full_decomposition", "plan": {"children": [{"name": "a"}]}, "score": 110}
+SELECTED_OPTION_END"""
+        result = _parse_step_output(output, OptionsConsidered)
+        assert isinstance(result, OptionsConsidered)
+        assert len(result.options) == 1
+        assert result.options[0].name == "full_decomposition"
+        assert result.options[0].numeric_score == 110.0
+
+    def test_orphan_selected_option_end_recovers_truncated_multipart(self):
+        """Issue #2372: BEGIN missing / head truncated, trailing SELECTED_OPTION_END."""
+        # Simulates multipart capture that kept only the final message: head of
+        # OPTIONS is gone, BEGIN markers absent, but the selected object + END remain.
+        selected = {
+            "name": "full_decomposition_flat_siblings",
+            "plan": {
+                "children": [
+                    {"name": "public_surface_snapshot"},
+                    {"name": "churn_gate"},
+                ]
+            },
+            "score": {
+                "cohesion": 18,
+                "coupling": 12,
+                "total": 110,
+            },
+        }
+        output = (
+            'pyproject.toml, MANIFEST.in", "action": "NO CHANGE — truncated head\n'
+            + json.dumps(selected)
+            + "\nSELECTED_OPTION_END\n"
+            + "Three things about this output worth your attention before step 5 runs.\n"
+        )
+        result = _parse_step_output(output, OptionsConsidered)
+        assert isinstance(result, OptionsConsidered)
+        assert len(result.options) == 1
+        assert result.options[0].name == "full_decomposition_flat_siblings"
+        assert result.options[0].numeric_score == 110.0
+
     def test_diagnosis_from_real_prompt_output(self):
         """Real LLM output uses recommended_action, not type."""
         output = """DIAGNOSIS_BEGIN
@@ -243,6 +287,27 @@ QUALITATIVE_ASSESSMENT_END"""
         assert result.cohesion["rating"] == "clear"
         assert result.boundary_clarity["rating"] == "moderate"
         assert result.change_decorrelation["rating"] == "clear"
+
+
+class TestOrphanEndMarkerRecovery:
+    """Helpers that recover JSON when only ``*_END`` survives (Issue #2372)."""
+
+    def test_trailing_balanced_object(self):
+        text = 'garbage "prefix", then {"name": "ok", "score": 1}'
+        assert _extract_trailing_balanced_json(text) == '{"name": "ok", "score": 1}'
+
+    def test_orphan_end_skips_complete_begin_end_pair(self):
+        output = """OPTIONS_BEGIN
+[{"name": "a", "score": 1}]
+OPTIONS_END
+"""
+        assert _extract_orphan_end_marker_json(output) == []
+
+    def test_persist_unparseable_step_output(self, tmp_path: Path):
+        path = _persist_unparseable_step_output(tmp_path, 42, "4", "raw agent text")
+        assert path is not None
+        assert path.name == "split_42_step4_unparsed.txt"
+        assert path.read_text(encoding="utf-8") == "raw agent text"
 
 
 # =========================================================================
@@ -930,6 +995,57 @@ class TestOrchestratorProposeOnly:
             assert "Propose only complete" in msg
             # step 0 + steps 1-4 = 5 agent calls
             assert call_count[0] == 5
+
+    def test_step4_parse_failure_retries_then_recovers(self, tmp_path: Path):
+        """Issue #2372: unparseable step-4 output retries with a format fix."""
+        good_options = """OPTIONS_BEGIN
+[{"name": "recovered", "plan": {"children": [{"name": "a"}]}, "score": 88}]
+OPTIONS_END
+SELECTED_OPTION_BEGIN
+{"name": "recovered", "plan": {"children": [{"name": "a"}]}, "score": 88}
+SELECTED_OPTION_END"""
+        outputs = [
+            'INTENT_BEGIN\n{"intent": "REDUCE_MONOLITH", "confidence": 0.9, "rationale": "ok"}\nINTENT_END',
+            '{"survey": "data"}',
+            json.dumps({"type": "hotspot", "rationale": "churn"}),
+            # step 3: empty shared_layer_candidates so hard gate does not fire
+            '{"shared_layer_candidates": []}',
+            # step 4 first attempt: garbage (would previously break with no retry)
+            "not parseable options at all",
+            # step 4 retry
+            good_options,
+        ]
+        labels: List[str] = []
+        call_count = [0]
+
+        def fake_agentic_task(**kwargs):
+            labels.append(kwargs.get("label", ""))
+            idx = call_count[0]
+            call_count[0] += 1
+            return _mock_agentic_task(outputs[idx])
+
+        with patch(f"{MODULE}.get_language", return_value="Python"), \
+             patch(f"{MODULE}.load_workflow_state", return_value=(None, None)), \
+             patch(f"{MODULE}.save_workflow_state", return_value=None), \
+             patch(f"{MODULE}.load_prompt_template", return_value="template"), \
+             patch(f"{MODULE}.preprocess", return_value="processed"), \
+             patch(f"{MODULE}.substitute_template_variables", return_value="prompt"), \
+             patch(f"{MODULE}.run_agentic_task", side_effect=fake_agentic_task), \
+             patch(f"{MODULE}.set_agentic_progress"), \
+             patch(f"{MODULE}.clear_agentic_progress"), \
+             patch(f"{MODULE}._get_state_dir", return_value=tmp_path):
+            ok, msg, cost, model, files = run_agentic_split_orchestrator(
+                "foo.py", cwd=tmp_path, quiet=True, propose_only=True,
+            )
+            assert ok is False
+            assert "Propose only complete" in msg
+            assert any(
+                isinstance(label, str) and label.startswith("4_propose_options_retry_")
+                for label in labels
+            )
+            dumps = list(tmp_path.glob("split_*_step4_unparsed.txt"))
+            assert len(dumps) == 1
+            assert dumps[0].read_text(encoding="utf-8") == "not parseable options at all"
 
 
 class TestOrchestratorLeaveAlone:
