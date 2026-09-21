@@ -432,6 +432,13 @@ class PDDCLI(click.Group):
             # Intentional failure (e.g. checkup --validate-arch-includes, failed sync): do not
             # route through handle_error — that misreports "unexpected error" after
             # the command already printed diagnostics.
+            #
+            # Restore any core-dump OutputCapture before re-raising: this path
+            # bypasses process_commands(), and embedded top-level invocations
+            # (cli.main(standalone_mode=False), the in-process server executor)
+            # would otherwise be left with sys.stdout/sys.stderr still wrapped
+            # for the rest of the process (issue #1979 review follow-up).
+            _restore_captured_streams(ctx)
             raise
         except Exception as e:
             # Handle all other exceptions
