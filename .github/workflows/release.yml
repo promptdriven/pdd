@@ -22,15 +22,15 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -67,15 +67,15 @@ jobs:
       # re-enable video for the previous one; the guarantee is permanent.
       RELEASE_VIDEO_OPT_OUT_TAGS: '["v0.0.309","v0.0.310"]'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -111,7 +111,7 @@ jobs:
 
       - name: Setup Node for Claude Code
         if: env.HAS_CLAUDE_OAUTH == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -346,7 +346,7 @@ jobs:
 
       - name: Upload release video recovery artifacts
         if: env.HAS_PDS == 'true' && always() && !contains(fromJSON(env.RELEASE_VIDEO_OPT_OUT_TAGS), github.ref_name)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-video-${{ github.ref_name }}
           path: .pdd/release-videos/${{ github.ref_name }}/

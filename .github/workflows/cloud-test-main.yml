@@ -60,14 +60,14 @@ jobs:
     environment: pdd-cloud-test
     steps:
       - name: Checkout main
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # submit.sh derives the candidate version from `git describe --tags`,
           # so the tag history must be present.
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -92,7 +92,7 @@ jobs:
         run: echo "hash=$(make -s cloud-image-hash)" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached image-build marker
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .cloud-image-hash
           key: cloud-image-hash-${{ steps.imagehash.outputs.hash }}
