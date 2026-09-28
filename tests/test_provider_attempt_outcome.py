@@ -469,6 +469,41 @@ def test_claude_280_complete_401_is_not_started():
     )
 
 
+@pytest.mark.parametrize("version", ["2.1.263", "2.1.280"])
+def test_reviewed_claude_account_cap_429_proves_zero_work(version):
+    envelope = _zero_work_rejection_280() if version == "2.1.280" else _zero_work_rejection()
+    envelope["api_error_status"] = 429
+    envelope["result"] = "You've hit your weekly limit · resets Sep 24, 11pm (UTC)"
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value=f"{version} (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt("anthropic", 1, 1, json.dumps(envelope), "")
+    assert (receipt.failure_kind, receipt.work_disposition) == (
+        "provider_limit", "not_started"
+    )
+
+
+@pytest.mark.parametrize("change", ["generic", "cost", "stderr", "missing-index"])
+def test_claude_280_account_cap_requires_complete_uncontradicted_zero_work(change):
+    envelope = _zero_work_rejection_280()
+    envelope["api_error_status"] = 429
+    envelope["result"] = "You've hit your weekly limit · resets Sep 24, 11pm (UTC)"
+    stderr = ""
+    if change == "generic":
+        envelope["result"] = "API Error: 429 Too many requests"
+    elif change == "cost":
+        envelope["total_cost_usd"] = 0.01
+    elif change == "stderr":
+        stderr = "connection reset"
+    else:
+        del envelope["result_index"]
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(envelope), stderr
+        )
+    assert receipt.work_disposition == (
+        "started_or_billable" if change == "cost" else "ambiguous"
+    )
+
+
 def test_claude_280_native_cancellation_without_json_is_ambiguous():
     with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
         receipt = ac._create_provider_attempt_receipt("anthropic", 1, 124, "", "")
