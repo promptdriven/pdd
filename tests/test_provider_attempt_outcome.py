@@ -90,6 +90,20 @@ def _zero_work_rejection() -> dict[str, Any]:
     }
 
 
+def _zero_work_rejection_280() -> dict[str, Any]:
+    """Sanitized 2.1.280 output from a local-only synthetic 403 API boundary.
+
+    Compared with 2.1.263 using npm package integrity
+    sha512-EZlX8jqNf+e7q9v+UoPbLYAbEGth7aDbcTytHzPYYohbP/fCfrjboCbcv85ZYGEq1Rq7Amm8hXLhuCKxLsabwA==.
+    Both CLIs used --output-format json against ANTHROPIC_BASE_URL on loopback
+    with a synthetic key; the 2.1.280 result adds result_index: 0.
+    """
+    envelope = _zero_work_rejection()
+    envelope["result"] = "Failed to authenticate. API Error: 403 synthetic account has no access"
+    envelope["result_index"] = 0
+    return envelope
+
+
 @pytest.fixture(autouse=True)
 def _reset_provider_state(request):
     version_boundary = (
@@ -258,6 +272,7 @@ def _run_public(
     max_retries: int = 4,
     before_attempt=None,
     single_provider_attempt: bool = True,
+    claude_version: str = "2.1.263 (Claude Code)",
 ):
     preference = provider_preference or ",".join(providers)
     with ExitStack() as stack:
@@ -286,7 +301,7 @@ def _run_public(
         stack.enter_context(
             patch(
                 "pdd.agentic_common._get_provider_cli_version",
-                return_value="2.1.263 (Claude Code)",
+                return_value=claude_version,
             )
         )
         stack.enter_context(
@@ -350,6 +365,84 @@ def test_complete_private_envelope_returns_not_started_and_blocks_fallback(tmp_p
     assert "11111111-2222-4333-8444-555555555555" not in result.output_text
     assert "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" not in result.output_text
     assert '"duration_api_ms"' not in result.output_text
+
+
+@pytest.mark.parametrize(
+    "single_provider_attempt,expected_attempts",
+    [(True, [("anthropic", 1)]), (False, [("anthropic", 1), ("google", 1)])],
+)
+def test_claude_280_rejection_rotation_and_retry(
+    tmp_path, single_provider_attempt, expected_attempts
+):
+    attempts: list[tuple[str, int]] = []
+    result, run_mock, _ = _run_public(
+        tmp_path,
+        providers=["anthropic", "google"],
+        boundary_result=_completed(json.dumps(_zero_work_rejection_280())),
+        claude_version="2.1.280 (Claude Code)",
+        max_retries=7,
+        single_provider_attempt=single_provider_attempt,
+        before_attempt=lambda provider, attempt: attempts.append((provider, attempt)),
+    )
+    assert result.success is False
+    assert attempts == expected_attempts
+    assert run_mock.call_count == len(expected_attempts)
+    if single_provider_attempt:
+        assert _receipt_dict(result)["work_disposition"] == "not_started"
+        assert _receipt_dict(result)["failure_kind"] == "credential_or_account"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda data: data.pop("result_index"),
+        lambda data: data.__setitem__("result_index", 1),
+        lambda data: data.__setitem__("result_index", True),
+        lambda data: data.__setitem__("result_index", -1),
+        lambda data: data.__setitem__("future_activity", 0),
+        lambda data: data["usage"].__setitem__("future_tokens", 0),
+    ],
+    ids=["missing-index", "second-result", "boolean-index", "negative-index", "new-field", "new-usage"],
+)
+def test_claude_280_unreviewed_or_substituted_envelope_is_ambiguous(mutation):
+    envelope = _zero_work_rejection_280()
+    mutation(envelope)
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(envelope), ""
+        )
+    assert receipt.work_disposition == "ambiguous"
+
+
+def test_claude_280_envelope_rejected_under_263_version():
+    receipt = ac._create_provider_attempt_receipt(
+        "anthropic", 1, 1, json.dumps(_zero_work_rejection_280()), ""
+    )
+    assert receipt.work_disposition == "ambiguous"
+
+
+@pytest.mark.parametrize("change", ["tokens", "cost", "queue"])
+def test_claude_280_positive_work_overrides_credential_failure(change):
+    envelope = _zero_work_rejection_280()
+    if change == "tokens":
+        envelope["usage"]["input_tokens"] = 1
+    elif change == "cost":
+        envelope["total_cost_usd"] = 0.01
+    else:
+        envelope["queued_turn_count"] = 1
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(envelope), ""
+        )
+    assert receipt.work_disposition == "started_or_billable"
+
+
+def test_claude_280_contradictory_stderr_is_ambiguous():
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(_zero_work_rejection_280()), "connection reset"
+        )
+    assert receipt.work_disposition == "ambiguous"
 
 
 def test_single_attempt_unstructured_diagnostic_never_echoes_private_text(tmp_path):
@@ -531,7 +624,7 @@ def test_wrong_reviewed_field_types_are_ambiguous(path, value):
 
 @pytest.mark.parametrize(
     "version",
-    ["2.1.264 (Claude Code)", "2.1.263.1", "2.1.263-beta", "2.1.263"],
+    ["2.1.264 (Claude Code)", "2.1.281 (Claude Code)", "2.1.263.1", "2.1.263-beta", "2.1.263"],
 )
 def test_unreviewed_anthropic_cli_version_is_ambiguous(version):
     with patch(
@@ -878,6 +971,11 @@ def test_single_attempt_false_positive_diagnostic_does_not_echo_private_ids(tmp_
             "not_started",
         ),
         (
+            "2.1.280 (Claude Code)",
+            "credential_or_account",
+            "not_started",
+        ),
+        (
             "2.1.119 (Claude Code)",
             "unknown",
             "ambiguous",
@@ -895,7 +993,10 @@ def test_fake_claude_executable_exercises_public_receipt_end_to_end(
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     event_log = tmp_path / "claude-events.log"
-    raw = json.dumps(_zero_work_rejection(), separators=(",", ":"))
+    raw = json.dumps(
+        _zero_work_rejection_280() if "2.1.280" in version else _zero_work_rejection(),
+        separators=(",", ":"),
+    )
     isolated_env = {
         "HOME": str(fake_home),
         "PATH": str(fake_cli.parent),
