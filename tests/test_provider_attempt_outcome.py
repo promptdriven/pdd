@@ -445,6 +445,28 @@ def test_claude_280_contradictory_stderr_is_ambiguous():
     assert receipt.work_disposition == "ambiguous"
 
 
+@pytest.mark.parametrize("boundary", [{"timed_out": True}, {"output_complete": False}])
+def test_claude_280_cancelled_or_partial_output_is_ambiguous(boundary):
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(_zero_work_rejection_280()), "", **boundary
+        )
+    assert receipt.work_disposition == "ambiguous"
+
+
+def test_claude_280_complete_401_is_not_started():
+    envelope = _zero_work_rejection_280()
+    envelope["api_error_status"] = 401
+    envelope["result"] = "Failed to authenticate. API Error: 401 synthetic invalid key"
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt(
+            "anthropic", 1, 1, json.dumps(envelope), ""
+        )
+    assert (receipt.failure_kind, receipt.work_disposition) == (
+        "credential_or_account", "not_started"
+    )
+
+
 def test_single_attempt_unstructured_diagnostic_never_echoes_private_text(tmp_path):
     private_text = (
         "authentication failed password=hunter2 "
