@@ -1086,6 +1086,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			exit 1; \
 		fi; \
 		if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$EXISTING_TAG"; then \
+			echo "Skipping release video because RELEASE_VIDEO=0"; \
 			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
 		else \
 			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
@@ -1115,6 +1116,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	git push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
 	if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$NEW_TAG"; then \
+		echo "Skipping release video because RELEASE_VIDEO=0"; \
 		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
 	else \
 		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
