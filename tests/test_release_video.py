@@ -3121,6 +3121,7 @@ check-release-video-config:
         ]
     else:
         assert f"Skipping release video for opted-out tag {release_tag}." in result.stdout
+        assert "Skipping release video because RELEASE_VIDEO=0" not in result.stdout
 
     if scenario == "new":
         git_calls = git_log.read_text(encoding="utf8").splitlines()
