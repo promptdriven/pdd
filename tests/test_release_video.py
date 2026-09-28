@@ -3034,7 +3034,7 @@ with Path(os.environ["RELEASE_TEST_MAKE_LOG"]).open("a", encoding="utf8") as log
     log.write(" ".join(args) + "\\n")
 
 if "release-video" in args and any(
-    ("RELEASE_TAG=" + t) in args for t in ("v0.0.309", "v0.0.310")
+    ("RELEASE_TAG=" + t) in args for t in ("v0.0.309", "v0.0.310", "v0.0.311")
 ):
     sys.stderr.write("release-video: tag is opted out\\n")
     raise SystemExit(1)
@@ -3049,8 +3049,10 @@ raise SystemExit(0)
     [
         ("existing", "v0.0.309", "", False),
         ("new", "v0.0.309", "v0.0.308", False),
-        ("existing", "v0.0.311", "", True),
-        ("new", "v0.0.311", "v0.0.310", True),
+        ("existing", "v0.0.311", "", False),
+        ("new", "v0.0.311", "v0.0.310", False),
+        ("existing", "v0.0.312", "", True),
+        ("new", "v0.0.312", "v0.0.311", True),
     ],
 )
 def test_release_makefile_treats_only_opt_out_tag_as_successful_no_video_path(
@@ -3281,6 +3283,7 @@ def test_release_video_workflow_explicitly_opts_out_v0_0_309():
     assert json.loads(publish_job["env"]["RELEASE_VIDEO_OPT_OUT_TAGS"]) == [
         "v0.0.309",
         "v0.0.310",
+        "v0.0.311",
     ]
     for step_name in (
         "Create release video and prepend link to notes (best-effort)",
@@ -8534,7 +8537,7 @@ def test_release_video_opt_out_is_a_set_covering_every_opted_out_tag() -> None:
         release_video_opt_out_reason,
     )
 
-    assert {"v0.0.309", "v0.0.310"} <= RELEASE_VIDEO_OPT_OUT_TAGS
+    assert {"v0.0.309", "v0.0.310", "v0.0.311"} <= RELEASE_VIDEO_OPT_OUT_TAGS
 
     for tag in sorted(RELEASE_VIDEO_OPT_OUT_TAGS):
         reason = release_video_opt_out_reason(tag)
@@ -8543,7 +8546,7 @@ def test_release_video_opt_out_is_a_set_covering_every_opted_out_tag() -> None:
     # Exact membership, never prefix or substring.
     assert release_video_opt_out_reason("v0.0.31") is None
     assert release_video_opt_out_reason("v0.0.3100") is None
-    assert release_video_opt_out_reason("v0.0.311") is None
+    assert release_video_opt_out_reason("v0.0.3110") is None
 
 
 def test_release_video_opt_out_sources_agree() -> None:

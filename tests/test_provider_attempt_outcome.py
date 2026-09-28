@@ -481,6 +481,22 @@ def test_reviewed_claude_account_cap_429_proves_zero_work(version):
     )
 
 
+@pytest.mark.parametrize("version", ["2.1.263", "2.1.280"])
+@pytest.mark.parametrize("detail", [
+    "You have not hit your weekly limit · resets Sep 24, 11pm (UTC); this is a temporary rate limit",
+    "If you hit your weekly limit · resets Sep 24, 11pm (UTC)",
+    "You've hit your weekly limit · resets Sep 24, 11pm (UTC); this is a temporary rate limit",
+    "API Error: 429 Too many requests",
+])
+def test_claude_429_unreviewed_or_contradictory_message_is_ambiguous(version, detail):
+    envelope = _zero_work_rejection_280() if version == "2.1.280" else _zero_work_rejection()
+    envelope["api_error_status"] = 429
+    envelope["result"] = detail
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value=f"{version} (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt("anthropic", 1, 1, json.dumps(envelope), "")
+    assert (receipt.failure_kind, receipt.work_disposition) == ("provider_limit", "ambiguous")
+
+
 @pytest.mark.parametrize("change", ["generic", "cost", "stderr", "missing-index"])
 def test_claude_280_account_cap_requires_complete_uncontradicted_zero_work(change):
     envelope = _zero_work_rejection_280()

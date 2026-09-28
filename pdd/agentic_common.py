@@ -1285,6 +1285,12 @@ _ANTHROPIC_CREDENTIAL_ERROR_RE = re.compile(
     r"organization\s+does\s+not\s+have\s+access|account\s+access)\b",
     re.IGNORECASE,
 )
+_ANTHROPIC_REVIEWED_ACCOUNT_CAP_RE = re.compile(
+    r"You've hit your (?:weekly )?limit · resets "
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"(?:[1-9]|[12][0-9]|3[01]), "
+    r"(?:[1-9]|1[0-2])(?::[0-5][0-9])?(?:am|pm) \(UTC\)"
+)
 
 # This is deliberately a *closed* description of the Claude Code 2.1.263
 # result envelope reviewed for the pre-inference 401/403 case. Claude 2.1.280
@@ -2318,7 +2324,7 @@ def _anthropic_is_complete_zero_work_rejection(
     if status == 429:
         # Generic rate limits remain ambiguous. Only the reviewed account-cap
         # message together with the complete zero-work envelope proves no work.
-        return _classify_permanent_error(detail) == "credential-limit"
+        return bool(_ANTHROPIC_REVIEWED_ACCOUNT_CAP_RE.fullmatch(detail))
     return bool(_ANTHROPIC_CREDENTIAL_ERROR_RE.search(detail))
 
 

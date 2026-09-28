@@ -112,7 +112,7 @@ RELEASE_VIDEO_SKIP_REASON ?=
 # silently re-enables video for the previous one, and the guarantee is
 # per-release and permanent. v0.0.309 carries no `pdd-release-video-skipped`
 # marker, so this list is the only thing keeping a backfill off it.
-RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310
+RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310 v0.0.311
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
