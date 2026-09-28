@@ -112,7 +112,7 @@ RELEASE_VIDEO_SKIP_REASON ?=
 # silently re-enables video for the previous one, and the guarantee is
 # per-release and permanent. v0.0.309 carries no `pdd-release-video-skipped`
 # marker, so this list is the only thing keeping a backfill off it.
-RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310
+RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310 v0.0.311
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
@@ -1086,6 +1086,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			exit 1; \
 		fi; \
 		if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$EXISTING_TAG"; then \
+			if [ "$(RELEASE_VIDEO)" = "0" ]; then echo "Skipping release video because RELEASE_VIDEO=0"; fi; \
 			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
 		else \
 			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
@@ -1115,6 +1116,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	git push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
 	if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$NEW_TAG"; then \
+		if [ "$(RELEASE_VIDEO)" = "0" ]; then echo "Skipping release video because RELEASE_VIDEO=0"; fi; \
 		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
 	else \
 		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \

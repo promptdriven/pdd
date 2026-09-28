@@ -1285,9 +1285,16 @@ _ANTHROPIC_CREDENTIAL_ERROR_RE = re.compile(
     r"organization\s+does\s+not\s+have\s+access|account\s+access)\b",
     re.IGNORECASE,
 )
+_ANTHROPIC_REVIEWED_ACCOUNT_CAP_RE = re.compile(
+    r"You've hit your (?:weekly )?limit · resets "
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"(?:[1-9]|[12][0-9]|3[01]), "
+    r"(?:[1-9]|1[0-2])(?::[0-5][0-9])?(?:am|pm) \(UTC\)"
+)
 
 # This is deliberately a *closed* description of the Claude Code 2.1.263
-# result envelope reviewed for the pre-inference 401/403 case.  It is not a
+# result envelope reviewed for the pre-inference 401/403 case. Claude 2.1.280
+# adds result_index, whose reviewed single-result value is zero. It is not a
 # permissive parser: a newer CLI can add an activity counter whose zero value
 # we do not understand, so it must fail closed until reviewed.
 _ANTHROPIC_REVIEWED_TOP_LEVEL_FIELDS = frozenset(
@@ -1313,6 +1320,9 @@ _ANTHROPIC_REVIEWED_TOP_LEVEL_FIELDS = frozenset(
         "fast_mode_state",
         "fast_mode_disabled_reason",
     }
+)
+_ANTHROPIC_REVIEWED_280_TOP_LEVEL_FIELDS = (
+    _ANTHROPIC_REVIEWED_TOP_LEVEL_FIELDS | {"result_index"}
 )
 _ANTHROPIC_REVIEWED_OBJECT_FIELDS = {
     ("usage",): frozenset(
@@ -1496,11 +1506,15 @@ def _strict_codex_json_object(text: str) -> Any:
 
 
 def _mapping_has_only_reviewed_fields(
-    data: Mapping[str, Any], path: Tuple[str, ...] = (),
+    data: Mapping[str, Any], path: Tuple[str, ...] = (), *, cli_version: str = "2.1.263",
 ) -> bool:
     """Validate every activity-bearing Claude object against the pinned shape."""
     allowed = (
-        _ANTHROPIC_REVIEWED_TOP_LEVEL_FIELDS
+        (
+            _ANTHROPIC_REVIEWED_280_TOP_LEVEL_FIELDS
+            if cli_version == "2.1.280"
+            else _ANTHROPIC_REVIEWED_TOP_LEVEL_FIELDS
+        )
         if not path else _ANTHROPIC_REVIEWED_OBJECT_FIELDS.get(path)
     )
     if allowed is None or set(data) != set(allowed):
@@ -1509,16 +1523,28 @@ def _mapping_has_only_reviewed_fields(
         child_path = path + (key,)
         if child_path in _ANTHROPIC_REVIEWED_OBJECT_FIELDS:
             if not isinstance(value, Mapping) or not _mapping_has_only_reviewed_fields(
-                value, child_path
+                value, child_path, cli_version=cli_version
             ):
                 return False
     return True
 
 
-def _anthropic_matches_reviewed_schema(data: Mapping[str, Any]) -> bool:
-    """Validate the exact Claude Code 2.1.263 result-envelope shape."""
-    if not _mapping_has_only_reviewed_fields(data):
+def _anthropic_matches_reviewed_schema(
+    data: Mapping[str, Any], *, cli_version: str = "2.1.263"
+) -> bool:
+    """Validate the exact result-envelope shape for a reviewed Claude CLI."""
+    if cli_version not in {"2.1.263", "2.1.280"}:
         return False
+    if not _mapping_has_only_reviewed_fields(data, cli_version=cli_version):
+        return False
+    if cli_version == "2.1.280":
+        result_index = data.get("result_index")
+        if (
+            isinstance(result_index, bool)
+            or not isinstance(result_index, int)
+            or result_index != 0
+        ):
+            return False
     if not all(
         isinstance(_nested_value(data, path), str)
         for path in _ANTHROPIC_REVIEWED_STRING_PATHS
@@ -1545,10 +1571,15 @@ def _anthropic_matches_reviewed_schema(data: Mapping[str, Any]) -> bool:
     )
 
 
-def _anthropic_cli_version_is_reviewed() -> bool:
-    """Accept only the Claude Code version whose failure schema was reviewed."""
+def _anthropic_reviewed_cli_version() -> Optional[str]:
+    """Return the exact Claude Code version whose failure schema was reviewed."""
     version = _get_provider_cli_version("anthropic").strip()
-    return re.fullmatch(r"2\.1\.263 \(Claude Code\)", version) is not None
+    match = re.fullmatch(r"(2\.1\.(?:263|280)) \(Claude Code\)", version)
+    return match.group(1) if match else None
+
+
+def _anthropic_cli_version_is_reviewed() -> bool:
+    return _anthropic_reviewed_cli_version() is not None
 
 
 def _has_positive_counter(data: Any, names: AbstractSet[str]) -> bool:
@@ -2259,9 +2290,11 @@ def _anthropic_has_reviewed_activity(data: Mapping[str, Any]) -> bool:
     return isinstance(by_type, Mapping) and bool(by_type)
 
 
-def _anthropic_is_complete_zero_work_rejection(data: Mapping[str, Any]) -> bool:
-    """Match the reviewed Claude 2.1.263 pre-inference rejection boundary."""
-    if not _anthropic_matches_reviewed_schema(data):
+def _anthropic_is_complete_zero_work_rejection(
+    data: Mapping[str, Any], *, cli_version: str = "2.1.263"
+) -> bool:
+    """Match a reviewed Claude pre-inference rejection boundary."""
+    if not _anthropic_matches_reviewed_schema(data, cli_version=cli_version):
         return False
     if data.get("type") != "result" or data.get("subtype") != "success":
         return False
@@ -2270,7 +2303,7 @@ def _anthropic_is_complete_zero_work_rejection(data: Mapping[str, Any]) -> bool:
     if data.get("is_error") is not True or data.get("terminal_reason") != "api_error":
         return False
     status = data.get("api_error_status")
-    if isinstance(status, bool) or status not in {401, 403}:
+    if isinstance(status, bool) or status not in {401, 403, 429}:
         return False
     if data.get("num_turns") != 1:
         return False
@@ -2286,7 +2319,13 @@ def _anthropic_is_complete_zero_work_rejection(data: Mapping[str, Any]) -> bool:
     if _nested_value(data, ("subagent_stats", "by_type")) != {}:
         return False
     detail = data.get("result")
-    return isinstance(detail, str) and bool(_ANTHROPIC_CREDENTIAL_ERROR_RE.search(detail))
+    if not isinstance(detail, str):
+        return False
+    if status == 429:
+        # Generic rate limits remain ambiguous. Only the reviewed account-cap
+        # message together with the complete zero-work envelope proves no work.
+        return bool(_ANTHROPIC_REVIEWED_ACCOUNT_CAP_RE.fullmatch(detail))
+    return bool(_ANTHROPIC_CREDENTIAL_ERROR_RE.search(detail))
 
 
 def _new_provider_attempt_receipt(
@@ -2388,9 +2427,9 @@ def _create_provider_attempt_receipt(
         # A schema mismatch is deliberately checked before known counters.
         # Positive fields in an unreviewed future envelope are not evidence for
         # either old field semantics or zero work.
-        if (
-            not _anthropic_cli_version_is_reviewed()
-            or not _anthropic_matches_reviewed_schema(parsed)
+        cli_version = _anthropic_reviewed_cli_version()
+        if cli_version is None or not _anthropic_matches_reviewed_schema(
+            parsed, cli_version=cli_version
         ):
             return _new_provider_attempt_receipt(
                 safe_provider, attempt_number, "unknown", "ambiguous"
@@ -2417,10 +2456,13 @@ def _create_provider_attempt_receipt(
         # reset after work began). Only an empty benign stderr proves zero work.
         if (
             not stderr_text.strip()
-            and _anthropic_is_complete_zero_work_rejection(parsed)
+            and _anthropic_is_complete_zero_work_rejection(parsed, cli_version=cli_version)
         ):
+            zero_work_kind: ProviderFailureKind = (
+                "provider_limit" if status == 429 else "credential_or_account"
+            )
             return _new_provider_attempt_receipt(
-                safe_provider, attempt_number, "credential_or_account", "not_started"
+                safe_provider, attempt_number, zero_work_kind, "not_started"
             )
         if status == 429:
             failure_kind: ProviderFailureKind = "provider_limit"

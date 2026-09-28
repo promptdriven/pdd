@@ -25,7 +25,7 @@ YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s
 # per-release and permanent. v0.0.309 in particular carries no
 # `pdd-release-video-skipped` marker on its GitHub Release, so this set is the
 # only thing preventing a later backfill from attaching a video to it.
-RELEASE_VIDEO_OPT_OUT_TAGS = frozenset({"v0.0.309", "v0.0.310"})
+RELEASE_VIDEO_OPT_OUT_TAGS = frozenset({"v0.0.309", "v0.0.310", "v0.0.311"})
 IDEMPOTENCY_PROVENANCE_RE = re.compile(r"[^a-z0-9._-]+")
 PDS_RUN_HANDLE_LINE_RE = re.compile(
     r"^\[pds\]\s+release-video run handle:\s+(?P<fields>.+)$",

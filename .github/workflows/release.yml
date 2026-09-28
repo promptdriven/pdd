@@ -65,7 +65,7 @@ jobs:
       # matching -- `contains('v0.0.31', ...)` would also match v0.0.310.
       # Overwriting a single tag to opt out a new release would silently
       # re-enable video for the previous one; the guarantee is permanent.
-      RELEASE_VIDEO_OPT_OUT_TAGS: '["v0.0.309","v0.0.310"]'
+      RELEASE_VIDEO_OPT_OUT_TAGS: '["v0.0.309","v0.0.310","v0.0.311"]'
     steps:
       - uses: actions/checkout@v6
         with:
