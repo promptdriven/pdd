@@ -96,7 +96,9 @@ def _zero_work_rejection_280() -> dict[str, Any]:
     Compared with 2.1.263 using npm package integrity
     sha512-EZlX8jqNf+e7q9v+UoPbLYAbEGth7aDbcTytHzPYYohbP/fCfrjboCbcv85ZYGEq1Rq7Amm8hXLhuCKxLsabwA==.
     Both CLIs used --output-format json against ANTHROPIC_BASE_URL on loopback
-    with a synthetic key; the 2.1.280 result adds result_index: 0.
+    with a synthetic key; the 2.1.280 result adds result_index: 0. When
+    interrupted while the local endpoint withheld its response, 2.1.280
+    emitted no JSON, whereas 2.1.263 emitted an aborted_streaming envelope.
     """
     envelope = _zero_work_rejection()
     envelope["result"] = "Failed to authenticate. API Error: 403 synthetic account has no access"
@@ -465,6 +467,12 @@ def test_claude_280_complete_401_is_not_started():
     assert (receipt.failure_kind, receipt.work_disposition) == (
         "credential_or_account", "not_started"
     )
+
+
+def test_claude_280_native_cancellation_without_json_is_ambiguous():
+    with patch("pdd.agentic_common._get_provider_cli_version", return_value="2.1.280 (Claude Code)"):
+        receipt = ac._create_provider_attempt_receipt("anthropic", 1, 124, "", "")
+    assert receipt.work_disposition == "ambiguous"
 
 
 def test_single_attempt_unstructured_diagnostic_never_echoes_private_text(tmp_path):
