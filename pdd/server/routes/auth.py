@@ -20,6 +20,7 @@ from pdd.auth_service import (
     clear_jwt_cache as _clear_jwt_cache,
     clear_refresh_token as _clear_refresh_token,
     get_cached_jwt as _get_cached_jwt,
+    _has_unexpired_jwt_with_confirmed_audience_mismatch,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -78,10 +79,24 @@ async def get_auth_status() -> AuthStatus:
 
     Returns whether the user is authenticated (has valid cached JWT or refresh token).
     """
-    # First check JWT cache
+    # Check whether the cache holds an unexpired JWT with a *confirmed* audience
+    # mismatch before the audience-aware read below may delete the file.
+    # Malformed/unparseable JWTs do NOT set this flag and fall through to the
+    # refresh-token check rather than incorrectly clearing the refresh token.
+    jwt_audience_mismatch = _has_unexpired_jwt_with_confirmed_audience_mismatch()
+
+    # Check JWT cache (audience-aware)
     cache_valid, expires_at = _get_jwt_cache_info()
     if cache_valid:
         return AuthStatus(authenticated=True, cached=True, expires_at=expires_at)
+
+    # Confirmed audience mismatch: do NOT fall back to the refresh token — that
+    # would cause a split-brain where the UI shows "authenticated" while all
+    # JWT-gated calls fail.  Also clear the refresh token so that repeated
+    # /status polls stay unauthenticated.
+    if jwt_audience_mismatch:
+        _clear_refresh_token()
+        return AuthStatus(authenticated=False, cached=False, expires_at=None)
 
     # Check for refresh token in keyring
     has_refresh = _has_refresh_token()

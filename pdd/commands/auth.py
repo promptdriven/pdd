@@ -19,6 +19,8 @@ try:
         logout as service_logout,
         verify_auth,
         JWT_CACHE_FILE,
+        get_cached_jwt,
+        get_jwt_cache_info,
     )
     from ..get_jwt_token import (
         get_jwt_token,
@@ -307,22 +309,9 @@ def logout_cmd():
 def token_cmd(output_format: str):
     """Print the current authentication token."""
 
-    token_str = None
-    expires_at = None
-
-    # Attempt to read valid token from cache
-    if JWT_CACHE_FILE.exists():
-        try:
-            data = json.loads(JWT_CACHE_FILE.read_text())
-            cached_token = data.get("id_token")
-            cached_exp = data.get("expires_at")
-
-            # Simple expiry check
-            if cached_token and cached_exp and cached_exp > time.time():
-                token_str = cached_token
-                expires_at = cached_exp
-        except Exception:
-            pass
+    # Use the audience-aware cache helpers to avoid returning wrong-environment JWTs
+    cache_valid, expires_at = get_jwt_cache_info()
+    token_str = get_cached_jwt() if cache_valid else None
 
     if not token_str:
         # Removed err=True because rich.console.Console.print does not support it
