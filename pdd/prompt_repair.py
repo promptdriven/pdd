@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
+import os
+import signal
 import subprocess
 import tempfile
 import time
@@ -11,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from . import change as change_mod
 from .agentic_common import (
     AgenticTaskResult,
     AgenticUnsupportedSemanticsError,
@@ -443,6 +447,106 @@ def _maybe_rollback_strict(
     return current_text
 
 
+def _rollback(path: Path, original_text: str) -> str:
+    """Restore the original prompt after a timed-out provider call."""
+    try:
+        atomic_write_text(path, original_text)
+    except OSError as exc:
+        logger.warning("Failed to restore original prompt %s: %s", path, exc)
+    return original_text
+
+
+def _provider_worker(
+    response_writer: Any,
+    provider: Any,
+    kwargs: Dict[str, Any],
+) -> None:
+    """Run one provider call in its own process group."""
+    try:
+        if hasattr(os, "setpgrp"):
+            os.setpgrp()
+        response_writer.send({"kind": "ready"})
+        try:
+            result = provider(**kwargs)
+            response_writer.send({"kind": "result", "result": result})
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            response_writer.send(
+                {
+                    "kind": "error",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    finally:
+        response_writer.close()
+
+
+def _supervised_provider_call(
+    provider: Any,
+    deadline: float,
+    **kwargs: Any,
+) -> Any:
+    """Invoke a provider within the absolute repair deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Prompt repair deadline exceeded")
+
+    context = multiprocessing.get_context(
+        "fork" if hasattr(os, "fork") else "spawn"
+    )
+    response_reader, response_writer = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_provider_worker,
+        args=(response_writer, provider, kwargs),
+    )
+    started = False
+    try:
+        process.start()
+        started = True
+        response_writer.close()
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not response_reader.poll(remaining):
+            raise TimeoutError("Prompt repair deadline exceeded")
+        try:
+            message = response_reader.recv()
+        except (EOFError, ConnectionResetError) as exc:
+            raise RuntimeError("Provider worker exited before readiness") from exc
+        if message.get("kind") != "ready":
+            raise RuntimeError("Provider worker sent an invalid readiness response")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not response_reader.poll(remaining):
+            raise TimeoutError("Prompt repair deadline exceeded")
+        try:
+            message = response_reader.recv()
+        except (EOFError, ConnectionResetError) as exc:
+            raise RuntimeError("Provider worker exited without a result") from exc
+        if message.get("kind") == "result":
+            return message["result"]
+        if message.get("kind") == "error":
+            error_type = message.get("error_type", "ProviderError")
+            raise RuntimeError(f"{error_type}: {message.get('error', '')}")
+        raise RuntimeError("Provider worker sent an invalid result")
+    finally:
+        if started:
+            # The worker creates a process group before reporting readiness. Kill
+            # that group even if the worker has already exited, because a provider
+            # may have left descendants running after returning or timing out.
+            if hasattr(os, "killpg") and process.pid is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if process.is_alive():
+                process.kill()
+            process.join(0.2)
+            if process.is_alive():
+                process.kill()
+                process.join(0.1)
+        response_reader.close()
+        response_writer.close()
+
+
 # pylint: disable=too-many-arguments,too-many-locals
 # pylint: disable=too-many-return-statements,too-many-branches,too-many-statements
 def run_prompt_repair_loop(
@@ -488,6 +592,7 @@ def run_prompt_repair_loop(
         )
 
     started = time.monotonic()
+    absolute_deadline = started + config.max_seconds
     try:
         original_text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -555,11 +660,10 @@ def run_prompt_repair_loop(
     current_report = initial_report
 
     for _round in range(config.max_rounds):
-        if time.monotonic() - started >= config.max_seconds:
+        remaining = absolute_deadline - time.monotonic()
+        if remaining <= 0:
             logger.warning("Prompt repair timed out after %.1fs for %s", config.max_seconds, path)
-            current_text = _maybe_rollback_strict(
-                path, original_text, current_text, config=config, rounds_used=rounds_used
-            )
+            current_text = _rollback(path, original_text)
             _ta = count_tokens(current_text) if tokens_before >= 0 else -1
             result = RepairResult(
                 success=False,
@@ -568,7 +672,7 @@ def run_prompt_repair_loop(
                 rounds_used=rounds_used,
                 tokens_before=tokens_before,
                 tokens_after=_ta,
-                token_delta=_ta - tokens_before if tokens_before >= 0 and _ta >= 0 else 0,
+                token_delta=0,
                 preamble_estimate=preamble_estimate,
                 message="repair timeout",
                 findings_before=findings_before,
@@ -604,7 +708,6 @@ def run_prompt_repair_loop(
             findings_after = []
             break
 
-        remaining = max(1.0, config.max_seconds - (time.monotonic() - started))
         brief = _repair_brief(current_findings, context)
         change_context = json.dumps(
             {
@@ -618,6 +721,8 @@ def run_prompt_repair_loop(
             },
             indent=2,
         )
+        observed_round_cost = 0.0
+        observed_round_model: Optional[str] = None
         try:
             if exact_model:
                 exact_result = _run_exact_prompt_change(
@@ -643,23 +748,86 @@ def run_prompt_repair_loop(
                         "Exact prompt repair did not return the required delimiters"
                     )
             else:
-                candidate, round_cost, round_model = change(
-                    input_prompt=current_text,
-                    input_code=change_context,
-                    change_prompt=brief,
-                    temperature=0.0,
-                    # Normalise remaining wall-clock seconds to the 0–1 relative
-                    # thinking budget that change()/llm_invoke() expects.
-                    # Clamped to [0.01, 1.0] to avoid zero or over-budget reasoning.
-                    time=min(1.0, max(0.01, remaining / config.max_seconds)),
-                    verbose=verbose and not quiet,
+                captured_provider = change_mod.llm_invoke
+
+                def supervised_provider(**kwargs: Any) -> Any:
+                    nonlocal observed_round_cost, observed_round_model
+                    response = _supervised_provider_call(
+                        captured_provider,
+                        absolute_deadline,
+                        **kwargs,
+                    )
+                    if isinstance(response, dict):
+                        try:
+                            observed_round_cost += float(response.get("cost") or 0.0)
+                        except (TypeError, ValueError):
+                            pass
+                        if observed_round_model is None:
+                            reported_model = str(response.get("model_name") or "")
+                            observed_round_model = reported_model or None
+                    return response
+
+                override_token = change_mod.LLM_INVOKE_OVERRIDE.set(
+                    supervised_provider
                 )
+                try:
+                    candidate, round_cost, round_model = change(
+                        input_prompt=current_text,
+                        input_code=change_context,
+                        change_prompt=brief,
+                        temperature=0.0,
+                        # Normalise remaining wall-clock seconds to the 0–1 relative
+                        # thinking budget that change()/llm_invoke() expects.
+                        # Clamped to [0.01, 1.0] to avoid zero or over-budget reasoning.
+                        time=min(1.0, max(0.01, remaining / config.max_seconds)),
+                        verbose=verbose and not quiet,
+                    )
+                finally:
+                    change_mod.LLM_INVOKE_OVERRIDE.reset(override_token)
                 total_cost_usd += float(round_cost or 0.0)
                 model_used = str(round_model or "") or model_used
                 if round_cost:
                     billing_status = "reported_nonzero"
+        except TimeoutError:
+            logger.warning("Prompt repair timed out during provider call for %s", path)
+            total_cost_usd += observed_round_cost
+            model_used = observed_round_model or model_used
+            if observed_round_cost:
+                billing_status = "reported_nonzero"
+            current_text = _rollback(path, original_text)
+            _ta = count_tokens(current_text) if tokens_before >= 0 else -1
+            result = RepairResult(
+                success=False,
+                issues_before=issues_before,
+                issues_after=current_issues,
+                rounds_used=rounds_used,
+                tokens_before=tokens_before,
+                tokens_after=_ta,
+                token_delta=0,
+                preamble_estimate=preamble_estimate,
+                message="repair timeout",
+                findings_before=findings_before,
+                findings_after=current_findings,
+                model_used=model_used,
+                cost_usd=total_cost_usd,
+                usage=usage_records,
+                apply_method=apply_method,
+                billing_status=billing_status,
+            )
+            result.audit_path = _write_audit_note(
+                project_root=project_root,
+                path=path,
+                config=config,
+                result=result,
+                applied_operations=applied_operations,
+            )
+            return result
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Prompt repair change() call failed for %s: %s", path, exc)
+            total_cost_usd += observed_round_cost
+            model_used = observed_round_model or model_used
+            if observed_round_cost:
+                billing_status = "reported_nonzero"
             current_text = _maybe_rollback_strict(
                 path, original_text, current_text, config=config, rounds_used=rounds_used
             )
