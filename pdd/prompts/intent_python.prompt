@@ -1,0 +1,204 @@
+<pdd-reason>Plans an ordinary-language product request against local repository evidence without requiring GitHub, mutating project files, or invoking an LLM.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "dataclasses": [
+      {
+        "name": "IntentTarget",
+        "fields": [
+          {"name": "product_area", "type": "str"},
+          {"name": "prompt_path", "type": "Optional[str]"},
+          {"name": "output_path", "type": "Optional[str]"},
+          {"name": "architecture_path", "type": "Optional[str]"},
+          {"name": "score", "type": "int"},
+          {"name": "matched_terms", "type": "Tuple[str, ...]"}
+        ]
+      },
+      {
+        "name": "IntentPlan",
+        "fields": [
+          {"name": "schema_version", "type": "str"},
+          {"name": "intent_id", "type": "str"},
+          {"name": "title", "type": "str"},
+          {"name": "original_request", "type": "str"},
+          {"name": "original_request_sha256", "type": "str"},
+          {"name": "source_kind", "type": "str"},
+          {"name": "source_ref", "type": "Optional[str]"},
+          {"name": "project_root", "type": "str"},
+          {"name": "project_exists", "type": "bool"},
+          {"name": "repository_root", "type": "Optional[str]"},
+          {"name": "scope_kind", "type": "str"},
+          {"name": "adoption_scenario", "type": "str"},
+          {"name": "project_kind", "type": "str"},
+          {"name": "pdd_signals", "type": "Tuple[str, ...]"},
+          {"name": "candidate_targets", "type": "Tuple[IntentTarget, ...]"},
+          {"name": "must_preserve", "type": "Tuple[str, ...]"},
+          {"name": "examples", "type": "Tuple[str, ...]"},
+          {"name": "story_recommended", "type": "bool"},
+          {"name": "story_reasons", "type": "Tuple[str, ...]"},
+          {"name": "recommended_workflow", "type": "str"},
+          {"name": "open_decisions", "type": "Tuple[str, ...]"},
+          {"name": "warnings", "type": "Tuple[str, ...]"}
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "build_intent_plan",
+        "signature": "(request: str, project_root: Path, *, title: Optional[str] = None, source_kind: str = 'inline', source_ref: Optional[str] = None) -> IntentPlan",
+        "returns": "IntentPlan"
+      },
+      {
+        "name": "intent_plan_to_dict",
+        "signature": "(plan: IntentPlan) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]"
+      },
+      {
+        "name": "render_review_card",
+        "signature": "(plan: IntentPlan) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "detected_technology_terms",
+        "signature": "(request: str) -> Tuple[str, ...]",
+        "returns": "Tuple[str, ...]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Write `pdd/intent.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  Implement the deterministic, local planning core for the beginner-facing
+  `pdd intent` workflow. This first vertical slice preserves an ordinary-language
+  request, classifies the project, discovers candidate prompt-owned product
+  areas, and renders a plain-language review card. It MUST NOT mutate the project,
+  call GitHub, invoke an LLM, run generation, or claim that it applied the plan.
+
+<contract_rules>
+R1 - Immutable request representation
+`build_intent_plan` MUST reject empty/whitespace-only requests, normalize only
+outer whitespace, retain the request text otherwise byte-for-byte, and include
+a SHA-256 digest of the retained request. It MUST derive a deterministic,
+lowercase intent ID containing only ASCII letters, digits, and hyphens, with no
+leading/trailing hyphen and a maximum length of 57 characters, from the
+supplied/inferred title plus the digest.
+
+R2 - Project classification
+Classify the project as `existing_pdd` when local PDD evidence exists
+(`.pddrc`, one or more `architecture.json` files, or `.prompt` files);
+otherwise classify it as `conventional_brownfield` when ordinary source files
+exist, and `greenfield` when neither PDD evidence nor ordinary source exists.
+Permit a proposed project root that does not exist yet and classify it as
+greenfield without creating it. When an existing project root holds visible
+files that are neither recognized source nor prompts, such as a documentation
+directory, it MUST still classify as greenfield but MUST also emit a warning
+and an open decision that the root be confirmed before anything is generated
+into it. A genuinely empty root MUST NOT trigger that warning.
+Discover the nearest containing Git repository
+from `.git` evidence and distinguish `repository` from `subproject` scope.
+Return an adoption scenario that distinguishes an existing standalone project,
+a new standalone project, an existing monorepo subproject, a new monorepo
+subproject, and already-PDD-managed variants.
+Discovery MUST ignore `.git`, `.pdd`, virtual environments, dependency/vendor
+trees, caches, and build outputs. It MUST be bounded and deterministic.
+
+R3 - Tolerant architecture discovery
+Use `pdd.architecture_registry.find_architecture_for_project` and
+`extract_modules` to read bare-array and `{modules: [...]}` architecture files.
+An architecture file that raises `OSError` or `JSONDecodeError` MUST produce a
+warning instead of crashing.
+Architecture discovery MUST retain the declaring architecture path, prompt
+filename, generated output path, description/reason, and tags needed for
+candidate scoring.
+
+R4 - Conservative candidate discovery
+Discover candidate targets by deterministic token overlap between the request
+and architecture/prompt inventory. Identity fields (prompt filename, output
+path, tags) MUST carry more weight than description/reason prose. Return at
+most five stable, score-sorted candidates. A candidate MUST match at least one
+meaningful request token in an identity field or at least two meaningful
+request tokens in description/reason prose. Common workflow terms such as
+`agent`, `GitHub`, `issue`, `project`, `planning`, `prompt`, and `PDD` MUST NOT
+count as meaningful standalone target tokens. Ordinary English function words,
+such as `each`, `every`, `while`, `same`, `other`, `them`, and `what`, MUST NOT
+count either, and a two-word phrase composed only of such words, such as
+`for each`, MUST NOT count as a phrase match. A request that overlaps a product
+area on nothing but function words MUST yield no candidate. Give additional weight to
+matching adjacent two-word phrases, including phrases containing one workflow
+term and one target-specific term (for example, `pdd intent`). After sorting,
+retain only candidates scoring at least 60 percent of the highest score, up to
+the five-candidate limit. Never fabricate a target and never claim a candidate
+is authoritative; when no qualifying match exists, return no candidate and add
+an open decision that an agent must inspect the architecture or propose a new
+product part.
+
+R4a - Technology detection for greenfield work
+`detected_technology_terms` MUST deterministically return the language,
+runtime, framework, and tooling names stated in the request, in stable sorted
+order. It MUST exclude ordinary English words that merely coincide with
+technology names, such as `go`, `c`, and `r`, because a false positive lets
+greenfield generation begin against an undecided stack while a false negative
+only costs one explicit assertion. When a greenfield plan names no technology,
+planning MUST add both an open decision to decide it and a warning that apply
+will refuse until it is stated or asserted.
+
+R5 - Human intent extraction
+Extract explicit preservation constraints from sentences containing language
+such as `must`, `must not`, `never`, `always`, `do not`, or `without`.
+Extract example-bearing sentences using markers such as `for example`, `e.g.`,
+`such as`, or `when`. Preserve their original wording and cap each list at five.
+Absence is honest and MUST NOT cause invented constraints/examples.
+
+R6 - Selective story recommendation
+Recommend independent story coverage only when deterministic request evidence
+suggests user-visible behavior, cross-part/end-to-end behavior, a regression,
+or a critical MUST/MUST-NOT/security/privacy/data-loss boundary. Return the
+reason categories. This is a recommendation only: planning MUST NOT write story
+files or invoke `pdd story`.
+
+R7 - Workflow routing
+The plan MUST return exactly one stable workflow identifier. It MUST return
+`change_existing_pdd` for `existing_pdd`, `characterize_then_adopt` for
+`conventional_brownfield`, and `design_greenfield` for `greenfield`.
+The plan MUST distinguish these routes without requiring the caller to know a
+prompt path or “dev unit.”
+
+R7b - Scoped ownership
+All discovery MUST be anchored to the selected project root, not automatically
+expanded to the containing Git repository. This permits a monorepo subproject
+to own its own `.pddrc`, `architecture.json`, prompt graph, and generated
+outputs without converting unrelated siblings. The plan MUST report the
+containing repository separately and MUST add an open decision asking the
+agent to confirm the subproject boundary and its required integration checks.
+
+R8 - Stable structured output
+`intent_plan_to_dict` MUST emit JSON-serializable data with schema version
+`pdd.intent.plan.v1`, preserve list ordering, and include a capabilities object
+that truthfully reports `planning: true`, `apply: false`, `writes_project_files:
+false`, `requires_github: false`, and `invokes_llm: false`.
+
+R9 - Human review card
+`render_review_card` MUST show: What I heard, What will change, What must stay
+unchanged, Important examples, How we will prove it, Affected product areas,
+Open decisions, and Story coverage. It MUST describe technical candidates as
+proposals, avoid requiring PDD jargon from the human, and end by stating that
+this is planning only and no project files were changed.
+
+R10 - No side effects
+All public functions in this module MUST be deterministic and read-only with
+respect to the project. They MUST NOT create `.pdd/`, intent files, logs,
+branches, worktrees, issues, comments, prompts, tests, or generated code.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/intent.py`
+- Tests: `tests/test_pdd_intent.py`
