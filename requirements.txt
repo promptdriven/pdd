@@ -58,6 +58,7 @@ pytest-mock
 pytest-testmon
 pytest-timeout
 pytest-xdist
+pexpect>=4.9
 setuptools-scm>=8
 twine
 wheel
