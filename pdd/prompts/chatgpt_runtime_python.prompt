@@ -24,3 +24,4 @@ Preserve VM host ID; fence source before import. Uncertain SSH leaves source fen
 Successful transfer clears source tokens; VM owns refresh. Mac needs a distinct session.
 R4: No account activation or live test. Catalog is not entitlement proof. Live completed
 turn, thread resume and encrypted reasoning limitations remain explicitly unverified.
+R5: Public runtime entry functions require PDD_CHATGPT_SIGN_IN=1 before side effects.

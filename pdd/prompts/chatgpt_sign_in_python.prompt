@@ -23,3 +23,5 @@ EOF closes. Replies contain id/result or id/errorCode. Quiet callbacks and stder
 R6: CLI status and host-id are local. import reads selected record on stdin. transfer
 uses SSH stdin and fixed remote command. app-server delegates to runtime. All honor
 switch and safe error reporting. Offline tests never sign in to real accounts.
+R7: System browser launch suppresses subprocess stdout/stderr so ID-token hints
+cannot appear in terminal diagnostics. Use open on Mac and xdg-open on Linux.
