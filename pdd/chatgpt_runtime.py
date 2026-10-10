@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import signal
+import threading
 import time
 import json
 
@@ -13,6 +15,46 @@ from .chatgpt_oauth import require_enabled, request_json, verify_identity
 RESOURCE = 'https://api.openai.com/v1'
 _TERMINAL = {'invalid_grant', 'invalid_refresh_token', 'token_expired',
              'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'}
+
+
+def _run_child(argv: list, *, env: dict, check: bool, pass_fds: tuple):
+    """Forward wrapper shutdown to its child, then confirm child exit."""
+    with subprocess.Popen(argv, env=env, pass_fds=pass_fds) as child:
+        timers = []
+
+        def kill_child():
+            if child.poll() is None:
+                try:
+                    child.kill()
+                except ProcessLookupError:
+                    pass
+
+        def stop(signum, _frame):
+            if child.poll() is not None:
+                return
+            try:
+                child.send_signal(signum)
+            except ProcessLookupError:
+                return
+            timer = threading.Timer(3, kill_child)
+            timer.daemon = True
+            timers.append(timer)
+            timer.start()
+
+        previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            result = subprocess.CompletedProcess(argv, child.wait())
+            if check and result.returncode:
+                raise subprocess.CalledProcessError(result.returncode, argv)
+            return result
+        finally:
+            for timer in timers:
+                timer.cancel()
+            if child.poll() is None:
+                kill_child()
+                child.wait()
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def access_record(store: CredentialStore, key: str, *, request=None, verify=None,
@@ -81,7 +123,7 @@ def app_server(store: CredentialStore, key: str, codex_bin: str, codex_home: str
                **ports) -> int:
     """Run the supplied tested Codex on stdio with credentials in child env only."""
     require_enabled()
-    run = ports.pop('run', subprocess.run)
+    run = ports.pop('run', _run_child)
     env = ports.pop('env', None)
     if ports:
         raise TypeError('unexpected runtime port')

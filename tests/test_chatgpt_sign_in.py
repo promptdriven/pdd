@@ -414,3 +414,28 @@ def test_invalid_grant_starts_fresh_oauth_with_issued_client(tmp_path, signing, 
         assert new['code_challenge'] != old['code_challenge']
     finally:
         helper.close()
+
+# Wrong: normal wrapper close abandons its child and leaves the use lease alive.
+def test_wrapper_term_confirms_owned_child_cleanup(tmp_path):
+    store = CredentialStore(tmp_path / 'credentials'); key = store.write(record(store))
+    executable = tmp_path / 'offline-codex'
+    executable.write_text(f'#!{sys.executable}\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nprint("ready",flush=True)\ntime.sleep(30)\n')
+    executable.chmod(0o700)
+    script = '''import sys
+from pathlib import Path
+from pdd.chatgpt_credentials import CredentialStore
+from pdd.chatgpt_runtime import app_server
+app_server(CredentialStore(Path(sys.argv[1])),sys.argv[2],sys.argv[3],'/offline/home')
+'''
+    wrapper = subprocess.Popen([sys.executable, '-c', script, str(store.root), key, str(executable)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert select.select([wrapper.stdout], [], [], 30)[0]
+        assert wrapper.stdout.readline() == b'ready\n'
+        wrapper.terminate(); wrapper.wait(timeout=6)
+        assert select.select([wrapper.stdout], [], [], 2)[0]
+        assert wrapper.stdout.read() == b''
+        with store.usage(key, exclusive=True): pass
+    finally:
+        if wrapper.poll() is None: wrapper.kill(); wrapper.wait(timeout=5)
+        wrapper.stdin.close()
