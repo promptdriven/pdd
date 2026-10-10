@@ -12448,5 +12448,146 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Keeps public OSS ChatGPT sign-in and plan credentials on the user machine.",
+    "description": "Protected local SIWC registrations, host identity, atomic files and shared runtime leases.",
+    "dependencies": [],
+    "priority": 250,
+    "filename": "chatgpt_credentials_python.prompt",
+    "filepath": "pdd/chatgpt_credentials.py",
+    "tags": [
+      "module",
+      "python",
+      "auth"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "CredentialStore",
+            "signature": "(root=None)",
+            "returns": "CredentialStore"
+          },
+          {
+            "name": "CredentialError",
+            "signature": "(code)",
+            "returns": "CredentialError"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Keeps public OSS ChatGPT sign-in and plan credentials on the user machine.",
+    "description": "Default-off local public OSS browser OAuth and safe NDJSON control.",
+    "dependencies": [
+      "chatgpt_credentials_python.prompt",
+      "chatgpt_runtime_python.prompt"
+    ],
+    "priority": 250,
+    "filename": "chatgpt_sign_in_python.prompt",
+    "filepath": "pdd/chatgpt_sign_in.py",
+    "tags": [
+      "module",
+      "python",
+      "auth"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "SignIn",
+            "signature": "(store=None, *, request, verify, browser, now, timeout)",
+            "returns": "SignIn"
+          },
+          {
+            "name": "verify_identity",
+            "signature": "(token, client_id, nonce, *, jwks=None, now)",
+            "returns": "dict"
+          },
+          {
+            "name": "main",
+            "signature": "()",
+            "returns": "int"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Keeps public OSS ChatGPT sign-in and plan credentials on the user machine.",
+    "description": "Local serialized refresh, Codex child credentials, and selected-session SSH handoff.",
+    "dependencies": [
+      "chatgpt_credentials_python.prompt",
+      "chatgpt_sign_in_python.prompt"
+    ],
+    "priority": 250,
+    "filename": "chatgpt_runtime_python.prompt",
+    "filepath": "pdd/chatgpt_runtime.py",
+    "tags": [
+      "module",
+      "python",
+      "auth"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "access_record",
+            "signature": "(store, key, *, request=None, verify=None, now)",
+            "returns": "dict"
+          },
+          {
+            "name": "app_server",
+            "signature": "(store, key, codex_bin, codex_home, *, run, env=None)",
+            "returns": "int"
+          },
+          {
+            "name": "transfer",
+            "signature": "(store, key, destination, *, run)",
+            "returns": "dict"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Share OAuth transport and pure identity verification without an auth/runtime cycle.",
+    "description": "Fixed OpenAI OAuth endpoints, safe transport and signed OIDC validation.",
+    "dependencies": [],
+    "priority": 250,
+    "filename": "chatgpt_oauth_python.prompt",
+    "filepath": "pdd/chatgpt_oauth.py",
+    "tags": [
+      "module",
+      "python",
+      "auth"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "verify_identity",
+            "signature": "(token, client_id, nonce, *, jwks=None, now)",
+            "returns": "dict"
+          },
+          {
+            "name": "request_json",
+            "signature": "(url, form=None)",
+            "returns": "dict"
+          },
+          {
+            "name": "require_enabled",
+            "signature": "()",
+            "returns": "None"
+          }
+        ]
+      }
+    }
   }
 ]

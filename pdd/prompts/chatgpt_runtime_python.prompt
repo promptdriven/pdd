@@ -1,0 +1,41 @@
+% ChatGPT plan runtime and VM transfer
+Own pdd/chatgpt_runtime.py. Use credential store, OAuth request/verification ports,
+chatgpt_oauth and Python built-ins. No new dependency. Official contracts:
+https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions
+https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
+https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms
+R1: access_record locks registration and checks owner/grant. Near expiry refresh
+with issued client ID, refresh_token, resource, no scope; observe earliest_refresh_at.
+Save rotating token/expiry/grant atomically. Validate replacement ID if returned.
+Omitted scope retains grant. Terminal errors clear unusable tokens, retain identity
+and client. Temporary failures preserve credentials. Concurrent processes never race.
+R2: app_server holds a shared usage lease for its child lifetime, but releases the
+short credential lock after access_record. Several same-account processes can run.
+Refresh is serialized independently. Transfer takes exclusive usage before any SSH.
+app_server uses supplied tested codex binary and existing CODEX_HOME. Set child
+ACCESS_TOKEN only. Documented openai_chatgpt_plan provider: api.openai.com/v1,
+responses, requires_openai_auth=false, supports_websockets=false, env_key=ACCESS_TOKEN.
+Relay stdio directly. No argv tokens, auth.json changes, parent environment changes.
+Remove inherited API/GitHub credentials and SSH agent. Host owns initialize,
+initialized and safe restart/thread/resume near token expiry.
+R3: Prepare VM host ID first, then transfer only selected registration using SSH argv
+and stdin, no shell. Fixed Python remote commands. Reject unsafe/option destinations.
+Preserve VM host ID; fence source before import. Uncertain SSH leaves source fenced.
+Successful transfer clears source tokens; VM owns refresh. Mac needs a distinct session.
+R4: No account activation or live test. Catalog is not entitlement proof. Live completed
+turn, thread resume and encrypted reasoning limitations remain explicitly unverified.
+R5: Public runtime entry functions require PDD_CHATGPT_SIGN_IN=1 before side effects.
+R6: Pass the shared lease file descriptor to the Codex child explicitly. If the
+wrapper is killed, the child retains transfer exclusion until it exits. Host still
+must inventory unmanaged processes. Tests prove inherited lease behavior with a
+real offline child; no tested live Codex behavior is inferred from that fake.
+R7: Default child runner is parent-owned. Forward TERM/INT to the owned Codex child,
+wait for exit and escalate to kill after three seconds. Restore parent handlers.
+Close/EOF must not silently abandon a live child. SIGKILL cannot run parent cleanup;
+inherited usage lease still protects a surviving child and H must inventory it.
+R8: Keep renewal decision/locking separate from replacement validation and record
+assembly. A small private helper verifies an optional replacement ID against saved
+identity, requires nonempty string access/refresh tokens and Bearer token_type,
+requires a positive finite numeric expiry, then assembles the replacement atomically.
+Malformed provider fields never replace the saved record. This is token-shape
+validation, not a new repository check or gate. Preserve omitted-scope behavior.
