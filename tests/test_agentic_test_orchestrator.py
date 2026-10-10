@@ -352,7 +352,7 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
 def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
     mock_deps, default_args
 ):
-    """A normal resume after clean restart keeps clean worktree and PR behavior."""
+    """A normal resume keeps cached steps plus clean worktree/PR behavior."""
     mocks = mock_deps
     mocks["template"].side_effect = (
         lambda name: "clean={clean_restart}"
@@ -384,6 +384,13 @@ def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
     success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is True
+    called_labels = {
+        call.kwargs.get("label") for call in mocks["run"].call_args_list
+    }
+    assert called_labels.isdisjoint(
+        {f"step{step}" for step in range(1, 12)}
+    ), "persisted clean-restart lineage must resume after cached Step 11"
+    assert "step12" in called_labels
     assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
     step17_calls = [
         c for c in mocks["run"].call_args_list
