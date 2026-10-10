@@ -1,0 +1,25 @@
+% Local browser OAuth for public OSS pdd
+Own pdd/chatgpt_sign_in.py. Entry point python -m pdd.chatgpt_sign_in. Dependencies:
+chatgpt_credentials, chatgpt_runtime, Python built-ins and existing cryptography.
+Official source: https://developers.openai.com/siwc/token-sharing-open-source/sign-in
+JWT guidance: https://developers.openai.com/siwc/website
+R1: Require PDD_CHATGPT_SIGN_IN=1 before side effects. No API key option. SignIn
+exposes start(account_key=None), status(), cancel(), close(). start returns safe status.
+R2: Bind 127.0.0.1 port 0 /auth/callback before system browser opens. Fresh state,
+nonce, verifier and S256 challenge per attempt. Bounded expiry. Exact redirect URI
+and resource=https://api.openai.com/v1 are retained for code exchange. Register with
+client_id=dynamic_agent_client, agent_name_hint=PDD, stable ext_agent_host_id.
+Returning sign-in uses saved issued client ID and retained ID/email hints; omit name hint.
+R3: Reject wrong state, duplicate parameters, wrong callback path, replay, missing
+issued ID or changed returning client. Handle denial before exchange. Never exchange
+with dynamic_agent_client. invalid_grant needs fresh OAuth; retain issued ID for retry.
+R4: Verify RS256/ES256 JWT with fixed official JWKS, algorithm/key match, issuer,
+audience, expiry, iat, optional nbf, nonce, subject, and returning identity before save.
+Scope comes only from token response. Save identity-only result as plan_disabled.
+Cancel/expiry prevents late save. Never expose URL, tokens, paths, verifier or raw errors.
+R5: Safe status contains method/state/accountKey/control-free bounded label/errorCode/
+updatedAt. serve NDJSON accepts id/operation/accountKey for start/status/cancel/close.
+EOF closes. Replies contain id/result or id/errorCode. Quiet callbacks and stderr.
+R6: CLI status and host-id are local. import reads selected record on stdin. transfer
+uses SSH stdin and fixed remote command. app-server delegates to runtime. All honor
+switch and safe error reporting. Offline tests never sign in to real accounts.
