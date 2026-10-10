@@ -117,6 +117,30 @@ def test_privileged_heal_steps_run_for_internal_generated_prs():
         assert "trusted_app_requester" not in condition, name
 
 
+def test_docs_only_prs_complete_required_check_without_privileged_heal():
+    classify = _step("Classify PR changes")
+    classify_script = classify["run"]
+    short_circuit = _step("Short-circuit documentation-only PRs")
+
+    assert 'docs/*|*.md)' in classify_script
+    assert "pulls/$PR_NUMBER/files" in classify_script
+    assert "steps.changes.outputs.docs_only == 'true'" in short_circuit["if"]
+    assert "-f conclusion='success'" in short_circuit["run"]
+    assert "Cloud Build was not dispatched" in short_circuit["run"]
+
+    privileged_steps = [
+        "Mint pdd_cloud App token",
+        "Authorize requester (must be pdd_cloud collaborator)",
+        "Authenticate to GCP via Workload Identity Federation",
+        "Set up gcloud",
+        "Submit Cloud Build (async)",
+        "Wait for Cloud Build to complete",
+        "Finalize check_run",
+    ]
+    for name in privileged_steps:
+        assert "steps.changes.outputs.docs_only != 'true'" in _step(name)["if"], name
+
+
 def test_workflow_does_not_allowlist_arbitrary_bot_identities():
     auth_script = _step("Authorize requester (must be pdd_cloud collaborator)")["run"]
     workflow_text = WORKFLOW_PATH.read_text()
