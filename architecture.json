@@ -12538,7 +12538,7 @@
         "functions": [
           {
             "name": "access_record",
-            "signature": "(store, key, *, request=None, verify=None, now, locked=False)",
+            "signature": "(store, key, *, request=None, verify=None, now)",
             "returns": "dict"
           },
           {
