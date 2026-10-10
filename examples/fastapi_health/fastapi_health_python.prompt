@@ -1,0 +1,27 @@
+# Simple Python API — Prompt-Driven Example
+
+Goal:
+Generate a minimal Python REST API using FastAPI.
+
+Requirements:
+- Use Python 3.12
+- Use FastAPI
+- One GET endpoint: /health
+- Response JSON: {"status": "ok"}
+
+Testing:
+- Include pytest unit tests
+- Validate /health endpoint response
+
+Documentation:
+- Include README.md
+- Steps to run server and tests
+
+Output Files:
+- main.py
+- test_main.py
+- README.md
+
+Constraints:
+- Keep code minimal and deterministic
+- No auth, no database
