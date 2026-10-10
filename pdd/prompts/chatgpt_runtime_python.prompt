@@ -25,3 +25,7 @@ Successful transfer clears source tokens; VM owns refresh. Mac needs a distinct 
 R4: No account activation or live test. Catalog is not entitlement proof. Live completed
 turn, thread resume and encrypted reasoning limitations remain explicitly unverified.
 R5: Public runtime entry functions require PDD_CHATGPT_SIGN_IN=1 before side effects.
+R6: Pass the shared lease file descriptor to the Codex child explicitly. If the
+wrapper is killed, the child retains transfer exclusion until it exits. Host still
+must inventory unmanaged processes. Tests prove inherited lease behavior with a
+real offline child; no tested live Codex behavior is inferred from that fake.
