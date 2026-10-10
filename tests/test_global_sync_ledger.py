@@ -1,11 +1,16 @@
 """Tests for deterministic, fail-closed global-sync ledger rendering."""
-# pylint: disable=duplicate-code,missing-function-docstring
+# pylint: disable=duplicate-code,missing-function-docstring,too-many-lines
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -14,6 +19,7 @@ import yaml
 from pdd.sync_core.global_sync_ledger import (
     GitHubPromotionVerifier,
     LedgerError,
+    PROTECTED_HISTORY_BASE_SHA,
     canonical_predicate_digest,
     load_unique_yaml,
     run,
@@ -22,6 +28,9 @@ from pdd.sync_core.global_sync_ledger import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_SCRIPT = ROOT / "scripts" / "verify_global_sync_execution_contract.py"
+CURRENT_PROTECTED_BASE_SHA = "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+HISTORICAL_PROTECTED_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
 STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -54,7 +63,7 @@ def _payload() -> dict[str, object]:
         for order in range(1, 11)
     ]
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "controlling_plan": "plan.md",
         "status_vocabulary": ["pending", "in-progress", "passed"],
         "evidence_state_vocabulary": ["pending", "in-progress", "passed"],
@@ -66,8 +75,33 @@ def _payload() -> dict[str, object]:
             "evidence_state": _state(implemented="in-progress"),
             "required_predicate": {"generator": True},
         },
+        "execution_contract": {
+            "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
+            "active_blocker": "m0-executable-baseline",
+            "execution_state_vocabulary": [
+                "ARCHIVED",
+                "EXISTS",
+                "EXTERNAL_PROTECTED",
+                "TO_BUILD",
+            ],
+        },
+        "canonical_blockers": {
+            "m0": {"id": "m0-executable-baseline", "text": "Establish M0."}
+        },
         "promotion_bundles": {},
-        "live_rebaseline": {"gates_required": 10, "gates_passed": 0},
+        "historical_promotion_bundles": {},
+        "historical_steps": [],
+        "live_rebaseline": {
+            "milestones_required": 6,
+            "milestones_passed": 0,
+            "single_next_blocker_id": "m0-executable-baseline",
+            "single_next_blocker": "Establish M0.",
+        },
+        "current_critical_path": {
+            "blocker_id": "m0-executable-baseline",
+            "blocker": "Establish M0.",
+            "next_milestone": "M0",
+        },
         "steps": steps,
     }
 
@@ -152,9 +186,45 @@ def _write_fixture(
         encoding="utf-8",
     )
     if source_text is None:
-        source_text = yaml.safe_dump(payload or _payload(), sort_keys=False)
+        source_text = yaml.safe_dump(_fixture_payload(payload or _payload()), sort_keys=False)
     source.write_text(source_text, encoding="utf-8")
     return plan, source, output
+
+
+def _fixture_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Translate legacy-shaped unit fixtures into the active milestone schema."""
+    result = copy.deepcopy(payload)
+    steps = result.pop("steps", None)
+    if not isinstance(steps, list):
+        return result
+    milestones: list[dict[str, object]] = []
+    for index, step in enumerate(steps[:6]):
+        assert isinstance(step, dict)
+        milestone = {**step, "id": f"M{index}", "execution_state": "EXISTS"}
+        if index == 0:
+            milestone.update(
+                {"blocker_id": "m0-executable-baseline", "blocker": "Establish M0."}
+            )
+        milestones.append(milestone)
+    result["milestones"] = milestones
+    rebaseline = result["live_rebaseline"]
+    assert isinstance(rebaseline, dict)
+    rebaseline["milestones_passed"] = rebaseline.pop("gates_passed", 0)
+    rebaseline.pop("gates_required", None)
+    bundles = result["promotion_bundles"]
+    assert isinstance(bundles, dict)
+    for bundle in bundles.values():
+        assert isinstance(bundle, dict)
+        subject = bundle.get("subject")
+        if not isinstance(subject, dict):
+            continue
+        record = subject.get("record")
+        if isinstance(record, dict) and record.get("kind") == "gate":
+            order = record.get("order")
+            assert isinstance(order, int)
+            record.clear()
+            record.update({"kind": "milestone", "id": f"M{order - 1}"})
+    return result
 
 
 def _valid_github_responses() -> dict[str, dict[str, object]]:
@@ -310,9 +380,9 @@ def test_global_sync_ledger_check_detects_drift_without_writing(tmp_path: Path, 
 @pytest.mark.parametrize(
     "source_text, expected",
     [
-        ("schema_version: 5\nschema_version: 5\n", "duplicate YAML key"),
+        ("schema_version: 6\nschema_version: 6\n", "duplicate YAML key"),
         ("schema_version: [\n", "cannot parse YAML input"),
-        ("schema_version: 3\n", "ledger schema_version must be 5"),
+        ("schema_version: 3\n", "ledger schema_version must be 6"),
     ],
 )
 def test_global_sync_ledger_rejects_malformed_schema(
@@ -858,6 +928,73 @@ def test_global_sync_ledger_accepts_current_source_promotion_identities(monkeypa
     assert set(requested_paths) == set(responses)
 
 
+def test_archived_gates_are_not_live_authority_or_remotely_verified(monkeypatch) -> None:
+    """Archived Gate records remain tamper-evident but cannot drive current work."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+
+    assert payload["schema_version"] == 6
+    assert "steps" not in payload
+    historical_steps = payload["historical_steps"]
+    assert isinstance(historical_steps, list)
+    assert len(historical_steps) == 10
+    assert {step["execution_state"] for step in historical_steps} == {"ARCHIVED"}
+
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    assert [milestone["id"] for milestone in milestones] == [
+        "M0",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
+    ]
+    assert milestones[0]["status"] == "in-progress"
+    assert milestones[0]["blocker_id"] == "m0-executable-baseline"
+    assert payload["live_rebaseline"]["milestones_passed"] == 0
+
+    responses = _current_source_promotion_responses(payload)
+    requested_paths: list[str] = []
+    verifier = GitHubPromotionVerifier()
+
+    def get_response(path: str) -> dict[str, object]:
+        requested_paths.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(verifier, "_get", get_response)
+    validate_ledger(payload, plan, source, verify_remote=True, promotion_verifier=verifier)
+
+    assert "/repos/promptdriven/pdd/pulls/2214" not in requested_paths
+
+
+def test_archived_gate_and_promotion_tampering_remain_rejected() -> None:
+    """Archival removes current authority, not the historical integrity boundary."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+    historical_steps = payload["historical_steps"]
+    assert isinstance(historical_steps, list)
+    assert isinstance(historical_steps[0], dict)
+    historical_steps[0]["execution_state"] = "EXISTS"
+
+    with pytest.raises(LedgerError, match="historical_steps\\[0\\].execution_state"):
+        validate_ledger(payload, plan, source)
+
+    payload = load_unique_yaml(source)
+    historical_bundles = payload["historical_promotion_bundles"]
+    assert isinstance(historical_bundles, dict)
+    historical_bundle = historical_bundles["gate_1_hosted_merge"]
+    assert isinstance(historical_bundle, dict)
+    subject = historical_bundle["subject"]
+    assert isinstance(subject, dict)
+    subject["required_predicate_sha256"] = "0" * 64
+
+    with pytest.raises(LedgerError, match="subject does not match its record"):
+        validate_ledger(payload, plan, source)
+
+
 @pytest.mark.parametrize("failure", ["metadata-mismatch", "outage"])
 def test_global_sync_ledger_remote_failure_fails_closed_without_writing(
     tmp_path: Path, monkeypatch, failure: str
@@ -925,4 +1062,414 @@ def test_global_sync_ledger_cli_generation_and_check(tmp_path: Path) -> None:
 def test_global_sync_ledger_rejects_duplicate_yaml_keys() -> None:
     payload = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
 
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
+
+
+# Execution-contract tests live here because the ledger is the architecture-owned
+# authority for its state and promotion records.  Keeping them together prevents
+# the test-to-architecture ownership map from silently losing coverage.
+def _execution_contract_module():
+    spec = importlib.util.spec_from_file_location("execution_contract", CONTRACT_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_execution_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\\n\\nM0 M1 M2 M3 M4 M5\\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts" / "present.py").write_text("pass\\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_present.py").write_text("pass\\n", encoding="utf-8")
+    base = "a" * 40
+    registry = [{
+        "id": "present-script", "state": "EXISTS", "kind": "script",
+        "argv": ["python", "scripts/present.py"], "owner": "integration",
+        "introducing_milestone": "M0", "earliest_invocable_milestone": "M0",
+        "introducing_pr": "local", "last_source_validation_sha": None,
+        "last_wheel_validation_sha": None,
+    }]
+    state = {
+        "schema_version": 1, "protected_base_sha": base,
+        "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
+        "active_blocker": "m0-executable-baseline",
+        "preflight": {"protected_base_ref": "origin/main", "protected_base_sha": base,
+                      "source_checkout_clean": "pending-m0-validation"},
+        "integration": {"owner": "integration", "base_sha": base,
+                        "write_set": ["scripts/present.py"]},
+        "m0_bootstrap_allowlist": ["scripts/present.py"],
+        "tracks": [{"id": "m0-bootstrap", "owner": "integration", "base_sha": base,
+                    "write_set": ["scripts/present.py"]}],
+        "command_registry": registry,
+        "validation_steps": [{"id": "m0", "milestone": "M0", "executable": True,
+                              "validation_commands": ["present-script"]}],
+        "ledger_source": "docs/ledger_source.yaml", "generated_ledger": "docs/ledger.yaml",
+    }
+    ledger = {"execution_contract": {
+        "protected_base_sha": base, "milestone_order": state["milestone_order"],
+        "active_blocker": state["active_blocker"], "command_registry": registry,
+        "validation_steps": state["validation_steps"],
+    }}
+    state_path = tmp_path / "docs" / "state.yaml"
+    source_path = tmp_path / "docs" / "ledger_source.yaml"
+    output_path = tmp_path / "docs" / "ledger.yaml"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    source_path.write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    output_path.write_bytes(source_path.read_bytes())
+    return plan, state_path, tmp_path
+
+
+def test_execution_contract_rejects_unlisted_feature_diff_before_m0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    module = _execution_contract_module()
+    monkeypatch.setattr(module, "_git_diff_paths", lambda *_args: [
+        "scripts/present.py", "pdd/sync_core/planner.py"
+    ])
+    errors = module.verify(plan, state_path, root=root, validate_cli=False,
+                           candidate_sha="b" * 40)
+    assert any("M0 bootstrap allowlist" in error and "planner.py" in error for error in errors)
+
+
+def test_execution_contract_rejects_unrecorded_m0_diff_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    module = _execution_contract_module()
+    monkeypatch.setattr(module, "_git_diff_paths", lambda *_args: ["scripts/unrecorded.py"])
+    errors = module.verify(plan, state_path, root=root, validate_cli=False,
+                           candidate_sha="b" * 40)
+    assert any("topology/write sets" in error and "unrecorded.py" in error for error in errors)
+
+
+def test_execution_contract_diff_boundary_includes_deletes_and_rename_endpoints(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout="D\tremoved.py\nR100\told-name.py\tnew-name.py\nC100\tsource.py\tcopy.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module._git_diff_paths(ROOT, "a" * 40, "b" * 40) == [  # pylint: disable=protected-access
+        "removed.py", "old-name.py", "new-name.py", "source.py", "copy.py",
+    ]
+
+
+def test_execution_contract_requires_candidate_bound_focused_test_outcomes(
+    tmp_path: Path
+) -> None:
+    module = _execution_contract_module()
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    candidate = "a" * 40
+    source = tmp_path / "source.json"
+    wheel_proof = tmp_path / "wheel.json"
+    payload = {
+        "candidate_sha": candidate,
+        "focused_test_targets": list(module.M0_FOCUSED_TEST_TARGETS),
+        "finalizer_node": module.M0_FINALIZER_NODE,
+        "outcomes": {
+            "focused_suite": {"status": "passed", "exit_code": 0},
+            "finalizer_node": {"status": "passed", "exit_code": 0},
+        },
+    }
+    source.write_text(json.dumps({**payload, "environment": "source"}), encoding="utf-8")
+    wheel_proof.write_text(json.dumps({
+        **payload, "environment": "wheel",
+        "wheel_artifact_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "copied_test_closure": list(module.M0_WHEEL_COPIED_TEST_CLOSURE),
+    }), encoding="utf-8")
+    assert module._focused_test_proof_errors(source, "source", candidate, None)[0] == []  # pylint: disable=protected-access
+    assert module._focused_test_proof_errors(wheel_proof, "wheel", candidate, wheel)[0] == []  # pylint: disable=protected-access
+    payload["outcomes"]["finalizer_node"] = {"status": "failed", "exit_code": 1}
+    source.write_text(json.dumps({**payload, "environment": "source"}), encoding="utf-8")
+    errors, _proof = module._focused_test_proof_errors(source, "source", candidate, None)  # pylint: disable=protected-access
+    assert any("successful finalizer" in error for error in errors)
+
+
+def test_execution_contract_records_wheel_copied_test_closure() -> None:
+    """The copied reporting test can load its standalone M0 sample verifier."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'mkdir -p "$proof_root" "$wheel_tests" "$RUNNER_TEMP/scripts"' in workflow
+    assert (
+        'cp scripts/verify_global_sync_m0_samples.py "$RUNNER_TEMP/scripts/"'
+        in workflow
+    )
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"
+    ))
+    binding = state["validation_steps"][2]["required_runtime_binding"]
+    assert binding["wheel_copied_test_closure"] == [
+        "scripts/verify_global_sync_m0_samples.py",
+        ".pdd/global-sync/standalone-checker-modules.json",
+        "pdd/sync_core/<standalone-manifest-modules>",
+        "pdd/data/language_format.csv",
+    ]
+    assert 'manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")' in workflow
+    assert "from pdd.sync_core.standalone_package import load_standalone_manifest" in workflow
+    assert "manifest = load_standalone_manifest(source)" in workflow
+    assert (
+        'closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])'
+        in workflow
+    )
+    assert 'all(path not in package.parents for path in fixture_paths)' in workflow
+    assert 'relative.is_absolute() or ".." in relative.parts' in workflow
+    assert "standalone fixture source must be a regular file" in workflow
+    assert "standalone fixture source escapes checkout" in workflow
+    assert "standalone fixture target escapes runner temp" in workflow
+
+
+def test_execution_contract_requires_pinned_deterministic_sample_replay() -> None:
+    """Protected CI must replay the exact committed M0 sample artifact."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Replay deterministic global-sync M0 samples against pinned canary" in workflow
+    assert 'git -C "$canary" fetch --no-tags origin "$pdd_cloud_sha"' in workflow
+    assert 'git merge-base --is-ancestor "$base_sha" HEAD' in workflow
+    assert 'git worktree add --detach "$sampled_root" "$base_sha"' in workflow
+    assert 'sample-affecting path changed after sampled base: $changed' in workflow
+    assert 'python "$sampled_root/scripts/verify_global_sync_m0_samples.py"' in workflow
+    assert '--root "$sampled_root" --base-sha "$base_sha"' in workflow
+    assert 'env -u PDD_PATH PYTHONPATH="$sampled_root"' in workflow
+    assert 'sample replay imported pdd outside sampled root: {package}' in workflow
+    assert 'cmp "$replay" "$artifact"' in workflow
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"
+    ))
+    commands = {command["id"]: command for command in state["command_registry"]}
+    assert commands["m0-deterministic-sample-replay"]["argv"][3:7] == [
+        "{pdd_repo}", "--base-sha", "{candidate_sha}", "--closure-limit"
+    ]
+    step = next(
+        step
+        for step in state["validation_steps"]
+        if step["id"] == "m0-deterministic-sample-replay"
+    )
+    assert step["executable"] is True
+    assert step["required_runtime_binding"]["deterministic_output"] == (
+        "byte-equal-to-committed-sample-results"
+    )
+    assert step["required_runtime_binding"]["post_sample_diff"] == (
+        "evidence-and-control-plane-paths-only"
+    )
+
+
+def test_execution_contract_rejects_sample_implementation_changes_after_replay_base() -> None:
+    """Only evidence/control-plane paths may follow the sampled implementation."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = workflow.split('while IFS= read -r changed; do', 1)[1].split(
+        'done < <(git diff --name-only "$base_sha..HEAD")', 1
+    )[0]
+    assert "scripts/verify_global_sync_m0_samples.py" not in policy
+    assert "pdd/sync_core/" not in policy
+    assert '*) echo "sample-affecting path changed after sampled base: $changed"' in policy
+
+
+def test_execution_contract_retains_complete_concordant_registry_coverage(tmp_path: Path) -> None:
+    plan, state, root = _write_execution_contract(tmp_path)
+    assert _execution_contract_module().verify(plan, state, root=root, validate_cli=False) == []
+
+
+def test_execution_contract_retains_missing_component_and_invocation_coverage(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][0]["argv"] = ["python", "scripts/missing.py"]
+    state["command_registry"][0]["state"] = "TO_BUILD"
+    state["promotion_commands"] = ["present-script"]
+    state["validation_steps"][0]["validation_commands"] = []
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("empty validation" in error for error in errors)
+    assert any("TO_BUILD" in error for error in errors)
+
+
+def test_execution_contract_retains_plan_and_lifecycle_coverage(tmp_path: Path) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    plan.write_text(
+        "# Plan\n\nM0 M1 M2 M3 M4 M5\n```bash\npython -m missing\n```\n",
+        encoding="utf-8",
+    )
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["validation_steps"].append({"id": "bad", "executable": False})
+    state["command_registry"][0]["earliest_invocable_milestone"] = "M1"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("plan command is absent" in error for error in errors)
+    assert any("validation step milestone" in error for error in errors)
+
+
+def test_execution_contract_retains_protected_base_and_ledger_concordance_coverage(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    errors = _execution_contract_module().verify(
+        plan, state_path, root=root, validate_cli=False, expected_protected_base="b" * 40
+    )
+    assert any("expected protected base" in error for error in errors)
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["protected_base_sha"] = "b" * 40
+    (root / "docs" / "ledger_source.yaml").write_text(yaml.safe_dump(ledger), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("base SHA" in error for error in errors)
+
+
+def test_execution_contract_retains_cli_parent_and_option_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout="--base-reference TEXT\n", stderr=""))
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "bad", "kind": "console", "argv": ["pdd", "sync", "certify"],
+         "documented_options": ["--base-ref"]}, sys.executable, "source", tmp_path)
+    assert any("wrong Click parent" in error for error in errors)
+    assert any("--base-ref" in error for error in errors)
+
+
+def test_execution_contract_retains_wheel_binding_and_checkout_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+    wheel_root = tmp_path / "venv"
+    python = wheel_root / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("placeholder", encoding="utf-8")
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout='{"direct_url":{"archive_info":{"hash":"sha256=stale"}}}', stderr=""))
+    assert any("does not bind" in error for error in module._wheel_binding_errors(  # pylint: disable=protected-access
+        str(python), wheel, "a" * 40, tmp_path / "checkout"))
+    assert any("does not match" in error for error in module._candidate_checkout_errors(  # pylint: disable=protected-access
+        "a" * 40, ROOT))
+
+
+def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"].append({
+        "id": "m1-component", "state": "EXISTS", "kind": "script",
+        "argv": ["python", "scripts/present.py"], "owner": "track-a",
+        "introducing_milestone": "M1", "earliest_invocable_milestone": "M1",
+        "introducing_pr": "merged-pr", "merged_introducer_evidence": {"sha": "d" * 40},
+        "component_binding": "m1-component", "last_source_validation_sha": "d" * 40,
+        "last_wheel_validation_sha": "d" * 40,
+    })
+    state["milestone_promotions"] = {"M0": {
+        "state": "passed", "hosted_proof": "https://example.invalid/m0-proof",
+        "candidate_sha": "b" * 40, "wheel_artifact_sha256": "c" * 64,
+    }}
+    state["command_registry"][0]["last_source_validation_sha"] = "b" * 40
+    state["command_registry"][0]["last_wheel_validation_sha"] = "b" * 40
+    state["scoreboard"] = {"milestone": "M1"}
+    state["active_blocker"] = "m1-vertical-slice"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["command_registry"] = state["command_registry"]
+    ledger["execution_contract"]["active_blocker"] = state["active_blocker"]
+    for name in ("ledger_source.yaml", "ledger.yaml"):
+        (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(
+        plan, state_path, root=root, validate_cli=False
+    )
+    assert errors == []
+
+
+def test_execution_contract_rejects_premature_m1_relabel(tmp_path: Path) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][0].update({
+        "id": "m1-component", "state": "EXISTS", "owner": "track-a",
+        "introducing_milestone": "M1", "earliest_invocable_milestone": "M1",
+        "introducing_pr": "merged-pr",
+    })
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["command_registry"] = state["command_registry"]
+    for name in ("ledger_source.yaml", "ledger.yaml"):
+        (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("predecessor M0 promotion" in error for error in errors)
+
+
+def test_execution_contract_rejects_wheel_probe_that_imports_checkout_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-environment"
+    wheel_python = wheel_root / "bin" / "python"
+    wheel_python.parent.mkdir(parents=True)
+    wheel_python.write_text("placeholder\\n", encoding="utf-8")
+    checkout = tmp_path / "checkout"
+    package = checkout / "pdd" / "__init__.py"
+    package.parent.mkdir(parents=True)
+    package.write_text("\\n", encoding="utf-8")
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stderr="", stdout=(
+            f'{{"prefix": "{wheel_root}", "pdd_file": "{package}"}}\n'))
+
+    module = _execution_contract_module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "wheel", "kind": "console", "argv": ["pdd", "certify"]},
+        str(wheel_python), "built-wheel", checkout,
+    )
+    assert any("checkout source" in error for error in errors)
+
+
+def test_execution_state_records_exact_m0_focused_suite_and_live_base_rebinding() -> None:
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"))
+    commands = {command["id"]: command for command in state["command_registry"]}
+    assert commands["m0-focused-cli-test"]["argv"][-4:] == [
+        "tests/test_sync_core_cli.py", "tests/test_sync_core_transaction.py",
+        "tests/test_sync_core_reporting.py", "tests/test_sync_core_standalone_package.py",
+    ]
+    assert "tests/test_global_sync_execution_contract.py" not in state[
+        "m0_bootstrap_allowlist"]
+    assert "docs/global_sync_resolution_plan.md" in state["m0_bootstrap_allowlist"]
+    assert CURRENT_PROTECTED_BASE_SHA == state["protected_base_sha"]
+    assert state["preflight"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["integration"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["scoreboard"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+
+    tracks = {track["id"]: track for track in state["tracks"]}
+    prerequisite = tracks["m0-protected-base-prerequisite"]
+    prerequisite_paths = [
+        ".pdd/sync-ownership.json",
+        "tests/test_sync_core_pdd_rollout_policy.py",
+    ]
+    assert prerequisite["worktree"] == "/private/tmp/pdd-1932-m0-protected-ownership"
+    assert prerequisite["base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
+    assert prerequisite["branch"] == "fix/1932-m0-protected-ownership"
+    assert prerequisite["pull_request"] == 2302
+    assert prerequisite["merge_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert prerequisite["write_set"] == prerequisite_paths
+    assert not set(prerequisite_paths) & set(state["m0_bootstrap_allowlist"])
+    assert not set(prerequisite_paths) & set(state["integration"]["write_set"])
+
+    source = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger_source.yaml")
+    generated = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
+    assert source["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert generated["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert PROTECTED_HISTORY_BASE_SHA == HISTORICAL_PROTECTED_BASE_SHA
+    assert source["historical_archive"]["protected_base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
+    assert generated["historical_archive"]["protected_base_sha"] == HISTORICAL_PROTECTED_BASE_SHA

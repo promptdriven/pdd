@@ -1,0 +1,368 @@
+{
+  "base_sha": "f13deb7b4671c640aaf04460fe9a811b877bad42",
+  "cases": [
+    {
+      "category": "nested-config",
+      "changed_path": "pdd/agentic_architecture.py",
+      "id": "01-nested-config",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2036,
+      "patch_sha256": "44f252cab10826c240897367f6ec1017d13760987b49db2aa680af24ef5566f9",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/agentic_architecture_python.prompt"
+    },
+    {
+      "category": "include-closure",
+      "changed_path": "pdd/commands/checkup.py",
+      "id": "02-include-closure",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3861,
+      "patch_sha256": "a4239dc7bc7913dbb6580e8d09181bab01326cb25f06ebd33d925174a5b851f2",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/commands/checkup_python.prompt"
+    },
+    {
+      "category": "duplicate-basename",
+      "changed_path": "pdd/core/duplicate_cli_guard.py",
+      "id": "03-duplicate-basename",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3665,
+      "patch_sha256": "d82e6ab78315e272f875fcfdc4559e47cbb12b02f8a1be273e76cbdf9f8ed9bc",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/core/duplicate_cli_guard_python.prompt"
+    },
+    {
+      "category": "human-owned-test",
+      "changed_path": "pdd/bug_to_unit_test.py",
+      "id": "04-human-owned-test",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3401,
+      "patch_sha256": "5d34180e0deb99b32a9355137a2e604419892d8143a98589e08d2ca2a9a2087e",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/bug_to_unit_test_python.prompt"
+    },
+    {
+      "category": "multi-file-example-test",
+      "changed_path": "pdd/agentic_test_generate.py",
+      "id": "05-multi-file-example-test",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2740,
+      "patch_sha256": "2b10fa3b2686e60087f27104c538f0a253e3cd44b3a07b85675e9b3dc437d433",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/agentic_test_generate_python.prompt"
+    },
+    {
+      "category": "executable-artifact",
+      "changed_path": "pdd/pre_checkup_gate.py",
+      "id": "06-executable-artifact",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3598,
+      "patch_sha256": "57868fe9d839e50e4aac83bcc17d0e438fd3ee5f3d81936c8c0928b9436df361",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/pre_checkup_gate_python.prompt"
+    },
+    {
+      "category": "architecture-override",
+      "changed_path": "pdd/architecture_sync.py",
+      "id": "07-architecture-override",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2258,
+      "patch_sha256": "f638eb704173c0f13d6a5aab361975350c3ddf4567c9b8d241e7c8e1122b8647",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/architecture_sync_python.prompt"
+    },
+    {
+      "category": "runtime-dependency",
+      "changed_path": "pdd/architecture_registry.py",
+      "id": "08-runtime-dependency",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2045,
+      "patch_sha256": "db48f5385a8d7d06e8c06ee035385b57a33ff6af3e32ae40aee6d761037a3c2a",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/architecture_registry_python.prompt"
+    },
+    {
+      "category": "historically-problematic-adjacent-control",
+      "changed_path": "pdd/checkup_agent.py",
+      "id": "09-historically-problematic-adjacent-control",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2036,
+      "patch_sha256": "4da15423a9beb26894cd93ce629ea508967180e903001576505a52e10ee66b2d",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/checkup_agent_python.prompt"
+    },
+    {
+      "category": "cross-language",
+      "changed_path": "pdd/frontend/constants.ts",
+      "id": "10-cross-language",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2262,
+      "patch_sha256": "0840b491654134f96b9ab16aebbf317fb5aaca9ce57e8b2cf7a5eccf97f791f2",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/frontend/constants_typescript.prompt"
+    }
+  ],
+  "closure": {
+    "completed": 20,
+    "invalid": [
+      {
+        "path": "pdd/prompts/Makefile_makefile.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step10_completeness_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step11_sync_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step12_deps_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/prompts/src/models_example.py"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step2_analyze_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step3_research_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step4_data_model_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step5_design_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step6_research_deps_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step7_generate_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step8_pddrc_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_arch_step9_prompts_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/templates/generic/context/some_module_example.py"
+      },
+      {
+        "path": "pdd/prompts/agentic_architecture_orchestrator_python.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/`.`"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step10_verify_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step11_e2e_test_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step12_pr_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step1_duplicate_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step2_docs_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step3_triage_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step5_reproduce_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step6_root_cause_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/`.`"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step10_architecture_update_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step11_identify_issues_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step12_fix_issues_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step13_create_pr_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step1_duplicate_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step2_docs_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step3_research_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step4_clarify_LLM.prompt",
+        "reason": "cannot build unit snapshot: unapproved managed symlink: prompts"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step5_docs_change_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step6_devunits_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step7_architecture_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step8_analyze_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      },
+      {
+        "path": "pdd/prompts/agentic_change_step9_implement_LLM.prompt",
+        "reason": "cannot build unit snapshot: required include is missing: pdd/docs/src/render.js"
+      }
+    ],
+    "requested": 20
+  },
+  "negative_controls": [
+    {
+      "id": "01-profile",
+      "kind": "profile",
+      "outcome": "rejected-by-public-profile-api",
+      "patch_bytes": 624835,
+      "patch_sha256": "962b8e469475757d0ca3c06e897ec0e96a2216bf8c4dc8069b5efd8760f44508",
+      "sample_path": "pdd/prompts/commands/checkup_python.prompt"
+    },
+    {
+      "id": "09-ownership",
+      "kind": "ownership",
+      "outcome": "rejected-by-public-manifest-api:ManifestError",
+      "patch_bytes": 10711,
+      "patch_sha256": "f3ecb5f066c86c114f000a53009b0633fe4e6978ced68b22f3b7d001faf41286",
+      "sample_path": ".pdd/sync-ownership.json"
+    }
+  ],
+  "partition": {
+    "derivable": 220,
+    "human_attestation_only": 465,
+    "managed_units": 469,
+    "missing_tests": 26,
+    "ownership_or_scope": 219,
+    "profiles": 469
+  },
+  "pdd_cloud_canary": {
+    "architecture_path": "extensions/github_pdd_app/architecture.json",
+    "canary_prompt": "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt",
+    "closure_paths": [
+      "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt",
+      "extensions/github_pdd_app/prompts/src/webhook_app_Python.prompt",
+      "extensions/github_pdd_app/architecture.json",
+      "extensions/github_pdd_app/Dockerfile.webhook",
+      "extensions/github_pdd_app/requirements.txt",
+      "extensions/github_pdd_app/src/webhook_app.py",
+      "extensions/github_pdd_app/.pddrc",
+      "extensions/github_pdd_app/.pdd/meta/Dockerfile_webhook_dockerfile.json"
+    ],
+    "content_sha256": {
+      "extensions/github_pdd_app/.pdd/meta/Dockerfile_webhook_dockerfile.json": "009728138ad2c0a100798a61492c7d7965de6b784d28a2afd6894ea007457165",
+      "extensions/github_pdd_app/.pddrc": "093654ef3b84456a620004618f8289e3229fb3b50e2a86b9635e60857fd63ccb",
+      "extensions/github_pdd_app/Dockerfile.webhook": "085f8a47bbef683dc51a2a2da1559b497e048642302e2c0d3e8882629c6596ce",
+      "extensions/github_pdd_app/architecture.json": "d8f877697180b0bcd76f9b3a2dedaaaf5ecb0bb0a99063ed9428d8c359a26b3a",
+      "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt": "7cf045e8faaa243c2491db353548e2398f376a1d072957480d0ef8452d58317a",
+      "extensions/github_pdd_app/prompts/src/webhook_app_Python.prompt": "09a9b8d835f6dc9e250f9283dae97d26120aa0cfe226683c0a079ff76016bc97",
+      "extensions/github_pdd_app/requirements.txt": "9e6f44c2d79fe7facc7df33c0c6d6f436f420a65560472624b7657a330b3f330",
+      "extensions/github_pdd_app/src/webhook_app.py": "8850c54dd306e8a2db933ce0b598d5c8c881ec8074f80731fed7a2938d08a68b"
+    },
+    "expected_artifact": "extensions/github_pdd_app/Dockerfile.webhook",
+    "sha": "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8"
+  },
+  "pdd_cloud_sha": "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8",
+  "product_decisions": [
+    {
+      "adjacent_positive_control": "06-executable-artifact",
+      "category": "executable-artifact",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/Makefile_makefile.prompt"
+    },
+    {
+      "adjacent_positive_control": "09-historically-problematic-adjacent-control",
+      "category": "historically-problematic",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/sync_main_python.prompt"
+    },
+    {
+      "adjacent_positive_control": "01-nested-config",
+      "category": "nested-config",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/sync_orchestration_python.prompt"
+    }
+  ],
+  "schema_version": 1
+}

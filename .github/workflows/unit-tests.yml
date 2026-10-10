@@ -117,6 +117,56 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
+      - name: Replay deterministic global-sync M0 samples against pinned canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="docs/global_sync_m0_sample_results.json"
+          read -r base_sha pdd_cloud_sha < <(python - "$artifact" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          values = (payload.get("base_sha"), payload.get("pdd_cloud_sha"))
+          if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) for value in values):
+              raise SystemExit("sample artifact must bind exact lowercase base_sha and pdd_cloud_sha")
+          print(*values)
+          PY
+          )
+          git cat-file -e "$base_sha^{commit}"
+          git merge-base --is-ancestor "$base_sha" HEAD
+          while IFS= read -r changed; do
+            case "$changed" in
+              docs/global_sync_m0_sample_results.json|docs/global_sync_m0_sample_metrics.json|docs/global_sync_m0_scope_report.md|.github/workflows/unit-tests.yml|docs/global_sync_execution_state.yaml|scripts/verify_global_sync_execution_contract.py|tests/test_global_sync_ledger.py) ;;
+              *) echo "sample-affecting path changed after sampled base: $changed" >&2; exit 1 ;;
+            esac
+          done < <(git diff --name-only "$base_sha..HEAD")
+          sampled_root="$RUNNER_TEMP/pdd-m0-sampled-implementation"
+          git worktree add --detach "$sampled_root" "$base_sha"
+          canary="$RUNNER_TEMP/pdd-cloud-canary"
+          git init -q "$canary"
+          git -C "$canary" remote add origin https://github.com/promptdriven/pdd_cloud.git
+          git -C "$canary" fetch --no-tags origin "$pdd_cloud_sha"
+          git -C "$canary" cat-file -e "$pdd_cloud_sha^{commit}"
+          git -C "$canary" checkout -q --detach "$pdd_cloud_sha"
+          test "$(git -C "$canary" rev-parse HEAD)" = "$pdd_cloud_sha"
+          replay="$RUNNER_TEMP/global-sync-m0-sample-replay.json"
+          SAMPLED_ROOT="$sampled_root" env -u PDD_PATH PYTHONPATH="$sampled_root" python - <<'PY'
+          import os
+          from pathlib import Path
+          import pdd
+          sampled = Path(os.environ["SAMPLED_ROOT"]).resolve()
+          package = Path(pdd.__file__).resolve()
+          if sampled not in package.parents:
+              raise SystemExit(f"sample replay imported pdd outside sampled root: {package}")
+          PY
+          env -u PDD_PATH PYTHONPATH="$sampled_root" python "$sampled_root/scripts/verify_global_sync_m0_samples.py" \
+            --root "$sampled_root" --base-sha "$base_sha" \
+            --closure-limit 20 --pdd-cloud-root "$canary" \
+            --pdd-cloud-sha "$pdd_cloud_sha" --output "$replay"
+          cmp "$replay" "$artifact"
+
       - name: Verify protected global-sync evidence-ledger drift
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,6 +175,161 @@ jobs:
           --plan docs/global_sync_resolution_plan.md
           --output docs/global_sync_evidence_ledger.yaml
           --check --verify-remote
+
+      - name: Verify global-sync execution-contract semantics
+        run: >
+          python scripts/verify_global_sync_execution_contract.py
+          --plan docs/global_sync_resolution_plan.md
+          --state docs/global_sync_execution_state.yaml
+
+      - name: Run M0 focused source suite
+        run: >
+          pytest -q
+          tests/test_sync_core_cli.py
+          tests/test_sync_core_transaction.py
+          tests/test_sync_core_reporting.py
+          tests/test_sync_core_standalone_package.py
+
+      - name: Run M0 trusted-finalizer source node
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
+          CANDIDATE_SHA="$(git rev-parse HEAD)" SOURCE_PROOF="$RUNNER_TEMP/global-sync-m0-source-focused-proof.json" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          targets = [
+              "tests/test_sync_core_cli.py",
+              "tests/test_sync_core_transaction.py",
+              "tests/test_sync_core_reporting.py",
+              "tests/test_sync_core_standalone_package.py",
+          ]
+          finalizer = "tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
+          Path(os.environ["SOURCE_PROOF"]).write_text(json.dumps({
+              "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "source",
+              "focused_test_targets": targets, "finalizer_node": finalizer,
+              "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
+                           "finalizer_node": {"status": "passed", "exit_code": 0}},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Prove global-sync M0 contract against the exact built candidate wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git rev-parse HEAD)"
+          wheel_dir="$RUNNER_TEMP/pdd-contract-wheel"
+          wheel_venv="$RUNNER_TEMP/pdd-contract-wheel-venv"
+          mkdir -p "$wheel_dir"
+          python -m pip install build
+          python -m build --wheel --outdir "$wheel_dir"
+          wheel="$(find "$wheel_dir" -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          python -m venv "$wheel_venv"
+          "$wheel_venv/bin/python" -m pip install "$wheel" pytest
+          proof_root="$RUNNER_TEMP/pdd-contract-proof"
+          wheel_tests="$RUNNER_TEMP/pdd-contract-wheel-tests"
+          mkdir -p "$proof_root" "$wheel_tests" "$RUNNER_TEMP/scripts"
+          cp scripts/verify_global_sync_execution_contract.py "$proof_root/"
+          cp docs/global_sync_resolution_plan.md docs/global_sync_execution_state.yaml "$proof_root/"
+          cp tests/conftest.py "$wheel_tests/"
+          cp tests/test_sync_core_cli.py tests/test_sync_core_transaction.py \
+            tests/test_sync_core_reporting.py tests/test_sync_core_standalone_package.py \
+            "$wheel_tests/"
+          cp scripts/verify_global_sync_m0_samples.py "$RUNNER_TEMP/scripts/"
+          FIXTURE_ROOT="$RUNNER_TEMP" python - <<'PY'
+          import os
+          from pathlib import Path
+          from pdd.sync_core.standalone_package import load_standalone_manifest
+
+          source = Path.cwd().resolve(strict=True)
+          fixture = Path(os.environ["FIXTURE_ROOT"]).resolve(strict=True)
+          manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")
+          manifest = load_standalone_manifest(source)
+          closure = [manifest_relpath, Path("pdd/data/language_format.csv")]
+          closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])
+          closure.extend(Path(item["source"]) for item in manifest["data"] if isinstance(item, dict))
+
+          def safe_copy(relative: Path) -> None:
+              if relative.is_absolute() or ".." in relative.parts:
+                  raise SystemExit(f"unsafe standalone fixture path: {relative}")
+              candidate = source / relative
+              if candidate.is_symlink() or not candidate.is_file():
+                  raise SystemExit(f"standalone fixture source must be a regular file: {relative}")
+              resolved_source = candidate.resolve(strict=True)
+              if source not in resolved_source.parents:
+                  raise SystemExit(f"standalone fixture source escapes checkout: {relative}")
+              target = fixture / relative
+              target.parent.mkdir(parents=True, exist_ok=True)
+              resolved_parent = target.parent.resolve(strict=True)
+              if fixture != resolved_parent and fixture not in resolved_parent.parents:
+                  raise SystemExit(f"standalone fixture target escapes runner temp: {relative}")
+              if target.exists() or target.is_symlink():
+                  raise SystemExit(f"standalone fixture target already exists: {relative}")
+              target.write_bytes(resolved_source.read_bytes())
+
+          for relative in dict.fromkeys(closure):
+              safe_copy(relative)
+          PY
+          cd "$wheel_tests"
+          env -u PDD_PATH WORKSPACE="$GITHUB_WORKSPACE" FIXTURE_ROOT="$RUNNER_TEMP" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; checkout = pathlib.Path(os.environ["WORKSPACE"]).resolve(); fixture = pathlib.Path(os.environ["FIXTURE_ROOT"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); fixture_paths = tuple(fixture / name for name in ("pdd", ".pdd", "scripts", "pdd-contract-wheel-tests")); assert checkout not in package.parents and all(path not in package.parents for path in fixture_paths) and "site-packages" in package.parts, package'
+          env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
+            test_sync_core_cli.py \
+            test_sync_core_transaction.py \
+            test_sync_core_reporting.py \
+            test_sync_core_standalone_package.py
+          env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
+            test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
+          CANDIDATE_SHA="$candidate_sha" WHEEL_DIGEST="$(shasum -a 256 "$wheel" | awk '{print $1}')" WHEEL_PROOF="$RUNNER_TEMP/global-sync-m0-wheel-focused-proof.json" "$wheel_venv/bin/python" -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          targets = [
+              "tests/test_sync_core_cli.py",
+              "tests/test_sync_core_transaction.py",
+              "tests/test_sync_core_reporting.py",
+              "tests/test_sync_core_standalone_package.py",
+          ]
+          finalizer = "tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
+          Path(os.environ["WHEEL_PROOF"]).write_text(json.dumps({
+              "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "wheel",
+              "wheel_artifact_sha256": os.environ["WHEEL_DIGEST"],
+              "copied_test_closure": [
+                  "scripts/verify_global_sync_m0_samples.py",
+                  ".pdd/global-sync/standalone-checker-modules.json",
+                  "pdd/sync_core/<standalone-manifest-modules>",
+                  "pdd/data/language_format.csv",
+              ],
+              "focused_test_targets": targets, "finalizer_node": finalizer,
+              "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
+                           "finalizer_node": {"status": "passed", "exit_code": 0}},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          cd "$proof_root"
+          expected_base=()
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            expected_base=(--expected-protected-base "${{ github.event.pull_request.base.sha }}")
+          fi
+          env -u PDD_PATH "$wheel_venv/bin/python" -I verify_global_sync_execution_contract.py \
+            --plan global_sync_resolution_plan.md \
+            --state global_sync_execution_state.yaml \
+            --root "$GITHUB_WORKSPACE" \
+            --wheel-python "$wheel_venv/bin/python" \
+            --wheel-artifact "$wheel" \
+            --candidate-sha "$candidate_sha" \
+            --source-focused-proof "$RUNNER_TEMP/global-sync-m0-source-focused-proof.json" \
+            --wheel-focused-proof "$RUNNER_TEMP/global-sync-m0-wheel-focused-proof.json" \
+            "${expected_base[@]}" \
+            --output "$RUNNER_TEMP/global-sync-m0-wheel-proof.json"
+
+      - name: Upload candidate-bound M0 wheel proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-sync-m0-wheel-proof-${{ github.sha }}
+          path: ${{ runner.temp }}/global-sync-m0-wheel-proof.json
+          if-no-files-found: error
 
       - name: Provision and verify protected Linux sandbox
         run: |
