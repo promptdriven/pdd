@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 import json
+import math
 
 from .chatgpt_credentials import CredentialError, CredentialStore, timestamp
 from .chatgpt_oauth import require_enabled, request_json, verify_identity
@@ -92,24 +93,33 @@ def _access_locked(store, key, request, verify, now) -> dict:
             store.write(record)
             raise CredentialError('sign_in_required') from exc
         raise
+    record = _replacement_record(record, tokens, verify, now())
+    store.write(record)
+    if 'chatgpt.tokens.use.direct' not in record['scopes']:
+        raise CredentialError('chatgpt_plan_disabled')
+    return record
+
+
+def _replacement_record(record: dict, tokens: dict, verify, received_at: float) -> dict:
+    """Validate renewal before assembling a replacement credential record."""
     if tokens.get('id_token'):
         claims = verify(tokens['id_token'], record['client_id'], None)
         if claims['sub'] != record['subject']:
             raise CredentialError('account_identity_mismatch')
-    if (not tokens.get('access_token') or not tokens.get('refresh_token') or
-            tokens.get('token_type', '').lower() != 'bearer' or
-            not isinstance(tokens.get('expires_in'), (int, float)) or tokens['expires_in'] <= 0):
+    fields = ('access_token', 'refresh_token', 'token_type')
+    expiry = tokens.get('expires_in')
+    expiry_valid = (isinstance(expiry, (int, float)) and not isinstance(expiry, bool)
+                    and math.isfinite(expiry) and expiry > 0)
+    if (not all(isinstance(tokens.get(field), str) and tokens[field] for field in fields) or
+            tokens['token_type'].lower() != 'bearer' or not expiry_valid):
         raise CredentialError('token_response_invalid')
-    record.update({k: tokens[k] for k in ('access_token', 'refresh_token', 'token_type')})
+    record = dict(record, **{field: tokens[field] for field in fields})
     if tokens.get('id_token'):
         record['id_token'] = tokens['id_token']
-    record.update(expires_at=now() + tokens['expires_in'], saved_at=timestamp(),
+    record.update(expires_at=received_at + expiry, saved_at=timestamp(),
                   earliest_refresh_at=tokens.get('earliest_refresh_at', 0))
     if 'scope' in tokens:
         record['scopes'] = tokens['scope'].split()
-    store.write(record)
-    if 'chatgpt.tokens.use.direct' not in record['scopes']:
-        raise CredentialError('chatgpt_plan_disabled')
     return record
 
 

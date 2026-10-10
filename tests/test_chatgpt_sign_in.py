@@ -439,3 +439,32 @@ app_server(CredentialStore(Path(sys.argv[1])),sys.argv[2],sys.argv[3],'/offline/
     finally:
         if wrapper.poll() is None: wrapper.kill(); wrapper.wait(timeout=5)
         wrapper.stdin.close()
+
+# Wrong: malformed renewal credentials overwrite the last usable local record.
+@pytest.mark.parametrize('field,value', [
+    ('expires_in', float('inf')), ('expires_in', float('-inf')),
+    ('expires_in', float('nan')), ('expires_in', 0), ('expires_in', -1),
+    ('expires_in', True), ('expires_in', '3600'), ('access_token', ''),
+    ('access_token', True), ('refresh_token', ['not-a-token']), ('token_type', 1),
+])
+def test_malformed_renewal_does_not_replace_credentials(tmp_path, field, value):
+    store = CredentialStore(tmp_path / 'credentials')
+    saved = record(store); saved['expires_at'] = 1; key = store.write(saved)
+    tokens = {'access_token': 'new-access', 'refresh_token': 'new-refresh',
+              'token_type': 'Bearer', 'expires_in': 3600}
+    tokens[field] = value
+    with pytest.raises(CredentialError, match='token_response_invalid'):
+        access_record(store, key, request=lambda *args: tokens)
+    assert store.read(key) == saved
+
+
+# Wrong: optional replacement identity bypasses the saved subject boundary.
+def test_renewal_identity_mismatch_keeps_registration(tmp_path):
+    store = CredentialStore(tmp_path / 'credentials')
+    saved = record(store); saved['expires_at'] = 1; key = store.write(saved)
+    tokens = {'access_token': 'new-access', 'refresh_token': 'new-refresh',
+              'token_type': 'Bearer', 'expires_in': 3600, 'id_token': 'fake-new-id'}
+    with pytest.raises(CredentialError, match='account_identity_mismatch'):
+        access_record(store, key, request=lambda *args: tokens,
+                      verify=lambda *args: {'sub': 'other-subject'})
+    assert store.read(key) == saved
