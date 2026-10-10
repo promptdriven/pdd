@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "frozen_before_generation": true,
+  "uses_hidden_results": false,
+  "trained_on_confirmation_hidden": false,
+  "tuned_on_confirmation_hidden": false,
+  "training_sources": [
+    {
+      "name": "public-benchmark-v1",
+      "leakage_from_hidden_labels": false,
+      "leakage_from_hidden_stdout": false,
+      "leakage_from_hidden_test_names": false
+    }
+  ],
+  "tiebreak_order": [
+    "lint_pass",
+    "parse_ok",
+    "test_pass",
+    "candidate_index"
+  ]
+}

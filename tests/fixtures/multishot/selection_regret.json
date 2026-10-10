@@ -1,0 +1,8 @@
+{
+  "oracle_count": 2,
+  "selected_count": 1,
+  "regret_count": 1,
+  "regret_rate": 0.3333333333333333,
+  "oracle_lift_capture": 0.5,
+  "total_tasks": 3
+}

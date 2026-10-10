@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "selection_policy.schema.json",
+  "title": "SelectionPolicy",
+  "description": "Frozen selection policy for multi-shot candidate selection (Issue #1475). Must be committed before any candidate is generated.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "frozen_before_generation",
+    "uses_hidden_results",
+    "trained_on_confirmation_hidden",
+    "tuned_on_confirmation_hidden",
+    "training_sources",
+    "tiebreak_order"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "frozen_before_generation": {
+      "type": "boolean",
+      "const": true,
+      "description": "Must always be true; policy is frozen before generation begins."
+    },
+    "uses_hidden_results": {
+      "type": "boolean"
+    },
+    "trained_on_confirmation_hidden": {
+      "type": "boolean"
+    },
+    "tuned_on_confirmation_hidden": {
+      "type": "boolean"
+    },
+    "training_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "leakage_from_hidden_labels",
+          "leakage_from_hidden_stdout",
+          "leakage_from_hidden_test_names"
+        ],
+        "properties": {
+          "name": { "type": "string" },
+          "leakage_from_hidden_labels": { "type": "boolean" },
+          "leakage_from_hidden_stdout": { "type": "boolean" },
+          "leakage_from_hidden_test_names": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tiebreak_order": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Ordered list of public signal keys used to break ties deterministically."
+    }
+  },
+  "additionalProperties": false
+}
