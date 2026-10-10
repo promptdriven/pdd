@@ -683,6 +683,63 @@ class TestExistingEarlyExits:
             f"Expected 9 step calls (all steps in one cycle) but got {mock_run.call_count}."
         )
 
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step9_unmet_acceptance_criteria_starts_another_cycle(
+        self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Issue #2285: Step 9 must start another cycle, not complete, when its
+        own report marks a source acceptance criterion as unmet even though the
+        selected tests pass.
+
+        Every cycle Step 9 emits ``ACCEPTANCE_CRITERIA_UNMET`` alongside a
+        passing test claim; independent verification agrees on the tests. With
+        max_cycles=2 the acceptance gate must downgrade each pass to another
+        cycle: cycle 2 must start (Step 1 runs again), and the run must not
+        advance to CI/completion (surfaces as a non-success exit).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Selected tests pass and independent verification agrees — only the
+        # acceptance-criteria evaluation flags remaining scope.
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (
+                    True,
+                    "18/18 selected unit tests pass, but one source acceptance "
+                    "criterion remains unimplemented.\n"
+                    "**Acceptance criteria:** ACCEPTANCE_CRITERIA_UNMET\n"
+                    "**Status:** ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        labels = [call.kwargs.get("label", "") for call in mock_run.call_args_list]
+
+        assert "cycle1_step9" in labels, (
+            "Cycle 1 should reach Step 9 final verification."
+        )
+        assert "cycle2_step1" in labels, (
+            "Unmet acceptance criteria at Step 9 must start another cycle "
+            f"(Step 1 should run again). Labels seen: {labels}"
+        )
+        assert success is False, (
+            "Step 9 must not advance to CI/completion when an acceptance "
+            f"criterion is unmet, even with all selected tests passing: {msg}"
+        )
+
     def test_happy_path_all_9_steps_execute(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Regression test: Normal flow should execute all 9 steps per cycle.
 

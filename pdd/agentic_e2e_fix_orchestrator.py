@@ -317,6 +317,10 @@ _MOCK_CONTRACT_MISMATCH_PATTERN = _re.compile(
     r"^\s*\*\*Mock contract audit:\*\*\s*MOCK_CONTRACT_MISMATCH\s*$",
     _re.IGNORECASE | _re.MULTILINE,
 )
+_ACCEPTANCE_CRITERIA_UNMET_PATTERN = _re.compile(
+    r"^\s*\*\*Acceptance criteria:\*\*\s*ACCEPTANCE_CRITERIA_UNMET\s*$",
+    _re.IGNORECASE | _re.MULTILINE,
+)
 
 
 def _enforce_mock_contract_audit_gate(
@@ -355,6 +359,38 @@ def _enforce_mock_contract_audit_gate(
     return resolved_token
 
 
+def _enforce_acceptance_criteria_gate(
+    step_output: str,
+    resolved_token: Optional[str],
+    *,
+    output_console: Console,
+) -> Optional[str]:
+    """Prevent a tests-pass token from advancing when Step 9's own report
+    marks an original issue acceptance criterion as unmet (#2285).
+
+    The selected tests only prove the subset the workflow chose to generate;
+    treating that as equivalent to the source issue's acceptance criteria lets
+    a partial implementation reach the final PR gate. This deterministic
+    boundary is marker-based (Option B): it acts only on the explicit
+    ``**Acceptance criteria:** ACCEPTANCE_CRITERIA_UNMET`` result line the
+    Step 9 agent emits when any source criterion remains unmet/unverified/
+    untested/unimplemented (including acknowledged operator steering). It never
+    infers unmet criteria from arbitrary prose, and a pass without the marker
+    keeps its pre-#2285 behavior.
+    """
+    if resolved_token in (
+        "ALL_TESTS_PASS",
+        "LOCAL_TESTS_PASS",
+    ) and _ACCEPTANCE_CRITERIA_UNMET_PATTERN.search(step_output):
+        output_console.print(
+            "[yellow]Step 9 reported unmet source-issue acceptance criteria "
+            "(ACCEPTANCE_CRITERIA_UNMET); starting another fix cycle.[/yellow]"
+        )
+        return "CONTINUE_CYCLE"
+
+    return resolved_token
+
+
 def _resolve_step9_loop_token(
     step_output: str,
     console: Console,
@@ -368,10 +404,14 @@ def _resolve_step9_loop_token(
     """
     tok = _classify_step_output(step_output, step_num=9)
     if tok:
-        return _enforce_mock_contract_audit_gate(
+        return _enforce_acceptance_criteria_gate(
             step_output,
-            tok,
-            mock_contract_audit_required=mock_contract_audit_required,
+            _enforce_mock_contract_audit_gate(
+                step_output,
+                tok,
+                mock_contract_audit_required=mock_contract_audit_required,
+                output_console=console,
+            ),
             output_console=console,
         )
     tier4 = classify_step_output(
@@ -384,10 +424,14 @@ def _resolve_step9_loop_token(
         resolved = (
             "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
         )
-        return _enforce_mock_contract_audit_gate(
+        return _enforce_acceptance_criteria_gate(
             step_output,
-            resolved,
-            mock_contract_audit_required=mock_contract_audit_required,
+            _enforce_mock_contract_audit_gate(
+                step_output,
+                resolved,
+                mock_contract_audit_required=mock_contract_audit_required,
+                output_console=console,
+            ),
             output_console=console,
         )
     if tier4 and tier4.token == "CLASSIFICATION_ERROR":
@@ -396,10 +440,14 @@ def _resolve_step9_loop_token(
             "starting next cycle.[/yellow]"
         )
         return "CONTINUE_CYCLE"
-    return _enforce_mock_contract_audit_gate(
+    return _enforce_acceptance_criteria_gate(
         step_output,
-        None,
-        mock_contract_audit_required=mock_contract_audit_required,
+        _enforce_mock_contract_audit_gate(
+            step_output,
+            None,
+            mock_contract_audit_required=mock_contract_audit_required,
+            output_console=console,
+        ),
         output_console=console,
     )
 
@@ -456,10 +504,14 @@ def _post_step9_resume_action(
     # (that's Step 3), but if the cached output surfaces it, treat as
     # success — Step 3 would already have determined no bug exists.
     if "NOT_A_BUG" in step9_output:
-        not_a_bug_gate = _enforce_mock_contract_audit_gate(
+        not_a_bug_gate = _enforce_acceptance_criteria_gate(
             step9_output,
-            "LOCAL_TESTS_PASS",
-            mock_contract_audit_required=mock_contract_audit_required,
+            _enforce_mock_contract_audit_gate(
+                step9_output,
+                "LOCAL_TESTS_PASS",
+                mock_contract_audit_required=mock_contract_audit_required,
+                output_console=console,
+            ),
             output_console=console,
         )
         if not_a_bug_gate != "CONTINUE_CYCLE":

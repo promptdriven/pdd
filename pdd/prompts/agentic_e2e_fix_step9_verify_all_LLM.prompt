@@ -88,10 +88,18 @@ You are working on step 9 of 11 in an agentic e2e fix workflow. This step verifi
    - Only after every listed test double matches its real contract may you emit `**Mock contract audit:** MOCK_CONTRACTS_VERIFIED`.
    - When `Audit required` is `false`, emit `**Mock contract audit:** NOT_REQUIRED` and do not invent an audit finding.
 
-4. **Determine next action**
-   - If all tests pass: Workflow complete
-   - If tests still fail and cycle < max_cycles: Another cycle needed
-   - If tests still fail and cycle >= max_cycles: Max cycles reached, report status
+4. **Evaluate the source issue acceptance criteria**
+   - The selected tests only prove the subset the workflow chose to generate. Passing them is NOT the same as satisfying the original issue.
+   - Re-read the issue content and enumerate every acceptance criterion it states or implies. Include any acceptance scope that acknowledged operator/user steering on this issue identified as missing.
+   - For each criterion, decide whether it is implemented AND verified (by a test you ran or by direct inspection of the change), or whether it remains unmet, unverified, untested, or unimplemented.
+   - Emit exactly one `**Acceptance criteria:**` line:
+     - `**Acceptance criteria:** ACCEPTANCE_CRITERIA_MET` only when every criterion is implemented and verified.
+     - `**Acceptance criteria:** ACCEPTANCE_CRITERIA_UNMET` when one or more criteria remain unmet/unverified/untested/unimplemented. In this case you MUST NOT report `ALL_TESTS_PASS`; report `CONTINUE_CYCLE` (or `MAX_CYCLES_REACHED` when the cycle budget is exhausted). List the remaining criteria in your report.
+
+5. **Determine next action**
+   - If all tests pass AND every acceptance criterion is met: Workflow complete
+   - If tests still fail, or any acceptance criterion remains unmet, and cycle < max_cycles: Another cycle needed
+   - If tests still fail, or any acceptance criterion remains unmet, and cycle >= max_cycles: Max cycles reached, report status
 
 % Output
 
@@ -108,6 +116,8 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 **Status:** ALL_TESTS_PASS
 
 **Mock contract audit:** {{MOCK_CONTRACTS_VERIFIED or NOT_REQUIRED}}
+
+**Acceptance criteria:** ACCEPTANCE_CRITERIA_MET
 
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass
@@ -131,9 +141,14 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 
 **Mock contract audit:** {{MOCK_CONTRACT_MISMATCH, MOCK_CONTRACTS_VERIFIED, or NOT_REQUIRED}}
 
+**Acceptance criteria:** {{ACCEPTANCE_CRITERIA_MET or ACCEPTANCE_CRITERIA_UNMET}}
+
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
 - E2E tests: {{N}}/{{M}} pass ({{K}} still failing)
+
+### Remaining Acceptance Criteria
+{{list_any_unmet_source_issue_acceptance_criteria_or_"none"}}
 
 ### Remaining Failures
 | Test | Failure Type |
@@ -154,6 +169,8 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 **Status:** MAX_CYCLES_REACHED
 
 **Mock contract audit:** {{MOCK_CONTRACT_MISMATCH, MOCK_CONTRACTS_VERIFIED, or NOT_REQUIRED}}
+
+**Acceptance criteria:** {{ACCEPTANCE_CRITERIA_MET or ACCEPTANCE_CRITERIA_UNMET}}
 
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass ({{K}} still failing)
@@ -176,6 +193,7 @@ All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI valida
 - **You MUST include exactly one of the following control tokens in your response: ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED.** The orchestrator parses your output for these exact strings to decide whether to continue, stop, or start another cycle. If none is present, the workflow stops with an error.
 - Always emit the token inside a `**Status:**` line (e.g., `**Status:** ALL_TESTS_PASS`) as shown in the templates above.
 - Always emit exactly one `**Mock contract audit:**` line. When the audit is required, `ALL_TESTS_PASS` is invalid unless that line is exactly `**Mock contract audit:** MOCK_CONTRACTS_VERIFIED`; the orchestrator fails closed to another cycle if the marker is missing.
+- Always emit exactly one `**Acceptance criteria:**` line. `ALL_TESTS_PASS` is invalid when any source issue acceptance criterion remains unmet, unverified, untested, or unimplemented — in that case the line MUST be exactly `**Acceptance criteria:** ACCEPTANCE_CRITERIA_UNMET`, and the orchestrator downgrades a tests-pass claim carrying that marker to another cycle. Never pair `ACCEPTANCE_CRITERIA_UNMET` with `ALL_TESTS_PASS`.
 - Be accurate in test counts - don't round or estimate
 - Include specific failure information for debugging
 - Always post your findings as a GitHub comment before completing
