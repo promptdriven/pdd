@@ -25,3 +25,6 @@ uses SSH stdin and fixed remote command. app-server delegates to runtime. All ho
 switch and safe error reporting. Offline tests never sign in to real accounts.
 R7: System browser launch suppresses subprocess stdout/stderr so ID-token hints
 cannot appear in terminal diagnostics. Use open on Mac and xdg-open on Linux.
+R8: HTTPServer dispatch requires the method name do_GET. Retain that exact stdlib
+convention and its bounded callback behavior. A naming lint note is documented;
+do not rename the method, add a custom HTTP framework, or suppress broad warnings.

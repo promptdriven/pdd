@@ -33,3 +33,9 @@ R7: Default child runner is parent-owned. Forward TERM/INT to the owned Codex ch
 wait for exit and escalate to kill after three seconds. Restore parent handlers.
 Close/EOF must not silently abandon a live child. SIGKILL cannot run parent cleanup;
 inherited usage lease still protects a surviving child and H must inventory it.
+R8: Keep renewal decision/locking separate from replacement validation and record
+assembly. A small private helper verifies an optional replacement ID against saved
+identity, requires nonempty string access/refresh tokens and Bearer token_type,
+requires a positive finite numeric expiry, then assembles the replacement atomically.
+Malformed provider fields never replace the saved record. This is token-shape
+validation, not a new repository check or gate. Preserve omitted-scope behavior.
