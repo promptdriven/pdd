@@ -1,6 +1,6 @@
 % Local browser OAuth for public OSS pdd
 Own pdd/chatgpt_sign_in.py. Entry point python -m pdd.chatgpt_sign_in. Dependencies:
-chatgpt_credentials, chatgpt_runtime, Python built-ins and existing cryptography.
+chatgpt_credentials, chatgpt_runtime, chatgpt_oauth, Python built-ins.
 Official source: https://developers.openai.com/siwc/token-sharing-open-source/sign-in
 JWT guidance: https://developers.openai.com/siwc/website
 R1: Require PDD_CHATGPT_SIGN_IN=1 before side effects. No API key option. SignIn

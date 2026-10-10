@@ -1,6 +1,6 @@
 % ChatGPT plan runtime and VM transfer
 Own pdd/chatgpt_runtime.py. Use credential store, OAuth request/verification ports,
-Python built-ins. No new dependency. Official contracts:
+chatgpt_oauth and Python built-ins. No new dependency. Official contracts:
 https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions
 https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
 https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms

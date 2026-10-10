@@ -1,0 +1,13 @@
+% Pure OAuth transport and signed OpenID identity
+Own pdd/chatgpt_oauth.py. Extract the OAuth transport, constants, switch check,
+and signature validation from chatgpt_sign_in, without changing behavior. Use
+existing cryptography and Python built-ins. This removes the runtime import cycle.
+R1: request_json sends form data only to fixed official endpoints, refuses redirects,
+bounds responses and returns safe errors, never raw provider content.
+R2: verify_identity accepts RS256/ES256 only; fixed official JWKS, key/algorithm
+match; validate issuer, issued-client audience/azp, exp, iat, optional nbf, nonce,
+and nonempty subject. Reject malformed signatures/claims. Inject JWKS/time for tests.
+R3: require_enabled enforces literal PDD_CHATGPT_SIGN_IN=1. Signature checks are
+pure and do not require opt-in. No credential storage or browser launch here.
+References: https://developers.openai.com/siwc/token-sharing-open-source/sign-in
+https://developers.openai.com/siwc/website
