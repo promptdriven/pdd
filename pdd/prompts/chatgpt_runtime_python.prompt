@@ -9,7 +9,10 @@ with issued client ID, refresh_token, resource, no scope; observe earliest_refre
 Save rotating token/expiry/grant atomically. Validate replacement ID if returned.
 Omitted scope retains grant. Terminal errors clear unusable tokens, retain identity
 and client. Temporary failures preserve credentials. Concurrent processes never race.
-R2: app_server uses supplied tested codex binary and existing CODEX_HOME. Set child
+R2: app_server holds a shared usage lease for its child lifetime, but releases the
+short credential lock after access_record. Several same-account processes can run.
+Refresh is serialized independently. Transfer takes exclusive usage before any SSH.
+app_server uses supplied tested codex binary and existing CODEX_HOME. Set child
 ACCESS_TOKEN only. Documented openai_chatgpt_plan provider: api.openai.com/v1,
 responses, requires_openai_auth=false, supports_websockets=false, env_key=ACCESS_TOKEN.
 Relay stdio directly. No argv tokens, auth.json changes, parent environment changes.
