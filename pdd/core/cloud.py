@@ -37,6 +37,10 @@ PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"
 DEFAULT_CLOUD_TIMEOUT = 900  # 15 minutes
 CLOUD_CONNECT_TIMEOUT = 30  # seconds — fail fast if server is unreachable
 
+# Cloud checkup job polling parameters
+CLOUD_CHECKUP_POLL_INTERVAL = 15  # seconds between status polls
+CLOUD_CHECKUP_POLL_TIMEOUT = 7200  # 2 hours maximum wait
+
 
 def get_cloud_timeout() -> int:
     """Get cloud request timeout in seconds.
@@ -99,6 +103,9 @@ CLOUD_ENDPOINTS = {
     "updateCommand": "/updateCommand",
     "cancelCommand": "/cancelCommand",
     "submitExample": "/submitExample",
+    # Cloud checkup job endpoints
+    "submitCheckup": "/submitCheckup",
+    "getCheckupStatus": "/getCheckupStatus",
 }
 
 
@@ -343,4 +350,6 @@ __all__ = [
     "get_cloud_timeout",
     "get_cloud_request_timeout",
     "CLOUD_CONNECT_TIMEOUT",
+    "CLOUD_CHECKUP_POLL_INTERVAL",
+    "CLOUD_CHECKUP_POLL_TIMEOUT",
 ]
