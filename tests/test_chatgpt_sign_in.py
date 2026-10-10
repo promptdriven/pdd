@@ -99,10 +99,10 @@ def test_default_off(tmp_path, monkeypatch, value):
 
 # Wrong: decode-only JWT validation accepts untrusted identity or claims.
 @pytest.mark.parametrize('field,value', [('iss', 'https://evil.invalid'), ('aud', 'other'),
-    ('exp', 1), ('iat', time.time()+600), ('nbf', time.time()+600), ('nonce', 'wrong'), ('sub', '')])
+    ('exp', 1), ('iat', 'future'), ('nbf', 'future'), ('nonce', 'wrong'), ('sub', '')])
 def test_oidc_rejects_invalid_claims(signing, field, value):
     jwks, token = signing
-    c = claims(); c[field] = value
+    c = claims(); c[field] = time.time()+600 if value == 'future' else value
     with pytest.raises(CredentialError, match='id_token_invalid'):
         verify_identity(token(c), 'oaiapp_offline', 'nonce', jwks=jwks)
 
