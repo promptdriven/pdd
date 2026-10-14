@@ -17,6 +17,7 @@
 - `STATUS_STORY_REGRESSION_OK = "story-regression-ok"`
 - `STATUS_STORY_REGRESSION_MISSING = "story-regression-missing"`
 - `STATUS_STORY_REGRESSION_STALE = "story-regression-stale"`
+- `STATUS_STORY_REGRESSION_TRACEABILITY_ONLY = "story-regression-traceability-only"` for a fresh generated text-pin whose module declares `PDD_STORY_TEST_MODE = "traceability"`. Treat an absent mode as behavioural so hand-written tests are never downgraded. When multiple tests claim a story, decide this mode from **fresh** claims only: a stale behavioural sibling must not mask a fresh traceability-only test, while any fresh behavioural sibling wins.
 - Re-export `STATUS_STORY_REGRESSION_MISSING` and `STATUS_STORY_REGRESSION_STALE` from `pdd.coverage_contracts` so `pdd checkup coverage` can report them.
 
 % Data shapes (frozen dataclasses)
