@@ -1,7 +1,7 @@
 {
   "name": "pdd",
   "version": "0.1.0",
-  "description": "The Prompting guide command line client",
+  "description": "Public PDD CLI client for prompt-first development",
   "type": "module",
   "bin": {
     "pdd": "bin/pdd.mjs"
