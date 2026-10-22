@@ -1,0 +1,29 @@
+{
+  "name": "pdd",
+  "version": "0.1.0",
+  "description": "The Prompting guide command line client",
+  "type": "module",
+  "bin": {
+    "pdd": "bin/pdd.mjs"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+    "bin/",
+    "src/",
+    "prompts/cli/",
+    "docs/",
+    "skills/",
+    ".pdd/workflows/",
+    "examples/"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs examples/ticket-status/test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "license": "MIT"
+}
