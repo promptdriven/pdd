@@ -5,6 +5,7 @@ Use this recipe for a contained, reversible change with a clear effect and limit
 1. [Confirm the scope](scope.md)
 2. [Make the change](change.md)
 3. [Run focused checks](verify.md)
-4. [Review one PR and leave merge to the person](review.md)
+4. [Open one PR](open-pr.md): pr Small change
+5. [Wait for the person to merge](wait-merge.md): wait merge
 
 If impact is broad, difficult to reverse, or unclear, stop expanding this recipe and use the feature or bug workflow with the person's agreement.

@@ -6,11 +6,12 @@ Use this recipe when an observed behavior violates an existing expectation. Repr
 2. [Write the corrected prompt and Story](prompt-story.md)
 3. [Check the prompt and examples](check.md)
 4. [Try the behavior, when useful](try.md)
-5. [Get the person's approval](approve.md)
-6. [Prepare the Prompt PR, when prompts changed](prompt-pr.md)
-7. [Implement the fix](build.md)
-8. [Replay vectors and run checks](verify.md)
-9. [Prepare and review the Code PR](code-pr.md)
-10. [Person merges the reviewed revision](merge.md)
+5. [Get the person's approval](approve.md): approval: story
+6. [Publish the Prompt PR, when prompts changed](prompt-pr.md): publish-prompt-pr
+7. [Wait for the Prompt PR merge](prompt-merge.md): wait-for-merge: pr1
+8. [Implement the fix](build.md)
+9. [Replay vectors and run checks](verify.md)
+10. [Publish the Code PR](code-pr.md): publish-code-pr
+11. [Wait for the Code PR merge](code-merge.md): wait-for-merge: pr2
 
 If the existing prompt already states the correct behavior, record why a prompt edit is unnecessary and proceed without a Prompt PR. Do not invent a prompt defect to force a prompt change.

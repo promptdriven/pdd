@@ -13,7 +13,7 @@ Choose a workflow from the repository's `.pdd/workflows/` directory when one fit
 
 Keep authored expectations separate from observed results. A model answer is not an expected result. A prompt check does not prove generated code; code tests do not prove that a prompt expresses the intended rule; formal analysis covers only its declared assumptions and scope. Report the evidence actually collected and its limits.
 
-When prompt behavior changes, show the current prompt and Story for the person's review. If the person approves the current revision, open a Prompt PR when the prompt changed. Wait for that PR to be reviewed and merged before implementing code. Then test the generated change through the public code boundary, review the current Code PR, and leave merge to the person. A small contained change may use one PR without adopting or rewriting prompt space; see the small-change workflow.
+When prompt behavior changes, show the current prompt and Story for the person's review. The feature and bug recipes use `approval: story`, `publish-prompt-pr`, and `wait-for-merge: pr1` for the person's approval and Prompt PR handoff before code work. After code tests, `publish-code-pr` and `wait-for-merge: pr2` publish the Code PR and leave its merge to the person. Follow those stages when supported by the installed release. A small contained change may use one PR without adopting or rewriting prompt space; see the small-change workflow.
 
 Try is optional. Recommend it when the changed behavior benefits from a person exercising the proposed flow, and use it only when the installed PDD distribution supports it. If unavailable, say so; never describe a draft, link, or unavailable run as a completed Try.
 
