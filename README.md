@@ -895,22 +895,28 @@ This ensures that all necessary context is available for debugging while keeping
 
 ## Auto-Update Control
 
-PDD automatically updates itself to ensure you have the latest features and security patches. However, you can control this behavior using the `PDD_AUTO_UPDATE` environment variable:
+In an interactive terminal, PDD checks PyPI for a newer release and asks before upgrading (`Would you like to upgrade? [y/N]`). You can turn the check off with the `PDD_AUTO_UPDATE` environment variable:
 
 ```bash
-# Disable auto-updates
+# Disable the update check
 export PDD_AUTO_UPDATE=false
 
-# Enable auto-updates (default behavior)
+# Enable the update check (default behavior)
 export PDD_AUTO_UPDATE=true
 ```
 
 For persistent settings, add this environment variable to your shell's configuration file (e.g., `.bashrc` or `.zshrc`).
 
-This is particularly useful in:
-- Production environments where version stability is crucial
-- CI/CD pipelines where consistent behavior is required
-- Version-sensitive projects that require specific PDD versions
+PDD never upgrades without asking. In non-interactive contexts it skips the update step entirely: it does not contact PyPI, does not prompt, and does not install anything, so the installed version stays exactly as it is. This happens when:
+- `CI`, `PDD_NO_INTERACTIVE`, or `PDD_SKIP_UPDATE_CHECK` is set to `1`, `true`, `yes`, or `on`
+- stdin or stdout is not a terminal (piped, redirected, or running under a job runner)
+
+To keep a fixed version in production or CI, pin the install and leave the update check off:
+
+```bash
+uv tool install pdd-cli==<version>   # optionally add --index-url <your-mirror>
+export PDD_AUTO_UPDATE=false
+```
 
 ## AI Model Information
 
@@ -3643,7 +3649,7 @@ PDD uses several environment variables to customize its behavior:
 #### Core Environment Variables
 
 - **`PDD_PATH`**: Points to the root directory of PDD. This is automatically set during pip installation to the directory where PDD is installed. You typically don't need to set this manually.
-- **`PDD_AUTO_UPDATE`**: Controls whether PDD automatically updates itself (default: true).
+- **`PDD_AUTO_UPDATE`**: Controls whether PDD checks for a newer version and offers to upgrade (default: true). In non-interactive contexts PDD never checks, prompts, or upgrades, regardless of this setting; see "Auto-Update Control".
 - **`PDD_CONFIG_PATH`**: Override the default `.pddrc` file location (default: searches upward from current directory).
 - **`PDD_DEFAULT_CONTEXT`**: Default context to use when no context is detected (default: "default").
 - **`PDD_DEFAULT_LANGUAGE`**: Global default programming language when not specified in context (default: "python").

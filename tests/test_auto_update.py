@@ -12,15 +12,19 @@ def clean_auto_update_env():
     # Save original values
     orig_ci = os.environ.get("CI")
     orig_skip = os.environ.get("PDD_SKIP_UPDATE_CHECK")
+    orig_no_interactive = os.environ.get("PDD_NO_INTERACTIVE")
 
     # Clear the environment variables that cause early exit
     if "CI" in os.environ:
         del os.environ["CI"]
     if "PDD_SKIP_UPDATE_CHECK" in os.environ:
         del os.environ["PDD_SKIP_UPDATE_CHECK"]
+    if "PDD_NO_INTERACTIVE" in os.environ:
+        del os.environ["PDD_NO_INTERACTIVE"]
 
     # Mock isatty to return True (simulating interactive terminal)
-    with patch("pdd.auto_update.sys.stdin.isatty", return_value=True):
+    with patch("pdd.auto_update.sys.stdin.isatty", return_value=True), \
+         patch("pdd.auto_update.sys.stdout.isatty", return_value=True):
         yield
 
     # Restore original values
@@ -28,6 +32,8 @@ def clean_auto_update_env():
         os.environ["CI"] = orig_ci
     if orig_skip is not None:
         os.environ["PDD_SKIP_UPDATE_CHECK"] = orig_skip
+    if orig_no_interactive is not None:
+        os.environ["PDD_NO_INTERACTIVE"] = orig_no_interactive
 
 
 @pytest.fixture(name="mock_importlib_metadata_version")
@@ -269,3 +275,89 @@ def test_get_upgrade_command():
     assert "--upgrade" in pip_cmd
     assert "pdd-cli" in pip_cmd
     assert isinstance(pip_shell, bool)
+
+# ---------------------------------------------------------------------------
+# Issue #2345: never check for or install updates in non-interactive contexts
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"CI": "true"},
+        {"CI": "1"},
+        {"PDD_NO_INTERACTIVE": "1"},
+        {"PDD_NO_INTERACTIVE": "true"},
+        {"PDD_SKIP_UPDATE_CHECK": "1"},
+        {"PDD_SKIP_UPDATE_CHECK": "true"},
+    ],
+)
+def test_issue_2345_auto_update_skips_in_machine_mode(
+    env, monkeypatch, mock_requests_get, mock_input, mock_subprocess_run
+):
+    """Issue #2345: CI and explicit no-interactive flags skip the update check entirely."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    mock_input.return_value = "n"
+
+    auto_update()
+
+    mock_requests_get.assert_not_called()
+    mock_input.assert_not_called()
+    mock_subprocess_run.assert_not_called()
+
+
+def test_issue_2345_auto_update_skips_when_stdout_not_tty(
+    mock_requests_get, mock_input, mock_subprocess_run
+):
+    """Issue #2345: redirected stdout (e.g. piped into a log) is non-interactive."""
+    mock_input.return_value = "n"
+    with patch("pdd.auto_update.sys.stdout.isatty", return_value=False):
+        auto_update()
+
+    mock_requests_get.assert_not_called()
+    mock_input.assert_not_called()
+    mock_subprocess_run.assert_not_called()
+
+
+def test_issue_2345_falsey_ci_does_not_disable_update_check(monkeypatch):
+    """Issue #2345: CI=false in an interactive terminal keeps the update check."""
+    from pdd.auto_update import is_update_check_disabled
+
+    monkeypatch.setenv("CI", "false")
+    with patch("pdd.auto_update.sys.stdout.isatty", return_value=True):
+        assert is_update_check_disabled() is False
+
+
+def test_issue_2345_uv_missing_from_path_never_uses_shell(mock_shutil_which):
+    """Issue #2345: the upgrade command is always an explicit argv, never shell=True."""
+    mock_shutil_which.return_value = None
+
+    cmd, use_shell = get_upgrade_command("pdd-cli", "uv")
+
+    assert use_shell is False
+    assert cmd == ["uv", "tool", "install", "pdd-cli", "--force"]
+
+
+def test_issue_2345_upgrade_subprocess_runs_without_shell(mock_shutil_which, mock_subprocess_run):
+    """Issue #2345: the upgrade subprocess is invoked with shell=False."""
+    from pdd.auto_update import _upgrade_package
+
+    mock_shutil_which.return_value = None
+    mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+    _upgrade_package("pdd-cli", "uv")
+
+    assert mock_subprocess_run.call_args.kwargs["shell"] is False
+
+
+def test_issue_2345_cli_does_not_announce_skipped_update_check(monkeypatch):
+    """Issue #2345: the CLI must not print 'Checking for updates...' when the check is skipped."""
+    from click.testing import CliRunner
+    from pdd.core.cli import cli
+
+    monkeypatch.delenv("PDD_AUTO_UPDATE", raising=False)
+    monkeypatch.setenv("CI", "true")
+    with patch("pdd.core.cli.auto_update"):
+        result = CliRunner().invoke(cli, [])
+
+    assert "Checking for updates" not in result.output

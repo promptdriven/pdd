@@ -1,5 +1,5 @@
 # Example usage of auto_update function
-from pdd.auto_update import auto_update
+from pdd.auto_update import auto_update, is_update_check_disabled
 
 def main():
     """
@@ -13,6 +13,11 @@ def main():
 
     No output if the package is up to date.
     """
+    # True in CI, with PDD_NO_INTERACTIVE/PDD_SKIP_UPDATE_CHECK, or without a TTY;
+    # auto_update() is then a silent no-op.
+    if not is_update_check_disabled():
+        print("Checking for updates...")
+
     # Basic usage - check for updates of 'pdd' package
     auto_update()
 
