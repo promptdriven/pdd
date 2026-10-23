@@ -260,3 +260,21 @@ test('Host loader failures give distinct recovery without exposing exception dat
     assert.doesNotMatch(errors.text, /SECRET|private|dependency.mjs/);
   }
 });
+
+// Regression: rejecting --command without --session blocks a supported hosted route.
+test('hosted terminal commands without a session reach Host with literal command text', async () => {
+  const argv = ['try', '--terminal', '--command', 'inspect "sample value"; echo $HOME', '--json'];
+  let received;
+  const status = await runPdd(argv, {
+    loadHost: async () => async (args) => { received = args; return 3; },
+  });
+  assert.equal(status, 3);
+  assert.deepEqual(received, argv);
+  assert.notEqual(received, argv);
+  assert.deepEqual(parseArgv(['try', '--session', 'ses-1', '--request', 'req-1']).hostArgv,
+    ['try', '--session', 'ses-1', '--request', 'req-1']);
+  for (const invalid of [
+    ['--input', '{}'], ['--repeat', '2'], ['--request', 'req-1'],
+    ['--session', 'ses-1', '--command', 'inspect', '--request', 'req-1'],
+  ]) assert.throws(() => parseArgv(['try', '--terminal', ...invalid]), CommandInputError);
+});

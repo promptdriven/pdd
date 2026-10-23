@@ -117,7 +117,7 @@ function validateCombinations(route, operands, options) {
       } else if (has('--session')) {
         if (has('--input') || has('--repeat') || has('--run') || has('--command') && has('--request')) fail('Use --session with either --command or --request.');
       } else if (has('--terminal')) {
-        if (has('--input') || has('--repeat') || has('--request') || has('--command')) fail('Use --terminal with an optional session and command.');
+        if (has('--input') || has('--repeat') || has('--request')) fail('Use --terminal with an optional session and command.');
       } else if (has('--command')) fail('--command needs --session or --terminal.');
       else if (has('--request')) break;
       else if (has('--input') || has('--repeat')) fail('--input and --repeat need a prompt path.');
