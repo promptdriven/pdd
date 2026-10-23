@@ -1,1 +1,0 @@
-../pdd/docs/prompting_guide.md

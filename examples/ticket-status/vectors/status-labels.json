@@ -1,0 +1,13 @@
+{
+  "exampleStatus": "synthetic",
+  "cases": [
+    { "id": "open", "input": "open", "expected": "Open" },
+    { "id": "blocked", "input": "blocked", "expected": "Blocked" },
+    { "id": "done", "input": "done", "expected": "Done" },
+    { "id": "unknown-string", "input": "queued", "expected": "Unknown" },
+    { "id": "case-sensitive", "input": "Open", "expected": "Unknown" },
+    { "id": "no-trimming", "input": " open ", "expected": "Unknown" },
+    { "id": "null", "input": null, "expected": "Unknown" },
+    { "id": "number-rejected", "input": 7, "expectedError": "TypeError" }
+  ]
+}

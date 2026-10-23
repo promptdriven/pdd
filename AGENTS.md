@@ -1,24 +1,13 @@
-# Repository Guidelines
+# Working on PDD
 
-## Project Structure & Module Organization
-Core CLI logic lives in `pdd/`, where each module aligns with a prompt template in `prompts/` (for example, `pdd/code_generator.py` pairs with `prompts/code_generator_python.prompt`). Generated examples drop into `context/`, CSV data into `data/`, and packaged artifacts into `dist/`. Public examples live under `examples/`, and central documentation, diagrams, and onboarding notes reside in `docs/`.
+Prompts are the source. Change the owning prompt before changing behavior in code. Keep one canonical prompt per public module. Use observable stories and independent expected results to check changes.
 
-## Build, Test, and Development Commands
-Activate the Conda environment once per session with `conda activate pdd`; all Makefile targets assume interpreter and deps from that env.
-- `make test` runs the staging pytest suite defined in `tests/`.
-- `make coverage` executes pytest with coverage; review the report before large merges.
-- `make regression` or `make sync-regression` triggers the longer regression harnesses (optionally pass `TEST_NUM=42`).
-- `make lint` wraps `pylint` checks; fix diagnostics instead of suppressing them.
-- `make build` and `make install` create and install the CLI wheel locally for smoke checks.
+Use plain English in help and documentation. The public command is `pdd`. The guide is named “Prompting guide”. A terminal command shows the web app link or QR code; the person opens PDD on their own phone.
 
-## Coding Style & Naming Conventions
-Use Python 3.12+, four-space indentation, and type annotations for public functions. Match module and file names to their prompt identifiers (`snake_case`), keep classes in `PascalCase`, and reserve `UPPER_SNAKE_CASE` for constants. Favor small, composable functions with docstrings summarizing side effects. Run `make lint` or `pylint pdd/<module>.py` before submitting to catch style regressions.
+Keep this repository's source public under MIT. The phone app, Coordinator/server, billing, account pool, execution runtime, operations tools and internal fixtures remain outside this source tree. Workbench and Herdr source are deferred. The Host source follows once its excluded dependencies are separated; an installed built Host is a separate component.
 
-## Testing Guidelines
-All automated tests live in `tests/test_*.py` and follow the pytest discovery rules pinned in `pytest.ini`. Name new tests `test_<module>_<behavior>` and colocate fixtures in the same file unless shared broadly. Use `pytest -k sync_main` for targeted runs while iterating, then `make coverage` to confirm branch coverage holds. Regression shells (`tests/regression.sh`, `tests/sync_regression.sh`) expect API access—flag them as `real` with the provided marker when applicable.
+Work on a topic branch. Preserve existing work. Never commit or push directly to main, force-push or enable auto-merge. A draft PR does not authorize merge. Merge requires review, passing required checks and approval of the current revision by the person responsible for the change.
 
-## Commit & Pull Request Guidelines
-Commitizen is configured for Conventional Commits; prefer messages like `feat: improve sync verification loop`. Keep commits focused and reference related prompt paths when the change spans generated assets. Before opening a PR, run `make test` and `make lint`, describe the behavioral impact, link any tracked issues, and attach logs or screenshots for CLI UX tweaks.
+Use focused local tests for the public client. Full product suites require an authorized runner. Do not run model calls, live service actions, installation, account sign-in/out or paid work merely to test a source change. Never print or commit credentials.
 
-## Configuration & Secrets
-Run `pdd setup` once per machine to create `~/.pdd` credentials, and never commit keys or cache files (the repo `.gitignore` already excludes them). Use the public setup documentation to provision provider tokens. When recording logs for debugging, redact token strings and strip `litellm_cache.sqlite` before sharing artifacts.
+Keep reports and execution evidence outside the product repository. Include scope, checks, limitations, rollback and added/removed line counts in the PR description.
