@@ -156,7 +156,7 @@ test('valid Host commands report unavailable clearly when the installed export i
   });
   assert.equal(result, 69);
   assert.match(error.text, /installed PDD Host/);
-  assert.match(error.text, /coming soon/);
+  assert.match(error.text, /setup guide/);
   assert.equal(output.text, '');
 });
 
@@ -240,4 +240,23 @@ test('installed Host loader exposes only the existing runCli export and never in
   assert.equal(invoked, false);
   assert.equal(await loadInstalledHost({ home: '/tmp/person', importer: async () => ({}) }), null);
   assert.equal(await loadInstalledHost({ home: '/tmp/person', importer: async () => { throw new Error('missing'); } }), null);
+});
+
+
+test('Host loader failures give distinct recovery without exposing exception data', async () => {
+  const cases = [
+    ['missing', async (url) => { throw Object.assign(new Error('SECRET'), { code: 'ERR_MODULE_NOT_FOUND', url }); }, /entry module is missing/],
+    ['load-failed', async () => { throw Object.assign(new Error('SECRET'), { code: 'ERR_MODULE_NOT_FOUND', url: 'file:///private/dependency.mjs' }); }, /could not load/],
+    ['incompatible', async () => ({}), /does not export/],
+  ];
+  for (const [expected, importer, message] of cases) {
+    let reason;
+    assert.equal(await loadInstalledHost({ importer, onUnavailable: (value) => { reason = value; } }), null);
+    assert.equal(reason, expected);
+    const errors = { text: '', write(value) { this.text += value; } };
+    assert.equal(await runPdd(['session'], { stderr: errors, loadHost: (options) => loadInstalledHost({ ...options, importer }) }), 69);
+    assert.match(errors.text, message);
+    assert.match(errors.text, /setup guide/);
+    assert.doesNotMatch(errors.text, /SECRET|private|dependency.mjs/);
+  }
 });

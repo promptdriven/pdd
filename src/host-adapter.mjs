@@ -6,12 +6,15 @@ export function installedHostPath(home = homedir()) {
   return join(home, 'pocket', 'app', 'src', 'cli', 'pocket.mjs');
 }
 
-export async function loadInstalledHost({ home = homedir(), importer = (url) => import(url) } = {}) {
+export async function loadInstalledHost({ home = homedir(), importer = (url) => import(url), onUnavailable = () => {} } = {}) {
+  const moduleUrl = pathToFileURL(installedHostPath(home)).href;
   try {
-    const moduleUrl = pathToFileURL(installedHostPath(home)).href;
     const host = await importer(moduleUrl);
-    return typeof host?.runCli === 'function' ? host.runCli : null;
-  } catch {
+    if (typeof host?.runCli === 'function') return host.runCli;
+    onUnavailable('incompatible');
+    return null;
+  } catch (error) {
+    onUnavailable(error?.code === 'ERR_MODULE_NOT_FOUND' && error?.url === moduleUrl ? 'missing' : 'load-failed');
     return null;
   }
 }

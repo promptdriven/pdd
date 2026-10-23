@@ -8,7 +8,12 @@ import { loadInstalledHost } from './host-adapter.mjs';
 import { formatLocalWorkflows, listLocalWorkflows } from './workflow-list.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const HOST_UNAVAILABLE = 'This command needs the installed PDD Host. It is coming soon in a source-only build.';
+const HOST_UNAVAILABLE = {
+  missing: 'The installed PDD Host entry module is missing. See the PDD setup guide for supported distribution availability: docs/setup.md in this package',
+  'load-failed': 'The installed PDD Host could not load; its files or dependencies may be incomplete. See the PDD setup guide for supported distribution availability before repairing the Host: docs/setup.md in this package',
+  incompatible: 'The installed PDD Host does not export the supported command entry. See the PDD setup guide for compatible distribution availability: docs/setup.md in this package',
+  unknown: 'This command needs the installed PDD Host. See the PDD setup guide for supported distribution availability: docs/setup.md in this package',
+};
 
 function writeLine(stream, text) {
   stream.write(`${text}\n`);
@@ -29,7 +34,7 @@ export function renderHelp(prefix = []) {
     '',
     'Help, version, skill output, completion and local workflow listing work from this source tree.',
     'Host-dependent commands use the installed PDD Host and keep its person and approval checks.',
-    'Without the installed component, those commands report that they are coming soon.',
+    'If Host is unavailable, those commands explain the problem and point to distribution availability in the setup guide.',
   ].join('\n');
 }
 
@@ -57,9 +62,14 @@ async function runHostCommand(plan, { env, stdin, stdout, stderr, loadHost }) {
     return 2;
   }
   let runCli;
-  try { runCli = await loadHost(); } catch { runCli = null; }
+  let unavailable = 'unknown';
+  try {
+    runCli = await loadHost({ onUnavailable: (reason) => {
+      if (Object.hasOwn(HOST_UNAVAILABLE, reason)) unavailable = reason;
+    } });
+  } catch { runCli = null; unavailable = 'load-failed'; }
   if (typeof runCli !== 'function') {
-    writeLine(stderr, HOST_UNAVAILABLE);
+    writeLine(stderr, HOST_UNAVAILABLE[unavailable]);
     return 69;
   }
   try {
