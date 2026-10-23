@@ -10,6 +10,8 @@ The launch installer is **coming soon** on macOS and Linux:
 curl -fsSL https://promptdriven.ai/install | sh
 ```
 
+Or paste this link into Codex: <https://promptdriven.ai/start>. Codex installs and sets up PDD for you.
+
 **At launch, this installer replaces the old Python `pdd` command on your machine.**
 
 That URL is planned for launch. Use it when the [setup guide](docs/setup.md) confirms availability.
