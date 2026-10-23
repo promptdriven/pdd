@@ -2,20 +2,6 @@
 
 **Prompts are the source. Code is generated from them.**
 
-PDD is Prompt Driven Development. Describe what your program must do. Check it against examples. Try it before you build. Then generate code, test it and review the change.
-
-When behavior changes, change the owning prompt first. Keep prompts, stories and code together in Git.
-
-```mermaid
-flowchart LR
-    A[Prompt session] --> B[Prompts and stories]
-    B --> C[Check and Try]
-    C --> D[Your approval]
-    D --> E[Generate code]
-    E --> F[Test and review]
-    F --> G[Your merge decision]
-```
-
 ## Install
 
 The launch installer is **coming soon** on macOS and Linux:
@@ -26,55 +12,17 @@ curl -fsSL https://promptdriven.ai/install | sh
 
 **At launch, this installer replaces the old Python `pdd` command on your machine.**
 
-That URL is planned for launch. Use it when the [setup guide](docs/setup.md) confirms availability. This source PR does not release the installer or install the Host or execution runtime.
+That URL is planned for launch. Use it when the [setup guide](docs/setup.md) confirms availability.
 
-To inspect the public CLI from this checkout, use Node.js 22.16 or newer:
+After installation, show the command help:
 
 ```sh
-node bin/pdd.mjs --help
+pdd --help
 ```
-
-## Start with a conversation
-
-A prompt session is your normal Codex or Claude Code conversation with the [PDD skill](skills/pdd/SKILL.md). It knows the [Prompting guide](docs/prompting-guide.md), the runtime tools and the workflows.
-
-Start from an idea, an existing app or a bug. Ask it to write prompts, explain a rule or draft tests. You do not need an issue or a workflow to write prompts.
-
-With a supported Host installed, `pdd session` opens that conversation. Connected commands need that separate built Host package. If it is unavailable, the public CLI says so. Installed end-to-end support is coming soon; local source checks alone do not prove it.
-
-## Choose a workflow
-
-Workflows are Markdown files. Edit the steps and keep them in Git.
-
-| Work | Path |
-| --- | --- |
-| [Feature](.pdd/workflows/feature/WORKFLOW.md) | Understand → specify → write the Story → Check and optional Try → approve → generate → test → review. |
-| [Bug](.pdd/workflows/bug/WORKFLOW.md) | Reproduce → find the cause → change the owning prompt and Story → check and try affected behavior → generate → prove the regression is fixed. |
-| [Small change](.pdd/workflows/small-change/WORKFLOW.md) | Make a contained change → check it → open one PR → review and merge. No prompt setup is required. |
-
-The feature and bug recipes separate the Prompt PR from the Code PR. You review the prompt change before generated code uses it. Approval and merge are separate decisions. [Workflows](docs/workflows.md).
-
-## Check, then try
-
-Write test vectors from the Story: input, expected result and the rule each case tests. Include normal cases, boundaries and errors. Review the expected answers before using them to judge the program.
-
-`pdd verify` checks declared expectations. `pdd try` explores the prompt program. A Try observation is separate from a test verdict. Both need a supported execution connection; hosted execution is coming soon.
-
-After generation, replay the vectors against real code. For a precise rule, a bounded formal check can add evidence. State its assumptions and limits. Tests alone are not a formal proof. If a checker is unavailable, report that the formal check did not run.
-
-The [synthetic example](examples/ticket-status/README.md) shows the prompt, Story and vectors together. [Checks and evidence](docs/checks.md).
-
-## Keep the decisions
-
-Open PDD on your phone using the web app link. Add it to your Home Screen for easy access. Run `pdd phone` in your terminal to show the link and a QR code to scan with your phone.
-
-On your phone, review the current proposal, answer questions and ask for changes. Approve only the revision you reviewed. Review the PR before merging it.
-
-PDD keeps the check result, your Try feedback and your approval separate. A passing check never approves a change for you. A local Try page stays on its computer; cross-device Try is coming soon.
 
 ## Commands
 
-Use `pdd COMMAND --help` for the supported arguments and options. Local help, version, skill output, completion and workflow listing work from this source. Other commands need a supported installed Host. The client preserves that Host’s existing person and revision checks.
+Use `pdd COMMAND --help` for the supported arguments and options.
 
 | Command | What it does |
 | --- | --- |
@@ -165,6 +113,58 @@ Use `pdd COMMAND --help` for the supported arguments and options. Local help, ve
 | `pdd runtime recover [--json]` | Run the Runtime recovery operation. |
 | `pdd runtime replay-session [--json]` | Run the Runtime session replay operation. |
 
+## Start with a conversation
+
+PDD is Prompt Driven Development. Describe what your program must do. Check it against examples. Try it before you build. Then generate code, test it and review the change.
+
+When behavior changes, change the owning prompt first. Keep prompts, stories and code together in Git.
+
+```mermaid
+flowchart LR
+    A[Prompt session] --> B[Prompts and stories]
+    B --> C[Check and Try]
+    C --> D[Your approval]
+    D --> E[Generate code]
+    E --> F[Test and review]
+    F --> G[Your merge decision]
+```
+
+A prompt session is your normal Codex or Claude Code conversation with the [PDD skill](skills/pdd/SKILL.md). It knows the [Prompting guide](docs/prompting-guide.md), the runtime tools and the workflows.
+
+Start from an idea, an existing app or a bug. Ask it to write prompts, explain a rule or draft tests. You do not need an issue or a workflow to write prompts.
+
+With a supported Host installed, `pdd session` opens that conversation. Connected commands need that separate built Host package. If it is unavailable, the public CLI says so. Installed end-to-end support is coming soon; local source checks alone do not prove it.
+
+## Choose a workflow
+
+Workflows are Markdown files. Edit the steps and keep them in Git.
+
+| Work | Path |
+| --- | --- |
+| [Feature](.pdd/workflows/feature/WORKFLOW.md) | Understand → specify → write the Story → Check and optional Try → approve → generate → test → review. |
+| [Bug](.pdd/workflows/bug/WORKFLOW.md) | Reproduce → find the cause → change the owning prompt and Story → check and try affected behavior → generate → prove the regression is fixed. |
+| [Small change](.pdd/workflows/small-change/WORKFLOW.md) | Make a contained change → check it → open one PR → review and merge. No prompt setup is required. |
+
+The feature and bug recipes separate the Prompt PR from the Code PR. You review the prompt change before generated code uses it. Approval and merge are separate decisions. [Workflows](docs/workflows.md).
+
+## Check, then try
+
+Write test vectors from the Story: input, expected result and the rule each case tests. Include normal cases, boundaries and errors. Review the expected answers before using them to judge the program.
+
+`pdd verify` checks declared expectations. `pdd try` explores the prompt program. A Try observation is separate from a test verdict. Both need a supported execution connection; hosted execution is coming soon.
+
+After generation, replay the vectors against real code. For a precise rule, a bounded formal check can add evidence. State its assumptions and limits. Tests alone are not a formal proof. If a checker is unavailable, report that the formal check did not run.
+
+The [synthetic example](examples/ticket-status/README.md) shows the prompt, Story and vectors together. [Checks and evidence](docs/checks.md).
+
+## Keep the decisions
+
+Open PDD on your phone using the web app link. Add it to your Home Screen for easy access. Run `pdd phone` in your terminal to show the link and a QR code to scan with your phone.
+
+On your phone, review the current proposal, answer questions and ask for changes. Approve only the revision you reviewed. Review the PR before merging it.
+
+PDD keeps the check result, your Try feedback and your approval separate. A passing check never approves a change for you. A local Try page stays on its computer; cross-device Try is coming soon.
+
 ## What is open
 
 This repository is [MIT licensed](LICENSE). It contains the public CLI client, the Prompting guide, the PDD skill, workflow recipes, user docs, synthetic examples and public CI.
@@ -174,5 +174,17 @@ Host source is **coming soon**. The current Host still combines dependencies tha
 The phone app, Coordinator/server, hosting, billing, model desk, account pool, execution runtime and operations tools remain closed. The runtime is a separate built package, free to use with PDD, with no copying or resale. The MIT license here does not change those separate package terms.
 
 This PR prepares the new content in the existing public repository. Its old history and tags remain available. The replacement will merge at launch after review.
+
+## Contributing
+
+**Run from source (for contributors).** Use Node.js 22.16 or newer:
+
+```sh
+node bin/pdd.mjs --help
+```
+
+Local help, version, skill output, completion and workflow listing work from this source. Other commands need a supported installed Host. The client preserves that Host’s existing person and revision checks.
+
+This source PR does not release the installer or install the Host or execution runtime. See [Contributing](CONTRIBUTING.md).
 
 [Prompting guide](docs/prompting-guide.md) · [PDD skill](skills/pdd/SKILL.md) · [Workflows](docs/workflows.md) · [Setup](docs/setup.md) · [Commands](docs/cli.md) · [Report a problem](https://github.com/promptdriven/pdd/issues)
