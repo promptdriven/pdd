@@ -29,7 +29,7 @@ pdd workflow run feature 42
 
 PDD works on issue #42 in its own branch and worktree. Each step runs in a fresh agent session. You approve the plan, PDD runs your tests and opens the PR, and you merge.
 
-Needs Git, [GitHub CLI](https://cli.github.com) and [Herdr](https://herdr.dev). This command is in preview.
+Needs Git, [GitHub CLI](https://cli.github.com) and [Herdr](https://herdr.dev).
 
 ## Highlights
 

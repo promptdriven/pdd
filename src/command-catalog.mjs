@@ -1,17 +1,17 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 980959271c0548e17847da25e5f6b68f5c601cb323da67d15252b8e9b6a45d4e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: bf785ca27001ab567da9a7af5c331d96008527c8ff23420790ebd0bafd54c5cb).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']}],
-    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude]', 'PREVIEW: Run a validated project or bundled workflow for a GitHub issue; may push branches and create real PRs.')] },
+    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude]', 'Run a validated project or bundled workflow for a GitHub issue; may push branches and create real PRs.')] },
   { id: 'workflow.resume', prefix: ['workflow', 'resume'], local: 'workflow-resume',
     operands:[{name:'run-id',type:'uuid'}],options:[{name:'--decision',kind:'value',choices:['approve','skip']}],
-    forms:[form('pdd workflow resume RUN_ID [--decision approve|skip]', 'PREVIEW: Inspect or continue a saved workflow; omitted decision only reads/reconciles.')] },
+    forms:[form('pdd workflow resume RUN_ID [--decision approve|skip]', 'Inspect or continue a saved workflow; omitted decision only reads/reconciles.')] },
   { id: 'workflow.attach', prefix: ['workflow', 'attach'], local: 'workflow-attach',
     operands:[{name:'run-id',type:'uuid'}],options:[],
-    forms:[form('pdd workflow attach RUN_ID','PREVIEW: Attach to the saved active background stage; archived stages return information.')] },
+    forms:[form('pdd workflow attach RUN_ID','Attach to the saved active background stage; archived stages return information.')] },
   ...BUNDLED_WORKFLOW_NAMES.map(name => ({ id: `workflow.${name}`, prefix: ['workflow', name], local: 'session', workflowName: name,
     operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],
