@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, writeFile, rm, readdir, lstat, symlink, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, readdir, lstat, symlink, mkdir, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { allocateIssueWorktree, lookupIssueWorktree } from '../src/workflow-worktree.mjs';
@@ -55,7 +55,9 @@ test('two issues allocate concurrently into distinct actual worktrees and commit
   for (const key of ['worktreePath', 'gitDir', 'branch']) assert.notEqual(x[key], y[key]);
   assert.equal(x.commonDir, f.common); assert.equal(y.commonDir, f.common);
   assert.equal(x.sourceRoot, f.cwd); assert.equal(x.baseSha, (await f.git('rev-parse', 'main')).stdout.trim());
-  assert.equal(x.worktreePath, join(f.common, 'pdd', 'worktrees', basename(x.worktreePath)));
+  assert.equal(x.worktreePath, join(f.temp, 'project.pdd-worktrees', basename(x.worktreePath)));
+  assert(!x.worktreePath.split('/').some(part => part.toLowerCase() === '.git'));
+  assert(!y.worktreePath.split('/').some(part => part.toLowerCase() === '.git'));
   assert.match(basename(x.worktreePath), /^[a-f0-9-]{36}$/);
   assert.match(x.branch, /^pdd\/feature-101-[a-f0-9]{8}$/);
   assert.equal(await readFile(join(x.worktreePath, 'source.txt'), 'utf8'), 'committed base\n');
@@ -221,6 +223,8 @@ test('separate processes allocate two issues with both index entries, commit iso
   const outcomes = replies.map(r => JSON.parse(r.stdout));
   assert(outcomes.every(r => r.state === 'ready'), JSON.stringify(outcomes));
   const [a, b] = outcomes.map(r => r.assignment);
+  for (const assignment of [a, b])
+    assert.equal(dirname(assignment.worktreePath), join(f.temp, 'project.pdd-worktrees'));
   for (const key of ['worktreePath', 'gitDir', 'branch']) assert.notEqual(a[key], b[key]);
   await writeFile(join(a.worktreePath, 'source.txt'), 'first issue committed change\n');
   await f.gitAt(a.worktreePath, 'add', 'source.txt'); await f.gitAt(a.worktreePath, 'commit', '-m', 'Only first issue');
@@ -405,4 +409,80 @@ test('completed worktrees remain ready under ordinary protective locks with and 
       await f.gitAt(a.worktreePath, 'commit', '-m', 'Later assigned work');
     }
   }
+});
+
+
+async function legacyAssignment(f, input) {
+  // Real old-layout fixture; production never moves or rewrites an existing assignment.
+  const id = randomUUID(), baseSha = (await f.git('rev-parse', 'main')).stdout.trim();
+  const a = { version: 1, runId: input.runId, repository: input.repository, issueNumber: input.issueNumber,
+    workflowName: input.workflowName, commonDir: f.common, sourceRoot: f.cwd,
+    worktreePath: join(f.common, 'pdd', 'worktrees', id), gitDir: join(f.common, 'worktrees', id),
+    branch: `pdd/feature-${input.issueNumber}-${id.slice(0, 8)}`, baseRef: 'main', baseSha };
+  const runFile = metadata(f, input.runId), issues = join(dirname(dirname(runFile)), 'issues');
+  await mkdir(dirname(runFile), { recursive: true }); await mkdir(issues);
+  await mkdir(dirname(a.worktreePath), { recursive: true });
+  await writeFile(runFile, JSON.stringify(a) + '\n'); await link(runFile, join(issues, input.issueNumber + '.json'));
+  await f.git('worktree', 'add', '-b', a.branch, a.worktreePath, a.baseSha);
+  return a;
+}
+
+test('legacy version1 assignment keeps exact old physical path, bytes and journal on lookup and resume', async t => {
+  const f = await fixture(t), input = f.input(301), a = await legacyAssignment(f, input);
+  await writeFile(join(a.worktreePath, 'source.txt'), 'Original person changes\n');
+  await mkdir(join(a.gitDir, 'pdd', 'workflows', input.runId), { recursive: true });
+  const journal = join(a.gitDir, 'pdd', 'workflows', input.runId, 'journal.jsonl');
+  await writeFile(journal, 'retained original journal bytes\n');
+  const before = await snapshot(join(f.common, 'pdd', 'worktree-assignments'));
+  f.calls.length = 0;
+  assert.deepEqual((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).assignment, a);
+  assert.deepEqual((await allocateIssueWorktree(input, f.ports)).assignment, a);
+  assert.deepEqual((await lookupIssueWorktree({ cwd: a.worktreePath, runId: input.runId }, f.ports)).assignment, a);
+  assert(readOnly(f.calls)); assert.equal(adds(f.calls).length, 0);
+  assert.deepEqual(await snapshot(join(f.common, 'pdd', 'worktree-assignments')), before);
+  assert.equal(await readFile(journal, 'utf8'), 'retained original journal bytes\n');
+  assert.equal(await readFile(join(a.worktreePath, 'source.txt'), 'utf8'), 'Original person changes\n');
+  await assert.rejects(lstat(join(f.temp, 'project.pdd-worktrees')), { code: 'ENOENT' });
+  assert.equal((await allocateIssueWorktree(f.input(301, { workflowName: 'bug' }), f.ports)).state, 'conflict');
+});
+
+test('allocation from legacy linked checkout uses primary repository sibling and keeps common issue ownership', async t => {
+  const f = await fixture(t), old = await legacyAssignment(f, f.input(302));
+  const input = f.input(303, { cwd: old.worktreePath }), current = await allocateIssueWorktree(input, f.ports);
+  assert.equal(current.state, 'ready', current.message);
+  assert.equal(dirname(current.assignment.worktreePath), join(f.temp, 'project.pdd-worktrees'));
+  assert.equal(current.assignment.sourceRoot, old.worktreePath);
+  assert.equal(current.assignment.commonDir, old.commonDir);
+  assert(!current.assignment.worktreePath.split('/').includes('.git'));
+  f.calls.length = 0;
+  assert.deepEqual((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).assignment, current.assignment);
+  assert.deepEqual((await lookupIssueWorktree({ cwd: current.assignment.worktreePath, runId: old.runId }, f.ports)).assignment, old);
+  assert.equal((await allocateIssueWorktree(f.input(303, { cwd: current.assignment.worktreePath, workflowName: 'bug' }), f.ports)).state, 'conflict');
+  assert.equal(adds(f.calls).length, 0); assert(readOnly(f.calls));
+});
+
+for (const kind of ['symlink', 'file']) test(`external parent ${kind} refuses without overwrite, adoption or add`, async t => {
+  const f = await fixture(t), parent = join(f.temp, 'project.pdd-worktrees'), outside = join(f.temp, 'unowned');
+  if (kind === 'symlink') { await mkdir(outside); await writeFile(join(outside, 'keep.txt'), 'Unowned bytes\n'); await symlink(outside, parent, 'dir'); }
+  else await writeFile(parent, 'Unowned parent file\n');
+  const input = f.input(304);
+  assert.equal((await allocateIssueWorktree(input, f.ports)).state, 'recovery_required');
+  assert.equal(adds(f.calls).length, 0);
+  if (kind === 'symlink') assert.equal(await readFile(join(outside, 'keep.txt'), 'utf8'), 'Unowned bytes\n');
+  else assert.equal(await readFile(parent, 'utf8'), 'Unowned parent file\n');
+  await assert.rejects(lstat(metadata(f, input.runId)), { code: 'ENOENT' });
+});
+
+test('external saved assignment cannot substitute an arbitrary outside sibling path', async t => {
+  const f = await fixture(t), input = f.input(305), allocated = await allocateIssueWorktree(input, f.ports);
+  assert.equal(allocated.state, 'ready', allocated.message);
+  const a = allocated.assignment, alternate = join(f.temp, 'unowned-sibling', basename(a.worktreePath));
+  const changed = { ...a, worktreePath: alternate };
+  await writeFile(metadata(f, input.runId), JSON.stringify(changed) + '\n');
+  const before = await snapshot(join(f.common, 'pdd', 'worktree-assignments')); f.calls.length = 0;
+  assert.equal((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).state, 'recovery_required');
+  assert.equal((await allocateIssueWorktree(input, f.ports)).state, 'recovery_required');
+  assert(readOnly(f.calls)); assert.equal(adds(f.calls).length, 0);
+  assert.deepEqual(await snapshot(join(f.common, 'pdd', 'worktree-assignments')), before);
+  assert.equal(await readFile(join(a.worktreePath, 'source.txt'), 'utf8'), 'committed base\n');
 });

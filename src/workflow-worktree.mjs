@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: ac7a5fdcdabdfaa549c8e32735b4a7d4791a76cec923da74178dfa9dad93ae1e).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 9b942984bd903fa6958b3785c462b619b56c01f2cae6357341d642af9b383abc).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, realpath, mkdir, open, link } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
@@ -84,7 +84,7 @@ async function ensureDirectory(path) {
 }
 
 async function checkDirectories(p) {
-  for (const path of [p.root, p.index, p.runs, p.issues, p.worktrees]) await canonicalDirectory(path);
+  for (const path of [p.root, p.index, p.runs, p.issues]) await canonicalDirectory(path);
 }
 
 async function readRecord(file) {
@@ -98,15 +98,21 @@ async function readRecord(file) {
   } finally { await handle.close(); }
 }
 
-function assignmentShape(a, commonDir, runId) {
+async function assignmentShape(a, ctx, runId, c) {
+  const { commonDir } = ctx;
   const keys = 'baseRef,baseSha,branch,commonDir,gitDir,issueNumber,repository,runId,sourceRoot,version,workflowName,worktreePath';
   if (!a || Object.keys(a).sort().join(',') !== keys || a.version !== 1 || a.runId !== runId
     || !safe(a.runId) || !repoName(a.repository) || !Number.isSafeInteger(a.issueNumber) || a.issueNumber < 1
     || !safe(a.workflowName, 80) || a.commonDir !== commonDir || !plain(a.baseRef) || !SHA.test(a.baseSha)
     || !plain(a.sourceRoot) || !isAbsolute(a.sourceRoot) || !plain(a.worktreePath)) fail();
   const id = basename(a.worktreePath);
-  if (!UUID.test(id) || a.worktreePath !== join(commonDir, 'pdd', 'worktrees', id)
-    || a.gitDir !== join(commonDir, 'worktrees', id) || a.branch !== branchName(a.workflowName, a.issueNumber, id)) fail();
+  if (!UUID.test(id) || a.gitDir !== join(commonDir, 'worktrees', id)
+    || a.branch !== branchName(a.workflowName, a.issueNumber, id)) fail();
+  if (a.worktreePath !== join(commonDir, 'pdd', 'worktrees', id)) {
+    const parent = await externalWorktrees(ctx, c);
+    if (a.worktreePath !== join(parent, id)) fail();
+    await canonicalDirectory(parent);
+  }
   return a;
 }
 
@@ -115,10 +121,10 @@ function branchName(workflowName, issueNumber, id) {
   return `pdd/${name}-${issueNumber}-${id.slice(0, 8)}`;
 }
 
-async function ownedRecord(ctx, runId) {
+async function ownedRecord(ctx, runId, c) {
   const p = locations(ctx.commonDir, runId);
   await checkDirectories(p);
-  const a = assignmentShape(await readRecord(p.run), ctx.commonDir, runId);
+  const a = await assignmentShape(await readRecord(p.run), ctx, runId, c);
   if (!sameRepo(a.repository, ctx.repository)) fail();
   const issueFile = locations(ctx.commonDir, runId, a.issueNumber).issue;
   const claim = await readRecord(issueFile);
@@ -141,6 +147,17 @@ function registrations(output) {
   return records;
 }
 
+async function externalWorktrees(ctx, c) {
+  const primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
+  if (!primary?.worktree || primary.bare) fail();
+  const original = await context(primary.worktree, c);
+  if (original.sourceRoot !== primary.worktree || original.commonDir !== ctx.commonDir
+    || !sameRepo(original.repository, ctx.repository)) fail();
+  const path = join(dirname(original.sourceRoot), basename(original.sourceRoot) + '.pdd-worktrees');
+  if (path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
+  return path;
+}
+
 async function reconcile(ctx, a, c) {
   await canonicalDirectory(a.sourceRoot);
   const original = await context(a.sourceRoot, c);
@@ -161,7 +178,7 @@ async function reconcile(ctx, a, c) {
   if (matching.length !== 1 || matching[0].worktree !== a.worktreePath || matching[0].branch !== 'refs/heads/' + a.branch
     || matching[0].locked === 'initializing' || matching[0].HEAD !== head || matching[0].bare || matching[0].detached || matching[0].prunable) fail();
   // Re-read immutable custody after all awaited Git reads.
-  if (!equal(await ownedRecord(ctx, a.runId), a)) fail();
+  if (!equal(await ownedRecord(ctx, a.runId, c), a)) fail();
   return result('ready', 'Verified the original issue worktree assignment.', a);
 }
 
@@ -170,7 +187,7 @@ export async function lookupIssueWorktree(input, ports = {}) {
     const { cwd, runId } = structuredClone(input ?? {});
     if (!safe(runId)) fail();
     const c = commands(ports), ctx = await context(cwd, c);
-    return await reconcile(ctx, await ownedRecord(ctx, runId), c);
+    return await reconcile(ctx, await ownedRecord(ctx, runId, c), c);
   } catch { return result('recovery_required', 'The original worktree assignment is absent, incomplete or changed. Inspect this same run; do not allocate again.'); }
 }
 
@@ -184,13 +201,14 @@ export async function allocateIssueWorktree(input, ports = {}) {
     if (!sameRepo(ctx.repository, repository)) return result('conflict', 'The requested repository does not match this checkout origin.');
     const p = locations(ctx.commonDir, runId, issueNumber);
     if (await exists(p.run)) {
-      const a = await ownedRecord(ctx, runId);
+      const a = await ownedRecord(ctx, runId, c);
       if (!sameRepo(a.repository, repository) || a.issueNumber !== issueNumber || a.workflowName !== workflowName || a.baseRef !== baseRef)
         return result('conflict', 'This run already names a different issue, workflow or base.');
       return await reconcile(ctx, a, c);
     }
     if (await exists(p.issue)) return result('conflict', 'This issue already has a persistent worktree claim in this repository.');
-    for (const directory of [p.root, p.index, p.runs, p.issues, p.worktrees]) await ensureDirectory(directory);
+    const worktrees = await externalWorktrees(ctx, c);
+    for (const directory of [p.root, p.index, p.runs, p.issues, worktrees]) await ensureDirectory(directory);
     const fullRef = (await c.git(ctx.sourceRoot, ['rev-parse', '--symbolic-full-name', '--verify', '--end-of-options', baseRef])).trim();
     if (!fullRef.startsWith('refs/')) fail();
     const baseSha = (await c.git(ctx.sourceRoot, ['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`])).trim();
@@ -200,7 +218,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
     const branchExists = await c.raw(ctx.sourceRoot, ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch]);
     if (branchExists.code !== 1) return result('conflict', 'Cannot establish an unused branch for this allocation.');
     const a = { version: 1, runId, repository, issueNumber, workflowName, commonDir: ctx.commonDir, sourceRoot: ctx.sourceRoot,
-      worktreePath: join(p.worktrees, id), gitDir: join(ctx.commonDir, 'worktrees', id), branch, baseRef, baseSha };
+      worktreePath: join(worktrees, id), gitDir: join(ctx.commonDir, 'worktrees', id), branch, baseRef, baseSha };
     if (await exists(a.worktreePath) || await exists(a.gitDir)) return result('conflict', 'The intended worktree path or Git directory is already occupied.');
     let handle;
     try { handle = await open(p.run, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
@@ -212,7 +230,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
     catch (error) { if (error.code === 'EEXIST') return result('conflict', 'Another run claimed this issue. This run intent is retained without allocating.'); throw error; }
     await syncDirectory(p.issues);
     // Intent and exclusive claim are durable. No existing intent can ever enter this add path again.
-    if (!equal(await ownedRecord(ctx, runId), a)) fail();
+    if (!equal(await ownedRecord(ctx, runId, c), a)) fail();
     try { await c.git(ctx.sourceRoot, ['worktree', 'add', '-b', a.branch, a.worktreePath, a.baseSha]); }
     catch { /* A lost or rejected reply cannot justify a second add. Verify this same physical identity. */ }
     return await reconcile(ctx, a, c);
