@@ -121,11 +121,11 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       const decisions=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); COMP_CWORD=5; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
       assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
     } else {
-      const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
+      const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
-      const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow feature --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
+      const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow feature --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
-      const decisions=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); CURRENT=6; _pdd','test',script],{env,encoding:'utf8'});
+      const decisions=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); CURRENT=6; _pdd','test',script],{env,encoding:'utf8'});
       assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
     }
   }
