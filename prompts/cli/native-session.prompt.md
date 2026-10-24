@@ -1,0 +1,14 @@
+# Native local conversation launch
+
+Own `src/native-session.mjs`; export `launchNativeSession({agent,cwd,context,request,stderr},{spawn,signals,stdinIsTTY}) -> Promise<integer>`. Codex and Claude both accept one initial positional prompt (official CLI references). Compose the full supplied guide/skill/refs/workflow context and optional person request into that single trusted-heading argument. Default agent selection belongs to the CLI catalog/parser. Spawn only installed `codex` or `claude` by name with argv array, unchanged environment/cwd and inherited stdio, no shell. Do not use private wrapper paths, auth repair/config rewrite, credentials, developer/config overrides, replacement system instructions, unrequested models or any flags beyond the explicitly authorized full-access launch mode below.
+
+Wait for actual child close, preserve its integer exit code, map signal exits to128+OS signal, and remove temporary signal listeners. Missing native returns127 with an actionable diagnostic; other launch failure returns1. No install/fallback/retry. SIGTERM/SIGHUP directed to the wrapper forward to its child; a non-TTY SIGINT also forwards. With inherited interactive foreground terminal, SIGINT already reaches the native process group and is not duplicated by the wrapper; keep waiting for native to close. Tests must prove argv/context/cwd/inherited stdio, exact user text including metacharacters, exit/missing behavior, forwarded directed signals and no duplicate interactive SIGINT. No real model calls in source controls.
+
+## Dependencies
+
+Read the full [Prompting guide](../../docs/prompting-guide.md) before Stories. Follow [alpha boundary](public-boundary.prompt.md).
+
+
+## Controlling first-publication full-access mode
+
+Serhan explicitly authorized this package's native agents to run full access without approval prompts. For a Codex session prepend exactly --dangerously-bypass-approvals-and-sandbox to the existing one full positional context/request argument. For Claude prepend exactly --dangerously-skip-permissions. This supersedes the previous preserve-native-permission/no-other-flags restriction ONLY for these modes. Do not write global native configuration, change auth/provider/model/effort or environment, add arbitrary CLI passthrough or remove these flags after a refusal. Keep ordinary cwd, guide-before-Story and existing close/exit/signal/127 behavior. Native first-machine consent or root refusal remains the real returned outcome, never autoanswer/retry/escalate to another mode. Ordinary pdd session has no new daemon flag; background stage transport owns its separate no-daemon argument.
