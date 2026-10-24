@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 8263eb7925fa52434b72e307ac44e95c4b604ce8a9c62dcc69176ba5667a2f9f).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: bd98983620810b48ed1fbf49a2a221c2abee118f7b805c223aec0e014309297b).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
@@ -234,19 +234,37 @@ export async function reconcileWorkflowPr(input, ports = {}) {
 }
 
 export async function publishWorkflowPr(input, ports = {}) {
-  let effectStarted = false;
+  let effectStarted = false, unpublishedOnly = false;
   try {
-    const { cwd, intent: supplied } = structuredClone(input ?? {}), intent = intentCopy(supplied), deps = dependencies(ports);
+    const { cwd, intent: supplied, unpublishedOnly: mode = false } = structuredClone(input ?? {});
+    if (typeof mode !== 'boolean') fail('workflow_github_recovery_mode_invalid');
+    unpublishedOnly = mode;
+    const intent = intentCopy(supplied), deps = dependencies(ports);
     const actual = await repositoryAt(cwd, deps);
     if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
     const found = await lookup(cwd, intent, deps);
-    if (found.state === 'found') return found.outcome;
+    if (found.state === 'found') return unpublishedOnly
+      ? outcome('recovery_required', 'An original PR already exists. Inspect it without unpublished-only publication.') : found.outcome;
     if (found.state !== 'absent') return outcome('recovery_required', 'Cannot confirm the original PR identity. Reconcile the saved intent without another publication.');
     const topic = await localTopic(cwd, intent.baseBranch, intent.bodyFile, deps);
     if (topic.headBranch !== intent.headBranch || topic.headSha !== intent.headSha) fail('workflow_github_source_changed');
-    if (!markerBody(await deps.readFile(intent.bodyFile, 'utf8'), intent.marker)) fail('workflow_github_marker_missing');
+    const body = await deps.readFile(intent.bodyFile, 'utf8');
+    if (!markerBody(body, intent.marker)) fail('workflow_github_marker_missing');
     const pushRemote = (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim();
     if (!sameRepo(originRepository(pushRemote), intent.repository)) fail('workflow_github_repository_mismatch');
+    if (unpublishedOnly) {
+      const remote = await deps.raw(cwd, 'git', ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
+      if (remote.code !== 2 || remote.stdout !== '')
+        return outcome('recovery_required', 'The saved remote branch is present or its absence is unconfirmed. Inspect the same intent without publication.');
+      // Remote reads can wait for authentication. Revalidate source and body after that boundary.
+      const current = await localTopic(cwd, intent.baseBranch, intent.bodyFile, deps);
+      if (current.headBranch !== intent.headBranch || current.headSha !== intent.headSha
+        || await deps.readFile(intent.bodyFile, 'utf8') !== body) fail('workflow_github_source_changed');
+      const currentRepo = await repositoryAt(cwd, deps);
+      if (!sameRepo(currentRepo.repository, intent.repository)
+        || (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim() !== pushRemote)
+        fail('workflow_github_repository_mismatch');
+    }
     effectStarted = true;
     await deps.command(cwd, 'git', ['push', 'origin', `${intent.headSha}:refs/heads/${intent.headBranch}`]);
     await deps.command(cwd, 'gh', ['pr', 'create', '--repo', intent.repository, '--head', intent.headBranch,
@@ -254,7 +272,7 @@ export async function publishWorkflowPr(input, ports = {}) {
     // A successful create exit/printed URL is insufficient; use genuine GitHub readback.
     return await reconcileWorkflowPr({ cwd, intent }, ports);
   } catch {
-    return effectStarted
+    return effectStarted || unpublishedOnly
       ? outcome('recovery_required', 'Push or PR creation is unconfirmed. Reconcile this same saved intent; do not publish again.')
       : outcome('failed', 'Publication did not start. Check the saved intent, repository, clean topic branch and marked body file.');
   }

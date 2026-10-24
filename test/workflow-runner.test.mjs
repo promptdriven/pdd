@@ -35,7 +35,16 @@ async function fixture(t, options = {}) {
     calls.push({ file, args: [...args] });
     if (file === 'git' && args[0] === 'push') {
       assert.equal(f.saved(native.at(-1).input.runId).pending.kind, 'pr', 'PR intent must be durable BEFORE push');
+      if (options.preAuthPushFailure && !f.authFixed) throw Object.assign(Error('Username prompt timed out'), { code: 'ETIMEDOUT' });
+      if (options.preAuthPushFailure) {
+        const events = readFileSync(join(f.gitDir, 'pdd/workflows', native.at(-1).input.runId, 'journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+        assert.equal(events.at(-1).event, 'pr.unpublished_retry_intent', 'explicit retry intent durable BEFORE recovered push');
+      }
       return { stdout: '', stderr: '' };
+    }
+    if (file === 'git' && args[0] === 'ls-remote' && args.includes('--exit-code')) {
+      if (f.remoteUnreadable) throw Object.assign(Error('authentication unreadable'), { code: 128, stdout: '', stderr: 'authentication failed' });
+      return { code: f.remoteHead ? 0 : 2, stdout: f.remoteHead ? `${f.remoteHead}\t${args.at(-1)}\n` : '', stderr: '' };
     }
     if (file === 'git' && args[0] === 'ls-remote') return { stdout: f.pr ? `${f.pr.headRefOid}\trefs/heads/${f.pr.headRefName}\n` : '', stderr: '' };
     if (file !== 'gh') return exec(file, args, opts);
@@ -52,6 +61,7 @@ async function fixture(t, options = {}) {
       return { stdout: f.pr.url + '\n' };
     }
     if (args[0] === 'pr' && ['list', 'view'].includes(args[1])) {
+      if (f.prUnreadable) throw Error('PR lookup unreadable');
       if (f.pr && f.merged) Object.assign(f.pr, { state: 'MERGED', mergedAt: '2026-10-24T00:00:00Z', mergeCommit: { oid: f.pr.headRefOid } });
       return { stdout: JSON.stringify(args[1] === 'list' ? f.pr ? [f.pr] : [] : f.pr) };
     }
@@ -243,6 +253,57 @@ test('lost PR reply reconciles the identical original and never repeats push/cre
   const before = count(); assert.equal(before, 2); const recovered = await f.resume(first.runId);
   assert.equal(recovered.state, 'waiting', recovered.message); assert.equal(count(), before); assert.equal(f.native.length, 3);
   assert.equal(f.saved(first.runId).completed.find(s => s.id === 'open-pr').pr.number, 23);
+});
+
+test('pre-auth push failure recovers only on explicit approve using the original unpublished PR intent', async t => {
+  const f = await fixture(t, { preAuthPushFailure: true });
+  const first = await f.run(); const failed = await f.resume(first.runId, 'approve');
+  assert.equal(failed.state, 'recovery_required', failed.message);
+  const saved = f.saved(first.runId), original = structuredClone(saved.pending.intent);
+  const context = saved.context, expected = saved.expected, completed = saved.completed;
+  const effects = () => f.calls.filter(c => c.file === 'git' && c.args[0] === 'push' || c.file === 'gh' && c.args[1] === 'create');
+  assert.equal(effects().length, 1); f.authFixed = true;
+  assert.equal((await f.resume(first.runId)).state, 'recovery_required');
+  assert.equal(effects().length, 1, 'inspection after auth repair cannot publish');
+  const recovered = await f.resume(first.runId, 'approve');
+  assert.equal(recovered.state, 'waiting', recovered.message);
+  const after = f.saved(first.runId), pr = after.completed.find(row => row.id === 'open-pr');
+  assert.deepEqual(pr.intent, original); assert.equal(pr.pr.headSha, original.headSha);
+  assert.equal(after.runId, first.runId); assert.equal(after.context, context);
+  assert.deepEqual(after.expected, expected); assert.deepEqual(after.completed.slice(0, -1), completed);
+  assert.equal(f.native.length, 3, 'no stage or attempt replay');
+  assert.deepEqual(effects().map(c => c.file), ['git', 'git', 'gh']);
+  assert.ok(f.calls.some(c => c.file === 'git' && c.args[0] === 'ls-remote' && c.args.includes('--exit-code')), 'recovery must freshly prove remote absence');
+  assert.equal((await f.resume(first.runId, 'approve')).state, 'waiting');
+  assert.equal(effects().length, 3, 'original open PR never republishes');
+});
+
+test('unpublished PR recovery refuses present remote head and unreadable PR or remote queries', async t => {
+  for (const refusal of ['remoteHead', 'remoteUnreadable', 'prUnreadable']) {
+    await t.test(refusal, async t => {
+      const f = await fixture(t, { preAuthPushFailure: true }); const first = await f.run();
+      assert.equal((await f.resume(first.runId, 'approve')).state, 'recovery_required');
+      const original = structuredClone(f.saved(first.runId).pending.intent); f.authFixed = true;
+      f[refusal] = refusal === 'remoteHead' ? original.headSha : true;
+      const recovered = await f.resume(first.runId, 'approve');
+      assert.equal(recovered.state, 'recovery_required', recovered.message);
+      assert.deepEqual(f.saved(first.runId).pending.intent, original);
+      assert.equal(f.calls.filter(c => c.file === 'git' && c.args[0] === 'push').length, 1);
+      assert.equal(f.calls.filter(c => c.file === 'gh' && c.args[1] === 'create').length, 0);
+      assert.equal(f.native.length, 3);
+    });
+  }
+});
+
+test('lost reply during unpublished PR recovery reconciles without another push or create', async t => {
+  const f = await fixture(t, { preAuthPushFailure: true, lostPrReply: true }); const first = await f.run();
+  assert.equal((await f.resume(first.runId, 'approve')).state, 'recovery_required'); f.authFixed = true;
+  assert.equal((await f.resume(first.runId, 'approve')).state, 'recovery_required');
+  assert.ok(f.pr, 'actual create happened before lost reply');
+  const count = () => f.calls.filter(c => c.file === 'git' && c.args[0] === 'push' || c.file === 'gh' && c.args[1] === 'create').length;
+  assert.equal(count(), 3);
+  assert.equal((await f.resume(first.runId, 'approve')).state, 'waiting');
+  assert.equal(count(), 3); assert.equal(f.native.length, 3);
 });
 
 test('an existing same issue/workflow run cannot be duplicated or switch its saved agent', async t => {

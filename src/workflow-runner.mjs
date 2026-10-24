@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c0805079516dc01ec360ac58336ed19789e874d7c93005a1d8a466883f8eda74).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1320fe412969e3aaf53ea28b0a08854fdb6dda13369e6ed0042688afe3ccb2f3).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -409,12 +409,18 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
     return acceptAgent(s, stage, r, directory, options, p, seen);
   }
   try {
-    const outcome = await reconcileWorkflowPr({ cwd: r.root, intent: s.pending.intent }, p.commandPorts);
+    let outcome = await reconcileWorkflowPr({ cwd: r.root, intent: s.pending.intent }, p.commandPorts);
+    if (outcome.state === 'recovery_required' && canAdvance) {
+      await current(s, r, p);
+      record(s, directory, 'pr.unpublished_retry_intent');
+      outcome = await publishWorkflowPr({ cwd: r.root, intent: s.pending.intent, unpublishedOnly: true }, p.commandPorts);
+    }
     if (!['open', 'merged'].includes(outcome.state) || !outcome.pr)
       return result(s, 'recovery_required', outcome.message || 'The exact original PR was not proved; no effect was repeated.');
+    await current(s, r, p);
     await completePr(s, stage, s.pending.intent, outcome.pr, directory);
     return result(s, 'waiting', 'Original PR reconciled. Resume without a decision to observe merge, or with approve to advance.');
-  } catch { return result(s, 'recovery_required', 'Original PR could not be proved; no effect repeated.'); }
+  } catch { return result(s, 'recovery_required', 'Original PR recovery is unconfirmed; preserve this same intent for inspection.'); }
 }
 async function advance(s, r, directory, options, p, decision, initial) {
   authority(s, r);
