@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 95c219c05e65275d720546cce1c5d1e9f70ebe753d55e18d04aa6e263c60d30f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c0b64be06e2e134e566791666211d7d92090287291be53eeaecb50b5c1cb2cf6).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,11 +14,8 @@ const line = (stream, text) => stream.write(`${text}\n`);
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  const preview = !prefix.length || prefix[0] === 'workflow'
-    && (prefix.length === 1 || ['run', 'resume', 'attach'].includes(prefix[1]));
   return ['PDD Alpha: local guidance for your existing coding-agent conversation.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    ...(preview ? ['Workflow runner PREVIEW: a real workflow PR is not yet proven.'] : []),
     'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',
     'Keep the PDD controller running while its native stages work in background Herdr. After controller exit, use explicit resume to reconcile the original; no background PDD daemon continues it.',
