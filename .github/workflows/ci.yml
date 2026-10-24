@@ -22,6 +22,16 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+      - name: Ensure shell test prerequisites
+        run: |
+          command -v bash
+          bash --version
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          fi
+          command -v zsh
+          zsh --version
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: node bin/pdd.mjs --help
