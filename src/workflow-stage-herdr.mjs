@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 1af9e1ffe94149be843799c3ef1e30447006c65195de7283a6491e48295ff2fa).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 3e1696ef44abead80b9bcaaf9323c317ad13df0d836e1b1cbf61795c54828dd4).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -254,7 +254,7 @@ export async function runHerdrStage(input, ports = {}) {
     try {
       started = await command(rt, b.session, ['agent', 'start', b.agentName, '--kind', b.agent,
         '--pane', b.paneId, '--timeout', String(rt.startupMs),
-        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox'] : ['--', '--dangerously-skip-permissions'])], cwd, rt.startupMs + 5000);
+        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`] : ['--', '--dangerously-skip-permissions'])], cwd, rt.startupMs + 5000);
     } catch (error) {
       if (error.code !== 'agent_not_ready') throw error;
       const existing = await checkAgent(rt, b);

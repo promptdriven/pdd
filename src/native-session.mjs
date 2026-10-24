@@ -1,6 +1,7 @@
-// Generated from prompts/cli/native-session.prompt.md (sha256: 9216f9661676136692324ccd138bb52415906e70cb3ca72a234e314a71200978).
+// Generated from prompts/cli/native-session.prompt.md (sha256: 440623f0e97391ab15618618f55a3ecf03b5a858f78784acdc230c90802c3715).
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
+import { resolve as resolvePath } from 'node:path';
 
 export function launchNativeSession({ agent, cwd, context, request = '', stderr = process.stderr },
   { spawn = spawnChild, signals = process, stdinIsTTY = Boolean(process.stdin.isTTY) } = {}) {
@@ -20,7 +21,9 @@ export function launchNativeSession({ agent, cwd, context, request = '', stderr 
         ? `The native ${agent} CLI is not on PATH. Install and sign in with that native tool, then run pdd session again.\n`
         : `The native ${agent} session could not be launched. Check that tool and the size of the bundled instructions.\n`);
     };
-    try { child = spawn(agent, [agent === 'codex' ? '--dangerously-bypass-approvals-and-sandbox' : '--dangerously-skip-permissions', prompt], { cwd, stdio: 'inherit', shell: false }); }
+    try { child = spawn(agent, agent === 'codex'
+      ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(resolvePath(cwd))}={trust_level="trusted"}}`, prompt]
+      : ['--dangerously-skip-permissions', prompt], { cwd, stdio: 'inherit', shell: false }); }
     catch (error) { failed(error); finish(error.code === 'ENOENT' ? 127 : 1); return; }
     for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
       const fn = () => {

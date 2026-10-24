@@ -42,8 +42,9 @@ function harness(cwd, options = {}) {
         assert.equal(checkpoints.at(-1).phase,'start_intent');assert.equal(checkpoints.at(-1).terminalId,terminal);
         agentName=a[2];started=true;
         if(options.requireNoDaemon && !a.includes('--no-daemon'))throw Object.assign(Error('unsupported daemon'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Cannot use the shared background server: api_key_model_discovery must be disabled'}})});
+        if(options.requireTrust && a[a.indexOf('-c')+1]!==`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`)throw Object.assign(Error('folder trust required'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Trust this folder'}})});
         if(options.startBlocked)throw Object.assign(Error('pending'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Native startup awaits person'}})});
-        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox']:['--','--dangerously-skip-permissions'])]);
+        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]:['--','--dangerously-skip-permissions'])]);
         return encode({result:{agent:options.startAck?options.startAck(agent()):agent()}});
       }
       if (a[0] === 'agent' && a[1] === 'prompt') {
@@ -78,7 +79,7 @@ function harness(cwd, options = {}) {
     checkpoint:async snapshot=>{checkpoints.push(structuredClone(snapshot));if(options.checkpointFails===snapshot.phase)throw Error('Disk failure');}};
   return { input,ports,calls,checkpoints,options,setRunning:value=>{running=value;},closed:()=>closed,promptCount:()=>calls.filter(x=>x[0]==='herdr'&&x[1][2]==='agent'&&x[1][3]==='prompt').length };
 }
-async function temp(t) { const p=await realpath(await mkdtemp(join(tmpdir(),'pdd-stage-')));t.after(()=>rm(p,{recursive:true,force:true}));return p; }
+async function temp(t, prefix='pdd-stage-') { const p=await realpath(await mkdtemp(join(tmpdir(),prefix)));t.after(()=>rm(p,{recursive:true,force:true}));return p; }
 const acceptance = b => ({runId:b.runId,stageId:b.stageId,attemptId:b.attemptId,promptDigest:b.promptDigest,terminalId:b.terminalId,evidenceDigest:'a'.repeat(64)});
 
 test('fresh owned stage checkpoints actual IDs before one full prompt, observes work then ready; accepted cleanup only',async t=>{
@@ -271,11 +272,11 @@ test('legacy stopped pre-native original migrates short; legacy active or later 
 });
 
 
-test('fresh stages use authorized full-access flags and Codex retains no-daemon',async t=>{
+test('fresh stages trust only the assigned worktree per invocation and retain authorized full access',async t=>{
  for(const agent of ['codex','claude']){
-  const h=harness(await temp(t),{agent,requireNoDaemon:agent==='codex'});const r=await runHerdrStage(h.input,h.ports);
+  const h=harness(await temp(t,'pdd-stage \"quoted\".back\\slash=chosen-'),{agent,requireNoDaemon:agent==='codex',requireTrust:agent==='codex'});const r=await runHerdrStage(h.input,h.ports);
   assert.equal(r.state,'settled');const args=h.calls.find(c=>c[0]==='herdr'&&c[1][3]==='start')[1];
-  assert.equal(args.includes('--no-daemon'),agent==='codex');assert.ok(args.includes(agent==='codex'?'--dangerously-bypass-approvals-and-sandbox':'--dangerously-skip-permissions'));assert.equal(h.promptCount(),1);
+  assert.equal(args.includes('--no-daemon'),agent==='codex');assert.equal(args.includes('-c'),agent==='codex');assert.ok(args.includes(agent==='codex'?'--dangerously-bypass-approvals-and-sandbox':'--dangerously-skip-permissions'));assert.equal(h.promptCount(),1);
  }
 });
 
