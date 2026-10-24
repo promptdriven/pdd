@@ -33,4 +33,4 @@ Use a fresh temporary directory if that destination already contains prior artif
 
 ## Scope and license
 
-Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. This alpha excludes Runtime/server/mobile implementation, private managed sessions, remote workflow services, private Host/company integration and internal fixtures. Do not copy private Git history or credentials into source or package artifacts. An optional proposal for a future capability is not an implemented public command.
+Contributions are under the repository's [MIT license](LICENSE). Retain applicable notices. Keep the package self-contained, with no hosted services, private dependencies, operational fixtures or credentials in source or package artifacts. An optional proposal for a future capability is not an implemented public command.

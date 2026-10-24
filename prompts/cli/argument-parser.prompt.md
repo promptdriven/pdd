@@ -1,6 +1,6 @@
 # Alpha local argument parser
 
-Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`. No hostArgv/Host disposition/private validators or runtime enum.
+Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`. Do not emit service-adapter arguments or dispositions, private validators or an execution-service enum.
 
 Empty argv, root --help/-h/help, and known exact command/group help succeed. Unknown command plus --help/-h still refuses2. `--version` and `--skill` accept no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `session` defaults to codex, permits one optional --agent codex|claude plus optional request words (joined as one request), and supports -- to end its options. It does not forward native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 

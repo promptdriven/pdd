@@ -26,13 +26,13 @@ node /actual/package/bin/pdd.mjs workflow attach RUN_ID
 
 Run attach from another terminal in the same repository, including its original or a linked checkout. This attaches the saved active conversation. Normal Herdr detach leaves that native process running; it is different from exiting or closing the agent. Normal detach reports workflow waiting (exit 2), not completed. Use the actual run/stage message. Attachment pauses acceptance and cleanup. Responding to a permission prompt or submitting more work requires fresh settlement/currentness validation, not reuse of a prior candidate. The runner preserves the original identity; it does not start another conversation to satisfy attach.
 
-Accepted completed stage panes can be closed after evidence is retained. Their archived identities are not live attach targets. Later native history resume is not promised by this command. The adapter allows one active stage workspace per owned run server, plus at most one recorded seed workspace; occupied or unknown inventory refuses instead of killing work. Each running stage is a full Codex or Claude session on your computer. There is no fixed repository stage limit; PDD keeps one run per issue and one active stage per run. A run server may retain its seed workspace: automatic cleanup of historical servers is not promised. Removing the repository cap is not proof of 20–30 simultaneous sessions.
+Accepted completed stage panes can be closed after evidence is retained. Their archived identities are not live attach targets. Later native history resume is not promised by this command. The adapter allows one active stage workspace per owned run server, plus at most one recorded seed workspace; occupied or unknown inventory refuses instead of killing work. Each running stage is a full Codex or Claude session on your computer. There is no fixed repository stage limit; PDD keeps one run per issue and one active stage per run. A run server may retain its seed workspace: automatic cleanup of historical servers is not promised. Concurrent-session throughput is not guaranteed.
 
 Keep the PDD controller alive for automatic handoff. If it exits, Herdr native work may continue, but PDD does not keep advancing. Explicitly resume the saved run to inspect/reconcile. Blocked, unknown, stalled, timed-out or ambiguously delivered work remains the original attempt; do not resend a prompt, restart an agent or close uncertain work as a retry.
 
 ### Environment and prerequisites
 
-Herdr 0.9.1 is the inspected capability baseline, not a proven minimum release. The owned target's client/server/API compatibility must be checked; unsupported targets fail without automatic upgrade, restart or shared-session takeover.
+Herdr 0.9.1 is the capability baseline; compatibility with other versions is not guaranteed. The owned target's client/server/API compatibility must be checked; unsupported targets fail without automatic upgrade, restart or shared-session takeover.
 
 The backing native shell inherits the owned server environment and its normal shell startup. It does not automatically inherit each later CLI invoker's environment. Native executable lookup/login/provider settings follow that backing shell. PDD must pass the assigned absolute issue-worktree cwd and check the actual ready cwd before prompt submission. A missing tool/login/configuration mismatch is surfaced in the original session; it is not repaired by copying environment tokens/credentials, changing HOME or restarting a shared server.
 
@@ -44,7 +44,7 @@ The backing native shell inherits the owned server environment and its normal sh
 | [Bug](../.pdd/workflows/bug/WORKFLOW.md) | 11 | reproduce, prompt-story, check, try (optional), build, verify | approve, prompt-pr (optional), prompt-merge (conditional), code-pr, code-merge |
 | [Small change](../.pdd/workflows/small-change/WORKFLOW.md) | 5 | scope, change, verify | open-pr, wait-merge |
 
-For the bundled definitions, these are 7 possible native sessions for feature (5 required), 6 for bug (5 required), and 3 for small-change. The total step counts include optional/human work. Optional preview uses the project's actual available preview tools, not PDD Runtime Try. A recorded skip remains a skip after interruption; the skipped stage must not run on resume. A skipped prompt PR skips its merge wait. Human approval applies to the current revision, not a prior draft.
+For the bundled definitions, these are 7 possible native sessions for feature (5 required), 6 for bug (5 required), and 3 for small-change. The total step counts include optional/human work. Optional preview uses the project's actual available preview tools, not a PDD-hosted preview service. A recorded skip remains a skip after interruption; the skipped stage must not run on resume. A skipped prompt PR skips its merge wait. Human approval applies to the current revision, not a prior draft.
 
 ## Saved identity and resume
 
@@ -86,7 +86,7 @@ Workflow run is separate from ordinary `session` and the named-recipe shortcuts 
 
 `pdd workflow feature|bug|small-change [--agent codex|claude] [request text]` remains a companion shortcut for a single native conversation. It loads the complete guide, skill/references, overview and selected WORKFLOW with sibling/subdirectory Markdown. It does not itself create separate stage sessions, drive the local run journal or post PRs. You can also follow the same recipe manually in an existing conversation after loading the full guide.
 
-`pdd session` loads all bundled recipes for open-ended native work. Native login, permissions and resume remain with the installed tool. No private Host or Runtime is involved.
+`pdd session` loads all bundled recipes for open-ended native work. Native login and conversation resume remain with the installed tool. Sessions and workflow stages start agents in full-access mode without approval prompts, with invocation-only Codex trust for the exact cwd and no global configuration writes.
 
 ## Discover executable workflows
 

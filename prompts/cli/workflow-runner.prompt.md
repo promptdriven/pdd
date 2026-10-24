@@ -1,6 +1,6 @@
 # Local workflow runner
 
-`src/workflow-runner.mjs` owns sequential local workflows for the user's current Git project. It resolves a real same-repository GitHub issue, starts a fresh native coding-agent conversation for each agent stage, preserves observable file handoffs, asks for human choices, creates actual PRs and observes their merge. The assigned issue worktree and normal native user login and permissions remain with the supplied background stage adapter. No private Host, Runtime, company account, automatic merge or hidden credentials are used.
+`src/workflow-runner.mjs` owns sequential local workflows for the user's current Git project. It resolves a real same-repository GitHub issue, starts a fresh native coding-agent conversation for each agent stage, preserves observable file handoffs, asks for human choices, creates actual PRs and observes their merge. The supplied background stage adapter owns the assigned issue worktree and full-access native launch policy, preserving native login without global configuration writes. Do not merge automatically or embed credentials.
 
 ## Public module functions and ports
 
@@ -11,7 +11,7 @@ Export `WORKFLOW_STAGES` from the definitions module. Export async module functi
 
 Return `{exitCode,state,runId,stage,message}`. `state` is completed, waiting, failed or recovery_required. Exit zero for completed, two for an ordinary wait, and one for failure or uncertain effect. The CLI prints the single message including actual run/stage identity. Missing/malformed inputs fail before effects. Do not export a second integer/callback API or add a status command.
 
-The approved foreground baseline remains historical. In this successor, background agent stages use the [Herdr stage port](workflow-stage-herdr.prompt.md); ordinary pdd session remains unchanged.
+Background agent stages use the [Herdr stage port](workflow-stage-herdr.prompt.md); ordinary pdd session remains unchanged.
 
 Canonical base guidance uses `loadGuidance({packageRoot,cwd,workflows:false}) -> string`; append the actual docs/workflows.md overview and the exact saved resolved definition/Markdown, keeping the full canonical guide first. Snapshot the complete canonical base guidance and resolved recipe from the original source project before worktree allocation. After assignment, compose and save the exact stage context with its actual worktree cwd and SHA256 before a native effect. Recompute against the saved definition and guide source before further progress and refuse changed source rather than silently switching context. Never request a hardcoded bundled workflow name for custom workflows.
 
@@ -72,11 +72,11 @@ Read back the actual PR and require exact repo, branch, base, head commit and ma
 
 ## Editable semantic protocol
 
-Use resolved stage protocol fields, never reserved stage IDs, to decide report/proposal/work/verify behavior. Proposal roles and native argv plan come from its handoff; approval mode is human or next-advance. The latter pauses before subsequent effects until an explicit current advance. Human stages accept the one current proposal. A verify protocol executes the accepted plan. requiresMerge binds work or PR to the referenced exact observed merge; a clean explicit advance may accept a user-prepared branch containing that recorded revision with pinned artifacts unchanged, never while native intent is pending. Preserve both corrected707 refusal boundaries for every renamed optional/PR/merge stage.
+Use resolved stage protocol fields, never reserved stage IDs, to decide report/proposal/work/verify behavior. Proposal roles and native argv plan come from its handoff; approval mode is human or next-advance. The latter pauses before subsequent effects until an explicit current advance. Human stages accept the one current proposal. A verify protocol executes the accepted plan. requiresMerge binds work or PR to the referenced exact observed merge; a clean explicit advance may accept a user-prepared branch containing that recorded revision with pinned artifacts unchanged, never while native intent is pending. Preserve optional-decision and exact recorded-merge refusal boundaries for every renamed optional/PR/merge stage.
 
 Export `attachWorkflow({runId,cwd,packageRoot},ports)` for the CLI's `pdd workflow attach RUN_ID`. Resolve the original assignment/journal read-only using the common-repo run index; save no placeholder on a missing run. Attach only the current exact active saved backend after normal identity checks, not completed history or a different stage/session. Return the existing V1 result shape for finite archive/missing information; normal attach exit is not workflow success or advancement.
 
-Additional required dependencies: [editable definition loader](workflow-definition-loader.prompt.md), [issue worktree](workflow-worktree.prompt.md), [background native stage](workflow-stage-herdr.prompt.md). Each has one separate source owner; main consumes exact reviewed helper bytes without rewriting them.
+Additional required dependencies: [editable definition loader](workflow-definition-loader.prompt.md), [issue worktree](workflow-worktree.prompt.md), [background native stage](workflow-stage-herdr.prompt.md). Each owns its separate helper contract; main consumes those helpers without duplicating their policy.
 
 ## Shared attach and acceptance exclusion
 

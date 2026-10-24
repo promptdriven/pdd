@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-definition-loader.prompt.md (sha256: 899a8d035ea9678c734108ede6b431dc71eaefd83cd49fda35ba1bacaa83cd12).
+// Generated from prompts/cli/workflow-definition-loader.prompt.md (sha256: 726f55cca0befe2570c8353ab6589f3d7167c82f6b11274136a9b76c68917be4).
 import { constants, lstatSync, realpathSync, openSync, fstatSync, readFileSync, closeSync, readdirSync } from 'node:fs';
 import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';

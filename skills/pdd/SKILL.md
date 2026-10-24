@@ -9,13 +9,13 @@ description: Use PDD's Prompting guide to draft or revise module prompts, Storie
 
 Read the **entire canonical [Prompting guide](../../docs/prompting-guide.md) in this actual conversation before drafting any Story or prompt**, including when joining an existing conversation. A link or format checker does not supply its contents. If the guide is absent, inaccessible or truncated, obtain the complete file before authoring; do not invent replacement rules. Briefly explain the relevant method for the task, then apply it. Do not require a fixed Story format or confuse a test answer with a specification.
 
-The local native session launcher must supply the full guide and bundled workflow content automatically before any Story. It uses the person's installed agent and existing permissions, not a private Host. If working in a manually opened conversation, explicitly load the same complete context.
+The local native session launcher must supply the full guide and bundled workflow content automatically before any Story. It uses the person's installed agent and existing native login, starts agents in full-access mode without approval prompts, and writes no global agent configuration. If working in a manually opened conversation, explicitly load the same complete context.
 
 The local `--skill` output includes the guide first and all bundled skill references. Resolve file paths from their actual package locations. If output is clipped, read the full files in sections. The guide is the single authority for prompt-writing rules; these instructions describe how to use it.
 
 ## Follow the person's useful task
 
-Read [prompt-session guidance](references/prompt-session.md). Inspect the selected folder and its project instructions. Identify the useful change and preserve the person's scope. For local drafting, do not turn HOME into a project checkout or require an issue, enrollment, special account or private Host session. The explicit issue runner requires a real issue in the current GitHub repository. Ask only for decisions that affect the requested behavior.
+Read [prompt-session guidance](references/prompt-session.md). Inspect the selected folder and its project instructions. Identify the useful change and preserve the person's scope. For local drafting, do not turn HOME into a project checkout or require an issue, enrollment, special account or hosted-service session. The explicit issue runner requires a real issue in the current GitHub repository. Ask only for decisions that affect the requested behavior.
 
 Draft the relevant module contract, observable Story and independent expected cases using the guide. Reuse existing project paths. Keep unreviewed work labeled draft. For existing-code adoption, read callers and tests as evidence, preserve implementation during draft-only work and identify unresolved compatibility. An interface declaration is not evidence that a program ran.
 
@@ -29,6 +29,6 @@ Choose a manual [feature](../../.pdd/workflows/feature/WORKFLOW.md), [bug](../..
 
 Keep drafted, reviewed, implemented, tested and published separate. Expected cases come from the contract, not from the program's observed answer. Report exact checks actually run, failures and unverified gaps. A source reading is not a test, and a project test is not formal verification.
 
-This alpha has no PDD Runtime lint/CHECK/Try/replay, private managed service or private Host fallback. Do not recommend unavailable PDD commands, invent an SDK or install a private service to complete a recipe. Use the person's own agent and project tools under their actual authority and budget; do not assume agent work is free. Missing execution does not prevent prompt drafts or authorize claiming they passed.
+Use only the documented local PDD commands. Do not recommend unavailable lint/CHECK/Try/replay commands, invent an SDK or install a hosted service to complete a recipe. Use the person's own agent and project tools under their actual authority and budget; do not assume agent work is free. Missing execution does not prevent prompt drafts or authorize claiming they passed.
 
 For a complete synthetic example, read [ticket status](../../examples/ticket-status/README.md). For supported local CLI commands, read [CLI guidance](../../docs/cli.md).

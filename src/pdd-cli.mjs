@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 85d4777d294550f56414a3577e08a62409b45940366b0fc2ef10bbaa459a936d).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const line = (stream, text) => stream.write(`${text}\n`);
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return ['PDD Alpha: local guidance for your existing coding-agent conversation.', '',
+  return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
     'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',

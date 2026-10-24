@@ -1,6 +1,6 @@
 # Local workflow stage definitions
 
-Own the compatibility bundled stage descriptions exported as `WORKFLOW_STAGES` by `src/workflow-definitions.mjs`. The editable JSON files are the canonical bundled stage definitions; derive this export through the definition loader so this module does not duplicate their schema or stage ordering. These describe local CLI orchestration, not a private Host or model execution service. Each step keeps its bundled Markdown instruction filename and semantic identity. The runner consumes these definitions; no parser or native launcher policy lives here.
+Own the compatibility bundled stage descriptions exported as `WORKFLOW_STAGES` by `src/workflow-definitions.mjs`. The editable JSON files are the canonical bundled stage definitions; derive this export through the definition loader so this module does not duplicate their schema or stage ordering. These describe local CLI orchestration, not a hosted model execution service. Each step keeps its bundled Markdown instruction filename and semantic identity. The runner consumes these definitions; no parser or native launcher policy lives here.
 
 | Workflow | Ordered stages (`agent`, `human`, `pr`, `merge`) |
 | --- | --- |
