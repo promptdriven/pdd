@@ -148,7 +148,7 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
     const launched = spawnSync(process.execPath,[bin,'session','--agent',agent,request],
       {cwd:project,env:nativeEnv,input:'native stdin is inherited\n',encoding:'utf8',timeout:5000});
     assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout);
-    assert.equal(observed.executable,join(fakeBin,agent));assert.equal(observed.argv.length,2); assert.ok(observed.argv.at(-1).includes(request));
+    assert.equal(observed.executable,join(fakeBin,agent));assert.equal(observed.argv.length,agent==='codex'?5:2); assert.ok(observed.argv.at(-1).includes(request));
     assert.ok(observed.argv.at(-1).includes(guide));assert.ok(observed.argv.at(-1).indexOf(guide)<observed.argv.at(-1).indexOf(skillText));
     for(const name of names.filter(name=>name.startsWith('.pdd/workflows/')&&name.endsWith('.md')))
       assert.ok(observed.argv.at(-1).includes(readFileSync(join(packed,name),'utf8')),name);
@@ -160,7 +160,7 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
       const args=[bin,'workflow',name,...(agent?['--agent',agent]:[]),'--',request+' --help'];
       const launched=spawnSync(process.execPath,args,{cwd:project,env:nativeEnv,input:'selected recipe input',encoding:'utf8',timeout:5000});
       assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout),payload=observed.argv.at(-1);
-      assert.equal(observed.executable,join(fakeBin,agent??'codex'));assert.equal(observed.argv.length,2);assert.ok(payload.includes(guide));assert.ok(payload.includes(request+' --help'));
+      assert.equal(observed.executable,join(fakeBin,agent??'codex'));assert.equal(observed.argv.length,(agent??'codex')==='codex'?5:2);assert.ok(payload.includes(guide));assert.ok(payload.includes(request+' --help'));
       assert.equal(observed.cwd,project);assert.equal(observed.input,'selected recipe input');assert.equal(observed.setting,'unchanged');
       const entry=`.pdd/workflows/${name}/WORKFLOW.md`,entryText=readFileSync(join(packed,entry),'utf8');
       assert.ok(payload.includes(entryText));assert.ok(payload.indexOf(guide)<payload.indexOf(entryText));
@@ -180,7 +180,7 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
   const missingEntry=join(packed,'.pdd/workflows/feature/WORKFLOW.md');rmSync(missingEntry);
   const selectedMissing=spawnSync(process.execPath,[bin,'workflow','feature'],{cwd:project,env:nativeEnv,input:'',encoding:'utf8',timeout:5000});assert.equal(selectedMissing.status,1);assert.equal(selectedMissing.stdout,'');
   const exited=spawnSync(process.execPath,[bin,'session'],{cwd:project,env:{...nativeEnv,NATIVE_FIXTURE_EXIT:'7'},input:'',encoding:'utf8',timeout:5000});
-  assert.equal(exited.status,7);assert.equal(JSON.parse(exited.stdout).argv.length,2);
+  assert.equal(exited.status,7);assert.equal(JSON.parse(exited.stdout).argv.length,5);
   const missing=spawnSync(process.execPath,[bin,'session','--agent','claude'],{cwd:project,env:{...env,PATH:home},input:'',encoding:'utf8',timeout:5000});
   assert.equal(missing.status,127);assert.equal(missing.stdout,'');assert.ok(missing.stderr.includes('claude'));
   rmSync(join(packed,'docs/prompting-guide.md'));
@@ -199,8 +199,8 @@ test('ALPHA5: native argv and process lifetime preserve settings exits and direc
     const context='# Full guide\nquoted "value"\nFull manual recipes';
     const promise=launchNativeSession({agent,cwd:'/project with spaces',context,request:'x; $(command)',stderr:capture()},
       {spawn:(...args)=>{calls.push(args);return child;},signals,stdinIsTTY:false});
-    assert.equal(calls.length,1);assert.equal(calls[0][0],agent);assert.equal(calls[0][1].length,2);
-    assert.equal(calls[0][1][0],agent==='codex'?'--dangerously-bypass-approvals-and-sandbox':'--dangerously-skip-permissions');
+    assert.equal(calls.length,1);assert.equal(calls[0][0],agent);assert.equal(calls[0][1].length,agent==='codex'?5:2);
+    assert.deepEqual(calls[0][1].slice(0,-1),agent==='codex'?['--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c','projects={"/project with spaces"={trust_level="trusted"}}']:['--dangerously-skip-permissions']);
     assert.ok(calls[0][1].at(-1).includes(context));assert.ok(calls[0][1].at(-1).includes('x; $(command)'));
     assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false});
     signals.emit('SIGINT');signals.emit('SIGTERM');signals.emit('SIGHUP');assert.deepEqual(kills,['SIGINT','SIGTERM','SIGHUP']);
