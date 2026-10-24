@@ -21,7 +21,7 @@ test('native session and runner stage context pin real absolute executable despi
   const prefix=context.match(/absolute executable prefix: (.+)\. Append only/)[1];
   const bare=spawnSync('/bin/sh',['-c','pdd --help'],{env:{...process.env,PATH:old},encoding:'utf8'});assert.equal(bare.status,77);
   const actual=spawnSync('/bin/sh',['-c',prefix+' --help'],{cwd:tmp,env:{...process.env,PATH:old},encoding:'utf8'});
-  assert.equal(actual.status,0,actual.stderr);assert.match(actual.stdout,/PDD Alpha/);assert.doesNotMatch(actual.stdout,/OLD_PRIVATE/);
+  assert.equal(actual.status,0,actual.stderr);assert.match(actual.stdout,/^PDD: prompt-driven development for your coding agent\.\n/);assert.doesNotMatch(actual.stdout,/OLD_PRIVATE/);
   let captured;
   const status=await launchNativeSession({agent:'codex',cwd:tmp,context,request:'Inspect help only'}, {spawn:(agent,args,opts)=>{
    captured={agent,args,opts};const child=new (class {once(name,fn){if(name==='close')queueMicrotask(()=>fn(0));return this;}kill(){}})();return child;
