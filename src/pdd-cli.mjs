@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c0b64be06e2e134e566791666211d7d92090287291be53eeaecb50b5c1cb2cf6).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 85d4777d294550f56414a3577e08a62409b45940366b0fc2ef10bbaa459a936d).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,7 +38,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, `pdd ${metadata.version}`);return 0;
+        line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
     case 'skill':
       try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }

@@ -97,7 +97,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor|phone)\b/);
   }
-  const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout.trim(), `pdd ${metadata.version}`);
+  const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 0, skill.stderr);
   const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8'), skillText = readFileSync(join(packed, 'skills/pdd/SKILL.md'), 'utf8');
   assert.ok(skill.stdout.includes(guide)); assert.ok(skill.stdout.indexOf(guide) < skill.stdout.indexOf(skillText));
