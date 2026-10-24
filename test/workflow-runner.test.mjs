@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync, openSync, closeSync, writeSync, readSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { constants as bufferConstants } from 'node:buffer';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile as callbackExec, spawn } from 'node:child_process';
@@ -341,6 +342,78 @@ test('torn local journal refuses without a replacement operation', async t => {
   const f = await fixture(t); const first = await f.run(); const path = join(f.gitDir, 'pdd/workflows', first.runId, 'journal.jsonl');
   writeFileSync(path, readFileSync(path, 'utf8') + '{'); const failed = await f.resume(first.runId, 'approve');
   assert.equal(failed.state, 'failed'); assert.match(failed.message, /journal is incomplete/); assert.equal(f.native.length, 1);
+});
+
+test('a journal beyond the Node string limit resumes its latest optional stage without rewriting history', { timeout: 120000 }, async t => {
+  const f = await fixture(t), recipe = join(f.sourceCwd, '.pdd/workflows/large-journal');
+  mkdirSync(recipe, { recursive: true });
+  writeFileSync(join(recipe, 'workflow.json'), JSON.stringify({ version: 1, name: 'large-journal', overview: 'WORKFLOW.md', stages: [
+    { id: 'first', kind: 'agent', protocol: 'report', optional: true, file: 'first.md' },
+    { id: 'second', kind: 'agent', protocol: 'report', optional: true, file: 'second.md' }
+  ] }));
+  for (const name of ['WORKFLOW.md', 'first.md', 'second.md']) writeFileSync(join(recipe, name), 'Report the current optional step.\n');
+  const first = await f.run('large-journal'), saved = f.saved(first.runId);
+  const journal = join(f.gitDir, 'pdd/workflows', first.runId, 'journal.jsonl');
+  const context = saved.context, original = readFileSync(journal), expectedHash = createHash('sha256').update(original);
+  let bytes = original.length, rows = saved.seq;
+  const fd = openSync(journal, 'a');
+  try {
+    while (bytes <= bufferConstants.MAX_STRING_LENGTH + 64 * 1024 * 1024) {
+      saved.seq = ++rows;
+      const row = Buffer.from(JSON.stringify({ seq: rows, event: 'retained.snapshot', state: saved }) + '\n');
+      writeSync(fd, row); expectedHash.update(row); bytes += row.length;
+    }
+  } finally { closeSync(fd); }
+  assert.ok(bytes > bufferConstants.MAX_STRING_LENGTH);
+  const recovered = await f.resume(first.runId, 'skip');
+  assert.equal(recovered.state, 'waiting', recovered.message); assert.equal(recovered.runId, first.runId);
+  assert.equal(recovered.stage, 'second'); assert.equal(f.native.length, 0, 'skipping never starts an agent');
+  const input = openSync(journal, 'r'), actualHash = createHash('sha256'), chunk = Buffer.alloc(64 * 1024);
+  let position = 0;
+  try {
+    while (position < bytes) {
+      const count = readSync(input, chunk, 0, Math.min(chunk.length, bytes - position), position);
+      assert.ok(count > 0); actualHash.update(chunk.subarray(0, count)); position += count;
+    }
+    const end = statSync(journal).size, tail = Buffer.alloc(Math.min(end, 512 * 1024));
+    readSync(input, tail, 0, tail.length, end - tail.length);
+    const last = JSON.parse(tail.toString('utf8').trimEnd().split('\n').at(-1));
+    assert.ok(last.seq > rows); assert.equal(last.state.context, context);
+    assert.equal(last.state.index, 1); assert.equal(last.state.completed[0].id, 'first');
+    assert.equal(last.state.completed[0].skipped, true);
+  } finally { closeSync(input); }
+  assert.equal(actualHash.digest('hex'), expectedHash.digest('hex'), 'all original journal bytes remain unchanged');
+  t.diagnostic(`Read ${bytes} bytes / ${rows} retained snapshots through normal same-run skip; original byte prefix unchanged.`);
+});
+
+test('streamed journal validates earlier history and refuses malformed or partial records before effects', async t => {
+  for (const variant of ['sequence', 'run', 'malformed', 'partial']) {
+    await t.test(variant, async t => {
+      const f = await fixture(t); const first = await f.run();
+      const path = join(f.gitDir, 'pdd/workflows', first.runId, 'journal.jsonl');
+      const rows = readFileSync(path, 'utf8').trimEnd().split('\n').map(JSON.parse);
+      if (variant === 'sequence') { rows[0].seq = 10; rows[0].state.seq = 10; }
+      if (variant === 'run') rows[0].state.runId = randomUUID();
+      let raw = rows.map(JSON.stringify).join('\n') + '\n';
+      if (variant === 'malformed') raw = '{not json}\n' + raw;
+      if (variant === 'partial') raw += '{"seq":';
+      writeFileSync(path, raw);
+      const before = f.native.length, response = await f.resume(first.runId, 'approve');
+      assert.equal(response.state, 'failed', response.message); assert.equal(f.native.length, before);
+      assert.equal(readFileSync(path, 'utf8'), raw, 'invalid history is never repaired or rewritten');
+    });
+  }
+});
+
+test('streamed journal handles split UTF8 records and trailing whitespace without losing saved identity', async t => {
+  const f = await fixture(t); const first = await f.run();
+  const path = join(f.gitDir, 'pdd/workflows', first.runId, 'journal.jsonl');
+  const rows = readFileSync(path, 'utf8').trimEnd().split('\n').map(JSON.parse);
+  rows[0].event = 'checkpoint 🎯 中文 '.repeat(20000);
+  writeFileSync(path, rows.map(JSON.stringify).join('\n') + '\n \t\n');
+  const before = f.native.length, response = await f.resume(first.runId);
+  assert.equal(response.runId, first.runId); assert.equal(response.state, 'waiting', response.message);
+  assert.equal(f.native.length, before);
 });
 
 test('separate prompt PR waits for real merge and refuses code work without its exact merged ancestry', async t => {
@@ -716,8 +789,8 @@ test('resume owns the controller lock before reading the journal and cannot adva
   const saved=f.saved(first.runId), journal=join(f.gitDir,'pdd/workflows',first.runId,'journal.jsonl');
   const releasePath=join(f.sourceCwd,'.git','release-journal-reader');
   const script=`import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
-    const read=fs.readFileSync;let intercepted=false;
-    fs.readFileSync=function(path,...args){const value=read.call(this,path,...args);
+    const open=fs.openSync;let intercepted=false;
+    fs.openSync=function(path,...args){const value=open.call(this,path,...args);
       if(String(path)===${JSON.stringify(journal)}&&!intercepted){intercepted=true;process.stdout.write('JOURNAL_READ\\n');
         const wait=new Int32Array(new SharedArrayBuffer(4));const end=Date.now()+15000;
         while(!fs.existsSync(${JSON.stringify(releasePath)})){if(Date.now()>end)throw Error('Test reader release timed out');Atomics.wait(wait,0,0,5);}}
