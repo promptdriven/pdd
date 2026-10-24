@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c0b64be06e2e134e566791666211d7d92090287291be53eeaecb50b5c1cb2cf6).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const line = (stream, text) => stream.write(`${text}\n`);
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return ['PDD Alpha: local guidance for your existing coding-agent conversation.', '',
+  return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
     'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',
@@ -38,7 +38,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, `pdd ${metadata.version}`);return 0;
+        line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
     case 'skill':
       try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }

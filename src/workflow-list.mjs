@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-list.prompt.md (sha256: 9f454ee1a1a3a4b0b5675df4ae591429bc086ef0ee6a75007c956a581825b387).
+// Generated from prompts/cli/workflow-list.prompt.md (sha256: 4804e56894ad44ffa356cbd16fb99847fb77e4d394a683e91bf8449b1898b680).
 import { lstatSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 

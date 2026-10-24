@@ -1,4 +1,4 @@
-// Generated from prompts/cli/native-session.prompt.md (sha256: 440623f0e97391ab15618618f55a3ecf03b5a858f78784acdc230c90802c3715).
+// Generated from prompts/cli/native-session.prompt.md (sha256: 153c4b7ed5509736753afcf6f1cbc537f19fc35c95fc31bcfec94038a47f89a8).
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import { resolve as resolvePath } from 'node:path';

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/guidance.prompt.md (sha256: 66e5d77963496a95bd5f4a8896b381682fe889ec0aef219d932652195278dd5f).
+// Generated from prompts/cli/guidance.prompt.md (sha256: 3f5107fe1a3b708c6c9e59526169d7190beb3f925d4cb612e74abf1b75a42086).
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { BUNDLED_WORKFLOW_NAMES } from './command-catalog.mjs';

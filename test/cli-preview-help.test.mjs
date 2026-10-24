@@ -36,6 +36,7 @@ test('actual public bin launch help works offline in empty consumer folder; unre
  for(const words of [['--help'],['workflow','run','--help'],['workflow','resume','--help'],['workflow','attach','--help']]){
   const result=spawnSync(process.execPath,[bin,...words],{cwd,env:{...process.env,HOME:cwd,PATH:''},encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stderr);assert.equal(result.stderr,'');assert.doesNotMatch(result.stdout,/PREVIEW|real workflow PR is not yet proven/);
+  assert.equal(result.stdout.split('\n')[0],'PDD: prompt-driven development for your coding agent.');
  }
  const unknown=spawnSync(process.execPath,[bin,'not-a-command','--help'],{cwd,env:{...process.env,HOME:cwd,PATH:''},encoding:'utf8',timeout:5000});
  assert.equal(unknown.status,2);assert.equal(unknown.stdout,'');assert.match(unknown.stderr,/unsupported|unknown/i);

@@ -2,12 +2,15 @@
 
 **Prompt-driven development for your coding agent.**
 
+**New to PDD? Start with the [Prompting guide](docs/prompting-guide.md).**
+
 Describe what your software should do in prompts, Stories and test cases. Your coding agent builds it, runs your tests and opens the pull request.
 
 ## Install
 
 ```sh
 npm install -g github:promptdriven/pdd_alpha
+pdd --version # prints 0.0.311
 ```
 
 Requires Node.js 22.16+ and [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview). If you have the older Python `pdd`, uninstall it first: `uv tool uninstall pdd-cli` or `pip uninstall pdd-cli`.
@@ -33,7 +36,7 @@ Needs Git, [GitHub CLI](https://cli.github.com) and [Herdr](https://herdr.dev).
 
 ## Highlights
 
-- **Prompting guide.** A clear method for prompts, Stories and test cases that agents can build from.
+- **[Prompting guide](docs/prompting-guide.md).** A clear method for prompts, Stories and test cases that agents can build from.
 - **Three workflows.** `feature`, `bug` and `small-change`, written in plain Markdown that you can edit.
 - **A fresh session for every step.** Each step gets the guide, its instructions and the earlier results.
 - **Many issues at once.** Each issue gets its own worktree and branch.
