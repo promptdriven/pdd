@@ -5,6 +5,10 @@ Function Signature:
     - package_name (str): The name of the package to check. Default: "pdd-cli".
     - latest_version (str, optional): A known latest version to compare against. Default: None (fetch from PyPI).
 
+Non-interactive guard (issue #2345):
+- Expose `is_update_check_disabled() -> bool`. It returns True when `CI`, `PDD_NO_INTERACTIVE`, or `PDD_SKIP_UPDATE_CHECK` is set to a truthy value (`1`, `true`, `yes`, `on`, case-insensitive, whitespace-trimmed), or when stdin or stdout is not a TTY. Treat streams whose `isatty()` raises `AttributeError`/`ValueError` as non-interactive. Falsy values such as `CI=false` do not disable the check.
+- `auto_update` returns immediately, before any PyPI request or prompt, when `is_update_check_disabled()` is True.
+
 Core Logic:
 1. Determine the current installed version of the package.
 2. If `latest_version` is not provided, fetch it from PyPI for the specified `package_name`.
@@ -15,8 +19,8 @@ Core Logic:
     b. Ask for user confirmation before proceeding with the upgrade (e.g., "Would you like to upgrade? [y/N]:").
     c. If the user confirms:
         i. Detect the installation method by checking `sys.executable` path for UV markers (e.g., "/uv/tools/" or ".local/share/uv/"). Normalize path separators (convert \ to /) to support both Unix and Windows paths before checking.
-        ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool install <package> --force` or `python -m pip install --upgrade <package>`).
-        iii. Execute the upgrade command.
+        ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool install <package> --force` or `python -m pip install --upgrade <package>`). `get_upgrade_command(package_name, installation_method)` returns `(argv_list, False)`: for UV use `shutil.which("uv")` when available, otherwise the bare `"uv"` argv. Never use a shell.
+        iii. Execute the upgrade command with `subprocess.run(argv, shell=False, ...)`. A missing `uv` binary surfaces as an exception, which counts as a failed upgrade and triggers the pip fallback.
         iv. Provide feedback on the success or failure of the upgrade.
         v. If the primary upgrade method (e.g., UV) fails, attempt a fallback to a standard method (e.g., pip) if applicable, and report its outcome.
     d. If the user declines, print a cancellation message and exit.

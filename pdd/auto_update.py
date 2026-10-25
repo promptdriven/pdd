@@ -14,6 +14,29 @@ from typing import Optional, Tuple, List
 import requests
 import semver
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY
+
+
+def is_update_check_disabled() -> bool:
+    """Return True when the update check must not run.
+
+    The check is skipped in machine contexts where nobody can answer the
+    upgrade prompt and the toolchain must not change underneath a build:
+    ``CI``, ``PDD_NO_INTERACTIVE`` or ``PDD_SKIP_UPDATE_CHECK`` set to a
+    truthy value, or stdin/stdout not attached to a TTY (issue #2345).
+    """
+    if _env_truthy("CI") or _env_truthy("PDD_NO_INTERACTIVE") or _env_truthy("PDD_SKIP_UPDATE_CHECK"):
+        return True
+    try:
+        return not (sys.stdin.isatty() and sys.stdout.isatty())
+    except (AttributeError, ValueError):
+        # Detached or closed streams cannot host an interactive prompt.
+        return True
+
 
 def detect_installation_method(sys_executable: str) -> str:
     """Detect whether the package is installed via UV or pip.
@@ -50,17 +73,14 @@ def get_upgrade_command(package_name: str, installation_method: str) -> Tuple[Li
 
     Returns:
         A tuple ``(command_list, shell_mode)`` where ``command_list`` is the
-        command and its arguments as a list of strings, and ``shell_mode`` is a
-        boolean indicating whether ``subprocess.run`` should be invoked with
-        ``shell=True``.
+        command and its arguments as a list of strings, and ``shell_mode`` is
+        always ``False``: the upgrade never runs through a shell (issue #2345).
     """
     if installation_method == "uv":
-        # For UV commands, we need the full path if available
-        uv_path = shutil.which("uv")
-        if uv_path:
-            return [uv_path, "tool", "install", package_name, "--force"], False
-        # If uv isn't in PATH, use shell=True
-        return ["uv", "tool", "install", package_name, "--force"], True
+        # Prefer the resolved path; a bare "uv" that is not on PATH fails with
+        # FileNotFoundError, which triggers the pip fallback.
+        uv_path = shutil.which("uv") or "uv"
+        return [uv_path, "tool", "install", package_name, "--force"], False
 
     # Default pip method
     return [sys.executable, "-m", "pip", "install", "--upgrade", package_name], False
@@ -106,7 +126,7 @@ def _upgrade_package(package_name: str, installation_method: str) -> bool:
         ``True`` if the upgrade command succeeded (exit code 0), otherwise
         ``False``.
     """
-    cmd, use_shell = get_upgrade_command(package_name, installation_method)
+    cmd, _ = get_upgrade_command(package_name, installation_method)
     cmd_str = " ".join(cmd)
     print(f"\nDetected installation method: {installation_method}")
     print(f"Upgrading with command: {cmd_str}")
@@ -115,7 +135,7 @@ def _upgrade_package(package_name: str, installation_method: str) -> bool:
     try:
         result = subprocess.run(  # noqa: PLW1510
             cmd,
-            shell=use_shell,
+            shell=False,
             capture_output=True,
             text=True,
             check=False,
@@ -175,10 +195,7 @@ def auto_update(package_name: str = "pdd-cli", latest_version: Optional[str] = N
     Returns:
         None. All feedback is provided via ``print`` statements.
     """
-    # Skip update check in CI mode, headless mode, or when stdin is not a TTY
-    if (os.environ.get('CI') == '1' or
-        os.environ.get('PDD_SKIP_UPDATE_CHECK') == '1' or
-        not sys.stdin.isatty()):
+    if is_update_check_disabled():
         return
 
     # pylint: disable=broad-except

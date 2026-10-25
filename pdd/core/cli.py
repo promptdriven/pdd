@@ -16,7 +16,7 @@ except ImportError:
     DEFAULT_STRENGTH = 1.0
     DEFAULT_TIME = 0.25
     __version__ = "unknown"
-from ..auto_update import auto_update
+from ..auto_update import auto_update, is_update_check_disabled
 from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
@@ -941,7 +941,7 @@ def cli(
 
     if not json_mode and not estimate_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
-            if not quiet:
+            if not quiet and not is_update_check_disabled():
                 console.print("[info]Checking for updates...[/info]")
             # Removed quiet=quiet argument as it caused TypeError
             auto_update()
