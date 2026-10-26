@@ -259,11 +259,30 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
   assert.equal(calls[0].agent,'codex');assert.equal(calls.length,1);
 });
 
+
+test('0.1.0 warns once when another pdd is first on PATH without changing dispatch', async t => {
+  const fake = temp(t); const earlier = join(fake, 'pdd'); writeFileSync(earlier, '#!/bin/sh\necho 0.0.310\n'); execFileSync('chmod', ['700', earlier]);
+  const stdout = capture(), stderr = capture();
+  assert.equal(await runPdd(['--version'], {packageRoot: root, env: {PATH: fake}, stdout, stderr}), 0);
+  assert.equal(stdout.text, '0.1.0\n'); assert.equal(stderr.text, `Another pdd is first on PATH: ${earlier}\n`);
+});
+
+test('workflow run and malformed resume explain the missing workflow name', async () => {
+  const expected = 'Name the workflow: pdd workflow run small-change 81 (or bug, feature). See: pdd workflow list.\n';
+  for (const args of [['workflow', 'run'], ['workflow', 'run', '81'], ['workflow', 'run', 'Small-change', '81'],
+    ['workflow', 'run', 'small-change'], ['workflow', 'resume'], ['workflow', 'resume', 'not-a-run']]) {
+    const stderr = capture();
+    assert.equal(await runPdd(args, { packageRoot: root, stdout: capture(), stderr }), 2);
+    assert.equal(stderr.text, expected);
+  }
+});
+
 // Wrong: malformed references/options reach effects, omitted resume decision dispatches native directly, or an owner failure is automatically retried.
 test('ALPHA8: runner argument failures and invalid replies are finite without native effects or a second call',async()=>{
   const uuid='a1234567-1234-4123-8123-123456789abc';
   const invalid=[['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','bug','../issue'],
     ['workflow','run','feature','https://example.com/o/r/issues/1'],['workflow','run','feature','42','extra'],
+    ['workflow','run','small-change','81','--replace'],
     ['workflow','run','feature','42','--agent','other'],['workflow','resume','../run'],['workflow','resume',uuid,'--agent','claude'],
     ['workflow','resume',uuid,'--decision','yes'],['workflow','resume',uuid,'--decision','skip','--decision','approve']];
   for(const args of invalid){assert.equal(await runPdd(args,{packageRoot:'/absent',stdout:capture(),stderr:capture(),workflowRunner:{

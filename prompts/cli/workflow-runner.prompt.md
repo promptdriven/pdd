@@ -85,3 +85,8 @@ The runner supplies native `ports.withStageGuard(backend, action)` using the act
 ## Independent issue stages
 
 Do not cap active or unresolved native stages across a repository. Each running stage is a full Codex or Claude session on the person's computer. Distinct issues may retain independent unresolved stages concurrently; this does not promise tested throughput or automatic cleanup. Preserve one assigned run per issue and one active stage per run, controller and attachment exclusion, exact identity/currentness checks and uncertain-delivery refusal. Do not allocate or release repository admission slots. Historical admission metadata and claims may remain on disk; ignore them without clearing or rewriting live journals or claims.
+
+When a new run is refused because this issue already has its saved run, explain
+that holding run with its id, workflow, current stage, state and human-readable
+age, then print the exact `pdd workflow resume RUN_ID --decision approve` command.
+Do not create a replacement or advertise `--replace` in this 0.1.0 slice.

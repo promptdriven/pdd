@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 379d91146b93850f0654f43382423d23990bc5f41e662e6b6484e71dd1cd8250).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 9478e9ce2fcb682e6cbda5b94c5d3fd8809051c99ea14587efe3bd8ae9c14aaf).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -165,6 +165,12 @@ function result(s, state, message) {
   const runId = s?.runId ?? null, stage = s?.definitions?.[s.index]?.id ?? null;
   return { exitCode: ['failed', 'recovery_required'].includes(state) ? 1 : state === 'waiting' ? 2 : 0,
     state, runId, stage, message: `${state}: run ${runId ?? '(not started)'}${stage ? ` / ${stage}` : ''}. ${message}` };
+}
+function existingRunGuidance(s) {
+  const age = Number.isFinite(s?.startedAt) ? `${Math.max(0, Math.floor((Date.now() - s.startedAt) / 1000))}s` : 'unknown';
+  const stage = s?.definitions?.[s.index]?.id ?? 'finished';
+  const current = s?.pending ? 'running' : (s?.controlState ?? 'waiting');
+  return `This issue is held by run ${s.runId}; workflow ${s.name}; stage ${stage}; state ${current}; age ${age}. Resume: pdd workflow resume ${s.runId} --decision approve`;
 }
 const stageGuardOwner = new AsyncLocalStorage();
 function stageGuard(s) {
@@ -676,7 +682,7 @@ async function execute(options, ports, resume) {
       unlock = lock(join(original.gitDir, 'pdd', 'workflows'));
       const prior = readSaved(join(original.gitDir, 'pdd', 'workflows', original.runId));
       if (!isDeepStrictEqual(prior.assignment, original)) fail('Saved original assignment changed.');
-      return result(prior, prior.pending ? 'recovery_required' : 'waiting', 'This issue already has its original assigned run. Resume that run; no duplicate was launched.');
+      return result(prior, prior.pending ? 'recovery_required' : 'waiting', existingRunGuidance(prior));
     }
     if (allocated.state !== 'ready' || !allocated.assignment) return result(s, 'recovery_required', allocated.message || 'Worktree allocation is uncertain; no native attempt started.');
     assignment = allocated.assignment;
@@ -689,7 +695,7 @@ async function execute(options, ports, resume) {
     if (existsSync(directory)) fail('Run journal already exists; do not overwrite it.');
     ensureDirectory(directory); ensureDirectory(join(directory, 'artifacts')); syncDirectory(directory);
     const context = stageContext(input, r.root);
-    s = { version: 2, seq: 0, runId, name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
+    s = { version: 2, seq: 0, runId, startedAt: Date.now(), name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
       repo: r.repo, base: r.base, issue: binding.issue, assignment, definition, definitions: definition.stages,
       inputDigest: snapshotDigest(input), context, contextDigest: digest(context), index: 0, completed: [],
       expected: await fingerprint(r, p), pending: null };

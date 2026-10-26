@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 534db062f49e0b5b231bf8a43e32e50e7b8c2b4fc89b22b4413ab30cefa40b36).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { formatLocalWorkflows } from './workflow-list.mjs';
+import { findEarlierPdd } from './old-pdd.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -26,13 +27,20 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, env = process.env } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
+  try {
+    const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+    if (metadata.version === '0.1.0') {
+      const earlier = findEarlierPdd({packageRoot, cwd, env});
+      if (earlier) line(stderr, `Another pdd is first on PATH: ${earlier.path}`);
+    }
+  } catch { /* warning-only compatibility check */ }
   switch (plan.local) {
     case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;
     case 'version':

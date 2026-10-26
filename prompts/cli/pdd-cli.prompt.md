@@ -26,3 +26,9 @@ workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoo
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root, workflow group and exact workflow run/resume/attach help describe the commands without preview labels or a claim that real workflow PRs are unproven. Retain command syntax, the real push/PR side-effect warning, foreground controller/explicit resume and saved active attachment facts. Help is exit0/local, with no runner/native/loader/network/auth effects and no added refusal, gate, flag or success claim.
+
+On version `0.1.0` only, after parsing a valid command and before dispatch, use
+`src/old-pdd.mjs`'s detector to warn once on stderr when a different `pdd`
+executable is earlier on PATH: `Another pdd is first on PATH: <path>`. This is a
+warning only and must not change dispatch or remove anything. Later versions do
+not print this compatibility warning.

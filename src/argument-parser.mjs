@@ -1,10 +1,14 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 5b7a57fa779d31954698591f5b9a92320012d925123d21a069b3c8c8f45ec9d8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: efc3b840a97f1771356723f7f44131b307e2c1ed898d4cd188405cf759c3442f).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
 }
+const WORKFLOW_USAGE = 'Name the workflow: pdd workflow run small-change 81 (or bug, feature). See: pdd workflow list.';
 const fail = () => { throw new CommandInputError('Unsupported command or options in PDD Alpha. Run pdd --help for local authoring tools.'); };
+const workflowUsage = () => { throw new CommandInputError(WORKFLOW_USAGE); };
+const WORKFLOW_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
 const findRoute = words => routes.find(route => matches(route, words));
@@ -55,6 +59,14 @@ export function parseArgv(argv) {
     if (!route || route.prefix.length === words.length) return helpFor(words);
     parseRoute(route, words.slice(route.prefix.length));
     return help(route.prefix);
+  }
+  if (argv[0] === 'workflow' && argv[1] === 'run') {
+    const name = argv[2];
+    if (!name || name.startsWith('-') || !WORKFLOW_NAME.test(name) || !argv[3]) workflowUsage();
+  }
+  if (argv[0] === 'workflow' && argv[1] === 'resume') {
+    const runId = argv[2];
+    if (!runId || !UUID.test(runId)) workflowUsage();
   }
   const route = findRoute(argv);
   if (!route) fail();
