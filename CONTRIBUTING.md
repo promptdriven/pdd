@@ -12,7 +12,7 @@ node --test examples/ticket-status/test/status.test.mjs
 npm test
 ```
 
-Use a topic branch. Change a module's prompt before changing its behavior. Explain the useful outcome in a Story and author expected cases from that contract rather than copying the implementation's answer. Keep prompts, tests and code within the same reviewed change. Choose a [workflow or recipe](docs/workflows.md) when helpful.
+PDD Alpha lives on the `alpha` branch of [promptdriven/pdd](https://github.com/promptdriven/pdd/tree/alpha). Open pull requests against `alpha`, not `main`. Use a topic branch. Change a module's prompt before changing its behavior. Explain the useful outcome in a Story and author expected cases from that contract rather than copying the implementation's answer. Keep prompts, tests and code within the same reviewed change. Choose a [workflow or recipe](docs/workflows.md) when helpful.
 
 ## Review
 

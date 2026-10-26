@@ -2,6 +2,7 @@
 
 Start with the [README](../README.md). Before any Story or prompt authoring, have the actual agent conversation read the entire [Prompting guide](prompting-guide.md) and [PDD skill](../skills/pdd/SKILL.md).
 
+- [Usage guide](USAGE.md): install from the `alpha` branch, sessions, workflow runs, approvals, known limits and troubleshooting.
 - [Local setup](setup.md): source and Node prerequisites.
 - [Local native session or existing conversation](prompt-sessions.md): load the guide and work on a useful request.
 - [Local issue workflows and recipes](workflows.md): fresh background native stages, issue worktrees, editable definitions, human decisions and GitHub PR steps.
