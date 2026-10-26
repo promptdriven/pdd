@@ -22,4 +22,16 @@ Candidate branch: `alpha-slice-runs-list` from `origin/alpha`. This is a draft p
 4. **Reopen the finished scope session.** Copy the printed `reopen:` command and run it in the TTY; it resumes that native scope conversation without starting a new workflow stage.
 5. **Rollback.** Replace the candidate with the baseline: `npm install -g --prefix /tmp/pdd-runs-list-prefix github:promptdriven/pdd#alpha` and confirm `/tmp/pdd-runs-list-prefix/bin/pdd --version` prints `0.1.0`.
 
-Pack proof on this Linux VM used `/tmp/pdd-runs-list-pack4.vDlmgx/prefix` and a real `script` TTY. The run of issue `promptdriven/pdd#2442` reached a saved `scope` recovery state after 32 seconds because the local Herdr/native launch timed out, so no finished stage session or reopen command was available. The same TTY then exercised `workflow runs` and `workflow runs 5dbe6eb2-5196-4ce0-800d-89fc154cdf0e --json`; output showed local clocks (`22:33:24`) and `unknown` for an unfinished duration, with no epoch milliseconds in human or JSON output.
+Pack proof on this Linux VM used the clean npm prefix `/tmp/pdd-runs-review.JQgHTI/prefix` and a real `script` TTY. A completed `scope` journal and matching Codex session file were prepared in the scratch checkout `/tmp/pdd-runs-review.JQgHTI/repo`; the printed reopen command was then executed verbatim. The captured output was:
+
+```text
+23:17:07
+example/scratch#42 runs-list pack proof · small-change · done · age 8s · open: pdd workflow runs 123e4567-e89b-42d3-a456-426614174000
+23:17:08
+example/scratch#42 · small-change · done · worktree /tmp/pdd-runs-review.JQgHTI/repo
+scope · done · start 23:16:59 · end 23:17:03 · duration 4s · agent codex · codex session 123e4567-e89b-42d3-a456-426614174001 · reopen: cd '/tmp/pdd-runs-review.JQgHTI/repo' && codex resume 123e4567-e89b-42d3-a456-426614174001
+23:17:08
+REOPENED agent=codex args=resume 123e4567-e89b-42d3-a456-426614174001
+```
+
+The previous live GitHub issue attempt timed out before a finished stage; it is retained only as an earlier diagnostic and is not the slice proof.
