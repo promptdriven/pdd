@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 379d91146b93850f0654f43382423d23990bc5f41e662e6b6484e71dd1cd8250).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b06f6b8e9cf63add95c5c5d3ea57e899c86a456093379e76a28b246ac45e01f3).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -134,9 +134,30 @@ function readSaved(directory) {
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
   return saved;
 }
+const progressScope = new AsyncLocalStorage();
+function progress(s, event, state) {
+  const observe = progressScope.getStore();
+  if (typeof observe !== 'function' || !s) return;
+  const stage = s.definitions?.[s.index];
+  const directory = s.gitDir ? join(s.gitDir, 'pdd', 'workflows', s.runId) : null;
+  const last = s.completed?.at(-1);
+  const handoff = s.completed?.findLast(step => step.handoff)?.handoff;
+  const proposal = s.proposal ? s.completed?.findLast(step => s.definitions?.find(def => def.id === step.id)?.protocol === 'proposal')?.handoff : null;
+  const backend = s.pending?.backend ?? s.completed?.findLast(step => step.backend)?.backend;
+  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, issue: s.issue?.number,
+    stage: stage ? { id: stage.id, kind: stage.kind, optional: !!stage.optional } : null,
+    ordinal: s.index + 1, total: s.definitions?.length, root: s.root, branch: s.assignment?.branch,
+    journal: directory ? join(directory, 'journal.jsonl') : null, pending: s.pending?.kind,
+    ended: last?.id, backend: backend ? { session: backend.session, workspaceId: backend.workspaceId } : null,
+    summary: handoff?.summary, files: directory ? [...new Set([handoff, proposal].filter(Boolean).flatMap(item => [join(directory, item.path),
+      ...item.files.map(file => resolve(s.root, file.path))]))] : [],
+    prs: (s.completed ?? []).filter(step => step.pr).map(step => step.pr.url)
+  })); } catch { /* Observation cannot change workflow authority or progress. */ }
+}
 function record(s, directory, event) {
   s.seq = (s.seq ?? 0) + 1;
   durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
+  progress(s, event);
 }
 function lock(root) {
   ensureDirectory(dirname(root)); ensureDirectory(root);
@@ -162,6 +183,7 @@ function lock(root) {
   return () => unlinkSync(path);
 }
 function result(s, state, message) {
+  progress(s, 'result', state);
   const runId = s?.runId ?? null, stage = s?.definitions?.[s.index]?.id ?? null;
   return { exitCode: ['failed', 'recovery_required'].includes(state) ? 1 : state === 'waiting' ? 2 : 0,
     state, runId, stage, message: `${state}: run ${runId ?? '(not started)'}${stage ? ` / ${stage}` : ''}. ${message}` };
@@ -652,6 +674,7 @@ async function execute(options, ports, resume) {
       unlock = lock(join(r.gitDir, 'pdd', 'workflows'));
       s = readSaved(directory);
       if (!isDeepStrictEqual(s.assignment, assignment)) fail('Saved assignment identity changed.');
+      progress(s, 'run.loaded');
       const binding = await resolveWorkflowIssue({ cwd: r.root, issue: s.issue.url }, p.commandPorts);
       r.repo = binding.repository; r.base = binding.defaultBranch;
       await validateInput(s, options, p);
@@ -699,8 +722,8 @@ async function execute(options, ports, resume) {
   } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }
   finally { unlock?.(); }
 }
-export async function runWorkflow(options, ports) { return execute(options, ports, false); }
-export async function resumeWorkflow(options, ports) { return execute(options, ports, true); }
+export async function runWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, false)); }
+export async function resumeWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, true)); }
 
 export async function attachWorkflow(options, ports) {
   const p = dependencies(ports);

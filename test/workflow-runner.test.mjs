@@ -961,3 +961,43 @@ test('first-dispatch continuation refuses changed original request or worktree b
   const changed = await f.resume(first.runId, 'approve');
   assert.equal(changed.state, 'failed'); assert.match(changed.message, /HEAD or worktree changed/); assert.equal(calls.length, 1);
 });
+
+test('live observations use saved identities, follow durable stage/test/PR records and cannot mutate the run', async t => {
+  const f = await fixture(t), events = [];
+  f.ports.onProgress = event => {
+    events.push(structuredClone(event));
+    if (event.event === 'run.started') assert.equal(f.saved(event.runId).runId, event.runId);
+    event.runId = 'mutated';
+    if (event.stage) event.stage.id = 'mutated';
+  };
+  const start = await f.run();
+  assert.equal(start.state, 'waiting');
+  const gate = events.at(-1);
+  assert.equal(gate.state, 'waiting');assert.equal(gate.stage.id, 'change');
+  assert.ok(gate.files.some(path => path.endsWith('cases.json')));
+  assert.match(gate.summary, /Completed current scope/);
+  assert.ok(events.some(e => e.event === 'agent.intent' && e.stage.id === 'scope'));
+  assert.ok(events.some(e => e.event === 'agent.completed' && e.ended === 'scope'));
+  const result = await f.resume(start.runId, 'approve');
+  assert.equal(result.stage, 'wait-merge');
+  assert.ok(events.some(e => e.event === 'test.intent'));
+  assert.ok(events.some(e => e.event === 'test.completed'));
+  assert.deepEqual(events.at(-1).prs, ['https://github.com/example/project/pull/23']);
+  assert.ok(events.every(e => e.runId === start.runId));
+  f.ports.onProgress = () => { throw Error('broken display'); };
+  f.merged = true;
+  assert.equal((await f.resume(start.runId)).state, 'completed');
+});
+
+test('feature approval progress retains proposal artifacts after later report-only stages', async t => {
+  const f = await fixture(t), events = [];
+  f.ports.onProgress = event => events.push(event);
+  let result = await f.run('feature');
+  while (result.state === 'waiting' && result.stage !== 'approve') {
+    result = await f.resume(result.runId, 'skip');
+  }
+  assert.equal(result.stage, 'approve', result.message);
+  const gate = events.at(-1);
+  for (const name of ['module.prompt.md', 'STORY.md', 'cases.json']) assert.ok(gate.files.some(path => path.endsWith(name)), name);
+  assert.ok(gate.files.some(path => /prompt-story-.*\.json$/.test(path)));
+});

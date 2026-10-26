@@ -12,7 +12,7 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 For a named workflow plan, use the existing session branch/native launcher with workflowName selecting only that provided recipe. No new process/approval/permission/transport path. Session without a named recipe retains all-recipes context.
 
-Workflow run/resume binds the DISTINCT public `src/workflow-runner.mjs` exports, with injection only for tests: runWorkflow({name,issue,agent,cwd,packageRoot},ports), resumeWorkflow({runId,cwd,packageRoot,decision},ports). Both resolve {exitCode,state,runId,stage,message}. ports contains exact existing loadGuidance/launchNativeSession plus stdout/stderr. Do not preload guessed context or saved agent; runner owns that and fresh native invocation per agent stage. Do not edit runner/definitions or their owning prompts.
+Workflow run/resume binds the DISTINCT public `src/workflow-runner.mjs` exports, with injection only for tests: runWorkflow({name,issue,agent,cwd,packageRoot},ports), resumeWorkflow({runId,cwd,packageRoot,decision},ports). Both resolve {exitCode,state,runId,stage,message}. ports contains exact existing loadGuidance/launchNativeSession plus stdout/stderr. Do not preload guessed context or saved agent; runner owns that and fresh native invocation per agent stage. Preserve runner authority and definition semantics.
 
 Print the actual returned message ONCE, never dump result objects/private DTOs; return exitCode. Runner-owned mapping completed0, waiting2, failed/recovery_required1; pass the actual exitCode unchanged; waiting is not completion or pass. Missing module/export, invalid result or thrown failure is finite1 with no retry/private fallback. No native0-as-completion inference, direct journal/GitHub/approval action, same-command resume, new status flag, or automatic next stage. The runner's explicit resume owns identity/reconciliation/decisions. Existing guidance/native APIs/process behavior unchanged.
 
@@ -26,3 +26,11 @@ workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoo
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root, workflow group and exact workflow run/resume/attach help describe the commands without preview labels or a claim that real workflow PRs are unproven. Retain command syntax, the real push/PR side-effect warning, foreground controller/explicit resume and saved active attachment facts. Help is exit0/local, with no runner/native/loader/network/auth effects and no added refusal, gate, flag or success claim.
+
+## Live foreground workflow output
+
+For workflow run/resume, print a short starting/inspection line immediately after parsing, before dynamic imports, repository or provider work. State that the terminal stays busy until a gate. Create the [progress renderer](workflow-progress.prompt.md) and pass its observe function as the runner's optional onProgress port. Keep the runner's final returned message exactly once and unchanged. Attach, sessions and discovery keep their existing behavior.
+
+While run/resume is active, handle SIGINT by printing the renderer's truthful interruption guidance and exiting 130. The foreground controller stops; the agent may keep working in Herdr, and an inspection-only resume does not advance it. Explain the exact inspection command and subsequent explicit approve command. Never claim the whole run progresses in the background, cancel/kill a Herdr agent, invent an ID, or change run allocation. Remove the signal listener on every ordinary return/error. signalSource and exit dependencies may be injected for tests; production uses process and process.exit.
+
+For resume, retain the already parsed UUID in the progress renderer before lookup so an early interruption can still name the exact saved-run commands. This is display state only; do not pass a generated run ID into runWorkflow.

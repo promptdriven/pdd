@@ -85,3 +85,9 @@ The runner supplies native `ports.withStageGuard(backend, action)` using the act
 ## Independent issue stages
 
 Do not cap active or unresolved native stages across a repository. Each running stage is a full Codex or Claude session on the person's computer. Distinct issues may retain independent unresolved stages concurrently; this does not promise tested throughput or automatic cleanup. Preserve one assigned run per issue and one active stage per run, controller and attachment exclusion, exact identity/currentness checks and uncertain-delivery refusal. Do not allocate or release repository admission slots. Historical admission metadata and claims may remain on disk; ignore them without clearing or rewriting live journals or claims.
+
+## Observing foreground progress
+
+Accept an optional onProgress(event) port for run/resume. It is observational only: absent or throwing observers must not change journal bytes, allocation, decisions, stage acceptance or results. Isolate simultaneous calls. Notify after durable records, when an existing run is loaded under its lock, and on finite results. Do not introduce a caller-supplied run ID or a runtime/installer requirement.
+
+Events contain a detached, minimal view: event name, actual run ID, workflow, issue number, current stage ID/kind/optional flag and ordinal/count, worktree/branch, journal path, pending kind, latest completed stage ID, actual backend session/workspace when known, latest accepted handoff summary and absolute artifact/file paths, including the current proposal JSON and prompt/Story/case files even when a later report is the latest handoff, and saved PR URLs. Do not expose guide/context, credentials, native prompts or raw DTOs. Backend polling may notify often; the renderer deduplicates identities. A result event includes its state. No new journal event or disk status file is needed for presentation. Existing journal/index files remain the rediscovery authority after terminal loss.

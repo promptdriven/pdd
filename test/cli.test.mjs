@@ -244,7 +244,7 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
     assert.equal(code,2);assert.equal(calls.length,1);assert.deepEqual(calls[0].input,{name:'feature',issue,agent:'claude',cwd:'/chosen',packageRoot:'/bundle'});
     assert.equal(typeof calls[0].ports.loadGuidance,'function');assert.equal(calls[0].ports.launchNativeSession,launchNativeSession);
     assert.equal(calls[0].ports.stdout,output);assert.equal(calls[0].ports.stderr,errors);assert.equal(calls[0].input.context,undefined);
-    assert.equal(output.text,'waiting '+uuid+' approve\n');assert.equal(errors.text,'');
+    assert.ok(output.text.startsWith('Starting feature for issue '+issue+'.'));assert.ok(output.text.endsWith('waiting '+uuid+' approve\n'));assert.equal(errors.text,'');
   }
   for(const decision of [undefined,'approve','skip']){
     const output=capture(),calls=[];
@@ -252,7 +252,7 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
       cwd:'/chosen',packageRoot:'/absent-guide',stdout:output,stderr:capture(),workflowRunner:{resumeWorkflow:async(input,ports)=>{
         calls.push(input);assert.equal(typeof ports.loadGuidance,'function');return {exitCode:0,state:'completed',runId:uuid,stage:'wait-merge',message:'completed '+uuid};}}});
     assert.equal(code,0);assert.deepEqual(calls,[{runId:uuid,cwd:'/chosen',packageRoot:'/absent-guide',...(decision?{decision}:{})}]);
-    assert.equal(output.text,'completed '+uuid+'\n');
+    assert.ok(output.text.startsWith('Inspecting run '+uuid+'.'));assert.ok(output.text.endsWith('completed '+uuid+'\n'));
   }
   const calls=[];assert.equal(await runPdd(['workflow','run','small-change','1'],{stdout:capture(),stderr:capture(),workflowRunner:{runWorkflow:async input=>{
     calls.push(input);return {exitCode:1,state:'recovery_required',runId:uuid,stage:'change',message:'recovery_required '+uuid};}}}),1);
