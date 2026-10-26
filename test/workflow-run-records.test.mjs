@@ -1,0 +1,19 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { matchStageSessionFiles, reopenCommand } from '../src/workflow-run-records.mjs';
+
+test('stage session recovery requires the assigned worktree and time window', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'pdd-runs-records-'));
+  const sessions = join(home, '.codex', 'sessions', '2026', '10', '26');
+  await mkdir(sessions, { recursive: true });
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  await writeFile(join(sessions, 'rollout-test.jsonl'), JSON.stringify({ type: 'session_meta', id, cwd: '/tmp/worktree', timestamp: 1500 }) + '\n');
+  const found = await matchStageSessionFiles({ agent: 'codex', root: '/tmp/worktree', startedAt: 1000, endedAt: 2000 }, { home, codexHome: join(home, '.codex') });
+  assert.deepEqual(found.matches, [{ agent: 'codex', id, source: 'session-file' }]);
+  assert.equal(reopenCommand('/tmp/worktree', found.matches[0]), `cd '/tmp/worktree' && codex resume ${id}`);
+  const outside = await matchStageSessionFiles({ agent: 'codex', root: '/tmp/other', startedAt: 1000, endedAt: 2000 }, { home, codexHome: join(home, '.codex') });
+  assert.equal(outside.matches.length, 0);
+});
