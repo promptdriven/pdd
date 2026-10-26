@@ -15,8 +15,8 @@ test('progress deduplicates polling, shows actual location, review artifacts, fu
  const backend={session:'pdd-real-hash',workspaceId:'workspace-42'};
  for(let i=0;i<50;i++)progress.observe({...view,event:'agent.backend',backend});
  assert.equal(stdout.text.match(/workspace-42/g).length,1);
- assert.equal(stdout.text.match(/stage scope started/g).length,1);
- assert.match(stdout.text,/\[1970-01-01T00:00:00.000Z\]/);
+ assert.equal(stdout.text.match(/scope started/g).length,1);
+ assert.match(stdout.text,/^\d{2}:\d{2}  scope started$/m);
  progress.observe({...view,event:'agent.completed',ended:'scope',stage:{id:'change',kind:'agent'}});
  progress.observe({...view,event:'result',state:'waiting',stage:{id:'change',kind:'agent'},summary:'Recommend feature.\n\x1b[2J',files:['/git/run/scope.json','/project worktree/cases.md']});
  assert.match(stdout.text,/Read: \/git\/run\/scope.json/);
@@ -60,4 +60,53 @@ test('interrupted resume retains its explicit UUID before saved state lookup',as
   workflowRunner:{async resumeWorkflow(){signalSource.emit('SIGINT');return {state:'waiting',exitCode:2,message:'lookup interrupted'};}}});
  assert.equal(status,130);assert.ok(stdout.text.includes(`Inspect: pdd workflow resume ${id}`));
  assert.doesNotMatch(stdout.text,/before a run identity was confirmed/);
+});
+
+test('header names the issue title, times are local HH:MM, one watch line, no internal file paths',()=>{
+ const stdout=capture(),progress=createWorkflowProgress({stdout,now:()=>0,timeZone:'America/Los_Angeles'});
+ const v={...view,title:'Always show prices with 2 decimals',agent:'codex'};
+ progress.observe({...v,event:'run.started'});
+ progress.observe({...v,event:'agent.intent'});
+ progress.observe({...v,event:'agent.backend',backend:{session:'pdd-real-hash'}});
+ for(let i=0;i<3;i++)progress.observe({...v,event:'agent.backend',backend:{session:'pdd-real-hash',workspaceId:'w1'}});
+ progress.observe({...v,event:'agent.completed',ended:'scope',stage:{id:'change',kind:'agent'}});
+ progress.observe({...v,event:'result',state:'waiting',stage:{id:'change',kind:'agent'},summary:'Plan ready',files:[]});
+ progress.interrupt();
+ const out=stdout.text;
+ assert.ok(out.includes(`Run ${id}: small-change for #17 "Always show prices with 2 decimals". Stage 1/5: scope.`),out);
+ assert.match(out,/^Working copy: \/project worktree \(branch pdd\/change\)$/m);
+ assert.match(out,/^16:00  scope started$/m);
+ assert.match(out,/^16:00  scope done$/m);
+ assert.match(out,/^16:00  waiting for you before change$/m);
+ assert.doesNotMatch(out,/\d{4}-\d{2}-\d{2}T/);
+ assert.equal(out.match(/Watch live: pdd workflow attach/g).length,1);
+ assert.doesNotMatch(out,/journal\.jsonl|Saved run/);
+ assert.doesNotMatch(out,/preparing/);
+ assert.equal(out.match(/Herdr session/g).length,1);
+ assert.match(out,/^Codex is working in Herdr session pdd-real-hash, workspace w1\.$/m);
+});
+
+test('a long stage prints a still-working line every two minutes, not on every poll',()=>{
+ let t=0;const stdout=capture(),progress=createWorkflowProgress({stdout,now:()=>t,timeZone:'UTC'});
+ const backend={session:'pdd-real-hash',workspaceId:'w1'};
+ progress.observe({...view,event:'agent.intent'});
+ for(t=0;t<=5*60000;t+=5000)progress.observe({...view,event:'agent.backend',backend});
+ assert.deepEqual(stdout.text.match(/scope still working \(\d+ min\)/g),['scope still working (2 min)','scope still working (4 min)']);
+ progress.observe({...view,event:'agent.completed',ended:'scope',stage:{id:'change',kind:'agent'}});
+ const before=stdout.text.length;t+=10*60000;
+ progress.observe({...view,event:'agent.backend',backend,stage:{id:'change',kind:'agent'}});
+ assert.doesNotMatch(stdout.text.slice(before),/still working/);
+});
+
+test('merge wait says the person merges, with a local time',()=>{
+ const stdout=capture(),progress=createWorkflowProgress({stdout,now:()=>0,timeZone:'UTC'});
+ progress.observe({...view,event:'result',state:'waiting',stage:{id:'wait-merge',kind:'merge'},prs:['https://github.com/example/repo/pull/2']});
+ assert.match(stdout.text,/^00:00  waiting for you to merge the PR$/m);
+});
+
+test('CLI start line marks a bare issue number with #',async()=>{
+ const stdout=capture(),signalSource=new EventEmitter();
+ const workflowRunner={async runWorkflow(){return {state:'waiting',exitCode:2,message:'done'};}};
+ await runPdd(['workflow','run','small-change','17'],{stdout,stderr:capture(),signalSource,workflowRunner,workflowStages:stages});
+ assert.match(stdout.text,/^Starting small-change for issue #17\. /m);
 });

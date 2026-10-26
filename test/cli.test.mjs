@@ -244,7 +244,7 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
     assert.equal(code,2);assert.equal(calls.length,1);assert.deepEqual(calls[0].input,{name:'feature',issue,agent:'claude',cwd:'/chosen',packageRoot:'/bundle'});
     assert.equal(typeof calls[0].ports.loadGuidance,'function');assert.equal(calls[0].ports.launchNativeSession,launchNativeSession);
     assert.equal(calls[0].ports.stdout,output);assert.equal(calls[0].ports.stderr,errors);assert.equal(calls[0].input.context,undefined);
-    assert.ok(output.text.startsWith('Starting feature for issue '+issue+'.'));assert.ok(output.text.endsWith('waiting '+uuid+' approve\n'));assert.equal(errors.text,'');
+    assert.ok(output.text.startsWith('Starting feature for issue '+(/^\d+$/.test(issue)?'#':'')+issue+'.'));assert.ok(output.text.endsWith('waiting '+uuid+' approve\n'));assert.equal(errors.text,'');
   }
   for(const decision of [undefined,'approve','skip']){
     const output=capture(),calls=[];

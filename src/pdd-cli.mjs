@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: eabb658d7e0b0555b54b8fcbaed7471379e2d6fb238dbdaaaa4e5e9c892b01d6).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 458738e626c1ef103f1835cfe8224f32ef94666b7e8b934738c84c758f63e165).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +53,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       if (progress) {
         if (plan.local === 'workflow-resume') progress.observe({ event: 'resume.requested', runId: plan.operands[0] });
         line(stdout, plan.local === 'workflow-run'
-          ? `Starting ${plan.operands[0]} for issue ${plan.operands[1]}. This terminal stays busy until the run stops at a gate.`
+          ? `Starting ${plan.operands[0]} for issue ${/^\d+$/.test(plan.operands[1]) ? '#' : ''}${plan.operands[1]}. This terminal stays busy until the run stops at a gate.`
           : `Inspecting run ${plan.operands[0]}. With a decision, this terminal stays busy until the next gate.`);
         signalSource.once('SIGINT', interrupted);
       }
