@@ -97,6 +97,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           runs.push({ ...entry, ...(await records.runStatusFromState(journal.value.state, { now: Date.now() }, { cwd })), runId: entry.runId });
         }
         const localTime = value => Number.isFinite(value) ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : 'unknown';
+        const age = value => {
+          if (!Number.isFinite(value)) return 'unknown';
+          const seconds = Math.max(0, Math.floor((Date.now() - value) / 1000));
+          if (seconds < 60) return `${seconds}s`;
+          const minutes = Math.floor(seconds / 60); if (minutes < 60) return `${minutes}m`;
+          const hours = Math.floor(minutes / 60); return hours < 48 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+        };
         const duration = (start, end) => {
           if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 'unknown';
           let seconds = Math.floor((end - start) / 1000), hours = Math.floor(seconds / 3600); seconds %= 3600;
@@ -107,8 +114,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (requested && !runs.length) { line(stdout, plan.options['--json'] ? JSON.stringify({ v: 1, runId: requested, state: 'unknown', message: 'Run not found' }) : 'Run not found'); return 1; }
         if (!requested) {
           runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-          if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runs: runs.map(run => ({ ...run, state: stateLabel(run), open: `pdd workflow runs ${run.runId}` })) })); return 0; }
-          for (const run of runs) line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · open: pdd workflow runs ${run.runId}`);
+          if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runs: runs.map(run => ({ ...run, state: stateLabel(run), age: age(run.startedAt), open: `pdd workflow runs ${run.runId}` })) })); return 0; }
+          for (const run of runs) line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`}${run.issue?.title ? ` ${run.issue.title}` : ''} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · age ${age(run.startedAt)} · open: pdd workflow runs ${run.runId}`);
           if (!runs.length) line(stdout, 'No saved runs.');
           return 0;
         }
