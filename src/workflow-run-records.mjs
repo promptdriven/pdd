@@ -23,15 +23,14 @@ async function allGitDirs(cwd, ports = {}) {
   const io = fsOf(ports), own = await gitDirFor(cwd, ports), dirs = [];
   if (!own) return dirs;
   dirs.push(own);
+  let common = own;
   try {
     const raw = (await io.readFile(join(own, 'commondir'), 'utf8')).trim();
-    const common = raw ? (raw.startsWith('/') ? raw : join(own, raw)) : null;
-    if (common) {
-      dirs.push(common);
-      for (const row of await io.readdir(join(common, 'worktrees'), { withFileTypes: true }).catch(() => []))
-        if (row.isDirectory?.()) dirs.push(join(common, 'worktrees', row.name));
-    }
+    if (raw) common = raw.startsWith('/') ? raw : join(own, raw);
   } catch { /* a main checkout has no worktree commondir file */ }
+  if (common !== own) dirs.push(common);
+  for (const row of await io.readdir(join(common, 'worktrees'), { withFileTypes: true }).catch(() => []))
+    if (row.isDirectory?.()) dirs.push(join(common, 'worktrees', row.name));
   return [...new Set(dirs)];
 }
 
