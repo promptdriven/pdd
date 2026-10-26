@@ -973,7 +973,7 @@ test('live observations use saved identities, follow durable stage/test/PR recor
   const start = await f.run();
   assert.equal(start.state, 'waiting');
   const gate = events.at(-1);
-  assert.equal(gate.state, 'waiting');assert.equal(gate.stage.id, 'change');
+  assert.equal(gate.state, 'waiting');assert.equal(gate.stage.id, 'change');assert.equal(gate.backend,null,'closed prior workspace is not current');
   assert.ok(gate.files.some(path => path.endsWith('cases.json')));
   assert.match(gate.summary, /Completed current scope/);
   assert.ok(events.some(e => e.event === 'agent.intent' && e.stage.id === 'scope'));

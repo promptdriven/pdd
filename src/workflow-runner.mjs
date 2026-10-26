@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b06f6b8e9cf63add95c5c5d3ea57e899c86a456093379e76a28b246ac45e01f3).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8e29afeaa6ba3268dc6d6328acb9b0f95dc0f0b111fe86b508679d6607a757bd).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -143,7 +143,7 @@ function progress(s, event, state) {
   const last = s.completed?.at(-1);
   const handoff = s.completed?.findLast(step => step.handoff)?.handoff;
   const proposal = s.proposal ? s.completed?.findLast(step => s.definitions?.find(def => def.id === step.id)?.protocol === 'proposal')?.handoff : null;
-  const backend = s.pending?.backend ?? s.completed?.findLast(step => step.backend)?.backend;
+  const backend = s.pending?.backend;
   try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, issue: s.issue?.number,
     stage: stage ? { id: stage.id, kind: stage.kind, optional: !!stage.optional } : null,
     ordinal: s.index + 1, total: s.definitions?.length, root: s.root, branch: s.assignment?.branch,
