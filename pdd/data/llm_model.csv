@@ -56,6 +56,8 @@ Baseten,baseten/MiniMaxAI/MiniMax-M2.5,0.3,1.2,1383,1383,arena-elo-fallback,,BAS
 Baseten,baseten/zai-org/GLM-4.6,0.6,2.2,1354,1354,arena-elo-fallback,,BASETEN_API_KEY,0,False,none,,False,
 Baseten,baseten/moonshotai/Kimi-K2-Thinking,0.6,2.5,1333,1333,static-prefix,,BASETEN_API_KEY,0,False,none,,False,
 Baseten,baseten/deepseek-ai/DeepSeek-V3-0324,0.77,0.77,1300,1300,static-prefix,,BASETEN_API_KEY,0,False,none,,False,
+Cheaper Inference,openai/gpt-5.2,1.75,14.0,1404,1404,static-prefix,https://api.cheaperinference.com/v1,CHEAPER_INFERENCE_API_KEY,0,True,none,,False,256000
+Cheaper Inference,openai/deepseek-v3.2,0.62,1.85,1332,1332,static-prefix,https://api.cheaperinference.com/v1,CHEAPER_INFERENCE_API_KEY,0,True,none,,False,160000
 Dashscope,dashscope/qwen3-max,0.0,0.0,1310,1310,static-prefix,,DASHSCOPE_API_KEY,0,True,effort,,False,
 DeepInfra,deepinfra/deepseek-ai/DeepSeek-R1-0528,0.5,2.15,1370,1370,static-prefix,,DEEPINFRA_API_KEY,0,True,none,,False,
 DeepInfra,deepinfra/moonshotai/Kimi-K2-Instruct,0.5,2.0,1310,1310,static-prefix,,DEEPINFRA_API_KEY,0,True,none,,False,
