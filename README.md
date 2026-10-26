@@ -1,5 +1,7 @@
 # PDD Alpha
 
+> Looking for the original Python PDD (`pdd-cli` 0.0.x)? It lives on the [`main` branch](https://github.com/promptdriven/pdd/tree/main) and on PyPI: `pip install pdd-cli`.
+
 **Prompt-driven development for your coding agent.**
 
 > **This is the `alpha` branch of `promptdriven/pdd`.** It holds PDD Alpha, a new command-line tool for Node.js. The `main` branch holds the older Python `pdd-cli`. They are different programs, but both install a command named `pdd`. Read [If you have the old Python pdd](#if-you-have-the-old-python-pdd) before you install.
