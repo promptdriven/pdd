@@ -3,7 +3,7 @@ name: PDD Alpha checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, alpha]
   workflow_dispatch:
 
 permissions:
