@@ -1,0 +1,234 @@
+name: PDD Alpha release
+
+on:
+  push:
+    tags:
+      - 'alpha-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and upload artifacts without creating a release
+        required: true
+        type: boolean
+        default: true
+      version:
+        description: Version used for a manual dry run
+        required: true
+        type: string
+        default: 0.1.1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pdd-alpha-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 22.16.0
+
+jobs:
+  pack-alpha:
+    name: Pack Alpha
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.pack.outputs.package }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+          check-latest: false
+      - id: pack
+        name: npm pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          npm pack --ignore-scripts --pack-destination dist
+          package=$(find dist -maxdepth 1 -type f -name '*.tgz' -printf '%f\n' | head -n 1)
+          test -n "$package"
+          sha256=$(sha256sum "dist/$package" | awk '{print $1}')
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          printf '%s  %s\n' "$sha256" "$package" > dist/alpha.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alpha-package
+          path: dist
+          if-no-files-found: error
+
+  runtime-assets:
+    name: Node ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: pack-alpha
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+            runner: ubuntu-latest
+            archive: tar.xz
+          - platform: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.xz
+          - platform: darwin
+            arch: arm64
+            runner: macos-14
+            archive: tar.gz
+          - platform: darwin
+            arch: x64
+            runner: macos-13
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: alpha-package
+          path: dist
+      - name: Download and verify pinned Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+          node_name="node-v${NODE_VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
+          archive="$node_name.${{ matrix.archive }}"
+          base="https://nodejs.org/dist/v${NODE_VERSION}"
+          curl --fail --location --retry 3 "$base/$archive" -o "dist/$archive"
+          curl --fail --location --retry 3 "$base/SHASUMS256.txt" -o dist/SHASUMS256.txt
+          expected=$(awk -v name="$archive" '$2 == name {print $1}' dist/SHASUMS256.txt)
+          actual=$(sha256_file "dist/$archive")
+          test -n "$expected" && test "$expected" = "$actual"
+          printf 'archive=%s\nurl=%s/%s\nsha256=%s\n' "$archive" "$base" "$archive" "$actual" > dist/node-meta
+      - name: Build native helpers when present
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f launcher/native/build.mjs ]; then
+            node launcher/native/build.mjs
+          else
+            echo 'No native helper tree is present in this Alpha source branch.'
+          fi
+      - name: Collect native helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper_dir="launcher/native/${{ matrix.platform }}-${{ matrix.arch }}"
+          if [ -d "$helper_dir" ]; then
+            tar -czf "dist/helpers-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" -C launcher/native "${{ matrix.platform }}-${{ matrix.arch }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble verified installer assets
+    needs: [pack-alpha, runtime-assets]
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.result.outputs.ready }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: alpha-package
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          merge-multiple: true
+          path: dist
+      - id: identity
+        name: Select release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/alpha-v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="alpha-v${{ inputs.version || '0.1.1' }}"
+          fi
+          [[ "$tag" =~ ^alpha-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Build descriptor and release table
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          package=$(find dist -maxdepth 1 -type f -name '*.tgz' -printf '%f\n' | head -n 1)
+          test -n "$package"
+          alpha_sha=$(sha256sum "dist/$package" | awk '{print $1}')
+          alpha_integrity="sha512-$(openssl dgst -sha512 -binary "dist/$package" | openssl base64 -A)"
+          alpha_url="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$package"
+          node_args=()
+          for platform_arch in linux-x64 linux-arm64 darwin-arm64 darwin-x64; do
+            archive="$(find dist -type f -name "node-v*-$platform_arch.*" | head -n 1)"
+            test -n "$archive"
+            node_version=$(basename "$archive" | sed -E 's/^node-v([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')
+            node_sha=$(sha256sum "$archive" | awk '{print $1}')
+            node_integrity="sha512-$(openssl dgst -sha512 -binary "$archive" | openssl base64 -A)"
+            node_url="https://nodejs.org/dist/v$node_version/$(basename "$archive")"
+            node_args+=("$platform_arch" "$node_version" "$node_url" "$node_sha" "$node_integrity")
+          done
+          package_version=$(node -p "require('./package.json').version")
+          node "${GITHUB_WORKSPACE}/.github/workflows/make-descriptor.mjs" "$RELEASE_TAG" "$package_version" "$alpha_url" "$alpha_sha" "$alpha_integrity" "${node_args[@]}"
+      - id: result
+        name: Check installer template
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f install.sh ] && [ -f launcher/build-bootstrap.mjs ]; then
+            node .github/workflows/build-installer.mjs dist/release.json dist/install.sh
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' 'install.sh and launcher/build-bootstrap.mjs are required for installer assembly; the Alpha branch does not contain the mobile-owned splitter tree yet.' > dist/assembly-blocked.txt
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create dry-run bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "alpha-${{ steps.identity.outputs.tag }}-assets.tar.gz" -C dist .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alpha-release-${{ steps.identity.outputs.tag }}
+          path: |
+            dist
+            alpha-${{ steps.identity.outputs.tag }}-assets.tar.gz
+          if-no-files-found: error
+      - name: Fail closed when installer assembly is unavailable
+        if: steps.result.outputs.ready != 'true'
+        run: exit 1
+
+  publish:
+    name: Create non-latest GitHub release
+    needs: assemble
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/alpha-v') && needs.assemble.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: alpha-release-${{ needs.assemble.outputs.tag }}
+          path: dist
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.assemble.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -F tag_name="$TAG" -f name="PDD Alpha $TAG" -f body="Automated PDD Alpha release." \
+            -F draft=false -F prerelease=false -F make_latest=false
+          gh release upload "$TAG" dist/install.sh dist/*.tgz dist/*.tar.gz --clobber
