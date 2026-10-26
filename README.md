@@ -36,9 +36,10 @@ Codex is the default agent and the most tested one. PDD Alpha is tested on macOS
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.0
-which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
+pdd --version   # must print 0.1.0
 ```
+
+**If `pdd --version` prints `pdd, version 0.0.3xx`, you are running the old Python pdd, not PDD Alpha.** The install worked, but the old `pdd` comes first on your PATH. Fix it as shown in [If you have the old Python pdd](#if-you-have-the-old-python-pdd), then check again.
 
 Always install and update with that full `github:` line. Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different, unrelated package called `pdd`, and npm would replace PDD Alpha with it.
 
@@ -47,7 +48,8 @@ Always install and update with that full `github:` line. Do not run `npm install
 The Python `pdd-cli` (from the `main` branch and PyPI) also installs a `pdd` command. If `pdd --version` does not print `0.1.0`, the old one comes first on your PATH. Remove it with the tool you used to install it:
 
 ```sh
-uv tool uninstall pdd-cli    # or: pipx uninstall pdd-cli   or: pip uninstall pdd-cli
+which -a pdd                 # shows every pdd; the first one wins
+uv tool uninstall pdd-cli    # or: pipx uninstall pdd-cli   or: pip uninstall pdd-cli (also in a conda env)
 hash -r                      # zsh users can also run: rehash
 which -a pdd
 ```
