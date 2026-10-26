@@ -723,7 +723,7 @@ test('fresh-process resume refuses edited source before any replacement stage de
   assert.equal(f.native.length, 1); assert.equal(f.saved(first.runId).index, 1);
 });
 
-test('main joins frozen native adapter through same-agent first dispatch, accepted cleanup and next-stage server donation', async t => {
+async function joinedHerdr(t, {dirty=false} = {}) {
   const f = await fixture(t, { defaultWorktree: true }); const foreground = f.ports.launchNativeSession;
   const sessions = new Map(), calls = [];
   function transport(base) {
@@ -753,6 +753,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           calls.push('prompt');assert.equal(native.state_change_seq,10);
           const marker='\n\n# Current workflow stage\n', index=a[3].lastIndexOf(marker);
           await foreground({agent:native.agent,cwd:f.cwd,context:a[3].slice(0,index),request:a[3].slice(index+marker.length)});
+          if(dirty && JSON.parse(a[3].split('PDD_STAGE_INPUT_JSON\n')[1].split('\nPDD_STAGE_INPUT_END')[0]).stageId==='verify')writeFileSync(join(f.cwd,'untracked-scope-case.md'),'Independent scope case retained outside commits.\n');
           native.agent_status='working';native.interactive_ready=false;native.state_change_seq=11;
           const acknowledgement=structuredClone(native);
           queueMicrotask(()=>{native.agent_status='done';native.interactive_ready=true;native.state_change_seq=12;});
@@ -778,7 +779,14 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   assert.equal(accepted.backend.attemptId,original.attemptId);assert.equal(accepted.backend.terminalId,original.backend.terminalId);
   assert.equal(calls.filter(x=>x==='start').length,1);assert.equal(calls.filter(x=>x==='create').length,1);
   assert.equal(calls.filter(x=>x==='prompt').length,1);
-  const progressed=await f.resume(first.runId,'approve');assert.equal(progressed.stage,'wait-merge',progressed.message);
+  const progressed=await f.resume(first.runId,'approve');
+  if(dirty) {
+    assert.equal(progressed.state,'failed');assert.match(progressed.message,/workflow_github_worktree_dirty/);
+    assert.equal([...sessions.values()][0].run,false,'failed publication must close the run workspace');
+    assert.equal([...sessions.values()][0].repo,true);assert.equal(existsSync(f.cwd),true);
+    assert.equal(f.saved(first.runId).herdrLayoutClosed,true);return;
+  }
+  assert.equal(progressed.stage,'wait-merge',progressed.message);
   assert.equal(calls.filter(x=>x==='server').length,1);assert.equal(calls.filter(x=>x==='prompt').length,3);assert.equal(calls.filter(x=>x==='close').length,3);
   const saved=f.saved(first.runId), stages=saved.completed.filter(stage=>stage.backend);
   assert.equal(new Set(stages.map(stage=>stage.backend.terminalId)).size,3);
@@ -793,7 +801,9 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   assert.equal(f.saved(first.runId).herdrLayoutClosed,true);
   assert.equal(existsSync(f.cwd),true,'run layout closure does not remove Git worktree');
   assert.equal((await f.resume(first.runId)).state,'completed');assert.equal(calls.filter(x=>x==='run-close').length,1);
-});
+}
+test('main joins frozen native adapter through same-agent first dispatch, accepted cleanup and next-stage server donation', t=>joinedHerdr(t));
+test('terminal publication exception closes the run workspace while preserving untracked Git artifacts',t=>joinedHerdr(t,{dirty:true}));
 
 test('resume owns the controller lock before reading the journal and cannot advance a stale optional snapshot', async t => {
   const f=await fixture(t), recipe=join(f.sourceCwd,'.pdd/workflows/journal-race');mkdirSync(recipe,{recursive:true});

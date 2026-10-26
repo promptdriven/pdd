@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4eafaac03f8c2e80e16707408d95d393949f71815fccb94637185df99aed7ba3).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fffbdd730f3bfb302682b78830109aae4b19a4cddc99e271766f4506d76abf30).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -298,7 +298,7 @@ function herdrLayoutInput(s) {
     issueNumber:s.assignment.issueNumber,workflowName:s.assignment.workflowName};
 }
 async function finishRunLayout(outcome, s, directory, p) {
-  if (!['completed','failed'].includes(outcome.state) || s.pending || s.herdrLayoutClosed) return outcome;
+  if (!s?.assignment || !directory || !['completed','failed'].includes(outcome.state) || s.pending || s.herdrLayoutClosed) return outcome;
   const backend=s.completed.findLast(entry=>entry.backend?.phase==='closed')?.backend;
   if (!backend || backend.session!=='pdd') return outcome;
   if (typeof p.closeHerdrRun!=='function') return result(s,'recovery_required','Run workspace cleanup is unavailable.');
@@ -682,12 +682,12 @@ async function assignedRepository(assignment, p) {
 }
 async function execute(options, ports, resume) {
   const p = dependencies(ports);
-  let s, unlock;
+  let s, unlock, directory;
   try {
     if (!text(options?.packageRoot) || typeof p.loadGuidance !== 'function') fail('A package root and canonical guidance port are required.');
     if (resume && (!UUID.test(options.runId ?? '') || options.decision !== undefined && !['approve', 'skip'].includes(options.decision))) fail('Supply a UUIDv4 run and optional approve/skip decision.');
     if (!resume && !['codex', 'claude'].includes(options.agent ?? 'codex')) fail('Choose codex or claude.');
-    let assignment, input, r, directory;
+    let assignment, input, r;
     if (resume) {
       const found = await assignmentFor(options, p, true, options.runId);
       if (found.state !== 'ready' || !found.assignment) return result({ runId: options.runId }, 'recovery_required', found.message || 'Original worktree assignment is not proved.');
@@ -742,7 +742,10 @@ async function execute(options, ports, resume) {
     record(s, directory, 'run.started');
     await validateInput(s, options, p);
     return await finishRunLayout(await advance(s, r, directory, options, p, undefined, true), s, directory, p);
-  } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }
+  } catch (error) {
+    const outcome=result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.');
+    return unlock ? await finishRunLayout(outcome,s,directory,p) : outcome;
+  }
   finally { unlock?.(); }
 }
 export async function runWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, false)); }
