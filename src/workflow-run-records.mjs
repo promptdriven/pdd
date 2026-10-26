@@ -19,6 +19,21 @@ async function gitDirFor(cwd, ports = {}) {
     return match ? (match[1].startsWith('/') ? match[1] : join(cwd, match[1])) : null;
   } catch { return null; }
 }
+async function allGitDirs(cwd, ports = {}) {
+  const io = fsOf(ports), own = await gitDirFor(cwd, ports), dirs = [];
+  if (!own) return dirs;
+  dirs.push(own);
+  try {
+    const raw = (await io.readFile(join(own, 'commondir'), 'utf8')).trim();
+    const common = raw ? (raw.startsWith('/') ? raw : join(own, raw)) : null;
+    if (common) {
+      dirs.push(common);
+      for (const row of await io.readdir(join(common, 'worktrees'), { withFileTypes: true }).catch(() => []))
+        if (row.isDirectory?.()) dirs.push(join(common, 'worktrees', row.name));
+    }
+  } catch { /* a main checkout has no worktree commondir file */ }
+  return [...new Set(dirs)];
+}
 
 export async function readJournalLast(runDir, ports = {}) {
   try {
@@ -33,18 +48,20 @@ export async function readJournalLast(runDir, ports = {}) {
 }
 
 export async function readRunIndex(ports = {}) {
-  const cwd = ports.cwd ?? process.cwd(), gitDir = await gitDirFor(cwd, ports);
-  if (!gitDir) return { entries: [], dropped: 0 };
-  const root = join(gitDir, 'pdd', 'workflows');
-  let names;
-  try { names = await fsOf(ports).readdir(root); } catch { return { entries: [], dropped: 0 }; }
-  const entries = [], io = fsOf(ports);
-  for (const name of names.filter(item => UUID.test(item)).sort()) {
-    const runDir = join(root, name), last = await readJournalLast(runDir, ports), state = last.value?.state;
-    if (!state || state.runId !== name) continue;
-    entries.push({ v: 1, runId: name, workflow: state.name ?? null, repo: state.repo ?? null,
-      issue: object(state.issue) ? { number: state.issue.number ?? null, url: state.issue.url ?? null, title: state.issue.title ?? null } : null,
-      agent: state.agent ?? null, root: state.root ?? null, runDir, startedAt: state.startedAt ?? null });
+  const dirs = await allGitDirs(ports.cwd ?? process.cwd(), ports);
+  const entries = [], io = fsOf(ports), seen = new Set();
+  for (const gitDir of dirs) {
+    const root = join(gitDir, 'pdd', 'workflows');
+    let names; try { names = await io.readdir(root); } catch { continue; }
+    for (const name of names.filter(item => UUID.test(item)).sort()) {
+      if (seen.has(name)) continue;
+      const runDir = join(root, name), last = await readJournalLast(runDir, ports), state = last.value?.state;
+      if (!state || state.runId !== name) continue;
+      seen.add(name);
+      entries.push({ v: 1, runId: name, workflow: state.name ?? null, repo: state.repo ?? null,
+        issue: object(state.issue) ? { number: state.issue.number ?? null, url: state.issue.url ?? null, title: state.issue.title ?? null } : null,
+        agent: state.agent ?? null, root: state.root ?? null, runDir, startedAt: state.startedAt ?? null });
+    }
   }
   return { entries, dropped: 0 };
 }
