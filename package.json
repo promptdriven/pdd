@@ -1,6 +1,6 @@
 {
   "name": "pdd",
-  "version": "0.0.311",
+  "version": "0.1.0",
   "description": "PDD Alpha: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
