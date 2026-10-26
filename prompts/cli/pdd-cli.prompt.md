@@ -34,3 +34,5 @@ For workflow run/resume, print a short starting/inspection line immediately afte
 While run/resume is active, handle SIGINT by printing the renderer's truthful interruption guidance and exiting 130. The foreground controller stops; the agent may keep working in Herdr, and an inspection-only resume does not advance it. Explain the exact inspection command and subsequent explicit approve command. Never claim the whole run progresses in the background, cancel/kill a Herdr agent, invent an ID, or change run allocation. Remove the signal listener on every ordinary return/error. signalSource and exit dependencies may be injected for tests; production uses process and process.exit.
 
 For resume, retain the already parsed UUID in the progress renderer before lookup so an early interruption can still name the exact saved-run commands. This is display state only; do not pass a generated run ID into runWorkflow.
+
+Supply closeHerdrRun from the stage adapter to the workflow runner so terminal runs can close their owned Herdr worktree workspace.

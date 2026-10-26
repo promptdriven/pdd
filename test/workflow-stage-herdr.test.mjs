@@ -9,12 +9,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { runHerdrStage, inspectHerdrStage, attachHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
 
 const runId = '12345678-1234-4123-8123-123456789abc';
-const sessionFor = id => `pdd-${createHash('sha256').update(id.toLowerCase()).digest('hex').slice(0,20)}`;
+const sessionFor = () => 'pdd';
 const attemptId = '87654321-4321-4321-8321-cba987654321';
 function harness(cwd, options = {}) {
   const calls = [], checkpoints = [];
   let clock = 0, running = Boolean(options.preexisting), prompted = false, started = false, poll = 0, agentName, closed = false;
-  const ws=options.workspaceId??'w2',tab=ws+':t1',pane=ws+':p1',terminal=options.terminalId??'term-real';
+  const ws='w2',tab=ws+':t'+(options.workspaceId??'2'),pane=ws+':p'+(options.workspaceId??'2'),terminal=options.terminalId??'term-real';
+  let repoCreated=Boolean(options.preexisting),runCreated=Boolean(options.preexisting);
+  const metadata={checkout_path:cwd,repo_key:join(cwd,'.git'),is_linked_worktree:true};
+  const repoRow={workspace_id:'repo',label:'project',worktree:metadata},runRow={workspace_id:ws,label:'#2 small-change',worktree:metadata};
   const session = sessionFor(options.runId ?? runId);
   const agent = (state = 'idle', seq = 10) => ({ workspace_id: ws, tab_id: tab, pane_id: pane, terminal_id: terminal,
     name: agentName, agent: options.agent ?? 'codex', cwd, agent_status: state, state_change_seq: seq,
@@ -22,6 +25,7 @@ function harness(cwd, options = {}) {
     agent_session: options.noNativeId ? null : { source: 'actual', agent: options.agent ?? 'codex', kind: 'id', value: options.nativeId ?? 'native-real' } });
   const encode = x => ({ stdout: JSON.stringify(x), stderr: '' });
   const ports = {
+    layoutDirectory:join(cwd,'.layout'),
     withStageGuard: async (backend, action) => { calls.push(['GUARD',backend.runId,backend.cwd]);return action(); },
     quietMs: 0, now: () => clock, sleep: async ms => { clock += ms; }, pollMs: 1, startupMs: 4000, activityMs: 3, timeoutMs: 10,
     spawnServer: async (actual, actualCwd) => { calls.push(['SERVER',actual,actualCwd]);running = true; },
@@ -32,12 +36,23 @@ function harness(cwd, options = {}) {
       const a = argv.slice(2);
       if (a[0] === 'status') return encode({ running, session, compatible: true, endpoint_compatible: !options.incompatible,
         socket: '/actual-owned/socket', protocol: 22, version: '0.9.1' });
-      if (a[0] === 'workspace' && a[1] === 'list') return encode({id:'cli:workspace:list',result:{type:'workspace_list',workspaces: options.capacity ? [{workspace_id:'seed'},{workspace_id:'occupied'}] : options.closeRemains && closed ? [{workspace_id:'seed'},{workspace_id:ws}] : [{workspace_id:'seed'}]}});
+      if (a[0] === 'workspace' && a[1] === 'list') return encode({id:'cli:workspace:list',result:{type:'workspace_list',workspaces:[{workspace_id:'seed'},...(repoCreated?[repoRow]:[]),...(runCreated?[runRow]:[])]}});
       if (a[0] === 'workspace' && a[1] === 'create') {
-        assert.equal(checkpoints.at(-1).phase,'workspace_intent');
-        assert.deepEqual(a,['workspace','create','--cwd',cwd,'--label','PDD check','--no-focus']);
-        return encode({ result: { workspace: { workspace_id:ws },tab:{ tab_id:tab },root_pane:{pane_id:pane,terminal_id:terminal} } });
+        assert.equal(checkpoints.at(-1).phase,'workspace_intent');repoCreated=true;
+        assert.deepEqual(a,['workspace','create','--cwd',cwd,'--label','project','--no-focus']);
+        return encode({id:'cli:workspace:create',result:{workspace:repoRow}});
       }
+      if(a[0]==='worktree'&&a[1]==='open') {
+        assert.deepEqual(a,['worktree','open','--workspace','repo','--path',cwd,'--label','#2 small-change','--no-focus']);runCreated=true;
+        return encode({id:'cli:worktree:open',result:{workspace:runRow,tab:{tab_id:ws+':t1'},root_pane:{pane_id:ws+':p1',terminal_id:'seed-terminal'}}});
+      }
+      if(a[0]==='pane'&&a[1]==='list')return encode({id:'cli:pane:list',result:{type:'pane_list',panes:[{workspace_id:ws,tab_id:ws+':t1',pane_id:ws+':p1',terminal_id:'seed-terminal',cwd}]}});
+      if(a[0]==='tab'&&a[1]==='create') {
+        assert.equal(checkpoints.at(-1).phase,'workspace_intent');
+        assert.deepEqual(a,['tab','create','--workspace',ws,'--cwd',cwd,'--label','check','--no-focus']);
+        return encode({id:'cli:tab:create',result:{tab:{tab_id:tab},root_pane:{pane_id:pane,terminal_id:terminal}}});
+      }
+      if(a[0]==='tab'&&a[1]==='list') return encode({id:'cli:tab:list',result:{type:'tab_list',tabs:[{tab_id:ws+':t1'},...(!closed||options.closeRemains?[{tab_id:tab}]:[])]}});
       if (a[0] === 'agent' && a[1] === 'start') {
         assert.equal(checkpoints.at(-1).phase,'start_intent');assert.equal(checkpoints.at(-1).terminalId,terminal);
         agentName=a[2];started=true;
@@ -69,14 +84,14 @@ function harness(cwd, options = {}) {
         if (options.after) value=options.after(value);
         return encode({result:{agent:value}});
       }
-      if (a[0] === 'workspace' && a[1] === 'close') {
-        assert.equal(checkpoints.at(-1).phase,'close_intent');assert.equal(a[2],ws);closed=true;return encode(Object.hasOwn(options,'closeReply') ? options.closeReply : {id:'cli:workspace:close',result:{type:'ok'}});
+      if (a[0] === 'tab' && a[1] === 'close') {
+        assert.equal(checkpoints.at(-1).phase,'close_intent');assert.equal(a[2],tab);closed=true;return encode(Object.hasOwn(options,'closeReply') ? options.closeReply : {id:'cli:tab:close',result:{type:'ok'}});
       }
       if (a[0] === 'pane' && a[1] === 'send-text') return encode({id:'cli:pane:send-text',result:{type:'ok'}});
       assert.fail('Unexpected effect '+JSON.stringify(a));
     }
   };
-  const input={runId:options.runId??runId,attemptId:options.attemptId??attemptId,stageId:'check',agent:options.agent??'codex',cwd,
+  const input={repository:'acme/project',sourceRoot:cwd,commonDir:join(cwd,'.git'),issueNumber:2,workflowName:'small-change',runId:options.runId??runId,attemptId:options.attemptId??attemptId,stageId:'check',agent:options.agent??'codex',cwd,
     context:'# Entire guide\nActual selected recipe',instructions:'literal $(not shell)',
     checkpoint:async snapshot=>{checkpoints.push(structuredClone(snapshot));if(options.checkpointFails===snapshot.phase)throw Error('Disk failure');}};
   return { input,ports,calls,checkpoints,options,setRunning:value=>{running=value;},closed:()=>closed,promptCount:()=>calls.filter(x=>x[0]==='herdr'&&x[1][2]==='agent'&&x[1][3]==='prompt').length };
@@ -109,14 +124,14 @@ test('idle, blocked, unknown and identity loss cannot become transport settlemen
   }
 });
 
-test('checkpoint failure fences corresponding effect; incompatible or unowned server never starts agent',async t=>{
+test('checkpoint failure fences corresponding effect; incompatible server never starts agent',async t=>{
   for(const phase of ['server_intent','workspace_intent','start_intent','prompt_intent']){
     const h=harness(await temp(t),{checkpointFails:phase});const r=await runHerdrStage(h.input,h.ports);
     assert.equal(r.state,'recovery_required');assert.equal(h.promptCount(),0);
     if(phase==='server_intent')assert.equal(h.calls.length,0);
     if(phase==='start_intent')assert.equal(h.calls.some(x=>x[0]==='herdr'&&x[1][3]==='start'),false);
   }
-  for(const options of [{preexisting:true},{incompatible:true},{capacity:true}]){
+  for(const options of [{incompatible:true}]){
     const h=harness(await temp(t),options);assert.equal((await runHerdrStage(h.input,h.ports)).state,'recovery_required');assert.equal(h.promptCount(),0);
   }
 });
@@ -179,11 +194,11 @@ test('two concurrent issue assignments keep actual cwd/backend and native kind s
   const one=harness(await temp(t));const two=harness(await temp(t),{runId:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',attemptId:'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',agent:'claude'});
   const [a,b]=await Promise.all([runHerdrStage(one.input,one.ports),runHerdrStage(two.input,two.ports)]);
   assert.equal(a.state,'settled');assert.equal(b.state,'settled');assert.notEqual(a.backend.cwd,b.backend.cwd);
-  assert.notEqual(a.backend.session,b.backend.session);assert.notEqual(a.backend.agentName,b.backend.agentName);
+  assert.equal(a.backend.session,b.backend.session);assert.notEqual(a.backend.agentName,b.backend.agentName);
   assert.equal(a.backend.agent,'codex');assert.equal(b.backend.agent,'claude');assert.equal(one.promptCount(),1);assert.equal(two.promptCount(),1);
 });
 
-test('actual default spawn boundary uses headless short-name server without environment changes and exact inherited attach',async t=>{
+test('actual default spawn boundary uses headless pdd server without environment changes and exact inherited attach',async t=>{
   const h=harness(await temp(t));const spawned=[];let unref=0;
   const ports={...h.ports,spawnServer:undefined,spawnAttach:undefined,spawn:(exe,args,opts)=>{
     const c=new EventEmitter();c.unref=()=>{unref++;};spawned.push({exe,args,opts});
@@ -196,7 +211,7 @@ test('actual default spawn boundary uses headless short-name server without envi
 });
 
 
-test('accepted predecessor reuses only owned run server; next stage gets fresh pane/native and one new prompt',async t=>{
+test('accepted predecessor reuses run workspace; next stage gets fresh pane/native and one new prompt',async t=>{
   const cwd=await temp(t);const first=harness(cwd);const a=await runHerdrStage(first.input,first.ports);
   const closed=await closeHerdrStage({backend:a.backend,acceptance:acceptance(a.backend)}, {...first.ports,checkpoint:first.input.checkpoint});
   const second=harness(cwd,{preexisting:true,attemptId:'cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa',workspaceId:'w3',terminalId:'term-next',nativeId:'native-next'});
@@ -220,13 +235,13 @@ test('captured candidate cannot absorb later activity or uncertain cleanup into 
 
 
 test('P2 cleanup malformed/unrelated acknowledgements or contradictory inventory retain original close intent',async t=>{
-  for(const options of [{closeReply:{}},{closeReply:[]},{closeReply:{result:{type:'workspace_created'}}},{closeReply:{id:'other',result:{type:'ok'}}},{closeReply:{id:'cli:workspace:close',result:{action:'workspace_closed'}}},{closeRemains:true}]){
+  for(const options of [{closeReply:{}},{closeReply:[]},{closeReply:{result:{type:'workspace_created'}}},{closeReply:{id:'other',result:{type:'ok'}}},{closeReply:{id:'cli:tab:close',result:{action:'workspace_closed'}}},{closeRemains:true}]){
     const h=harness(await temp(t),options);const r=await runHerdrStage(h.input,h.ports);
     const cleanup=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...h.ports,checkpoint:h.input.checkpoint});
     assert.equal(cleanup.state,'recovery_required',JSON.stringify(options));assert.equal(cleanup.backend.phase,'close_intent');
-    assert.equal(h.checkpoints.at(-1).phase,'close_intent');assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][2]==='workspace'&&c[1][3]==='close').length,1);
+    assert.equal(h.checkpoints.at(-1).phase,'close_intent');assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][2]==='tab'&&c[1][3]==='close').length,1);
     await inspectHerdrStage({backend:cleanup.backend},h.ports);assert.equal(h.promptCount(),1);
-    assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][2]==='workspace'&&c[1][3]==='close').length,1);
+    assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][2]==='tab'&&c[1][3]==='close').length,1);
   }
 });
 
@@ -267,7 +282,7 @@ test('pre-native recovery refuses changed input/server and cannot reinterpret la
  assert.equal(mismatch.reason,'herdr_server_changed');assert.equal(h.promptCount(),0);
 });
 
-test('legacy stopped pre-native original migrates short; legacy active or later phases never migrate',async t=>{
+test('legacy stopped pre-native original migrates to pdd; legacy active or later phases never migrate',async t=>{
  const h=harness(await temp(t));const exec=h.ports.execFile;let failList=true;
  h.ports.execFile=async(...args)=>{if(failList&&args[1][2]==='workspace'){failList=false;throw Object.assign(Error('fail'),{code:'STOP'});}return exec(...args);};
  const failed=await runHerdrStage(h.input,h.ports);assert.equal(failed.backend.phase,'server_intent');
@@ -373,4 +388,20 @@ test('persistent viewer contention remains bounded with original intent and no r
  assert.equal(result.state,'recovery_required');assert.equal(result.reason,'stage_wait_timeout');
  assert.equal(h.promptCount(),1);assert.equal(h.closed(),false);assert.equal(result.backend.phase,'submitted');
  assert.deepEqual(result.evidence,{readySeq:10});
+});
+
+test('accepted legacy predecessor refuses a new shared-layout stage before any mutation',async t=>{
+ const h=harness(await temp(t));const first=await runHerdrStage(h.input,h.ports);
+ const closed=await closeHerdrStage({backend:first.backend,acceptance:acceptance(first.backend)},{...h.ports,checkpoint:h.input.checkpoint});
+ const session=`pdd-${runId}`,legacy={...closed.backend,session,server:{...closed.backend.server,session}};
+ const before=h.calls.length;
+ const next=await runHerdrStage({...h.input,attemptId:'cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa',backend:legacy},h.ports);
+ assert.equal(next.reason,'legacy_layout_requires_inspection');assert.equal(h.calls.length,before);
+});
+
+test('real Herdr pane send-text empty success still permits accepted tab cleanup',async t=>{
+ const h=harness(await temp(t));const first=await runHerdrStage(h.input,h.ports);const exec=h.ports.execFile;
+ h.ports.execFile=async(...args)=>args[1][2]==='pane'&&args[1][3]==='send-text'?{stdout:'',stderr:''}:exec(...args);
+ const closed=await closeHerdrStage({backend:first.backend,acceptance:acceptance(first.backend)},{...h.ports,checkpoint:h.input.checkpoint});
+ assert.equal(closed.state,'closed',closed.reason);assert.equal(h.closed(),true);
 });

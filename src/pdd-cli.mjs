@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 458738e626c1ef103f1835cfe8224f32ef94666b7e8b934738c84c758f63e165).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3ac1c04a9843d00d4408a19ea05197dc07a760730e836220c81a927ec78beb85).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,9 +60,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         const stages = workflowStages ?? await import('./workflow-stage-herdr.mjs');
-        const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage} = stages;
+        const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,closeHerdrRun} = stages;
         if (![runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage].every(fn=>typeof fn==='function')) throw Error('Missing stage transport');
-        const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,stdout,stderr, ...(progress ? { onProgress: progress.observe } : {})};
+        const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,closeHerdrRun,stdout,stderr, ...(progress ? { onProgress: progress.observe } : {})};
         const result = plan.local === 'workflow-run'
           ? await runner.runWorkflow({name:plan.operands[0],issue:plan.operands[1],
             agent:plan.options['--agent']??'codex',cwd,packageRoot},ports)

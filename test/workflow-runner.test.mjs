@@ -9,7 +9,7 @@ import { execFile as callbackExec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runWorkflow, resumeWorkflow, attachWorkflow, WORKFLOW_STAGES } from '../src/workflow-runner.mjs';
 import { loadGuidance as actualGuidance } from '../src/guidance.mjs';
-import { runHerdrStage, inspectHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
+import { runHerdrStage, inspectHerdrStage, closeHerdrStage, closeHerdrRun } from '../src/workflow-stage-herdr.mjs';
 
 const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '..');
@@ -677,7 +677,7 @@ test('cleanup ambiguity retains accepted evidence and never retries close or pro
   const again = await f.resume(first.runId, 'approve'); assert.equal(again.state, 'recovery_required');
   assert.equal(closeCalls, 1); assert.equal(f.native.length, 1);
 });
-test('cross-process attachment excludes acceptance and invalidates the earlier candidate without blocking live controller polling', async t => {
+test('cross-process attach watcher stays open while the controller accepts the settled original', async t => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const f = await fixture(t, { pauseNative: gate }); const running = f.run();
@@ -696,12 +696,12 @@ test('cross-process attachment excludes acceptance and invalidates the earlier c
     for (let i = 0; i < 200 && !output.includes('ATTACHED'); i++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(output.includes('ATTACHED'), errors + output);
     release(); const paused = await running; assert.equal(paused.state, 'waiting', paused.message);
-    assert.equal(f.closes, 0); assert.equal(f.saved(runId).pending.kind, 'agent');
+    assert.equal(f.closes, 1); assert.equal(f.saved(runId).pending, null);
+    assert.equal(output.includes('attached'),false,'viewer is still open when acceptance finishes');
   } finally { release(); child.stdin.end('detach\n'); }
   assert.equal(await closed, 0, errors);
-  const invalidated = await f.resume(runId, 'approve');
-  assert.equal(invalidated.state, 'waiting', invalidated.message); assert.match(invalidated.message, /Attachment invalidated/); assert.equal(f.closes, 0);
-  const fresh = await f.resume(runId, 'approve'); assert.equal(fresh.state, 'waiting', fresh.message);
+  const inspected = await f.resume(runId);
+  assert.equal(inspected.state, 'waiting', inspected.message);
   assert.equal(f.native.length, 1); assert.equal(f.closes, 1);
 });
 
@@ -727,19 +727,24 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   const f = await fixture(t, { defaultWorktree: true }); const foreground = f.ports.launchNativeSession;
   const sessions = new Map(), calls = [];
   function transport(base) {
-    return {...base, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
+    return {...base, layoutDirectory:join(f.sourceCwd,'.git','layout-test'), quietMs:0, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
       sleep: async () => {},
-      spawnServer: async (session, cwd) => { assert.equal(cwd,f.cwd); sessions.set(session,{seed:'seed',active:null}); calls.push('server'); },
+      spawnServer: async (session, cwd) => { assert.equal(cwd,f.cwd); sessions.set(session,{seed:'seed',active:null,repo:false,run:false}); calls.push('server'); },
       execFile: async (file, argv, options) => {
         assert.equal(file,'herdr'); assert.equal(options.cwd,f.cwd); assert.equal(options.shell,false);
         const session=argv[1], a=argv.slice(2), server=sessions.get(session);
         const reply=value=>({stdout:JSON.stringify(value),stderr:''});
         if(a[0]==='status') return reply({running:Boolean(server),session,compatible:true,endpoint_compatible:true,protocol:22,version:'0.9.1',socket:`/owned/${session}`});
-        if(a[0]==='workspace'&&a[1]==='list') return reply({id:'cli:workspace:list',result:{type:'workspace_list',workspaces:[{workspace_id:'seed'},...(server.active?[{workspace_id:server.active.workspace_id}]:[])]}});
-        if(a[0]==='workspace'&&a[1]==='create') {
+        if(a[0]==='workspace'&&a[1]==='list') return reply({id:'cli:workspace:list',result:{type:'workspace_list',workspaces:[{workspace_id:'seed'},...(server.repo?[{workspace_id:'repo',label:'project',worktree:{checkout_path:f.sourceCwd,repo_key:join(f.sourceCwd,'.git')}}]:[]),...(server.run?[{workspace_id:'run',label:'#17 small-change',worktree:{checkout_path:f.cwd,repo_key:join(f.sourceCwd,'.git'),is_linked_worktree:true}}]:[])]}});
+        if(a[0]==='workspace'&&a[1]==='create'){server.repo=true;return reply({id:'cli:workspace:create',result:{workspace:{workspace_id:'repo'}}});}
+        if(a[0]==='worktree'&&a[1]==='open'){server.run=true;return reply({id:'cli:worktree:open',result:{workspace:{workspace_id:'run'},tab:{tab_id:'run:root'},root_pane:{pane_id:'run:root-pane',terminal_id:'root-terminal'}}});}
+        if(a[0]==='pane'&&a[1]==='list')return reply({id:'cli:pane:list',result:{type:'pane_list',panes:[{workspace_id:'run',tab_id:'run:root',pane_id:'run:root-pane',terminal_id:'root-terminal',cwd:f.cwd}]}});
+        if(a[0]==='tab'&&a[1]==='list')return reply({id:'cli:tab:list',result:{type:'tab_list',tabs:[{tab_id:'run:root'},...(server.active?[{tab_id:server.active.tab_id}]:[])]}});
+        if(a[0]==='pane'&&a[1]==='send-text')return reply({id:'cli:pane:send-text',result:{type:'ok'}});
+        if(a[0]==='tab'&&a[1]==='create') {
           assert.equal(server.active,null);const id=`stage-${calls.filter(x=>x==='create').length}`;calls.push('create');
-          server.active={workspace_id:id,tab_id:`${id}:tab`,pane_id:`${id}:pane`,terminal_id:`${id}:terminal`,cwd:f.cwd,agent_status:'idle',state_change_seq:10,interactive_ready:true,launch_pending:false};
-          return reply({result:{workspace:{workspace_id:id},tab:{tab_id:server.active.tab_id},root_pane:{pane_id:server.active.pane_id,terminal_id:server.active.terminal_id}}});
+          server.active={workspace_id:'run',tab_id:`${id}:tab`,pane_id:`${id}:pane`,terminal_id:`${id}:terminal`,cwd:f.cwd,agent_status:'idle',state_change_seq:10,interactive_ready:true,launch_pending:false};
+          return reply({id:'cli:tab:create',result:{workspace:{workspace_id:'run'},tab:{tab_id:server.active.tab_id},root_pane:{pane_id:server.active.pane_id,terminal_id:server.active.terminal_id}}});
         }
         const native=server.active;
         if(a[0]==='agent'&&a[1]==='start') {calls.push('start');native.name=a[2];native.agent=a[a.indexOf('--kind')+1];if(calls.filter(x=>x==='start').length===1){native.agent_status='blocked';native.interactive_ready=false;}return reply({result:{agent:native}});}
@@ -753,13 +758,15 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           queueMicrotask(()=>{native.agent_status='done';native.interactive_ready=true;native.state_change_seq=12;});
           return reply({result:{agent:acknowledgement}});
         }
-        if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;return reply({id:'cli:workspace:close',result:{type:'ok'}});}
+        if(a[0]==='workspace'&&a[1]==='close'){assert.equal(a[2],'run');assert.equal(server.active,null);server.run=false;calls.push('run-close');return reply({id:'cli:workspace:close',result:{type:'ok'}});}
+        if(a[0]==='tab'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.tab_id);server.active=null;return reply({id:'cli:tab:close',result:{type:'ok'}});}
         assert.fail('Unexpected stand-in Herdr operation '+JSON.stringify(a));
       }};
   }
   f.ports.runHerdrStage=(input,ports)=>runHerdrStage(input,transport(ports));
   f.ports.inspectHerdrStage=(input,ports)=>inspectHerdrStage(input,transport(ports));
   f.ports.closeHerdrStage=(input,ports)=>closeHerdrStage(input,transport(ports));
+  f.ports.closeHerdrRun=(input,ports)=>closeHerdrRun(input,transport(ports));
   const first=await f.run();assert.equal(first.state,'waiting',first.message);assert.equal(first.stage,'scope');
   const original=f.saved(first.runId).pending;assert.equal(original.backend.phase,'start_intent');
   assert.equal(calls.filter(x=>x==='prompt').length,0);assert.equal(calls.filter(x=>x==='start').length,1);
@@ -777,6 +784,15 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   assert.equal(new Set(stages.map(stage=>stage.backend.terminalId)).size,3);
   for(const stage of stages) {assert.equal(stage.backend.phase,'closed');assert.match(stage.acceptance.evidenceDigest,/^[a-f0-9]{64}$/);}
   assert.equal([...sessions.values()][0].active,null);
+  assert.equal([...sessions.values()][0].run,true,'merge wait retains run workspace');
+  assert.equal(calls.includes('run-close'),false);
+  f.merged=true;
+  const done=await f.resume(first.runId);assert.equal(done.state,'completed',done.message);
+  assert.equal([...sessions.values()][0].run,false);assert.equal([...sessions.values()][0].repo,true);
+  assert.equal(calls.filter(x=>x==='run-close').length,1);
+  assert.equal(f.saved(first.runId).herdrLayoutClosed,true);
+  assert.equal(existsSync(f.cwd),true,'run layout closure does not remove Git worktree');
+  assert.equal((await f.resume(first.runId)).state,'completed');assert.equal(calls.filter(x=>x==='run-close').length,1);
 });
 
 test('resume owns the controller lock before reading the journal and cannot advance a stale optional snapshot', async t => {
@@ -1001,4 +1017,17 @@ test('feature approval progress retains proposal artifacts after later report-on
   const gate = events.at(-1);
   for (const name of ['module.prompt.md', 'STORY.md', 'cases.json']) assert.ok(gate.files.some(path => path.endsWith(name)), name);
   assert.ok(gate.files.some(path => /prompt-story-.*\.json$/.test(path)));
+});
+
+test('real runner passes repository layout binding to the production stage adapter',async t=>{
+ const f=await fixture(t,{defaultWorktree:true});let observed;
+ f.ports.runHerdrStage=async(input,ports)=>{
+   observed=input;
+   return runHerdrStage(input,{...ports,layoutDirectory:join(f.sourceCwd,'.layout'),execFile:async()=>{throw Object.assign(Error('stop before native launch'),{code:'STOP'});}});
+ };
+ const outcome=await f.run();
+ assert.equal(outcome.state,'recovery_required');
+ assert.equal(observed.repository,'example/project');assert.equal(observed.issueNumber,17);assert.equal(observed.workflowName,'small-change');
+ assert.equal(observed.sourceRoot,f.sourceCwd);assert.equal(observed.commonDir,join(f.sourceCwd,'.git'));
+ assert.notEqual(observed.cwd,f.sourceCwd);assert.equal(f.saved(outcome.runId).pending.backend.session,'pdd');
 });

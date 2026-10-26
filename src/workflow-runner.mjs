@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c0901d649031ab019f3b26d767b59d6661afede684ca4991b4ebe25ee08631a9).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4eafaac03f8c2e80e16707408d95d393949f71815fccb94637185df99aed7ba3).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -293,6 +293,21 @@ function agentInstructions(s, stage, directory, attemptId, handoffPath, inputRev
     accepted: s.accepted ?? null };
   return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated work.\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Project files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
 }
+function herdrLayoutInput(s) {
+  return {repository:s.assignment.repository,sourceRoot:s.assignment.sourceRoot,commonDir:s.assignment.commonDir,
+    issueNumber:s.assignment.issueNumber,workflowName:s.assignment.workflowName};
+}
+async function finishRunLayout(outcome, s, directory, p) {
+  if (!['completed','failed'].includes(outcome.state) || s.pending || s.herdrLayoutClosed) return outcome;
+  const backend=s.completed.findLast(entry=>entry.backend?.phase==='closed')?.backend;
+  if (!backend || backend.session!=='pdd') return outcome;
+  if (typeof p.closeHerdrRun!=='function') return result(s,'recovery_required','Run workspace cleanup is unavailable.');
+  record(s,directory,'run.layout_close_intent');
+  const closed=await p.closeHerdrRun({backend}, {withStageGuard:stageGuard(s),checkpoint:async()=>record(s,directory,'run.layout_close_checkpoint')});
+  if(closed.state!=='closed') return result(s,'recovery_required',closed.reason||'Run workspace cleanup is uncertain.');
+  s.herdrLayoutClosed=true;record(s,directory,'run.layout_closed');
+  return outcome;
+}
 async function runAgent(s, stage, r, directory, options, p) {
   if (typeof p.runHerdrStage !== 'function' || typeof p.inspectHerdrStage !== 'function' || typeof p.closeHerdrStage !== 'function')
     fail('Background native run, inspection and cleanup ports are required.');
@@ -310,7 +325,7 @@ async function runAgent(s, stage, r, directory, options, p) {
   const previous = s.completed.filter(entry => entry.backend?.phase === 'closed').at(-1)?.backend;
   let outcome;
   try {
-    outcome = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId, agent: s.agent, cwd: r.root,
+    outcome = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId, agent: s.agent, cwd: r.root, ...herdrLayoutInput(s),
       context, instructions, backend: previous, checkpoint: portOptions.checkpoint }, portOptions);
     candidateIdentity(s, stage, outcome);
   } catch { return result(s, 'recovery_required', 'Background launch or delivery is uncertain; no automatic relaunch. Inspect the saved attempt.'); }
@@ -449,7 +464,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
       await current(s, r, p);
       try {
         seen = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId: s.pending.attemptId,
-          agent: s.agent, cwd: r.root, context: s.context, instructions, backend: s.pending.backend,
+          agent: s.agent, cwd: r.root, ...herdrLayoutInput(s), context: s.context, instructions, backend: s.pending.backend,
           checkpoint: portOptions.checkpoint }, portOptions);
         candidateIdentity(s, stage, seen);
       } catch { return result(s, 'recovery_required', 'Original first dispatch is unconfirmed; preserve this same attempt for inspection.'); }
@@ -686,7 +701,7 @@ async function execute(options, ports, resume) {
       const binding = await resolveWorkflowIssue({ cwd: r.root, issue: s.issue.url }, p.commandPorts);
       r.repo = binding.repository; r.base = binding.defaultBranch;
       await validateInput(s, options, p);
-      return await advance(s, r, directory, options, p, options.decision, false);
+      return await finishRunLayout(await advance(s, r, directory, options, p, options.decision, false), s, directory, p);
     }
     const source = await repository(options.cwd, p);
     const definition = loadWorkflowDefinition({ name: options.name, cwd: source.root, packageRoot: options.packageRoot });
@@ -726,7 +741,7 @@ async function execute(options, ports, resume) {
       expected: await fingerprint(r, p), pending: null };
     record(s, directory, 'run.started');
     await validateInput(s, options, p);
-    return await advance(s, r, directory, options, p, undefined, true);
+    return await finishRunLayout(await advance(s, r, directory, options, p, undefined, true), s, directory, p);
   } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }
   finally { unlock?.(); }
 }
