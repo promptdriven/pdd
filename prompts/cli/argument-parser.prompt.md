@@ -13,3 +13,12 @@ Named workflow routes have the same session options/request text/literal -- beha
 workflow.run requires exactly a safe free workflow name and syntactic issue reference plus optional --agent. workflow.resume requires exactly UUIDv4 run ID plus optional --decision approve|skip, with omitted decision absent. Live issue/repo/journal/agent/decision eligibility belongs to runner. Reject unsafe names/unsupported issues/UUIDs/options/extras with2 before guidance/runner/native. Known run/resume help is local.
 
 workflow.run accepts exactly safe free NAME (lowercase letter followed by lowercase letters/digits and single hyphen-separated nonempty segments, max64) plus existing ISSUE and agent; do not reject a syntactically valid custom name based on bundled catalog. Definition existence/graph/content belongs solely to loader/main. workflow.attach takes exactly UUIDv4, no options or other operands; route/help admission has no backend effect.
+
+For `workflow run` and `workflow resume`, when the first operand is absent or
+is not a valid workflow/run name, or when `workflow run` has a valid name but
+no issue operand, reject with exit2 and this exact stderr message: `Name the
+workflow: pdd workflow run small-change 81 (or bug, feature). See: pdd workflow
+list.` This diagnostic takes precedence over the generic unsupported-command
+message and performs no guidance, runner, native or network effect. A valid
+UUID remains the only accepted `workflow resume` identity; the hint is only for
+its malformed or missing first operand.

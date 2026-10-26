@@ -309,7 +309,7 @@ test('lost reply during unpublished PR recovery reconciles without another push 
 
 test('an existing same issue/workflow run cannot be duplicated or switch its saved agent', async t => {
   const f = await fixture(t); const first = await f.run(); const second = await f.run('small-change', 'codex');
-  assert.equal(second.runId, first.runId); assert.equal(second.state, 'waiting'); assert.equal(f.native.length, 1);
+  assert.equal(second.runId, first.runId); assert.equal(second.state, 'waiting'); assert.equal(f.native.length, 1); assert.match(second.message, new RegExp(`run ${first.runId}`)); assert.match(second.message, /workflow small-change/); assert.match(second.message, /stage/); assert.match(second.message, /state/); assert.match(second.message, /age \d+s/); assert.match(second.message, new RegExp(`pdd workflow resume ${first.runId} --decision approve`));
   assert.equal(f.saved(first.runId).agent, 'claude');
 });
 
