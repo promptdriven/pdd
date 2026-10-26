@@ -21,4 +21,8 @@ test('workflow runs lists and details finished stages without mutating', async (
   assert.match(detail.stdout.text, /start \d{2}:\d{2}:\d{2}.*duration 5s/);
   assert.match(detail.stdout.text, /codex resume 123e4567-e89b-42d3-a456-426614174001/);
   assert.doesNotMatch(detail.stdout.text, /170000000/);
+  const json = { stdout: capture(), stderr: capture() };
+  assert.equal(await runPdd(['workflow', 'runs', id, '--json'], { ...json, workflowRecords: records }), 0);
+  assert.doesNotMatch(json.stdout.text, /170000000/);
+  assert.match(json.stdout.text, /"start":"\d{2}:\d{2}:\d{2}"/);
 });

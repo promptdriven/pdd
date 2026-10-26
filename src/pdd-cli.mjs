@@ -111,16 +111,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return `${hours ? `${hours}h` : ''}${minutes ? `${minutes}m` : ''}${seconds}s`;
         };
         const stateLabel = run => run.state === 'completed' ? 'done' : run.state === 'waiting' ? 'waiting for you' : run.state === 'running' ? `working: ${run.stage?.id ?? 'unknown'}` : run.state;
+        const stageJson = stage => { const { startedAt, endedAt, ...rest } = stage; return { ...rest, start: localTime(startedAt), end: localTime(endedAt), duration: duration(startedAt, endedAt) }; };
         if (requested && !runs.length) { line(stdout, plan.options['--json'] ? JSON.stringify({ v: 1, runId: requested, state: 'unknown', message: 'Run not found' }) : 'Run not found'); return 1; }
         if (!requested) {
           runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-          if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runs: runs.map(run => ({ ...run, state: stateLabel(run), age: age(run.startedAt), open: `pdd workflow runs ${run.runId}` })) })); return 0; }
+          if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runs: runs.map(run => ({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, state: stateLabel(run), age: age(run.startedAt), open: `pdd workflow runs ${run.runId}` })) })); return 0; }
           for (const run of runs) line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`}${run.issue?.title ? ` ${run.issue.title}` : ''} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · age ${age(run.startedAt)} · open: pdd workflow runs ${run.runId}`);
           if (!runs.length) line(stdout, 'No saved runs.');
           return 0;
         }
         const run = runs[0];
-        if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, root: run.root, state: stateLabel(run), stages: run.steps })); return 0; }
+        if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, root: run.root, state: stateLabel(run), stages: (run.steps ?? []).map(stageJson) })); return 0; }
         line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · worktree ${run.root ?? 'unknown'}`);
         for (const stage of run.steps ?? []) {
           const session = stage.session ? ` · ${stage.session.agent} session ${stage.session.id}` : '';
