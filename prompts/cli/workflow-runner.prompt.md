@@ -29,6 +29,10 @@ Keep append-only durable journal snapshots and artifacts under the actual absolu
 
 Before any native launch, push or PR create, flush its specific intent. After crash or unknown delivery, reconcile existing state; never blindly replay a native session, push or PR create. No-decision resume may inspect journal/artifacts and read existing PR/merge state, but cannot launch a new agent, push, create a PR or automatically advance into an effect. Explicit approve permits ordinary next progress, with the same guards; skip is confined to optional steps.
 
+## Attach-as-watch semantics
+
+Attach takes no long-lived lock. The controller keeps observing while a viewer is attached, records person intervention when a newer working lifecycle appears, and waits for the quiet idle window before acceptance. Acceptance/cleanup is the only guarded moment; both controller output and the old pane receive a one-line accepted/moved-on notice.
+
 ## Stage progression
 
 ```mermaid

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 19fb33093150212af182c10e08a39d992ea4a73d851ada3b00a2e166ca96ab86).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 0e71ee335ac0dc32619b713a9d12649a077fbf1bba6c1ddf7f19579ab39273d1).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -29,6 +29,8 @@ function runtime(ports = {}) {
     pollMs: ports.pollMs ?? 100,
     startupMs: ports.startupMs ?? 30000,
     activityMs: ports.activityMs ?? 5000,
+    quietMs: ports.quietMs ?? 10000,
+    onPersonSteppedIn: ports.onPersonSteppedIn,
     timeoutMs: ports.timeoutMs ?? 1800000,
     spawnServer: ports.spawnServer ?? ((session, cwd) => new Promise((resolve, reject) => {
       const child = start('herdr', ['--session', session, 'server'],
@@ -145,6 +147,13 @@ async function observe(rt, b, checkpoint) {
   return await rt.guard(b, async () => {
   const a = await checkAgent(rt, b);
   recordAgent(b, a);
+  if (b.phase === 'candidate' && a.agent_status === 'working' && a.state_change_seq > b.evidence.settledSeq) {
+    b.phase = 'submitted'; b.evidence.personSteppedInSeq = a.state_change_seq;
+    delete b.evidence.settledSeq; delete b.evidence.candidateSince;
+    if (checkpoint) await save(b, checkpoint);
+    await rt.onPersonSteppedIn?.(clone(b));
+    return { state: 'active', backend: clone(b), evidence: clone(b.evidence), reason: 'person_stepped_in' };
+  }
   if (b.phase === 'candidate' && a.state_change_seq !== b.evidence.settledSeq) return fail(b, 'candidate_sequence_changed');
   if (a.agent_status === 'blocked') {
     if (checkpoint) await save(b, checkpoint);
@@ -152,15 +161,26 @@ async function observe(rt, b, checkpoint) {
   }
   if (a.agent_status === 'working') {
     if (b.phase !== 'prompt_intent' && b.phase !== 'submitted') return fail(b, 'unexpected_native_activity');
-    b.evidence.workingSeq ??= a.state_change_seq;
+    const steppedIn = b.evidence.workingSeq && a.state_change_seq > b.evidence.workingSeq;
+    b.evidence.workingSeq = a.state_change_seq;
     if (b.evidence.workingSeq <= b.evidence.readySeq) return fail(b, 'missing_new_prompt_activity');
     if (checkpoint) await save(b, checkpoint);
+    if (steppedIn && !b.evidence.personSteppedInSeq) {
+      b.evidence.personSteppedInSeq = a.state_change_seq;
+      await rt.onPersonSteppedIn?.(clone(b));
+    }
     return { state: 'active', backend: clone(b), evidence: clone(b.evidence) };
   }
   if (isReady(a) && b.evidence.workingSeq && a.state_change_seq > b.evidence.workingSeq) {
-    b.evidence.settledSeq = a.state_change_seq;
-    b.phase = 'candidate';
-    if (checkpoint) await save(b, checkpoint);
+    if (!b.evidence.settledSeq) {
+      b.evidence.settledSeq = a.state_change_seq;
+      b.evidence.candidateSince = rt.now();
+      b.phase = 'candidate';
+      if (checkpoint) await save(b, checkpoint);
+    }
+    if (rt.now() - b.evidence.candidateSince < rt.quietMs) {
+      return { state: 'active', backend: clone(b), evidence: clone(b.evidence), reason: 'stage_quiet_window' };
+    }
     return { state: 'settled', backend: clone(b), evidence: clone(b.evidence) };
   }
   return fail(b, isReady(a) ? 'no_observed_prompt_activity' : 'native_state_unknown');
@@ -336,11 +356,9 @@ export async function attachHerdrStage({ backend }, ports = {}) {
   try {
     assertBackend(b);
     if (b.phase === 'closed') return 2;
-    return await rt.guard(b, async () => {
-      sameServer(compatible(await status(rt, b.session, b.cwd), b.session), b.server);
-      await checkAgent(rt, b);
-      return rt.spawnAttach(b.session, b.agentName, b.cwd);
-    });
+    sameServer(compatible(await status(rt, b.session, b.cwd), b.session), b.server);
+    await checkAgent(rt, b);
+    return await rt.spawnAttach(b.session, b.agentName, b.cwd);
   } catch { return 1; }
 }
 
@@ -360,6 +378,8 @@ export async function closeHerdrStage({ backend, acceptance }, ports = {}) {
     b.acceptanceDigest = hash(canonical(acceptance));
     b.phase = 'close_intent';
     await save(b, checkpoint);
+    await command(rt, b.session, ['pane', 'send-text', b.paneId,
+      'This step is done. Messages here no longer change the run.\n'], b.cwd);
     // This workspace was created for this stage only; its seed belongs to the run's server separately.
     const closed = await command(rt, b.session, ['workspace', 'close', b.workspaceId], b.cwd);
     if (Array.isArray(closed) || closed.id !== 'cli:workspace:close' || closed.result?.type !== 'ok') {

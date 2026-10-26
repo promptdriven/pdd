@@ -20,6 +20,10 @@ closeHerdrStage requires the runner's actual durable acceptance record bound to 
 
 attachHerdrStage checks exact saved active identity and invokes documented agent attach with inherited terminal/cwd/environment, no takeover. It does not create a new native conversation, resume closed history, move unrelated panes or change lifecycle success. Return native attach exit; missing/closed identity refuses finitely.
 
+## Attach-as-watch semantics
+
+`pdd workflow attach` is a watch, not a takeover. It must not hold the stage guard or run lock while the viewer is open. A person prompt is detected when the owned agent becomes working with a lifecycle sequence newer than the saved PDD prompt/settled evidence; record `agent.person.stepped_in`, keep observing, and accept only after the configurable quiet window (default 10 seconds) of idle state. Cleanup sends `This step is done. Messages here no longer change the run.` to the old pane and closes its workspace before advancing.
+
 ## Dependencies
 
 Read entire [Prompting guide](../../docs/prompting-guide.md) before authoring. Follow [public boundary](public-boundary.prompt.md). Existing runner owns journal/currentness/acceptance/worktree assignment and supplies awaited checkpoint; this adapter owns transport identity and one-delivery observations only. Existing native launcher owns ordinary foreground pdd session. Herdr's public0.9.1 schema/skill commands establish concrete transport behavior; no private service dependency. Tests use capturing Herdr command/process stand-ins and temporary paths, never live servers/agents/models/accounts.

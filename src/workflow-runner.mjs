@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a56fdf2fa376fa38ac4558dc08a7abb053bda43d2533cfb6712a56b8df62a36a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c0901d649031ab019f3b26d767b59d6661afede684ca4991b4ebe25ee08631a9).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -249,6 +249,13 @@ async function handoff(s, stage, r, directory) {
 function nativePorts(s, directory, r, options, p) {
   const guard = stageGuard(s);
   return {
+    quietMs: options.attachQuietMs ?? p.attachQuietMs ?? 10000,
+    onPersonSteppedIn: async backend => {
+      if (!s.pending?.personSteppedIn) {
+        s.pending.personSteppedIn = { seq: backend.evidence?.personSteppedInSeq ?? null };
+        record(s, directory, 'agent.person.stepped_in', { seq: backend.evidence?.personSteppedInSeq ?? null });
+      }
+    },
     withStageGuard: (backend, action) => guard(backend, async () => {
       await validateInput(s, options, p);
       if (['ready', 'prompt_intent'].includes(backend.phase)) await current(s, r, p);
@@ -387,6 +394,7 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
       const closed = await p.closeHerdrStage({ backend: s.pending.backend, acceptance: s.pending.acceptance }, portOptions);
       if (closed.state !== 'closed' || closed.backend?.phase !== 'closed') return result(s, 'recovery_required', closed.reason || 'Owned cleanup is uncertain; no stage was resent.');
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
+      p.stdout.write(`pdd accepted ${stage.id} and moved on.\n`);
     }
     s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });
@@ -739,20 +747,15 @@ export async function attachWorkflow(options, ports) {
     if (!s.pending?.backend || s.pending.backend.phase === 'closed') return result(s, 'waiting', 'No live stage is retained. Completed stage history is archived; no conversation was started.');
     if (s.pending.kind === 'cleanup') return result(s, 'waiting', 'The stage is already accepted for cleanup; it is archived for workflow purposes.');
     if (typeof p.attachHerdrStage !== 'function') fail('Active native attachment is unavailable.');
-    const guard = stageGuard(s);
-    return await guard(s.pending.backend, async () => {
-      // Acceptance/cleanup may have won the guard after the initial lookup.
-      s = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
-      if (!isDeepStrictEqual(s.assignment, found.assignment)) fail('Saved assignment changed.');
-      await assignedRepository(s.assignment, p);
-      if (!s.pending?.backend || s.pending.backend.phase === 'closed' || s.pending.kind === 'cleanup')
-        return result(s, 'waiting', 'The stage is already accepted or archived. No live conversation was attached.');
-      await validateInput(s, options, p);
-      attachmentEpoch(s, true);
-      const code = await p.attachHerdrStage({ backend: s.pending.backend }, { withStageGuard: guard });
-      return result(s, code === 0 ? 'waiting' : 'recovery_required', code === 0
-        ? 'Detached from the original active stage. Resume its saved run to inspect; attachment does not certify stage success.'
-        : 'The exact original stage could not be attached. No replacement was started.');
-    });
+    s = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
+    if (!isDeepStrictEqual(s.assignment, found.assignment)) fail('Saved assignment changed.');
+    await assignedRepository(s.assignment, p);
+    if (!s.pending?.backend || s.pending.backend.phase === 'closed' || s.pending.kind === 'cleanup')
+      return result(s, 'waiting', 'The stage is already accepted or archived. No live conversation was attached.');
+    await validateInput(s, options, p);
+    const code = await p.attachHerdrStage({ backend: s.pending.backend }, {});
+    return result(s, code === 0 ? 'waiting' : 'recovery_required', code === 0
+      ? 'Watching the original active stage. The run continues while this view is open.'
+      : 'The exact original stage could not be attached. No replacement was started.');
   } catch (error) { return result(s, 'recovery_required', error.message); }
 }

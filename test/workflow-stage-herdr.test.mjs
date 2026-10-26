@@ -23,7 +23,7 @@ function harness(cwd, options = {}) {
   const encode = x => ({ stdout: JSON.stringify(x), stderr: '' });
   const ports = {
     withStageGuard: async (backend, action) => { calls.push(['GUARD',backend.runId,backend.cwd]);return action(); },
-    now: () => clock, sleep: async ms => { clock += ms; }, pollMs: 1, startupMs: 4000, activityMs: 3, timeoutMs: 10,
+    quietMs: 0, now: () => clock, sleep: async ms => { clock += ms; }, pollMs: 1, startupMs: 4000, activityMs: 3, timeoutMs: 10,
     spawnServer: async (actual, actualCwd) => { calls.push(['SERVER',actual,actualCwd]);running = true; },
     spawnAttach: async (...args) => { calls.push(['ATTACH',...args]);return 17; },
     execFile: async (bin, argv, cfg) => {
@@ -61,6 +61,7 @@ function harness(cwd, options = {}) {
         else if (options.stalled) value=agent('idle',10);
         else if (options.blocked) value=agent('blocked',11);
         else if (options.unknown) value=agent('unknown',11);
+        else if(options.personStepsIn) value=poll++===0 ? agent('working',11) : poll===2 ? agent('working',13) : agent('done',14);
         else value=poll++===0 ? agent('working',11) : agent('done',12);
         if (options.replace && prompted) value.terminal_id='different';
         if (options.lostNative && prompted) value.agent_session=null;
@@ -71,6 +72,7 @@ function harness(cwd, options = {}) {
       if (a[0] === 'workspace' && a[1] === 'close') {
         assert.equal(checkpoints.at(-1).phase,'close_intent');assert.equal(a[2],ws);closed=true;return encode(Object.hasOwn(options,'closeReply') ? options.closeReply : {id:'cli:workspace:close',result:{type:'ok'}});
       }
+      if (a[0] === 'pane' && a[1] === 'send-text') return encode({id:'cli:pane:send-text',result:{type:'ok'}});
       assert.fail('Unexpected effect '+JSON.stringify(a));
     }
   };
@@ -84,7 +86,7 @@ const acceptance = b => ({runId:b.runId,stageId:b.stageId,attemptId:b.attemptId,
 
 test('fresh owned stage checkpoints actual IDs before one full prompt, observes work then ready; accepted cleanup only',async t=>{
   const h=harness(await temp(t));const result=await runHerdrStage(h.input,h.ports);
-  assert.equal(result.state,'settled');assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12});
+  assert.equal(result.state,'settled');assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12,candidateSince:1});
   assert.equal(result.backend.nativeSession.value,'native-real');assert.equal(h.promptCount(),1);assert.equal(h.closed(),false);
   const denied=await closeHerdrStage({backend:result.backend,acceptance:{},}, {...h.ports,checkpoint:h.input.checkpoint});
   assert.equal(denied.state,'recovery_required');assert.equal(h.closed(),false);
@@ -136,11 +138,11 @@ test('cleanup refuses replacement, activity, or later sequence; no close of unce
 });
 
 
-test('missing guard refuses before provision; attach holds actual injected exclusion until detach',async t=>{
+test('missing guard refuses before provision; attach does not hold the stage guard while watching',async t=>{
   const h=harness(await temp(t));const missing={...h.ports};delete missing.withStageGuard;
   assert.equal((await runHerdrStage(h.input,missing)).state,'recovery_required');assert.equal(h.calls.length,0);
   const r=await runHerdrStage(h.input,h.ports);
-  assert.equal(await attachHerdrStage({backend:r.backend},missing),1);
+  assert.equal(await attachHerdrStage({backend:r.backend},missing),17);
   assert.equal((await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)},missing)).state,'recovery_required');
   const scope=new AsyncLocalStorage();let busy=false,detach,attachStarted;
   const attached=new Promise(resolve=>{attachStarted=resolve;});
@@ -152,14 +154,25 @@ test('missing guard refuses before provision; attach holds actual injected exclu
   const operation=attachHerdrStage({backend:r.backend},guarded);await attached;
   const count=h.calls.length;
   const inspected=await inspectHerdrStage({backend:r.backend,cwd:h.input.cwd},guarded);
-  assert.equal(inspected.state,'recovery_required');assert.equal(inspected.reason,'native_stage_active');
-  assert.equal(h.calls.slice(count).some(c=>c[0]==='herdr'&&c[1][3]==='get'),false);
-  const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint});
-  assert.equal(closed.state,'recovery_required');assert.equal(h.closed(),false);
+  assert.notEqual(inspected.reason,'stage_temporarily_guarded');
+  assert.ok(h.calls.slice(count).some(c=>c[0]==='herdr'&&c[1][3]==='get'));
   detach(0);assert.equal(await operation,0);assert.equal(busy,false);
-  // Main may already hold the same guard over validation; nested close/inspect must reuse it.
-  const accepted=await guarded.withStageGuard(r.backend,()=>closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint}));
+  const accepted=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint});
   assert.equal(accepted.state,'closed');
+});
+
+test('quiet window delays acceptance until the configured idle period',async t=>{
+  const h=harness(await temp(t)); h.ports.quietMs=10; h.ports.timeoutMs=20;
+  const r=await runHerdrStage(h.input,h.ports);
+  assert.equal(r.state,'settled'); assert.ok(h.checkpoints.some(x=>Number.isSafeInteger(x.evidence?.candidateSince)));
+});
+
+test('a prompt sent after the stage candidate reopens observation and is accepted after idle',async t=>{
+  const h=harness(await temp(t),{personStepsIn:true}); h.ports.quietMs=5; h.ports.timeoutMs=30; const stepped=[]; h.ports.onPersonSteppedIn=b=>{stepped.push(b.evidence.personSteppedInSeq);};
+  const r=await runHerdrStage(h.input,h.ports);
+  assert.equal(r.state,'settled'); assert.deepEqual(stepped,[13]); assert.equal(r.evidence.settledSeq,14);
+  const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...h.ports,checkpoint:h.input.checkpoint});
+  assert.equal(closed.state,'closed'); assert.ok(h.calls.some(x=>x[0]==='herdr'&&x[1][2]==='pane'&&x[1][3]==='send-text'));
 });
 
 test('two concurrent issue assignments keep actual cwd/backend and native kind separate',async t=>{
@@ -347,7 +360,7 @@ test('ordinary viewer guard contention waits beyond activity watchdog then obser
  const result=await runHerdrStage(h.input,h.ports);
  assert.equal(result.state,'settled');assert.equal(blockedReads,6);assert.equal(h.promptCount(),1);
  assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][3]==='start').length,1);assert.equal(h.closed(),false);
- assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12});
+ assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12,candidateSince:7});
 });
 
 test('persistent viewer contention remains bounded with original intent and no repeated prompt or cleanup',async t=>{
