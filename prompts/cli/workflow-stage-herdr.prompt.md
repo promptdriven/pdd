@@ -22,7 +22,7 @@ attachHerdrStage checks exact saved active identity and invokes documented agent
 
 ## Attach-as-watch semantics
 
-`pdd workflow attach` is a watch, not a takeover. It must not hold the stage guard or run lock while the viewer is open. A person prompt is detected when the owned agent becomes working with a lifecycle sequence newer than the saved PDD prompt/settled evidence; record `agent.person.stepped_in`, keep observing, and accept only after the configurable quiet window (default 10 seconds) of idle state. Cleanup sends `This step is done. Messages here no longer change the run.` to the old pane and closes its workspace before advancing.
+`pdd workflow attach` is a watch, not a takeover. It must not hold the stage guard or run lock while the viewer is open. A person prompt is detected when the owned agent becomes working with a lifecycle sequence newer than the saved PDD prompt/settled evidence; record `agent.person.stepped_in`, keep observing, and accept only after the configurable quiet window (default 10 seconds) of idle state. Cleanup sends `This step is done. Messages here no longer change the run.` to the old pane and closes its workspace before advancing. Keep Herdr session and per-stage workspace naming in one layout helper (currently the deterministic `pdd-<run hash>` session and `PDD <stage>` workspace label), so fleet layout changes can replace that helper without changing lifecycle behavior.
 
 ## Dependencies
 

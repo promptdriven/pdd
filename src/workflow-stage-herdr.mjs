@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 0e71ee335ac0dc32619b713a9d12649a077fbf1bba6c1ddf7f19579ab39273d1).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 0e98435dd2c4b92661601558d09484e0f13f72f3ea0d480f37dddd89b3a4d5d2).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -10,7 +10,12 @@ const STAGE = /^[a-z][a-z0-9-]{0,63}$/;
 const READY = new Set(['idle', 'done']);
 const clone = value => structuredClone(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
-const sessionFor = runId => `pdd-${hash(runId.toLowerCase()).slice(0, 20)}`;
+// Keep Herdr session and workspace naming in one helper so fleet layout
+// changes can replace it without changing stage lifecycle behavior.
+function herdrLayout(runId, stageId) {
+  return { session: `pdd-${hash(runId.toLowerCase()).slice(0, 20)}`, workspaceLabel: `PDD ${stageId}` };
+}
+const sessionFor = runId => herdrLayout(runId, 'stage').session;
 const canonical = value => JSON.stringify(value, function(key, item) {
   return item && !Array.isArray(item) && typeof item === 'object'
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item;
@@ -221,7 +226,7 @@ export async function runHerdrStage(input, ports = {}) {
       }
     }
     if (!continuingStartup) b = { version: 1, runId: input.runId, stageId: input.stageId, attemptId: input.attemptId,
-      agent: input.agent, cwd, session: recoveringBootstrap ? b.session : priorServer?.session ?? sessionFor(input.runId),
+      agent: input.agent, cwd, session: recoveringBootstrap ? b.session : priorServer?.session ?? herdrLayout(input.runId, input.stageId).session,
       agentName: `pdd-${hash(input.attemptId).slice(0, 24)}`, promptDigest,
       nativeSession: null, phase: 'server_intent', evidence: {}, ...(priorServer ? {server: priorServer} : {}) };
     await save(b, input.checkpoint);
@@ -261,7 +266,7 @@ export async function runHerdrStage(input, ports = {}) {
     b.phase = 'workspace_intent';
     await save(b, input.checkpoint);
     const created = await command(rt, b.session, ['workspace', 'create', '--cwd', cwd,
-      '--label', `PDD ${input.stageId}`, '--no-focus'], cwd);
+      '--label', herdrLayout(input.runId, input.stageId).workspaceLabel, '--no-focus'], cwd);
     const { workspace, tab, root_pane: pane } = created.result ?? {};
     b.workspaceId = workspace?.workspace_id;
     b.tabId = tab?.tab_id;
