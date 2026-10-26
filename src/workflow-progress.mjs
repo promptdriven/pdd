@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-progress.prompt.md (sha256: 1809dbda2522e0d9a12d770eed125495d4232026d9ce1301ad85dcc491c33d9b).
+// Generated from prompts/cli/workflow-progress.prompt.md (sha256: 3d0b9f97c85c496147e163920341f97bad247ca6bd4d3ab78f0b7c0d05be6d0a).
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
 const uuid = value => /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value ?? '');
 const AGENTS = { codex: 'Codex', claude: 'Claude' };
@@ -18,7 +18,7 @@ export function createWorkflowProgress({ stdout = process.stdout, now = () => Da
     if (value.root) {
       const title = value.title ? ` "${clean(value.title)}"` : '';
       once(`run:${id}`, `Run ${id}: ${clean(value.name)} for #${clean(value.issue)}${title}. Stage ${Math.min(value.ordinal, value.total)}/${value.total}: ${clean(value.stage?.id ?? 'complete')}.`);
-      once(`root:${id}`, `Working copy: ${clean(value.root)} (branch ${clean(value.branch)})\nWatch live: pdd workflow attach ${id}`);
+      once(`root:${id}`, `Working copy: ${clean(value.root)} (branch ${clean(value.branch)})\nOpen the agent: pdd workflow attach ${id} (pdd pauses while you are attached; close it to let the run go on)`);
     }
     const backend = value.backend;
     if (backend?.session && backend.workspaceId) once(`backend:${id}:${backend.session}:${backend.workspaceId}`,
