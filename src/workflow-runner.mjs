@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f37f4826684686fb97ddc3b8daf33df07810b1aba463c5cc970c62fa29e245dd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ec6b9c65519baa986731b5ead89b722ed1062c4999f1380dc4bc077ddedd29a7).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -194,7 +194,9 @@ function prBody(run, area, env, drafts = []) {
     : label === 'PR 2' ? [`Closes #${run.number}`, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
       ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
     : [`Closes #${run.number}`];
-  return [...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
+  const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim(), ''] : [];
+  return [...failing, ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n');
 }
