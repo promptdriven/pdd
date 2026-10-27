@@ -103,7 +103,8 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     const text = read(`${name}/SKILL.md`);
     assert.match(text, /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
-    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
+    // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
+    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd check`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
@@ -116,7 +117,8 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
   const text = read('pdd-setup/SKILL.md'), lines = text.split('\n');
   const block = lines.slice(lines.indexOf('<!-- pdd:start -->'), lines.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.length >= 3 && block.length <= 10, `${block.length} lines`);
-  for (const word of ['/pdd-prompting', '/pdd-feature', '/pdd-bug', '/pdd-small-change', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
+  // Codex calls a skill with $name, Claude Code with /name.
+  for (const word of ['Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
     assert.ok(block.join('\n').includes(word), word);
   assert.equal(lines.filter(line => line === '<!-- pdd:start -->').length, 1);
   assert.ok(Buffer.byteLength(text) <= 3584);
@@ -250,4 +252,12 @@ test('SKILLS17: Stories in the person\'s words, one owner prompt per rule, and t
     assert.match(step, /one owner prompt[^\n]*whole-CLI prompt[^\n]*module's prompt/, name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /`done` summary as the "before" report/);
+});
+
+// Wrong (0.1.4): the skills and pdd's help say /pdd-… only, but Codex calls a skill with $pdd-….
+test('SKILLS18: no skill text tells a Codex user to type /pdd-…', () => {
+  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file))) {
+    const text = readFileSync(file, 'utf8');
+    for (const [match] of text.matchAll(/\/pdd-[a-z-]+/g)) assert.match(text, new RegExp(`\\$${match.slice(1)}`), `${file} names ${match} without $${match.slice(1)}`);
+  }
 });
