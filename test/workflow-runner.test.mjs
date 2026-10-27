@@ -391,14 +391,14 @@ const featureAreas = { version: 2, areas: [
   { name: 'story', steps: ['understand', 'visual', 'prompt-story'], optional: ['visual'], gate: 'approve' },
   { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
   { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] };
-async function featureToPr1(t) {
+async function featureToPr1(t, promptText = 'Return two.\n') {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
   mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
   assert.equal((await f.run()).exitCode, 0);
   const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
   await done('understand', 'understood'); await done('visual', 'skipped');
-  writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt and Story');
+  writeFileSync(join(run.root, 'feature.prompt.md'), promptText); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt and Story');
   await done('prompt-story', 'Story and cases written');
   f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
   const promptMessage = readFileSync(join(run.runDir, 'prompt-pr-start.md'), 'utf8');
@@ -459,4 +459,23 @@ test('feature: when PR 1 merges while the run waits, the run is done at PR 1, an
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'code');
   await done('build', 'value is two'); await done('verify', 'tests pass');
   assert.equal(f.prs[1].baseRefName, 'main'); assert.doesNotMatch(f.prs[1].body, /stacked/);
+});
+
+const runtimePrompt = status => ['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
+  JSON.stringify({ status, prose_sha256: '', entries: [] }), '```', '</details>', ''].join('\n');
+
+test('draft prompts in PR 1 are named in its body and status, and block the code PR until the person approves them', async t => {
+  const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
+  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
+  f.tick();
+  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /Approve the draft prompts first: feature\.prompt\.md/);
+  assert.equal(f.prompts.length, 1, 'no y/N question while drafts remain'); assert.equal(f.record().chats.length, 2); assert.equal(f.record().area, 1);
+  assert.equal(readFileSync(join(run.root, 'feature.prompt.md'), 'utf8'), runtimePrompt('draft'), 'pdd never sets approved itself');
+  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
+  assert.doesNotMatch((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts/);
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7679ea58bccd46891b287decdb8ff8a98f6b6502bac52149bed596d6f3aa3acd).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8a4fc5dadefe7a3c249d25b22a8f2537382d36e518abdcfa45ddf8a607cc1b85).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -12,6 +12,7 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats } from './workflow-chat.mjs';
+import { interfaceBlocks } from './runtime-preflight.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -82,6 +83,25 @@ const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null
 const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
 const prLabel = (run, area) => !askArea(run) ? 'the PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2';
+
+// The *.prompt.md files that a branch changes against its base and whose Runtime interface is still "draft".
+async function draftPrompts(run, p, branch, base) {
+  try {
+    const files = (await git(p, run.root, 'diff', '--name-only', `refs/remotes/origin/${base}...${branch}`)).split('\n').filter(path => path.endsWith('.prompt.md'));
+    const drafts = [];
+    for (const path of files) {
+      let text;
+      try { text = String((await p.execFile('git', ['show', `${branch}:${path}`], { cwd: run.root })).stdout ?? ''); } catch { continue; }
+      if (interfaceBlocks(text).some(block => { try { return JSON.parse(block[1])?.status === 'draft'; } catch { return false; } })) drafts.push(path);
+    }
+    return drafts;
+  } catch { return []; }
+}
+const draftLine = drafts => `Draft prompts: ${drafts.join(', ')}. Approve them before you merge.`;
+async function pr1Drafts(run, p) {
+  const ask = askArea(run), pr1 = ask && prOf(run, ask.name);
+  return pr1 ? draftPrompts(run, p, pr1.branch, pr1.base) : [];
+}
 
 function describe(run) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
@@ -158,7 +178,7 @@ function hasReportLink(text, env) {
   return (text.match(/https?:\/\/[^\s)<>\]"']+/g) ?? []).some(url => /^https?:\/\/[^/]+\/(?:[^\s]*\/)?r\/[^/\s]+/.test(url) || base && url.startsWith(`${base}/`));
 }
 
-function prBody(run, area, env) {
+function prBody(run, area, env, drafts = []) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
   const lines = steps.map(step => `- **${step}**: ${oneLine(run.done[step].summary) || 'done'}`);
@@ -170,7 +190,7 @@ function prBody(run, area, env) {
     : label === 'PR 2' ? [`Closes #${run.number}`, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
       ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
     : [`Closes #${run.number}`];
-  return [...head, '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  return [...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n');
 }
@@ -191,7 +211,7 @@ async function finishPr(run, area, step, p, lines) {
     lines.push(`Pushed the new commits to ${label}.`);
   } else {
     const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
-    writeFileSync(bodyFile, prBody(run, area, p.env));
+    writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : []));
     let intent;
     try {
       intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
@@ -209,7 +229,8 @@ async function finishPr(run, area, step, p, lines) {
   if (area.then === 'ask-code') {
     run.state = 'waiting'; run.gate = { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
     const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
-    return done([...lines, `PR 1: ${url}`, ...summaries,
+    const drafts = await pr1Drafts(run, p);
+    return done([...lines, `PR 1: ${url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
       'Gate: show the person PR 1, the Runtime check line and the Try link, then ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Stop there.',
       `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
       `If they stop, tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR at any time. pdd never merges.`].join('\n'));
@@ -283,6 +304,10 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
   const agent = isAgentSession(p.env), viaChat = agent || !p.isTTY;
+  if (askCode && run.gate) {
+    const drafts = await pr1Drafts(run, p);
+    if (drafts.length) return fail(`Approve the draft prompts first: ${drafts.join(', ')}. The code is built from approved prompts; pdd never approves them itself.`);
+  }
   if (!run.gate) {
     const why = `The ${area.name} area of #${run.number} is not at its gate yet (not done: ${area.steps.filter(step => !run.done[step]).join(', ')}).`;
     if (viaChat) return fail(`${why} Finish the steps and run done first.`);
@@ -366,7 +391,7 @@ async function refreshPr(run, p) {
   writeRun(run, p);
 }
 
-function detail(run) {
+function detail(run, drafts = []) {
   const area = run.areas[run.area], chat = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${run.done[step].summary.slice(0, 120)}")` : ''}`);
@@ -378,6 +403,7 @@ function detail(run) {
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
     ...(chat && !ended(run) ? [`Chat: Herdr session pdd, tab "${chat.label}" — pdd workflow open ${run.number}`] : []),
     ...(run.pr ?? []).map(pr => { const label = prLabel(run, run.areas.find(item => item.name === pr.stage) ?? {}); return `${label === 'the PR' ? 'PR' : label}: ${pr.url} — ${pr.state ?? 'open'}, ${ci(pr)}${pr.base && pr.base !== run.baseBranch ? ` (stacked on ${pr.base})` : ''}`; }),
+    ...(drafts.length ? [draftLine(drafts)] : []),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
@@ -392,7 +418,8 @@ export async function runStatus({ ref, cwd }, ports) {
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   await refreshPr(found.run, p);
-  return done(detail(found.run));
+  const run = found.run, drafts = run.gate?.kind === 'ask-code' ? await pr1Drafts(run, p) : [];
+  return done(detail(run, drafts));
 }
 
 export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
