@@ -13,7 +13,7 @@ test('native reopen restricts tools, preserves cwd and sends no prompt', async (
         assert.equal(command, agent); assert.equal(options.cwd, '/tmp/accepted');
         assert.equal(options.shell, false); assert.equal(options.stdio, 'inherit');
         assert.equal(argv.at(-1), id);
-        if (agent === 'codex') assert.deepEqual(argv, ['--sandbox', 'read-only', '--ask-for-approval', 'never', 'resume', id]);
+        if (agent === 'codex') assert.deepEqual(argv, ['--sandbox', 'read-only', '--ask-for-approval', 'never', '-c', 'projects={"/tmp/accepted"={trust_level="trusted"}}', 'resume', id]);
         else assert.deepEqual(argv, ['--permission-mode', 'plan', '--tools', '', '--resume', id]);
         const child = new EventEmitter(); queueMicrotask(() => child.emit('close', 4)); return child;
       }

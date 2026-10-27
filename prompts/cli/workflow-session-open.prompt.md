@@ -7,7 +7,7 @@ creates a workflow stage or submits a prompt. Validate the agent, UUID session i
 and absolute cwd before spawning. Invalid identity returns 1 without launch.
 
 Use argv with no shell, inherited terminal and native login/environment, saved cwd,
-and no global configuration writes. Codex resumes the exact id with explicit
+and no global configuration writes. Supply invocation-only Codex folder trust for the exact saved cwd, as for an already-authorized native session; do not ask to persist a new trust choice. Codex resumes the exact id with explicit
 read-only sandbox and approval policy never; never use full-access/bypass flags.
 Claude resumes the exact id with tools disabled and plan permission mode. These
 settings restrict file-changing tools; the CLI warning still tells a person not

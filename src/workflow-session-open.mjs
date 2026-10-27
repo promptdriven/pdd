@@ -24,7 +24,7 @@ export function reopenNativeSession({ session, cwd, stderr = process.stderr },
         : `The native ${agent} session could not be launched. Check the native tool and saved session.\n`);
     };
     try { child = spawn(agent, agent === 'codex'
-      ? ['--sandbox', 'read-only', '--ask-for-approval', 'never', 'resume', id]
+      ? ['--sandbox', 'read-only', '--ask-for-approval', 'never', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`, 'resume', id]
       : ['--permission-mode', 'plan', '--tools', '', '--resume', id], { cwd, stdio: 'inherit', shell: false }); }
     catch (error) { failed(error); finish(error.code === 'ENOENT' ? 127 : 1); return; }
     for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
