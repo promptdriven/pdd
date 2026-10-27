@@ -66,8 +66,8 @@ function matchesReference(run, ref, { repository, local } = {}) {
   if (wanted) return sameRepo(run.repo, wanted);
   return local || !repository ? true : sameRepo(run.repo, repository);
 }
-function nextCommand(run, command, { repository, runs = [] } = {}) {
-  const ref = repository && sameRepo(run.repo, repository) ? String(run.issue?.number ?? '') : displayRef(run, runs);
+function nextCommand(run, command, { repository, runs } = {}) {
+  const ref = repository && sameRepo(run.repo, repository) ? String(run.issue?.number ?? '') : runs ? displayRef(run, runs) : issueRef(run);
   return `pdd workflow ${command}${ref ? ` ${ref}` : ''}`;
 }
 export async function resolveRun(ref, { cwd, records = defaultRecords, all = false, repository, waiting = false, fs: io } = {}) {
@@ -107,9 +107,9 @@ export function formatStatus(runs, { repository, all = false } = {}) {
   return runs.map(run => {
     const state = stateLabel(run), stage = run.stage?.id ? ` · stage ${run.stage.id}` : '';
     let next = '';
-    if (state === 'waiting for you') next = ` · next: ${nextCommand(run, run.waitingFor?.decisions?.length === 0 ? 'resume' : 'approve', { repository, runs })}`;
-    else if (state.startsWith('working:')) next = ` · next: ${nextCommand(run, 'watch', { repository, runs })}`;
-    else if (state === 'failed' || state === 'recovery_required') next = ` · next: ${nextCommand(run, 'resume', { repository, runs })}`;
+    if (state === 'waiting for you') next = ` · next: ${nextCommand(run, run.waitingFor?.decisions?.length === 0 ? 'resume' : 'approve', { repository })}`;
+    else if (state.startsWith('working:')) next = ` · next: ${nextCommand(run, 'watch', { repository })}`;
+    else if (state === 'failed' || state === 'recovery_required') next = ` · next: ${nextCommand(run, 'resume', { repository })}`;
     return `${issueLabel(run, runs)} · ${run.workflow ?? 'unknown'} · ${state}${stage}${next}`;
   }).join('\n');
 }

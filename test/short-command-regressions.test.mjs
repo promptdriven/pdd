@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {runPdd} from '../src/pdd-cli.mjs';
 import {resolveRun,formatStatus,formatAmbiguous} from '../src/workflow-shortcuts.mjs';
+import * as realRecords from '../src/workflow-run-records.mjs';
 import {parseArgv} from '../src/argument-parser.mjs';
 const id='11111111-1111-4111-8111-111111111111';
 const other='22222222-2222-4222-8222-222222222222';
@@ -62,3 +63,40 @@ test('bound decide also accepts an issue selector without changing explicit gate
   workflowDecider:{decideWorkflow:async i=>{called++;assert.equal(i.runId,id);assert.equal(i.expectSeq,3);assert.equal(i.decisionId,other);return {state:'refused',code:'stale_decision',exitCode:1,message:'Stale decision.'};}}});
  assert.equal(result,1);assert.equal(called,1);
 });
+
+for (const view of [['status'], ['watch', 'one/app#2']]) {
+ test(`${view[0]} next step retains the owner across machine-index repository collisions`, async t => {
+  const f=fixture(t);
+  const indexHome=join(f.dir,'machine-home');
+  const entries=f.entries.map((entry,i)=>({...entry,repo:i?'two/app':'one/app'}));
+  for (const entry of entries) {
+   writeFileSync(join(entry.runDir,'journal.jsonl'),JSON.stringify({seq:7,state:{...entry,name:'small-change',seq:7,index:0,
+    definitions:[{id:'change',kind:'human'}],waitingDecision:{stage:'change',seq:7,decisions:['approve']}}})+'\n');
+   assert.equal((await realRecords.appendRunIndex(entry,{home:indexHome})).ok,true);
+  }
+  // Only relocate the machine index; discovery, journals and projection are real.
+  const records={...realRecords,readRunIndex:ports=>realRecords.readRunIndex({...ports,home:indexHome})};
+  const ambiguous=await resolveRun('app#2',{cwd:f.repos[0],records});
+  assert.equal(ambiguous.reason,'ambiguous');
+  assert.equal(ambiguous.runs.length,2);
+  const out=capture();
+  assert.equal(await runPdd(['workflow',...view],{cwd:f.repos[0],workflowRecords:records,stdout:out,stderr:capture()}),0);
+  const command=out.text.match(/next: (pdd workflow approve ([^\s]+))/);
+  assert.ok(command,out.text);
+  assert.equal(command[2],'one/app#2');
+  assert.equal((await resolveRun(command[2],{cwd:f.repos[0],records})).run?.runId,id);
+  let calls=0;
+  assert.equal(await runPdd(command[1].split(' ').slice(1),{
+   cwd:f.repos[0],workflowRecords:records,stdout:capture(),stderr:capture(),
+   workflowRunner:{readWorkflowDecision:async input=>{
+    assert.equal(input.runId,id);assert.equal(input.cwd,f.repos[0]);
+    return {state:'ready',stage:'change',journalSeq:7};
+   }},
+   workflowDecider:{decideWorkflow:async input=>{
+    calls++;assert.equal(input.runId,id);assert.equal(input.cwd,f.repos[0]);
+    return {state:'refused',exitCode:1,message:'Selection verified; no decision authorized by this test.'};
+   }},
+  }),1);
+  assert.equal(calls,1);
+ });
+}
