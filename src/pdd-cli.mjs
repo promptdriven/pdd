@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 68f7530c03dcf1c8e461612c25af9ff9965a2dfeba99b6b0d911d138b94f451c).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0054f2c5d8af5362e53af4c0901e67be03e7fd7f44af94f7b28ce7fc5d8d1b5f).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,7 @@ export function renderHelp(prefix = []) {
     'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -70,7 +70,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'workflow-list':
       try {
         const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
-        const workflows = await areas.listWorkflowAreas({ packageRoot });
+        const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
