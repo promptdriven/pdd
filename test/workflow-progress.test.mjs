@@ -81,7 +81,7 @@ test('header names the issue title, times are local HH:MM, one watch line, no in
  assert.match(out,/^16:00  waiting for you before change$/m);
  assert.doesNotMatch(out,/\d{4}-\d{2}-\d{2}T/);
  assert.equal(out.match(/pdd workflow attach/g).length,1);
- assert.match(out,/^Open the agent: pdd workflow attach \S+ \(pdd pauses while you are attached; close it to let the run go on\)$/m);
+ assert.match(out,/^Open the agent: pdd workflow attach \S+ \(watching does not pause the run; this view closes when the step is accepted\)$/m);
  assert.doesNotMatch(out,/journal\.jsonl|Saved run/);
  assert.doesNotMatch(out,/preparing/);
  assert.equal(out.match(/Herdr session/g).length,1);

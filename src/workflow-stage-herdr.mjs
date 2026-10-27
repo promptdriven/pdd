@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: beb30c3a403e0c2276b19e5c70b87279a6fbd81f4d5f6cdbfefc0fab5dee1643).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: b95c6e5c48e86e532e49e11f1bbedd7f5fb0202dfa765cba5f5c22fa4c684a73).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -70,6 +70,7 @@ async function command(rt, session, args, cwd, timeout = 10000) {
     try { structured = JSON.parse(error.stderr); } catch { /* Never expose execFile's command/prompt message. */ }
     throw commandError(structured, args, typeof error.code === 'string' ? error.code : 'herdr_command_failed');
   }
+  if (args[0] === 'pane' && args[1] === 'send-text' && response.stdout.trim() === '') return null;
   let result;
   try { result = JSON.parse(response.stdout); }
   catch { throw commandError(null, args, 'herdr_invalid_json'); }
@@ -78,7 +79,8 @@ async function command(rt, session, args, cwd, timeout = 10000) {
   }
   return result;
 }
-async function firstPrompt(rt, session, agentName, prompt, cwd) {
+async function firstPrompt(rt, b, prompt) {
+  const { session, agentName, cwd } = b;
   const deadline = rt.now() + rt.startupMs;
   for (;;) {
     try { return await command(rt, session, ['agent', 'prompt', agentName, prompt], cwd); }
@@ -88,6 +90,9 @@ async function firstPrompt(rt, session, agentName, prompt, cwd) {
       // durable intent; other prompt failures remain one-send uncertainty.
       if (error.code !== 'agent_not_ready' || rt.now() >= deadline) throw error;
       await rt.sleep(rt.pollMs);
+      sameServer(compatible(await status(rt, session, cwd), session), b.server);
+      const current = await checkAgent(rt, b);
+      if (!isReady(current) || current.state_change_seq !== b.evidence.readySeq) throw issue('fresh_agent_changed_before_prompt');
     }
   }
 }
@@ -322,7 +327,7 @@ export async function runHerdrStage(input, ports = {}) {
       recordAgent(b, current);
       b.phase = 'prompt_intent';
       await save(b, input.checkpoint);
-      const delivered = await firstPrompt(rt, b.session, b.agentName, prompt, cwd);
+      const delivered = await firstPrompt(rt, b, prompt);
       const acknowledgement = await checkAgent(rt, b, agentFrom(delivered));
       recordAgent(b, acknowledgement);
       if (acknowledgement.agent_status === 'working' && acknowledgement.state_change_seq > b.evidence.readySeq) {
@@ -399,7 +404,7 @@ export async function closeHerdrStage({ backend, acceptance }, ports = {}) {
     b.phase = 'close_intent';
     await save(b, checkpoint);
     await command(rt, b.session, ['pane', 'send-text', b.paneId,
-      'This step is done. Messages here no longer change the run.\n'], b.cwd);
+      `pdd accepted ${b.stageId} and moved on. This step is done. Messages here no longer change the run.\n`], b.cwd);
     // This workspace was created for this stage only; its seed belongs to the run's server separately.
     const closed = await command(rt, b.session, ['workspace', 'close', b.workspaceId], b.cwd);
     if (Array.isArray(closed) || closed.id !== 'cli:workspace:close' || closed.result?.type !== 'ok') {

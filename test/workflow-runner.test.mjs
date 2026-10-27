@@ -9,7 +9,7 @@ import { execFile as callbackExec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runWorkflow, resumeWorkflow, attachWorkflow, WORKFLOW_STAGES } from '../src/workflow-runner.mjs';
 import { loadGuidance as actualGuidance } from '../src/guidance.mjs';
-import { runHerdrStage, inspectHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
+import { runHerdrStage, inspectHerdrStage, attachHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
 
 const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '..');
@@ -677,6 +677,30 @@ test('cleanup ambiguity retains accepted evidence and never retries close or pro
   const again = await f.resume(first.runId, 'approve'); assert.equal(again.state, 'recovery_required');
   assert.equal(closeCalls, 1); assert.equal(f.native.length, 1);
 });
+test('cross-process watch stays open while the controller accepts and reaches its gate', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { pauseNative: gate }); const running = f.run();
+  while (!f.native.length) await new Promise(resolve => setTimeout(resolve, 5));
+  const runId = f.native[0].input.runId, assignment = f.saved(runId).assignment;
+  const script = `import {attachWorkflow} from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
+    import {loadGuidance} from ${JSON.stringify(new URL('../src/guidance.mjs', import.meta.url).href)};
+    const result=await attachWorkflow({runId:${JSON.stringify(runId)},cwd:${JSON.stringify(f.sourceCwd)},packageRoot:${JSON.stringify(packageRoot)}}, {
+      loadGuidance,lookupIssueWorktree:async()=>({state:'ready',assignment:${JSON.stringify(assignment)}}), allocateIssueWorktree:async()=>{throw Error('no allocation')},
+      attachHerdrStage:async()=>{process.stdout.write('ATTACHED\\n');await new Promise(resolve=>process.stdin.once('data',resolve));return 0;}});
+    process.stdout.write(JSON.stringify(result)+'\\n');`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: f.sourceCwd, stdio: ['pipe','pipe','pipe'] });
+  let output = '', errors = ''; child.stdout.on('data', value => { output += value; }); child.stderr.on('data', value => { errors += value; });
+  const closed = new Promise(resolve => child.once('close', code => resolve(code)));
+  try {
+    for (let i = 0; i < 200 && !output.includes('ATTACHED'); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(output.includes('ATTACHED'), errors + output);
+    release(); const paused = await running; assert.equal(paused.state, 'waiting', paused.message);
+    assert.equal(f.closes, 1); assert.equal(f.saved(runId).pending, null); assert.equal(child.exitCode, null); assert.equal(f.native.length, 1);
+  } finally { release(); child.stdin.end('detach\n'); }
+  assert.equal(await closed, 0, errors);
+});
+
 test('fresh-process resume refuses edited source before any replacement stage delivery', async t => {
   const f = await fixture(t); const directory = projectWorkflow(f); const first = await f.run('snapshot-check');
   const assignment = f.saved(first.runId).assignment;
@@ -697,10 +721,11 @@ test('fresh-process resume refuses edited source before any replacement stage de
 
 test('main joins frozen native adapter through same-agent first dispatch, accepted cleanup and next-stage server donation', async t => {
   const f = await fixture(t, { defaultWorktree: true }); const foreground = f.ports.launchNativeSession;
-  const sessions = new Map(), calls = [];
+  const sessions = new Map(), calls = []; let viewerOpen = false, releaseViewer;
   function transport(base) {
     return {...base, quietMs: 0, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
       sleep: async () => {},
+      spawnAttach: async () => { viewerOpen = true; return new Promise(resolve => { releaseViewer = () => { viewerOpen = false; resolve(0); }; }); },
       spawnServer: async (session, cwd) => { assert.equal(cwd,f.cwd); sessions.set(session,{seed:'seed',active:null}); calls.push('server'); },
       execFile: async (file, argv, options) => {
         assert.equal(file,'herdr'); assert.equal(options.cwd,f.cwd); assert.equal(options.shell,false);
@@ -725,7 +750,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           queueMicrotask(()=>{native.agent_status='done';native.interactive_ready=true;native.state_change_seq=12;});
           return reply({result:{agent:acknowledgement}});
         }
-        if(a[0]==='pane'&&a[1]==='send-text') return reply({id:'cli:pane:send-text',result:{type:'ok'}});
+        if(a[0]==='pane'&&a[1]==='send-text') return {stdout:'',stderr:''};
         if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;return reply({id:'cli:workspace:close',result:{type:'ok'}});}
         assert.fail('Unexpected stand-in Herdr operation '+JSON.stringify(a));
       }};
@@ -739,7 +764,14 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   const inspection=await f.resume(first.runId);assert.equal(inspection.state,'waiting',inspection.message);
   assert.equal(calls.filter(x=>x==='prompt').length,0);assert.equal(calls.filter(x=>x==='start').length,1);
   const live=[...sessions.values()][0].active;live.agent_status='idle';live.interactive_ready=true;
-  const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
+  f.ports.attachHerdrStage=(input,ports)=>attachHerdrStage(input,transport(ports));
+  const viewer=attachWorkflow({runId:first.runId,cwd:f.sourceCwd,packageRoot},f.ports);
+  while(!viewerOpen) await new Promise(resolve=>setTimeout(resolve,1));
+  try {
+    const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
+    assert.equal(viewerOpen,true,'controller reaches gate without viewer exit');
+  } finally { releaseViewer(); await viewer; }
+
   const accepted=f.saved(first.runId).completed[0];
   assert.equal(accepted.backend.attemptId,original.attemptId);assert.equal(accepted.backend.terminalId,original.backend.terminalId);
   assert.equal(calls.filter(x=>x==='start').length,1);assert.equal(calls.filter(x=>x==='create').length,1);

@@ -63,7 +63,7 @@ function harness(cwd, options = {}) {
         else if (options.stalled) value=agent('idle',10);
         else if (options.blocked) value=agent('blocked',11);
         else if (options.unknown) value=agent('unknown',11);
-        else if(options.personStepsIn) value=poll++===0 ? agent('working',11) : poll===2 ? agent('working',13) : agent('done',14);
+        else if(options.personStepsIn) value=[agent('working',11),agent('done',12),agent('working',13),agent('done',14)][Math.min(poll++,3)];
         else value=poll++===0 ? agent('working',11) : agent('done',12);
         if (options.replace && prompted) value.terminal_id='different';
         if (options.lostNative && prompted) value.agent_session=null;
@@ -74,7 +74,7 @@ function harness(cwd, options = {}) {
       if (a[0] === 'workspace' && a[1] === 'close') {
         assert.equal(checkpoints.at(-1).phase,'close_intent');assert.equal(a[2],ws);closed=true;return encode(Object.hasOwn(options,'closeReply') ? options.closeReply : {id:'cli:workspace:close',result:{type:'ok'}});
       }
-      if (a[0] === 'pane' && a[1] === 'send-text') return encode({id:'cli:pane:send-text',result:{type:'ok'}});
+      if (a[0] === 'pane' && a[1] === 'send-text') return {stdout:'',stderr:''};
       assert.fail('Unexpected effect '+JSON.stringify(a));
     }
   };
@@ -380,4 +380,13 @@ test('persistent viewer contention remains bounded with original intent and no r
  assert.equal(result.state,'recovery_required');assert.equal(result.reason,'stage_wait_timeout');
  assert.equal(h.promptCount(),1);assert.equal(h.closed(),false);assert.equal(result.backend.phase,'submitted');
  assert.deepEqual(result.evidence,{readySeq:10});
+});
+
+ test('retry after pre-delivery refusal rechecks native identity before sending',async t=>{
+ for(const change of ['terminal_id','agent_session','state_change_seq','interactive_ready']){
+  const h=harness(await temp(t),{promptNotReady:true});
+  h.options.after=a=>h.options.promptRetried ? {...a,[change]:change==='terminal_id'?'replacement':change==='agent_session'?{...a.agent_session,value:'replacement'}:change==='state_change_seq'?11:false}:a;
+  const result=await runHerdrStage(h.input,h.ports);
+  assert.equal(result.state,'recovery_required');assert.equal(h.promptCount(),1,'no delivery after native identity or readiness changes');
+ }
 });
