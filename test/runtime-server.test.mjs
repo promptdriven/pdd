@@ -117,7 +117,7 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   assert.equal(code, 3);
   const batch = /pdd check --read (\S+)/.exec(ports.stderr.text)[1];
   assert.equal(ports.stdout.text.split('\n')[0], `pdd check --read ${batch}`);
-  assert.match(ports.stdout.text, /STILL RUNNING after 10 min: Place a coffee order\. Do not send it again\./);
+  assert.match(ports.stdout.text, /STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\./);
   finished = true;
   const posts = fake.posts.length;
   const read = await check(setup, fake, [batch], { '--read': true });
@@ -205,4 +205,17 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
   assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
     ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
+});
+
+// Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
+test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order'], { '--timeout': '1' });
+  assert.equal(result.code, 3);
+  assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
+  assert.match(result.out, /AI calls: 0 \(and 1 unknown\)/);
+  assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
+  assert.equal(fake.posts.length, 2);
 });

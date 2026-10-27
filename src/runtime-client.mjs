@@ -270,7 +270,7 @@ function applyAnswer(row, answer, context) {
     server_seconds: view.server_seconds, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha });
   if (row.state === 'refused') addHints(row, context.root, context.visible);
   if (ENDED.has(row.state) && row.sent_at && !row.ended_at) row.ended_at = context.ports.now();
-  row.seconds = row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
+  row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
 }
 
 function batchRecord(context) {
@@ -364,7 +364,7 @@ async function checkBatch(context, rows) {
   }
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
   const toSend = sendable.filter(row => row.state === 'ready');
-  line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} checks `
+  line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `(${context.capture.files.length} files, ${formatSize(context.capture.bytes)}) at ${clock(ports.now())}.`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
@@ -402,7 +402,7 @@ function printResult(context, rows, extra = {}) {
   if (context.stopped && !context.json) line(ports.stderr, context.stopped.message);
   if (context.json) line(ports.stdout, JSON.stringify(summary));
   else ports.stdout.write(renderText({ batch: context.batch, rows, warnings, details: context.details, timeoutMin: context.timeoutMin,
-    exitCode, secrets: context.secrets, ...extra }));
+    interrupted: context.interrupted || !!context.readStop, exitCode, secrets: context.secrets, ...extra }));
   if (exitCode === 3 && context.batch) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   return exitCode;
 }
@@ -523,7 +523,6 @@ async function runBatch(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  for (const text of context.warnings) line(ports.stderr, text);
   line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${batch}`);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });

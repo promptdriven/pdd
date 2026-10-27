@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 5d75a7b3cfd795d008d7cb1e55a4681caed255d7a5e634421157b3e04a5d66a6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: a68400edf66635766552b4dcc6c3c622da92588626c5c069ccc1a62ec7cf39de).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -86,7 +86,7 @@ function refusalLines(item) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, exitCode, secrets = [], recovery }) {
+export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, exitCode, secrets = [], recovery }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
   out.push(...table(rows));
@@ -108,7 +108,9 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   for (const row of rows.filter(row => row.state === 'not_run')) {
     out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
   }
-  for (const row of rows.filter(row => OPEN_STATES.has(row.state))) out.push(`STILL RUNNING after ${timeoutMin} min: ${row.title}. Do not send it again.`);
+  for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
+    out.push(`STILL RUNNING ${interrupted ? 'when pdd stopped reading' : `after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
+  }
   for (const row of rows.filter(row => row.state === 'unknown')) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
   }
@@ -116,7 +118,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`Checks for ${row.title} (${row.test}):`,
       ...[...row.all_checks].sort((a, b) => a.passed - b.passed).map(check => `  ${check.passed ? 'passed' : 'failed'}  ${checkLine(check, secrets)}`));
   }
-  const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number');
+  const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   const unknownCalls = sent.length - known.length;
   out.push(`Runtime check: ${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed. AI calls: ${known.reduce((sum, row) => sum + row.calls, 0)}`

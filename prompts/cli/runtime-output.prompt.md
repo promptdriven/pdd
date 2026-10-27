@@ -31,10 +31,10 @@ The first match from the top wins:
    - `REFUSED before sending (not sent, 0 AI calls)`, then for each row `  <test>  step N  <code>` and the message and hint lines.
    - `REFUSED  <title> (<test>)`, then `  <code>  <section>  <message>`, the engine message when it adds detail, and the `pdd:` hint.
    - `NOT RUN  <title> (<test>): <message> (<code>)`.
-   - `STILL RUNNING after N min: <title>. Do not send it again.`
+   - `STILL RUNNING after N min: <title>. Do not send it again.` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`)
    - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.
 4. With `--details`: every check of each row, failed checks first.
-5. `Runtime check: X of Y stories passed. AI calls: N. Model asked for: M.` (skip the model part when it is not known).
+5. `Runtime check: X of Y stories passed. AI calls: N. Model asked for: M.` Calls count only ended rows; others add `(and K unknown)`. Skip the model part when it is not known. Time is shown only for ended rows.
 6. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
 
 ## JSON (stdout, `--json`)
