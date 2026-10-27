@@ -334,8 +334,8 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
   assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
-  assert.equal(DEFAULT_RUNTIME_URL, 'https://34.72.131.98');
-  assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', 'runtime.promptdriven.ai', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
+  assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
+  assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', '34\\.72\\.131\\.98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://runtime.example' }), 'https://runtime.example');
   for (const bad of ['http://runtime.example', 'https://u:p@runtime.example', 'https://runtime.example/v1', 'ftp://x']) assert.throws(() => runtimeOrigin({ PDD_RUNTIME_URL: bad }), bad);
@@ -476,18 +476,18 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
 });
 
 // Wrong: the runtime runs on a bare IP (Serhan, Oct 27), and pdd refuses its own links or accepts a link to another host.
-test('RUNTIME-ADDRESS2: Try and report links on the IP origin pass; links on any other host, port or scheme fail', async () => {
+test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links on the old IP or any other host, port or scheme fail', async () => {
   const { runtimeOrigin } = await import('../src/runtime-client.mjs');
-  const origin = runtimeOrigin({});
-  assert.equal(origin, 'https://34.72.131.98');
+  const origin = runtimeOrigin({}), host = 'https://runtime.promptdriven.ai';
+  assert.equal(origin, host);
   const token = 'GzKhkowPRTBHXC8Px6XKK8bjrEpWNWk7E-igsV6aA-s';
-  assert.equal(validLink(`https://34.72.131.98/s/${token}/`, origin, 'try'), `https://34.72.131.98/s/${token}/`);
-  assert.equal(validLink('https://34.72.131.98/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f', origin, 'report'), 'https://34.72.131.98/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f');
-  for (const bad of [`https://34.72.131.99/s/${token}/`, `https://runtime.example/s/${token}/`, `http://34.72.131.98/s/${token}/`,
-    `https://34.72.131.98:8443/s/${token}/`, `https://u:p@34.72.131.98/s/${token}/`, `https://34.72.131.98/s/${token}`]) {
+  assert.equal(validLink(`${host}/s/${token}/`, origin, 'try'), `${host}/s/${token}/`);
+  assert.equal(validLink(`${host}/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f`, origin, 'report'), `${host}/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f`);
+  for (const bad of [`https://34.72.131.98/s/${token}/`, `https://promptdriven.ai/s/${token}/`, `https://runtime.promptdriven.ai.evil.example/s/${token}/`,
+    `http://runtime.promptdriven.ai/s/${token}/`, `https://runtime.promptdriven.ai:8443/s/${token}/`, `https://u:p@runtime.promptdriven.ai/s/${token}/`, `${host}/s/${token}`]) {
     assert.equal(validLink(bad, origin, 'try'), null, bad);
   }
-  for (const bad of ['https://34.72.131.99/r/abc', 'https://evil.example/r/abc', 'http://34.72.131.98/r/abc', 'https://34.72.131.98/s/abc/']) {
+  for (const bad of ['https://34.72.131.98/r/abc', 'https://evil.example/r/abc', 'http://runtime.promptdriven.ai/r/abc', `${host}/s/abc/`]) {
     assert.equal(validLink(bad, origin, 'report'), null, bad);
   }
 });
