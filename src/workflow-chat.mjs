@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 48b7994b7361690ac8b053d719f6f5f8214be396c3299533c8000e1225a998d6).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2a58b5050bb93da3469666c2772d41fbf6ab9f704365d971f1825b9d36c90f9e).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
@@ -69,7 +69,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const messageFile = join(run.runDir, `${area}-start.md`);
   writeFileSync(messageFile, message);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
-  const configDir = (run.agent === 'claude' ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME) || null;
+  const configDir = run.configDir !== undefined ? run.configDir : (run.agent === 'claude' ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME) || null;
   const startedAt = now();
   await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]);
   return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
