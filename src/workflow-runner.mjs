@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b9fdd4dd22e6790509474ea96c177fc6c4fc1aafa04fdde459809fb3e0299b8d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f0a037fce3473c553661358ae77ee9b176e62feafc60e326e1df6da1c92d2f29).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -80,7 +80,7 @@ async function areaMessage(run, index, p, packageRoot) {
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
-    `All PDD skills are in ${join(packageRoot ?? PACKAGE_ROOT, 'skills')} (use them if a skill is not installed).`,
+    `Read the PDD skills (pdd-prompting too) from ${join(packageRoot ?? PACKAGE_ROOT, 'skills')}: an installed copy with the same name may be older.`,
   ].join('\n') + '\n';
 }
 
