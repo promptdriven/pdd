@@ -60,7 +60,7 @@ test('invalid requests never produce an actionable default chat or task', () => 
 
 test('runner integration retains exact attempt command and returned next-stage protocol', async () => {
   const { buildAreaChatInstructions } = await import('../src/workflow-area-chat-context.mjs');
-  const reportCommand = "'/actual package/node' '/actual package/pdd.mjs' step done scope --run saved --attempt original";
+  const reportCommand = "'/actual package/node' '/actual package/pdd.mjs' step done scope saved original";
   const approvalCommand = "'/actual package/node' '/actual package/pdd.mjs' workflow approve 45";
   const stageInstructions = 'PDD_STAGE_INPUT_JSON\n{"stageId":"scope","attemptId":"original"}\nPDD_STAGE_INPUT_END';
   const args = { area: { id: 'plan', label: 'Chat 1: plan', gate: 'approve-plan' },
