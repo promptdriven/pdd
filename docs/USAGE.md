@@ -135,9 +135,11 @@ Where the skills go:
 |---|---|---|
 | `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project |
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/` |
-| `pdd setup`, when the skills are missing | Your user skills folders. `pdd setup` says where | The same |
+| `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 
-`pdd setup` copies the skills only when your agent does not have them yet. If `npx skills` already installed them, it copies nothing. pdd never copies the skills into your repo.
+`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. pdd never copies the skills into your repo.
+
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
 `npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have.
 

@@ -10,7 +10,7 @@ You need the pdd command only for runs with PRs and for `pdd check` and `pdd try
 |---|---|
 | `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. A second run changes nothing |
 
-If `npx skills` already installed the skills, `pdd setup` copies nothing. No other pdd command copies skills. The skill `/pdd-setup` writes the same block in a chat. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The skill `/pdd-setup` writes the same block in a chat. Run it in the top folder of the repo.
 
 ## Runs on a GitHub issue
 
