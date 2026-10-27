@@ -59,7 +59,7 @@ Request IDs appear only in state files and in `--json`.
 
 - STORY as for `pdd check`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd check`, for this one test.
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state: running` with a valid link, open that link again. `--new`: stop the old Try first, then make a new one.
-- POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, tab}` (tab default `call`; no `app_map`, no `max_calls`). Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check.
+- POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, tab}` (tab default `call`; no `app_map`, no `max_calls`). Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check. A Try that is ready but has an invalid link is unknown (exit 3); pdd keeps its record so `pdd try --stop` can end it, and never prints that link.
 - Open the link with `open` (macOS) or `xdg-open` (Linux) and print `Try link for "<title>" is open in your browser. It ends in 24 hours, or with: pdd try --stop <story>`. `--no-open`, or a failed open, prints the link instead.
 - `--stop`: DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try.
 - 429: no new attempt; `Too many Try links are open. Stop one with pdd try --stop`; exit 5. Exit 0 = link ready or stopped; other exit codes as for `pdd check`.

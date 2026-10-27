@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4741bcc0773fe88bbda7a35461dcafda79d246f0d0b5f93f3cbcb7e7a828b022).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 58aa7ebda753436bec9456563ccb7d28ee211ed2b7aa9db471867a5abeff9ed7).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -627,10 +627,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (done.unknownWhy || done.open || !done.answer || done.answer.state === 'unknown') {
       throw new Stop(3, `The Try setup is not finished or its result is unknown. Run pdd try ${test.story} again later; it reuses a running Try.`);
     }
-    delete repoState.tries[test.path];
-    store.saveRepo(root, repoState);
     applyAnswer(row, done.answer, context);
-    if (row.state === 'passed') Object.assign(row, { state: 'unknown', why: 'The runtime did not return a valid Try link.' });
+    // A Try that is running with a bad link stays recorded, so pdd try --stop can still end it.
+    if (row.state === 'passed') Object.assign(row, { state: 'unknown', why: `The runtime did not return a valid Try link. Stop this Try with: pdd try --stop ${test.story}` });
+    else { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
     return printTryProblem(context, row);
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
