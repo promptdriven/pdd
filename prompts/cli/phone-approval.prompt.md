@@ -56,7 +56,7 @@ forbid text. The requested input has the same binding domains.
 
 Request runId, stage, decision, expectSeq, phoneId and changes text must equal
 the signed values exactly. Any mismatch is `phone_binding_mismatch`. Invalid
-encoding, envelope, field values or key format is `phone_invalid_token`. Valid
+encoding, envelope or binding field format is `phone_invalid_token`. Valid
 signature requires a ledger JWK with kty EC, crv P-256, no private d field and
 valid x/y coordinates. Import/verification failure is `phone_invalid_signature`.
 Never obtain the verification key from the token or command-line arguments.
@@ -64,8 +64,9 @@ Never obtain the verification key from the token or command-line arguments.
 Refuse `phone_token_expired` if `time < now-300000` or `time > now+300000`;
 the endpoints are allowed. An invalid clock refuses `phone_invalid_token`.
 `usedNonces` is the complete run's durable phone-nonce list, as strings or
-`{phoneId,nonce}` records; a matching nonce string, or a matching record for the
-same phone, refuses `phone_token_replayed`. Missing usedNonces means empty;
+`{phoneId,nonce}` records. Any matching nonce refuses `phone_token_replayed`,
+including one admitted by a different phone; record phoneId is informational.
+Missing usedNonces means empty;
 nonarrays refuse. This function does not consume a nonce. The caller verifies
 under its run lock, then saves the returned phoneId/nonce with the decision
 before any effect, so two concurrent commands cannot both admit one token.
@@ -88,6 +89,3 @@ signature verification succeed. No failure admits authority or leaks the token.
 - Trusted `lookupPhone` port: runtime; ledger endpoint/schema adaptation is owned
   by the mobile host. Without that port this module refuses safely.
 
-Nonce uniqueness is per run, across all phones: usedNonces contains every admitted
-phone nonce from this run. A different active phone cannot reuse one; phoneId in
-a supplied nonce record is informational and does not narrow the replay check.

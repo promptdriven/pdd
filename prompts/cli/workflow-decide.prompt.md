@@ -6,7 +6,8 @@ approve, changes or skip request and delegates locked admission to the saved
 runner. Preserve Alpha's foreground runner and stage validation; introduce no
 persistent controller, private service or installer. Status is never authority.
 
-Input is `{runId,decision,decisionId,expectStage,expectSeq,text?,cwd,packageRoot,yes?}`.
+Input is `{runId,decision,decisionId,expectStage,expectSeq,text?,cwd,packageRoot,
+yes?,via?,phoneId?,approval?}`.
 IDs are lowercase UUIDv4, stage is 1–64 lowercase letters/digits separated by single
 hyphens, seq is a positive safe integer. Changes requires 1–4000 Unicode characters,
 with no control characters except tab/newline. Other decisions forbid text.
@@ -38,8 +39,9 @@ Non-TTY calls likewise require verified chat evidence; no evidence means refusal
 
 Chat verification calls W11's `readApprovalEvidence({stage:{agent,root,startedAt,
 endedAt},gateAskedAt,decision}, ports)`. Values come from the saved run and gate;
-root is the assigned worktree, start is the run's persisted start time, end is now,
-and gateAskedAt is its durable gate time. Require exactly one native session and
+root is the assigned worktree; the saved gate's evidenceStage carries the current
+pending or latest completed native stage's actual start/end window, and
+gateAskedAt is its durable gate time. Missing historical times cannot be invented. Require exactly one native session and
 a USER message strictly after the gate. Persist its returned userMessage,
 userMessageAt, sessionId and agent as approvalRecord. Missing verifier refuses
 approval_evidence_unavailable; verifier refusal is person_required with its plain
@@ -58,25 +60,14 @@ finite message. Native progress uses stderr in JSON mode. recorded means durable
 admission, not stage success; started requires actual stage/chat identity proof.
 Repeated ids never launch twice; an interrupted admitted request stays inspect-only.
 
-## Dependencies
-
-- [Runner](workflow-runner.prompt.md): generation/runtime, `applyWorkflowDecision`
-  owns exact journal/assignment validation, lock, binding, durable admission,
-  proposal revision and subsequent advancement.
-- [CLI](pdd-cli.prompt.md), [catalog](command-catalog.prompt.md) and
-  [parser](argument-parser.prompt.md): CLI invocation and output.
-- Optional runtime W11 module `src/approval-evidence.mjs`, export
-  `readApprovalEvidence`: required only for chat relay. Absence refuses safely;
-  terminal/phone operation remains available. Interface is declared above so
-  this independently mergeable branch does not require an unavailable file.
-
 ### Phone subprocess
 
 Input optionally supplies the complete trio `{via:'phone',phoneId,approval}`.
 It takes priority over TTY/host callback: verify the signed token with
 [phone approval](phone-approval.prompt.md), a required runtime/generation contract
 for this mode, using the trusted `ports.lookupPhone` fleet-ledger port. Pass
-nonces already saved for this phone in the journal. No HMAC fallback exists.
+every durable phone nonce from this run, across phoneIds. A different active
+phone using an admitted nonce is also phone_token_replayed. No HMAC fallback exists.
 The CLI adds `--via phone --phone PHONE_ID --approval TOKEN`; missing companions
 are bad_args. Successful signed proof is persisted as approvalRecord before
 advancement. Signature refusal never falls back to another person path.
@@ -90,5 +81,18 @@ The ledger port may be supplied as lookupPhone or as clientAdapter.lookupPhone
 from mobile's createPhoneLookupAdapter; preserve receiver and prefer an explicit
 port. Unknown/unreadable/unverifiable ledger authority is phone_ledger_unavailable.
 
-Supply every durable phone nonce from this run to verification, across phoneIds.
-A different active phone using an admitted nonce is also phone_token_replayed.
+
+
+## Dependencies
+
+- [Runner](workflow-runner.prompt.md): generation/runtime, `applyWorkflowDecision`
+  owns exact journal/assignment validation, lock, binding, durable admission,
+  proposal revision and subsequent advancement.
+- [CLI](pdd-cli.prompt.md), [catalog](command-catalog.prompt.md) and
+  [parser](argument-parser.prompt.md): CLI invocation and output.
+- Optional runtime W11 module `src/approval-evidence.mjs`, export
+  `readApprovalEvidence`: required only for chat relay. Absence refuses safely;
+  terminal/phone operation remains available. Interface is declared above so
+  this independently mergeable branch does not require an unavailable file.
+- [Phone verification](phone-approval.prompt.md): required generation/runtime
+  for phone mode; canonical signed fields, clock window and active-ledger proof.
