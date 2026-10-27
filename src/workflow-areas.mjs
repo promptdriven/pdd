@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: dbaa2d9267d705cdfec71d89088002eee9636643769321122c839cfe054aab1a).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: f37aba928f978982e9ba909ebd7699cf643081c0713d2479a2bbbd874ab36a17).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -46,6 +46,8 @@ function found(options) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const name = entry.name.slice(4), dir = join(root, entry.name);
       if (!entry.name.startsWith('pdd-') || !word(name) || workflows.has(name) || !existsSync(join(dir, 'workflow.json'))) continue;
+      // A copy that pdd installed (it has pdd's marker) is not an override: the running package is newer or the same.
+      if (source === 'home' && existsSync(join(dir, '.pdd-skill.json'))) continue;
       workflows.set(name, { name, skill: entry.name, dir, source });
     }
   }

@@ -1,3 +1,3 @@
 {"version":2,"areas":[
 {"name":"plan","steps":["scope"],"optional":[],"gate":"approve"},
-{"name":"build","steps":["change","verify"],"optional":[],"gate":"pr"}]}
+{"name":"build","steps":["change","verify","formal"],"optional":[],"gate":"pr"}]}

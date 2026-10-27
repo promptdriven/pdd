@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4f77e3e77b435273d355334e5cf8470466441a1888c93237db22946634205d58).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e73a8a654a618dad3e91e196333322ec66fc060175223c7667ed85d3e81d7a71).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -387,7 +387,7 @@ async function checkBatch(context, rows) {
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
   const toSend = sendable.filter(row => row.state === 'ready');
   line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
-    + `(${context.capture.files.length} files, ${formatSize(context.capture.bytes)}) at ${clock(ports.now())}.`);
+    + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
   let waitingShown = -1;
@@ -553,12 +553,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   const capture = captureSource(root);
-  const other = otherFiles(capture.files, found);
-  if (other.length) {
-    const note = `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`;
-    context.warnings.push(note);
-    line(ports.stderr, note);
-  }
+  context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -605,6 +600,16 @@ async function readUntil(context, id, command, isDone, ms) {
   }
 }
 
+// Why a ready Try's link was refused, in one line, without the secret link itself.
+function refusedLink(answer, origin) {
+  let at = null;
+  try { at = new URL(answer.result.url).origin; } catch { at = null; }
+  if (at && at !== 'null' && at !== origin) return `Try link refused: it points at ${cleanText(at)}, not ${origin}. The server's address setting may be wrong; tell the PDD team.`;
+  return 'Try link refused: it is not a valid Try link. Tell the PDD team.';
+}
+
+const otherNote = count => count ? `(${count} ${count === 1 ? 'is' : 'are'} not prompt, story or test files; run \`pdd check --files\` to see them)` : '';
+
 // A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
 const LIVE_SESSION = new Set(['running', 'paused']);
 function tryLink(answer, origin) {
@@ -650,8 +655,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), other = otherFiles(capture.files, found);
-    if (other.length) line(ports.stderr, `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`);
+    const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -667,6 +671,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping'].includes(answer.result?.session?.state));
       if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
+      if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd try ${test.story} again later, or pdd try ${test.story} --new to stop it and make a new one.`);
@@ -682,6 +687,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
     store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
     store.posted(context.folder, request.requestId);
+    if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
     if (verdict.answer) store.write(join(context.folder, `${request.requestId}.json`), verdict.answer);
     if (verdict.kind !== 'accepted') {
@@ -698,10 +704,11 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (done.unknownWhy || done.open || !done.answer || done.answer.state === 'unknown') {
       throw new Stop(3, `The Try setup is not finished or its result is unknown. Run pdd try ${test.story} again later; it reuses a running Try.`);
     }
+    // A ready Try with a bad link stays recorded, so pdd try --stop can still end it; pdd never prints that link.
+    if (done.answer.state === 'passed' && LIVE_SESSION.has(done.answer.result?.session?.state)) throw new Stop(3, refusedLink(done.answer, origin));
     applyAnswer(row, done.answer, context);
-    // A Try that is running with a bad link stays recorded, so pdd try --stop can still end it.
-    if (row.state === 'passed') Object.assign(row, { state: 'unknown', why: `The runtime did not return a valid Try link. Stop this Try with: pdd try --stop ${test.story}` });
-    else { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
+    delete repoState.tries[test.path];
+    store.saveRepo(root, repoState);
     return printTryProblem(context, row);
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }

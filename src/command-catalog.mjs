@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6b6ce0bca17c60a43d451a5c4d70a03a1af6c2b52060239aa437bcc9f73346dc).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 8dca5d76aa931a0564044e638cf6474cee71f3d29aa9add7d41954f839f2e46f).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -9,6 +9,9 @@ const routes = [
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
+  { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
+    operands: [{name:'question',type:'text',repeat:true}], options: [],
+    forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
     operands: [{name:'issue',type:'issue',optional:true}], options: [],
     forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },

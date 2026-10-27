@@ -67,15 +67,21 @@ test('RUNTIME-TRY2: --stop sends DELETE with X-Request-Id, reads the stop job an
 });
 
 // Wrong: pdd opens a link that points to another host, plain HTTP or a wrong path (spec 11 link checks).
-test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not opened', async t => {
+test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not opened; pdd says why in one line, with no table', async t => {
   for (const bad of [
     f => `https://${new URL(f.origin).host}/s/abc/`, f => `${f.origin.replace('127.0.0.1', 'localhost')}/s/abc/`,
     f => `${f.origin}/r/abc`, f => `${f.origin}/s/abc`, f => f.origin.replace('http://', 'http://user:pw@') + '/s/abc/']) {
     const setup = harbor(t), fake = await fakeRuntime(t, trying(f => bad(f)));
-    const result = await tryStory(setup, fake, ['place-order']);
-    assert.equal(result.code, 3, `${bad(fake)}: ${result.out}${result.err}`); assert.deepEqual(result.opened, []);
-    assert.equal((result.out + result.err).includes(bad(fake)), false);
-    assert.match(result.out, /Stop this Try with: pdd try --stop place-order/);
+    const elsewhere = new URL(bad(fake)).origin !== fake.origin;
+    const refused = elsewhere ? `Try link refused: it points at ${new URL(bad(fake)).origin}, not ${fake.origin}. The server's address setting may be wrong; tell the PDD team.`
+      : 'Try link refused: it is not a valid Try link. Tell the PDD team.';
+    for (const result of [await tryStory(setup, fake, ['place-order']), await tryStory(setup, fake, ['place-order'])]) {
+      assert.equal(result.code, 3, `${bad(fake)}: ${result.out}${result.err}`); assert.deepEqual(result.opened, []);
+      assert.equal((result.out + result.err).includes(bad(fake)), false);
+      assert.equal(result.out, ''); assert.equal(result.err.trimEnd().split('\n').at(-1), refused);
+      assert.doesNotMatch(result.err, /Runtime check|Story +Test/);
+    }
+    assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
     assert.equal((await tryStory(setup, fake, ['place-order'], { '--stop': true })).code, 0);
   }
 });
@@ -227,4 +233,13 @@ test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; 
     assert.equal(again.code, 0, `${status}: ${again.err}`);
     assert.equal(fake.posts.filter(post => post.command === 'try').length, 3, String(status));
   }
+});
+
+// Wrong: the note about other files reads like an alarm, or prints twice (runtime session, real check of b61547c).
+test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are not prompt, story or test files', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(result.code, 0);
+  const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
+  assert.deepEqual(said, ['Sent 6 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
 });
