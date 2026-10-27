@@ -299,7 +299,7 @@ for (const name of ['bug', 'feature']) {
     }
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
-    assert.match(f.prs[0].body, /Runtime report links expire after 7 days\./);
+    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
@@ -428,8 +428,8 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
-  assert.match(f.prs[0].body, /^Part of #17/); assert.doesNotMatch(f.prs[0].body, /Closes #17/);
-  assert.match(f.prs[0].body, /Runtime report links expire after 7 days/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
+  assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
@@ -747,4 +747,25 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(code.exitCode, 0, code.message); assert.match(f.prompts.at(-1), /Make the code PR now/); assert.equal(f.record().areas[f.record().area].name, 'code');
   assert.equal(f.git(run.root, 'branch', '--show-current'), `${run.branch}-code`);
+});
+
+// 0.1.4 #18: PR 1 starts with the Runtime check line and its report link; steps are one short line; no local paths.
+test('#18: the PR body puts the Runtime check and report link on top, cuts steps to one short line, and hides local paths', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const local = `${run.root}/test/x.test.mjs`;
+  writeFileSync(join(run.runDir, 'verify.md'), `Old notes from ${run.runDir}/check.md\n`);
+  f.tick();
+  const done = await stepDone({ step: 'check', summary: `Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls; Report: https://rt.example.test/r/d379-42; ran from ${local} with /Users/someone/pocket/node/bin/node and /home/ci/bin/node ${'and a very long tail of words that keeps going '.repeat(8)}`, cwd: run.root }, f.agentPorts());
+  assert.equal(done.exitCode, 0, done.message);
+  f.tick(); await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); f.ports.confirm = async () => false;
+  await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  const body = f.prs[0].body, top = body.split('\n');
+  assert.equal(top[0], 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
+  assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
+  assert.equal(top[3], 'Part of #17');
+  for (const row of body.split('\n').filter(row => row.startsWith('- **'))) assert.ok(row.length <= 220, row);
+  assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
+  assert.doesNotMatch(body, /## Verify/, 'PR 1 has no verify step, so no verify.md');
+  assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
 });

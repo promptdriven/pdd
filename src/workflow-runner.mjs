@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d3660409ce0fc0986319643f71507ee8c4465bd125ad9dbf85e3f39db2325f53).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 427c8df457ec97dc43560c3652a24cddc5a500dd8f85362f35e872bf8b1921d5).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -187,23 +187,41 @@ function hasReportLink(text, env) {
   return (text.match(/https?:\/\/[^\s)<>\]"']+/g) ?? []).some(url => /^https?:\/\/[^/]+\/(?:[^\s]*\/)?r\/[^/\s]+/.test(url) || base && url.startsWith(`${base}/`));
 }
 
+// PR bodies show repository paths, never the person's machine: the worktree becomes repo-relative, the run folder
+// "<run folder>", and any other home or temp path "<local path>".
+function hideLocalPaths(text, run) {
+  return text.split(`${run.root}/`).join('').split(run.root).join('.').split(run.runDir).join('<run folder>')
+    .replace(/(?:\/private)?\/(?:Users|home|var\/folders|tmp)\/[^\s)`'"<>\]]*/g, '<local path>');
+}
+const shortLine = text => text.length <= 200 ? text : `${text.slice(0, 199).replace(/\s+\S*$/, '')}…`;
+const reportUrl = (text, env) => (text.match(/https?:\/\/[^\s)<>\]"';]+/g) ?? []).find(url => hasReportLink(url, env)) ?? null;
+
 function prBody(run, area, env, drafts = []) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
-  const lines = steps.map(step => `- **${step}**: ${redactTry(oneLine(run.done[step].summary)) || 'done'}`);
+  const summaries = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(oneLine(run.done[step].summary)), run)]));
+  const lines = steps.map(step => `- **${step}**: ${shortLine(summaries[step]) || 'done'}`);
+  // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
-  try { verify = redactTry(readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim()); }
-  catch { if (steps.includes('verify')) verify = '_verify.md was not written in the run folder._'; }
+  if (steps.includes('verify')) {
+    try { verify = redactTry(readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim()); } catch { verify = '_verify.md was not written in the run folder._'; }
+  }
   const label = prLabel(run, area), ask = askArea(run), pr1 = ask && prOf(run, ask.name);
   const head = label === 'PR 1' ? [`Part of #${run.number}`, '', 'PR 1 of this run: the prompt, Story and test cases. The code comes in PR 2 only when the person asks for it.']
     : label === 'PR 2' ? [`Closes #${run.number}`, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
       ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
     : [`Closes #${run.number}`];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
-  const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim(), ''] : [];
-  return [...failing, ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
-    ...(hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
-    ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n');
+  const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
+  // The Runtime check line and its report link go on top (#18).
+  const checked = Object.values(summaries).find(text => /Runtime check/.test(text));
+  const report = checked ? reportUrl(checked, env) : null;
+  const runtime = checked ? [checked.slice(checked.indexOf('Runtime check')).split(/;|\s+Report:|\s+https?:\/\//)[0].trim().replace(/[.,]$/, ''),
+    ...(report ? [`Report: ${report} (report links expire after 7 days)`] : [])] : [];
+  const top = [...failing, ...runtime];
+  return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+    ...(!report && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
+    ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n'), run);
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
