@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: f37aba928f978982e9ba909ebd7699cf643081c0713d2479a2bbbd874ab36a17).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: d9f61443c2a1abff4ebcb4c95b5f21bf487778d19471c9f091ef17081d93e236).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -30,11 +30,13 @@ function parse(name, file) {
   return data.areas.map((area, index) => {
     const last = index === data.areas.length - 1;
     const askCode = !last && area?.gate === 'pr' && area.then === 'ask-code';
+    if (area?.before !== undefined && !(area.before === 'approve' && area.gate === 'pr'))
+      throw invalid(`area ${index + 1} may have "before":"approve" only with gate "pr"`);
     if (!word(area?.name) || !Array.isArray(area.steps) || !area.steps.length || !area.steps.every(word)
       || !Array.isArray(area.optional ?? []) || !(area.optional ?? []).every(step => area.steps.includes(step))
       || !(last ? area.gate === 'pr' && area.then === undefined : area.gate === 'approve' && area.then === undefined || askCode))
       throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? '"pr"' : '"approve", or "pr" with "then":"ask-code"'}`);
-    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}) };
+    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}) };
   });
 }
 

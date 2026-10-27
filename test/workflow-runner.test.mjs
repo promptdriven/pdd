@@ -268,7 +268,8 @@ test('done warns on unknown and out-of-order steps but records them and never br
 
 // The steps come from the bundled workflow.json, so a new step (for example formal) needs no test change.
 for (const name of ['bug', 'feature']) {
-  const areas = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas.map(area => [area.name, area.steps]);
+  const bundled = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas;
+  const areas = bundled.map(area => [area.name, area.steps]);
   test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
     const report = 'https://checks.example.test/r/k3y-123';
@@ -288,7 +289,8 @@ for (const name of ['bug', 'feature']) {
         const next = steps[steps.indexOf(step) + 1];
         if (next && optional.includes(next)) assert.match(out.message, /optional/i);
       }
-      assert.equal(f.prs.length, Math.max(0, index));
+      // A pr area opens its PR after its last step, unless the person approves first ("before":"approve", Try before PR 1).
+      assert.equal(f.prs.length, bundled.slice(0, index + 1).filter((area, at) => area.gate === 'pr' && !(at === index && area.before === 'approve')).length);
       if (index < areas.length - 1) {
         assert.equal(f.record().state, 'waiting');
         f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
@@ -686,4 +688,63 @@ test('a chat that shows a question dialog is waiting for the person in status, a
   assert.equal(refused.exitCode, 1); assert.match(refused.message, /question dialog/); assert.match(refused.message, /pdd workflow open 17/);
   pane.agent.agent_status = 'idle';
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
+});
+
+// 0.1.4 #13: the person tries the prompt and approves before PR 1 opens.
+async function featureAtTryGate(t) {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['understand', 'prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', before: 'approve', then: 'ask-code' },
+    { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] }));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('understand', 'ok'); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
+  await done('prompt-story', 'Story'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 2 of 2 criteria · Report: https://rt.example.test/r/abc');
+  const gate = await done('try', 'Try: https://rt.example.test/s/TOKEN/');
+  return { f, run, done, gate };
+}
+
+test('#13: after check and try the chat asks the person to try and approve; PR 1 opens only after approval, then the code question', async t => {
+  const { f, run, gate } = await featureAtTryGate(t);
+  assert.equal(f.prs.length, 0, 'no PR 1 before the person approves');
+  assert.match(gate.message, /Runtime check line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
+  assert.doesNotMatch(gate.message, /pdd opens PR 1 now/);
+  let record = f.record();
+  assert.equal(record.gate.kind, 'approve-pr'); assert.equal(record.state, 'waiting');
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /waiting for you: try it, then approve to open PR 1/);
+  f.tick();
+  const opened = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
+  assert.equal(opened.exitCode, 0, opened.message);
+  assert.equal(f.prs.length, 1); assert.match(opened.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(opened.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/);
+  record = f.record();
+  assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr'); assert.equal(record.chats.length, 2);
+  assert.equal(record.decisions.at(-1).stage, 'prompt-pr');
+  assert.doesNotMatch(f.prs[0].body, /\/s\/TOKEN/);
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Yes, build the code.', userMessageAt: f.clock - 1 }) }));
+  assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+});
+
+test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no stops with the plain approve-later line', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const pane = f.herdr.paneOf(f.record().chats[1]);
+  const answers = [true, false]; f.ports.confirm = async question => { f.prompts.push(question); return answers.shift(); };
+  f.tick();
+  const stopped = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(stopped.exitCode, 0, stopped.message);
+  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
+  assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(stopped.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
+  f.ports.confirm = async question => { f.prompts.push(question); return true; };
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message); assert.match(f.prompts.at(-1), /Make the code PR now/); assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.equal(f.git(run.root, 'branch', '--show-current'), `${run.branch}-code`);
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 51e717c9300e1ff8135d481fc37051ede3d1f33a4c50e0fc0f1582f8754e8317).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: b9538bb908c19a2321c06ae0eeb8d8b01059f91773ad0e383ddb10d1a4d94d39).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -90,7 +90,8 @@ export function statusView(run) {
       endedAt: record?.at ?? null, agent: run.agent ?? null, session: chat?.session ?? null, summary: record?.summary ?? null };
   });
   const asked = run.question && !ended(run);
-  const waitingFor = asked ? { decisions: ['changes'], what: run.question.text.split('\n')[0].slice(0, 200) } : gate ? { decisions: ['approve', 'changes'], what: run.gate.kind === 'ask-code' ? 'Make the code PR now, or stop here and merge PR 1' : `Approve the ${run.gate.area} area or ask for changes` }
+  const waitingFor = asked ? { decisions: ['changes'], what: run.question.text.split('\n')[0].slice(0, 200) } : gate ? { decisions: ['approve', 'changes'], what: run.gate.kind === 'ask-code' ? 'Make the code PR now, or stop here and merge PR 1'
+      : run.gate.kind === 'approve-pr' ? 'Try it, then approve to open the PR, or ask for changes' : `Approve the ${run.gate.area} area or ask for changes` }
     : run.state === 'waiting' && lastPr ? { decisions: [], what: 'Review and merge the PR on GitHub' } : { decisions: [], what: null };
   const chat = ended(run) ? null : currentChat(run);
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],

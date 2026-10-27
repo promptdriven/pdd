@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7fbf5fa5872a452c44ac6938555696106fabf66b93736331952a3d19b664a02f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d3660409ce0fc0986319643f71507ee8c4465bd125ad9dbf85e3f39db2325f53).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -116,6 +116,7 @@ function describe(run, blocked = false) {
   if (blocked && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). Run pdd workflow approve ${run.number} any time to make the code PR`;
   if (run.state === 'completed') return 'complete: the PR is merged';
+  if (run.gate?.kind === 'approve-pr') return `waiting for you: try it, then approve to open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} (or ask for changes)`;
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. Run pdd workflow approve ${run.number} any time to make the code PR`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
@@ -205,9 +206,9 @@ function prBody(run, area, env, drafts = []) {
     ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n');
 }
 
-async function finishPr(run, area, step, p, lines) {
+// Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
+async function publishAreaPr(run, area, p, lines, retry) {
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title).slice(0, 220) || `Issue #${run.number}`;
-  lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const status = await git(p, run.root, 'status', '--porcelain=v1', '--untracked-files=all');
   if (status) {
     const files = status.split('\n').map(row => row.slice(3)).filter(Boolean);
@@ -217,38 +218,50 @@ async function finishPr(run, area, step, p, lines) {
   }
   if (existing) {
     try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
-    catch { return fail([...lines, `git push to ${run.branch} failed. Check the network and gh auth, then run done ${step} again.`].join('\n')); }
+    catch { return fail([...lines, `git push to ${run.branch} failed. Check the network and gh auth, then ${retry}.`].join('\n')); }
     lines.push(`Pushed the new commits to ${label}.`);
-  } else {
-    const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
-    writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : []));
-    let intent;
-    try {
-      intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
-        title: label === 'PR 1' ? `${title} (prompt, Story and tests)` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
-    } catch (error) {
-      const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then run done ${step} again.`
-        : `pdd could not prepare ${label} (${error.code ?? 'error'}). Fix it, then run done ${step} again.`;
-      return fail([...lines, why].join('\n'));
-    }
-    const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
-    if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label} did not open: ${outcome.message} Run done ${step} again to retry.`].join('\n'));
-    run.pr.push({ stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base });
+    return null;
   }
-  const url = prOf(run, area.name).url;
+  const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
+  writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : []));
+  let intent;
+  try {
+    intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
+      title: label === 'PR 1' ? `${title} (prompt, Story and tests)` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
+  } catch (error) {
+    const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
+      : `pdd could not prepare ${label} (${error.code ?? 'error'}). Fix it, then ${retry}.`;
+    return fail([...lines, why].join('\n'));
+  }
+  const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
+  if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label} did not open: ${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`].join('\n'));
+  run.pr.push({ stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base });
+  return null;
+}
+
+// The code-or-stop question after PR 1, as the chat must show it.
+async function askCodeLines(run, area, p) {
+  const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
+  const drafts = await pr1Drafts(run, p);
+  return [`PR 1: ${prOf(run, area.name).url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
+    'Gate: show the person PR 1, the Runtime check line and the Try link, then ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Stop there.',
+    `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
+    `If they stop, tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR at any time. pdd never merges.`];
+}
+
+async function finishPr(run, area, step, p, lines) {
+  const label = prLabel(run, area), existing = prOf(run, area.name);
+  lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
+  const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
+  if (failed) return failed;
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
     run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
-    const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
-    const drafts = await pr1Drafts(run, p);
-    return done([...lines, `PR 1: ${url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
-      'Gate: show the person PR 1, the Runtime check line and the Try link, then ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Stop there.',
-      `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
-      `If they stop, tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR at any time. pdd never merges.`].join('\n'));
+    return done([...lines, ...await askCodeLines(run, area, p)].join('\n'));
   }
   run.state = 'waiting'; run.gate = null; writeRun(run, p);
-  return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
+  return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
 }
 
 export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
@@ -277,6 +290,15 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
       : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
+    return done(lines.join('\n'));
+  }
+  // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
+  if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
+    run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
+    lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
+      'Gate: show the person the Runtime check line with its report link and the Try link. Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+      `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
+      'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
     return done(lines.join('\n'));
   }
   if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
@@ -320,11 +342,11 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
-  const askCode = area.then === 'ask-code';
+  const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
-  if (area.gate === 'pr' && !askCode) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
+  if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
   const agent = isAgentSession(p.env), viaChat = agent || !p.isTTY;
-  if (askCode && run.gate) {
+  if (askCode && run.gate?.kind === 'ask-code') {
     const drafts = await pr1Drafts(run, p);
     if (drafts.length) return fail(`Approve the draft prompts first: ${drafts.join(', ')}. The code is built from approved prompts; pdd never approves them itself.`);
   }
@@ -343,15 +365,36 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
       gateAskedAt: run.gate.at, decision: 'approve', ignorePrefixes: [CHANGE_PREFIX, ANSWER_PREFIX] },
     { env: p.env, now: p.now, ...(chat.configDir ? (run.agent === 'claude' ? { claudeConfigDir: chat.configDir } : { codexHome: chat.configDir }) : {}) });
     if (evidence?.ok !== true) return fail(`Only the person can approve. Ask them in this chat and wait for their answer, then run this again. Or the person runs "pdd workflow approve ${run.number}" in a terminal. (${oneLine(evidence?.message) || 'no chat evidence'})`);
-    if (askCode && !YES_WORDS.test(evidence.userMessage ?? '')) return fail(`Not sure you approved. Run \`pdd workflow approve ${run.number}\` in your terminal.`);
+    if (askCode && !beforePr && !YES_WORDS.test(evidence.userMessage ?? '')) return fail(`Not sure you approved. Run \`pdd workflow approve ${run.number}\` in your terminal.`);
     record = { via: 'chat', text: evidence.userMessage, sessionId: evidence.sessionId, at: evidence.userMessageAt };
     if (!chat.session?.id && evidence.sessionId) chat.session = { agent: run.agent, id: evidence.sessionId };
   } else {
-    if (!await confirm(p, askCode ? `Make the code PR now for ${label}? PR 1: ${prOf(run, area.name)?.url} (y/N) ` : `Approve the ${area.name} area for ${label}? (y/N) `)) return fail('Not approved. The run is unchanged.');
+    if (!await confirm(p, beforePr ? `Approve the ${area.name} area and open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} for ${label}? (y/N) `
+      : askCode ? `Make the code PR now for ${label}? PR 1: ${prOf(run, area.name)?.url} (y/N) ` : `Approve the ${area.name} area for ${label}? (y/N) `)) return fail('Not approved. The run is unchanged.');
     record = { via: 'terminal' };
+  }
+  const said = record.text !== undefined ? ` The person wrote: "${oneLine(record.text).slice(0, 300)}".` : '';
+  if (beforePr) {
+    // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
+    const lines = [], failed = await publishAreaPr(run, area, p, lines, `run pdd workflow approve ${run.number} again`);
+    if (failed) return failed;
+    const at = p.now(), url = prOf(run, area.name).url;
+    run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at, ...(record.text !== undefined ? { text: record.text } : {}) });
+    run.approvalRecord = { kind: record.via, area: area.name, at, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
+    run.state = 'waiting'; run.gate = askCode ? { area: area.name, at, kind: 'ask-code' } : null; writeRun(run, p);
+    const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
+    if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
+    if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
+    if (!await confirm(p, `Make the code PR now for ${label}? PR 1: ${url} (y/N) `)) {
+      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR later. Then stop.`, p);
+      return done([...head, `PR 1: ${url}`, `Stopped at PR 1. To make the code PR later, run \`pdd workflow approve ${run.number}\`.`].join('\n'));
+    }
+    const drafts = await pr1Drafts(run, p);
+    if (drafts.length) return fail([...head, `PR 1: ${url}`, `Approve the draft prompts first: ${drafts.join(', ')}. Then run pdd workflow approve ${run.number} to make the code PR.`].join('\n'));
   }
   let based = '';
   if (askCode) {
+    // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
     try { based = await codeBranch(run, area, p); }
     catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
@@ -360,7 +403,6 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   run.approvalRecord = { kind: record.via, area: area.name, at: now, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
   run.gate = null; run.area++; run.state = 'running'; run.doneAt = null; writeRun(run, p);
   const next = run.areas[run.area];
-  const said = record.text !== undefined ? ` The person wrote: "${oneLine(record.text).slice(0, 300)}".` : '';
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) { return fail(`Approved the ${area.name} area of ${label}.${said} The ${next.name} chat did not start (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
@@ -466,6 +508,7 @@ function summary(run, timeZone, blocked = false) {
     : run.question ? `waiting for you: ${run.question.text.split('\n')[0]}`
     : !run.gate && blocked ? `waiting for you: the chat asks a question in its window`
     : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
+    : run.gate?.kind === 'approve-pr' ? `waiting for you: try it, then approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
     : step ? `agent working on ${step}` : 'agent working';

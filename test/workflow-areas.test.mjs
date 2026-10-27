@@ -55,3 +55,16 @@ test('a pdd-installed copy in a home folder (marker .pdd-skill.json) never shado
   rmSync(join(home, '.agents/skills/pdd-bug/.pdd-skill.json'));
   assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'bug', home }).areas[0].name, 'stale');
 });
+
+test('#13: "before":"approve" is allowed only on a pr gate', t => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-areas-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
+  const pkg = join(base, 'package'), skills = join(pkg, 'skills');
+  const shape = (middle, last = {}) => ({ version: 2, areas: [{ name: 'story', steps: ['a'], optional: [], gate: 'approve', ...middle.story },
+    { name: 'prompt-pr', steps: ['check'], optional: [], gate: 'pr', then: 'ask-code', ...middle.pr }, { name: 'code', steps: ['build'], optional: [], gate: 'pr', ...last }] });
+  put(skills, 'feature', shape({ pr: { before: 'approve' } }, { before: 'approve' }));
+  assert.deepEqual(readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }).areas.map(area => area.before ?? null), [null, 'approve', 'approve']);
+  for (const bad of [shape({ story: { before: 'approve' } }), shape({ pr: { before: 'yes' } })]) {
+    put(skills, 'feature', bad);
+    assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }), error => error.code === 'workflow_invalid');
+  }
+});
