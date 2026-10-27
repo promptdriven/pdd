@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f0a037fce3473c553661358ae77ee9b176e62feafc60e326e1df6da1c92d2f29).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 18fbf8b83eaf6c0a8a855e99238160deb36e2482b8c395dd828d2288a9e369f5).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -24,6 +24,8 @@ const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[
 const ordinary = promisify(execFileCallback);
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+// A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
+const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(Boolean).join('\n');
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
 const ended = run => ['cancelled', 'completed'].includes(run.state);
@@ -197,9 +199,9 @@ function hideLocalPaths(text, run) {
 }
 // Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
 // "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
-// at ";", a "Report" line, a link or the next Runtime check.
+// at a line break, ";", a "Report" line, a link or the next Runtime check.
 function runtimeLines(text) {
-  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
+  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
     const story = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim()).find(group => group && group.toUpperCase() !== 'DRAFT') ?? null;
     const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
     return { story, line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
@@ -217,12 +219,20 @@ function storyCount(run) {
 }
 const storyText = count => `${count.pass} of ${count.total} Stories pass`;
 const shortLine = text => text.length <= 200 ? text : `${text.slice(0, 199).replace(/\s+\S*$/, '')}…`;
-const reportUrl = (text, env) => (text.match(/https?:\/\/[^\s)<>\]"';]+/g) ?? []).find(url => hasReportLink(url, env)) ?? null;
+// Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
+function reportLinks(text, env) {
+  const links = new Map();
+  for (const [, story, url] of String(text ?? '').matchAll(/(?:\bReport\s*(?:\(([^)]*)\))?:\s*)?(https?:\/\/[^\s)<>\]"';]+)/g)) {
+    if (hasReportLink(url, env) && !links.has(url)) links.set(url, story && story.trim().toUpperCase() !== 'DRAFT' ? story.trim() : null);
+  }
+  return [...links].map(([url, story]) => `Report${story ? ` (${story})` : ''}: ${url} (report links expire after 7 days)`);
+}
 
 function prBody(run, area, env, drafts = []) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
-  const summaries = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(oneLine(run.done[step].summary)), run)]));
+  const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(run.done[step].summary), run)]));
+  const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   const lines = steps.map(step => `- **${step}**: ${shortLine(summaries[step]) || 'done'}`);
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
@@ -238,10 +248,11 @@ function prBody(run, area, env, drafts = []) {
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
   // The Runtime check line and its report link go on top (#18).
   // The check step's result wins; else the latest step that reports a Runtime check. One line per Story (0.1.6), then the overall line.
-  const checked = /Runtime check/.test(summaries.check ?? '') ? summaries.check : Object.values(summaries).reverse().find(text => /Runtime check/.test(text));
-  const reports = checked ? [...new Set((checked.match(/https?:\/\/[^\s)<>\]"';]+/g) ?? []).filter(url => hasReportLink(url, env)))] : [];
+  // Lines are read from the summary as stored, with its line breaks.
+  const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
+  const reports = checked ? reportLinks(checked, env) : [];
   const report = reports[0] ?? null;
-  const runtime = checked ? [...runtimeLines(checked).map(line => line.line), ...reports.map(url => `Report: ${url} (report links expire after 7 days)`)] : [];
+  const runtime = checked ? [...runtimeLines(checked).map(line => line.line), ...reports] : [];
   const top = [...failing, ...runtime];
   return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!report && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
@@ -283,7 +294,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
 
 // The code-or-stop question after PR 1, as the chat must show it.
 async function askCodeLines(run, area, p) {
-  const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
+  const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${oneLine(run.done[item].summary) || 'done'}`);
   const drafts = await pr1Drafts(run, p);
   return [`PR 1: ${prOf(run, area.name).url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
     `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
@@ -325,7 +336,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     for (const item of later) delete run.done[item];
     lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length > 1 ? 'those steps' : 'that step'}; run ${later.length > 1 ? 'them' : 'it'} again.`);
   }
-  run.done[step] = { at: p.now(), summary: oneLine(summary), area: area.name };
+  run.done[step] = { at: p.now(), summary: keepLines(summary), area: area.name };
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
     run.state = 'running'; run.gate = null; writeRun(run, p);
@@ -525,7 +536,7 @@ async function chatBlocked(run, p) {
 function detail(run, drafts = [], blocked = false) {
   const area = run.areas[run.area], chat = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
-  const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${run.done[step].summary.slice(0, 120)}")` : ''}`);
+  const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${oneLine(run.done[step].summary).slice(0, 120)}")` : ''}`);
   const next = run.gate?.kind === 'ask-code' ? `pdd workflow approve ${run.number}  (make the code PR)   or stop here and merge PR 1`
     : run.gate ? `pdd workflow approve ${run.number}   or   pdd workflow changes ${run.number} "what to change"`
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
