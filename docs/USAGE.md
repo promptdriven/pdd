@@ -56,7 +56,7 @@ Do these steps in this order:
 | Step | Command | When |
 |---|---|---|
 | 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
-| 2. Set up the repo | `/pdd-setup` in Codex or Claude Code | Once for each repo |
+| 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
 | 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check` and `pdd try` |
 
 ### 2.1 Install the skills
@@ -119,15 +119,15 @@ The agents that PDD starts always get the full path of PDD Alpha. They are not a
 
 ## 4. The PDD skills
 
-PDD is five skills. A skill is a folder of plain Markdown that your agent reads when it needs it. You call a skill by its name, as a slash command.
+PDD is five skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
-| [`/pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for runtime checks |
-| `/pdd-feature` | A workflow for new behavior |
-| `/pdd-bug` | A workflow for something that is broken |
-| `/pdd-small-change` | A workflow for a small change that is easy to undo |
-| `/pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
+| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for runtime checks |
+| `pdd-feature` | A workflow for new behavior |
+| `pdd-bug` | A workflow for something that is broken |
+| `pdd-small-change` | A workflow for a small change that is easy to undo |
+| `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
 
 Where the skills go:
 
@@ -149,10 +149,11 @@ The skills work in any Codex or Claude Code chat.
 
 ## 5. Set up a repo and use the skills
 
-Set up each repo once. Open Codex or Claude Code in the top folder of the repo and call:
+Set up each repo once. Open Codex or Claude Code in the top folder of the repo and call the `pdd-setup` skill:
 
 ```
-/pdd-setup
+$pdd-setup          # in Codex
+/pdd-setup          # in Claude Code
 ```
 
 If you installed the pdd command, `pdd setup` in the top folder of the repo does the same. It also installs the skills when they are missing. Both do this:
@@ -161,7 +162,16 @@ If you installed the pdd command, `pdd setup` in the top folder of the repo does
 2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
 3. They keep all other text. A second run changes nothing. They never paste the guide.
 
-Then open Codex or Claude Code as usual, in your project, and call a skill:
+Then open Codex or Claude Code as usual, in your project, and call a skill. In Codex:
+
+```
+$pdd-feature Add a CSV export button to the orders page.
+$pdd-bug The export button does nothing on Safari.
+$pdd-small-change Fix the typo in the footer.
+$pdd-prompting Review my prompts against the Prompting guide.
+```
+
+In Claude Code:
 
 ```
 /pdd-feature Add a CSV export button to the orders page.
@@ -169,6 +179,8 @@ Then open Codex or Claude Code as usual, in your project, and call a skill:
 /pdd-small-change Fix the typo in the footer.
 /pdd-prompting Review my prompts against the Prompting guide.
 ```
+
+You can also ask for a skill by name, for example "Use the pdd-bug skill for this."
 
 The agent can also pick a skill by itself when your request fits it. It reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.
 
@@ -449,7 +461,7 @@ This is an alpha. These limits are known today:
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
 | The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
-| The agent does not know `/pdd-feature` | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
+| The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem
