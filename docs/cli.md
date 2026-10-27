@@ -18,7 +18,7 @@ The skill `/pdd-setup` does the same in a chat. Run it in the top folder of the 
 |---|---|
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
-| `pdd workflow status [N]` | Show the area, the step, what the run waits for, and the PRs with their CI state. Without N, show all runs in this repo. In a run's worktree, show that run |
+| `pdd workflow status [N] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. Without N, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data |
 | `pdd workflow open N` | Show the current chat of the run. If the chat ended, resume it in its tab |
 | `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat. At the PR 1 gate of `feature` and `bug`, this makes the code PR. Without N, approve the run of the current worktree, or else the one run in this repo that waits for a person |
 | `pdd workflow changes N "text"` | Send the text to the same chat. The chat revises. The gate stays open |
