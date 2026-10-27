@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 04fdacef2ec7745eef4dce3e6a0a6378818135abca11ca7a41bc6c83f36f85c7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 504e3f56c4c02c8355785df0d04146755a6ea19d82e432d128dc9f4b2cb15274).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -79,7 +79,8 @@ async function areaMessage(run, index, p, packageRoot) {
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
-    `If the ${run.skill} skill is not available, read ${join(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md')}.`,
+    `All PDD skills are in ${join(packageRoot ?? PACKAGE_ROOT, 'skills')} (use them if a skill is not installed).`,
+    ...(run.skillDir && run.skillDir !== join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill) ? [`This run's ${run.skill} skill is ${join(run.skillDir, 'SKILL.md')}.`] : []),
   ].join('\n') + '\n';
 }
 
