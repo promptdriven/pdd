@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 379d91146b93850f0654f43382423d23990bc5f41e662e6b6484e71dd1cd8250).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 317dae64ce89b88a5b1d69ad81133abd2dc07b018bbcecd14b263a115f81a483).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -6,6 +6,7 @@ import { constants, fstatSync, openSync, closeSync, writeSync, readSync, fsyncSy
   lstatSync, realpathSync, unlinkSync, readlinkSync, existsSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep, basename, dirname } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { runStatusFromState, writeRunStatus } from './workflow-run-records.mjs';
 import { WORKFLOW_STAGES } from './workflow-definitions.mjs';
 import { loadWorkflowDefinition } from './workflow-definition-loader.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from './workflow-github.mjs';
@@ -134,9 +135,10 @@ function readSaved(directory) {
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
   return saved;
 }
-function record(s, directory, event) {
+async function record(s, directory, event) {
   s.seq = (s.seq ?? 0) + 1;
   durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
+  await writeRunStatus(directory, runStatusFromState(s, { phase: 'record', now: Date.now() }));
 }
 function lock(root) {
   ensureDirectory(dirname(root)); ensureDirectory(root);
@@ -242,7 +244,7 @@ function nativePorts(s, directory, r, options, p) {
           fail('An established native backend identity changed.');
       }
       pending.backend = structuredClone(backend);
-      record(s, directory, 'agent.backend');
+      await record(s, directory, 'agent.backend');
     }
   };
 }
@@ -273,11 +275,11 @@ async function runAgent(s, stage, r, directory, options, p) {
   const handoffPath = join(directory, 'artifacts', `${stage.id}-${randomUUID()}.json`);
   const attemptId = randomUUID();
   const instructions = agentInstructions(s, stage, directory, attemptId, handoffPath, s.expected);
-  s.pending = { kind: 'agent', stage: stage.id, attemptId, input: s.expected, handoffPath, backend: null, instructions,
+  s.pending = { kind: 'agent', stage: stage.id, attemptId, startedAt: Date.now(), agent: s.agent, input: s.expected, handoffPath, backend: null, instructions,
     promptDigest: digest(`${context}\n\n# Current workflow stage\n${instructions}`), transport: null };
   const guard = stageGuard(s), portOptions = nativePorts(s, directory, r, options, p);
   await guard({ runId: s.runId, cwd: s.root }, async () => { s.pending.attachmentEpoch = attachmentEpoch(s); });
-  record(s, directory, 'agent.intent');
+  await record(s, directory, 'agent.intent');
   const previous = s.completed.filter(entry => entry.backend?.phase === 'closed').at(-1)?.backend;
   let outcome;
   try {
@@ -286,7 +288,7 @@ async function runAgent(s, stage, r, directory, options, p) {
     candidateIdentity(s, stage, outcome);
   } catch { return result(s, 'recovery_required', 'Background launch or delivery is uncertain; no automatic relaunch. Inspect the saved attempt.'); }
   s.pending.backend = structuredClone(outcome.backend); s.pending.transport = outcome;
-  record(s, directory, 'agent.transport');
+  await record(s, directory, 'agent.transport');
   if (outcome.state !== 'settled') return result(s, outcome.state === 'blocked' ? 'waiting' : 'recovery_required', outcome.reason || 'The original background stage needs inspection; no resend.');
   return acceptAgent(s, stage, r, directory, options, p, outcome);
 }
@@ -295,7 +297,7 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
   return portOptions.withStageGuard(outcome.backend, async () => {
     if (s.pending.attachmentEpoch !== attachmentEpoch(s)) {
       s.pending.attachmentEpoch = attachmentEpoch(s); s.pending.transport = null;
-      record(s, directory, 'agent.candidate.invalidated_by_attach');
+      await record(s, directory, 'agent.candidate.invalidated_by_attach');
       return result(s, 'waiting', 'Attachment invalidated the earlier candidate. Resume with approve to inspect and validate the same original attempt afresh.');
     }
     const observed = await p.inspectHerdrStage({ backend: outcome.backend, cwd: r.root }, portOptions);
@@ -313,14 +315,14 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
     const plan = s.accepted?.testCommands;
     if (!plan?.length || h.testCommands.length && !isDeepStrictEqual(plan, h.testCommands)) return result(s, 'failed', 'Verification must execute the actual accepted native test plan.');
     s.pending.testCommands = plan; s.pending.executionInput = await fingerprint(r, p);
-    record(s, directory, 'test.intent');
+    await record(s, directory, 'test.intent');
     const checked = await runWorkflowTestCommands({ cwd: r.root, testCommands: plan }, p.commandPorts);
     h.checks = checked.results;
     s.pending.checks = checked.results;
     for (const check of checked.results) {
       p.stdout.write(String(check.stdout ?? '')); p.stderr.write(String(check.stderr ?? ''));
     }
-    record(s, directory, checked.passed ? 'test.completed' : 'test.failed');
+    await record(s, directory, checked.passed ? 'test.completed' : 'test.failed');
     if (!checked.passed) return result(s, 'failed', 'A real native project check failed or could not run.');
     if (!isDeepStrictEqual(s.pending.executionInput, await fingerprint(r, p)))
       fail('Native checks changed their execution input; the changed result is not verified.');
@@ -347,7 +349,7 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
   const verification = stage.protocol === 'verify' ? { output: s.expected, testCommands: s.accepted.testCommands,
     evidenceDigest: acceptance.evidenceDigest } : null;
   s.pending = { ...s.pending, kind: 'cleanup', backend: finalObservation.backend, handoff: h, acceptance, evidenceRecord, verification };
-  record(s, directory, 'agent.accepted');
+  await record(s, directory, 'agent.accepted');
   return cleanupAgent(s, stage, r, directory, options, p, true);
   });
 }
@@ -367,15 +369,16 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
     }
     s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
+      startedAt: s.pending.startedAt ?? null, endedAt: Date.now(), agent: s.agent,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });
-    s.pending = null; s.index++; record(s, directory, 'agent.completed');
+    s.pending = null; s.index++; await record(s, directory, 'agent.completed');
     return null;
   });
 }
 
 async function completePr(s, stage, intent, pr, directory) {
   s.completed.push({ id: stage.id, kind: stage.kind, pr, intent });
-  s.pending = null; s.index++; record(s, directory, 'pr.completed');
+  s.pending = null; s.index++; await record(s, directory, 'pr.completed');
 }
 async function makePr(s, stage, r, directory, p) {
   await current(s, r, p);
@@ -393,7 +396,7 @@ async function makePr(s, stage, r, directory, p) {
   const intent = await prepareWorkflowPr({ cwd: r.root, runId: s.runId, stageId: stage.id,
     repository: s.repo, baseBranch: s.base, bodyFile: join(directory, `pr-${stage.id}.md`) }, p.commandPorts);
   await current(s, r, p);
-  s.pending = { kind: 'pr', stage: stage.id, intent }; record(s, directory, 'pr.intent');
+  s.pending = { kind: 'pr', stage: stage.id, intent }; await record(s, directory, 'pr.intent');
   let outcome;
   try { outcome = await publishWorkflowPr({ cwd: r.root, intent }, p.commandPorts); }
   catch { return result(s, 'recovery_required', 'PR effect is uncertain; no blind resend.'); }
@@ -424,7 +427,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
         candidateIdentity(s, stage, seen);
       } catch { return result(s, 'recovery_required', 'Original first dispatch is unconfirmed; preserve this same attempt for inspection.'); }
       s.pending.backend = structuredClone(seen.backend); s.pending.transport = seen;
-      record(s, directory, 'agent.transport');
+      await record(s, directory, 'agent.transport');
     } else {
       seen = await p.inspectHerdrStage({ backend: s.pending.backend, cwd: r.root }, portOptions);
       candidateIdentity(s, stage, seen);
@@ -437,7 +440,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
     let outcome = await reconcileWorkflowPr({ cwd: r.root, intent: s.pending.intent }, p.commandPorts);
     if (outcome.state === 'recovery_required' && canAdvance) {
       await current(s, r, p);
-      record(s, directory, 'pr.unpublished_retry_intent');
+      await record(s, directory, 'pr.unpublished_retry_intent');
       outcome = await publishWorkflowPr({ cwd: r.root, intent: s.pending.intent, unpublishedOnly: true }, p.commandPorts);
     }
     if (!['open', 'merged'].includes(outcome.state) || !outcome.pr)
@@ -461,7 +464,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       await git(p, r.root, 'merge-base', '--is-ancestor', merged.mergeCommit, 'HEAD');
       const previous = s.expected; s.expected = fresh;
       s.inputTransitions ??= []; s.inputTransitions.push({ previous, current: fresh, reason: 'merged_proposal_base' });
-      record(s, directory, 'human.merged_base.accepted');
+      await record(s, directory, 'human.merged_base.accepted');
     }
   }
   if (s.pending?.kind === 'agent') { await sourceValid(s, r); await git(p, r.root, 'merge-base', '--is-ancestor', s.pending.input.head, 'HEAD'); }
@@ -481,7 +484,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       if (!selected) {
         if (!choice) return result(s, 'waiting', 'Optional step: resume with --decision approve to run it or --decision skip to omit it.');
         s.optional ??= {}; selected = { decision: choice, input: s.expected };
-        s.optional[stage.id] = selected; record(s, directory, 'optional.decision');
+        s.optional[stage.id] = selected; await record(s, directory, 'optional.decision');
       }
       if (!['approve', 'skip'].includes(selected.decision) || !isDeepStrictEqual(selected.input, s.expected))
         fail('The saved optional decision does not match the current input.');
@@ -489,7 +492,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       choice = undefined;
       if (selected.decision === 'skip') {
         s.completed.push({ id: stage.id, kind: stage.kind, skipped: true, input: selected.input }); s.index++;
-        record(s, directory, 'optional.skipped'); continue;
+        await record(s, directory, 'optional.skipped'); continue;
       }
     }
     if (stage.kind === 'human') {
@@ -498,11 +501,11 @@ async function advance(s, r, directory, options, p, decision, initial) {
       await assertWorkflowArtifacts({ cwd: r.root, files: s.proposal.files });
       s.accepted = { ...s.proposal, input: s.expected };
       s.completed.push({ id: stage.id, kind: stage.kind, input: s.expected }); s.index++;
-      record(s, directory, 'human.approved'); choice = undefined; continue;
+      await record(s, directory, 'human.approved'); choice = undefined; continue;
     }
     if (stage.kind === 'merge') {
       const prior = s.completed.find(step => step.id === stage.prStage);
-      if (prior?.skipped) { s.completed.push({ id: stage.id, kind: stage.kind, skipped: true }); s.index++; record(s, directory, 'merge.skipped'); continue; }
+      if (prior?.skipped) { s.completed.push({ id: stage.id, kind: stage.kind, skipped: true }); s.index++; await record(s, directory, 'merge.skipped'); continue; }
       if (!prior?.pr) fail('No original PR is saved for this merge step.');
       const outcome = await reconcileWorkflowPr({ cwd: r.root, intent: prior.intent }, p.commandPorts);
       if (outcome.pr && (outcome.pr.number !== prior.pr.number || outcome.pr.url !== prior.pr.url))
@@ -513,7 +516,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       const mergeCommit = outcome.pr.mergeCommit;
       if (!/^[a-f0-9]{40,64}$/.test(mergeCommit ?? '')) fail('Actual merged revision was not supplied by GitHub.');
       s.completed.push({ id: stage.id, kind: stage.kind, pr: outcome.pr, mergeCommit }); s.index++;
-      record(s, directory, 'merge.observed');
+      await record(s, directory, 'merge.observed');
       if (!canAdvance) return result(s, s.index === s.definitions.length ? 'completed' : 'waiting', 'Actual merge observed; no new stage was launched. Resume with approve to advance.');
       continue;
     }
@@ -522,7 +525,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       if (s.proposal !== priorProposal || decision !== 'approve')
         return result(s, 'waiting', 'Review the independent proposal and test plan; resume with approve to advance.');
       if (!s.proposal.files.length || !s.proposal.testCommands.length) fail('A complete independent proposal and test plan is required.');
-      s.accepted = { ...s.proposal, input: s.expected }; record(s, directory, 'proposal.accepted');
+      s.accepted = { ...s.proposal, input: s.expected }; await record(s, directory, 'proposal.accepted');
     }
     if (stage.requiresMerge) {
       const merged = s.completed.find(entry => entry.id === stage.requiresMerge);
@@ -637,7 +640,11 @@ async function assignedRepository(assignment, p) {
 }
 async function execute(options, ports, resume) {
   const p = dependencies(ports);
-  let s, unlock;
+  let s, unlock, statusDirectory;
+  const finish = async outcome => {
+    if (statusDirectory) await writeRunStatus(statusDirectory, runStatusFromState(s, { phase: 'exit', outcome, now: Date.now() }));
+    return outcome;
+  };
   try {
     if (!text(options?.packageRoot) || typeof p.loadGuidance !== 'function') fail('A package root and canonical guidance port are required.');
     if (resume && (!UUID.test(options.runId ?? '') || options.decision !== undefined && !['approve', 'skip'].includes(options.decision))) fail('Supply a UUIDv4 run and optional approve/skip decision.');
@@ -652,10 +659,11 @@ async function execute(options, ports, resume) {
       unlock = lock(join(r.gitDir, 'pdd', 'workflows'));
       s = readSaved(directory);
       if (!isDeepStrictEqual(s.assignment, assignment)) fail('Saved assignment identity changed.');
+      statusDirectory = directory;
       const binding = await resolveWorkflowIssue({ cwd: r.root, issue: s.issue.url }, p.commandPorts);
       r.repo = binding.repository; r.base = binding.defaultBranch;
       await validateInput(s, options, p);
-      return await advance(s, r, directory, options, p, options.decision, false);
+      return await finish(await advance(s, r, directory, options, p, options.decision, false));
     }
     const source = await repository(options.cwd, p);
     const definition = loadWorkflowDefinition({ name: options.name, cwd: source.root, packageRoot: options.packageRoot });
@@ -689,14 +697,15 @@ async function execute(options, ports, resume) {
     if (existsSync(directory)) fail('Run journal already exists; do not overwrite it.');
     ensureDirectory(directory); ensureDirectory(join(directory, 'artifacts')); syncDirectory(directory);
     const context = stageContext(input, r.root);
-    s = { version: 2, seq: 0, runId, name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
+    s = { version: 2, seq: 0, runId, startedAt: Date.now(), name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
       repo: r.repo, base: r.base, issue: binding.issue, assignment, definition, definitions: definition.stages,
       inputDigest: snapshotDigest(input), context, contextDigest: digest(context), index: 0, completed: [],
       expected: await fingerprint(r, p), pending: null };
-    record(s, directory, 'run.started');
+    statusDirectory = directory;
+    await record(s, directory, 'run.started');
     await validateInput(s, options, p);
-    return await advance(s, r, directory, options, p, undefined, true);
-  } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }
+    return await finish(await advance(s, r, directory, options, p, undefined, true));
+  } catch (error) { return await finish(result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.')); }
   finally { unlock?.(); }
 }
 export async function runWorkflow(options, ports) { return execute(options, ports, false); }

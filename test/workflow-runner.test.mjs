@@ -143,6 +143,7 @@ async function fixture(t, options = {}) {
       agent: value.agent, cwd: value.cwd, phase: 'ready', promptDigest: sha(`${value.context}\n\n# Current workflow stage\n${value.instructions}`),
       terminalId: `terminal-${value.attemptId}`, nativeSession: null, evidence: { readySeq: 1 } };
     await value.checkpoint(backend);
+    if (options.observeStatus) options.observeStatus(JSON.parse(readFileSync(join(f.gitDir,'pdd','workflows',value.runId,'status.json'),'utf8')), f.saved(value.runId));
     const code = await foreground({ ...value, request: value.instructions });
     backend.transportFailed = code !== 0;
     backend.phase = 'candidate'; backend.evidence = { readySeq: 1, workingSeq: 2, settledSeq: 3 };
@@ -960,4 +961,29 @@ test('first-dispatch continuation refuses changed original request or worktree b
   writeFileSync(join(f.cwd, 'value.mjs'), 'export const value = 9;\n');
   const changed = await f.resume(first.runId, 'approve');
   assert.equal(changed.state, 'failed'); assert.match(changed.message, /HEAD or worktree changed/); assert.equal(calls.length, 1);
+});
+
+
+test('status follows durable records and the final gate without changing outcomes', async t => {
+  let observations=0;
+  const f=await fixture(t,{observeStatus(status,saved){
+    observations++; assert.equal(status.journalSeq,saved.seq); assert.equal(status.state,'running');
+    assert.equal(status.stage.id,saved.pending.stage); assert.ok(Number.isFinite(status.steps.find(s=>s.id===saved.pending.stage).startedAt));
+  }});
+  const first=await f.run(); assert.equal(first.state,'waiting');assert.equal(observations,1);
+  const path=join(f.gitDir,'pdd','workflows',first.runId,'status.json');
+  const gate=JSON.parse(readFileSync(path,'utf8'));assert.equal(gate.state,'waiting');assert.equal(gate.journalSeq,f.saved(first.runId).seq);
+  assert.deepEqual(gate.waitingFor.decisions,['approve']); assert.equal(gate.steps[0].state,'done');
+  assert.ok(gate.steps[0].startedAt<=gate.steps[0].endedAt); assert.equal(gate.steps[1].startedAt,null);
+  const before=readFileSync(path,'utf8'); await attachWorkflow({runId:first.runId,cwd:f.cwd,packageRoot},{});
+  assert.equal(readFileSync(path,'utf8'),before,'archive attach does not rewrite status');
+});
+
+test('a derived status write failure does not change the run or append a failure event', async t => {
+  const f=await fixture(t);const first=await f.run();
+  const directory=join(f.gitDir,'pdd','workflows',first.runId), path=join(directory,'status.json');
+  unlinkSync(path);mkdirSync(path);
+  const seq=f.saved(first.runId).seq; const observed=await f.resume(first.runId);
+  assert.equal(observed.state,'waiting'); assert.equal(f.saved(first.runId).seq,seq);
+  assert.equal(f.native.length,1);assert.equal(statSync(path).isDirectory(),true);
 });

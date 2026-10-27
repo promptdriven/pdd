@@ -85,3 +85,13 @@ The runner supplies native `ports.withStageGuard(backend, action)` using the act
 ## Independent issue stages
 
 Do not cap active or unresolved native stages across a repository. Each running stage is a full Codex or Claude session on the person's computer. Distinct issues may retain independent unresolved stages concurrently; this does not promise tested throughput or automatic cleanup. Preserve one assigned run per issue and one active stage per run, controller and attachment exclusion, exact identity/currentness checks and uncertain-delivery refusal. Do not allocate or release repository admission slots. Historical admission metadata and claims may remain on disk; ignore them without clearing or rewriting live journals or claims.
+
+## Derived status for clients
+
+Use [workflow run records](workflow-run-records.prompt.md) as the required
+authoring/runtime contract for status projection and atomic writes. Await a
+status write after every durable journal record and after the final outcome,
+while holding the validated run's command lock. A failed derived write cannot
+change progression, journal, output or result. Attach and conflict reports write
+nothing. Save epoch-millisecond agent intent/completion timestamps in pending
+and completed entries; preserve the exact observed per-step native identity.
