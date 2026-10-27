@@ -6,9 +6,10 @@ Read [skills/pdd-prompting/SKILL.md](skills/pdd-prompting/SKILL.md) for the core
 
 What this alpha contains:
 
-- Four skills in `skills/`: `pdd-prompting`, `pdd-small-change`, `pdd-bug` and `pdd-feature`. pdd copies them into the agent's user skills folders (`~/.agents/skills`, `~/.claude/skills`, and `$CLAUDE_CONFIG_DIR/skills` when it is set). It never copies them into the person's repo. Keep each workflow skill small and its step files short. Do not repeat a rule that `SKILL.md` already states.
-- `pdd session` starts Codex or Claude Code with a short intro. It pastes no guide, skill or workflow. The agent loads skills when it needs them.
-- `pdd workflow run` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PR and status. There is no controller process, no polling loop and no time limit.
+- Five skills in `skills/`: `pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug` and `pdd-feature`. People install them with `npx skills add "promptdriven/pdd#alpha"`, or the pdd command copies them into the agent's user skills folders (`~/.agents/skills`, `~/.claude/skills`, and `$CLAUDE_CONFIG_DIR/skills` when it is set). pdd never copies them into the person's repo. Keep each workflow skill small and its step files short. Do not repeat a rule that `SKILL.md` already states. Write each `description` so that an agent picks the skill by itself.
+- There is no `pdd session`. People open Codex or Claude Code as usual and call `/pdd-feature`, `/pdd-bug`, `/pdd-small-change` or `/pdd-prompting`. `pdd setup` and `/pdd-setup` add one short block (at most 10 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) to `CLAUDE.md`, else `AGENTS.md`. They never paste the guide.
+- `pdd workflow run` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PRs and status. There is no controller process, no polling loop and no time limit.
+- `feature` and `bug` stop at PR 1 (prompt, Story and tests) and ask before the code area. PR 2 (code) is stacked on PR 1 while PR 1 is open. `small-change` makes one PR.
 - The agents run the tests. A fresh subagent that did not write the code does the verify step. pdd does not run tests and never merges. Only a person approves a gate.
 - Agents start in full-access mode. pdd does not write global agent config, copy credentials or touch the person's default Herdr session.
 

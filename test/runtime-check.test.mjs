@@ -92,21 +92,20 @@ const RULES = [
   ['P7 entry missing', 'entry-missing', (r, doc) => { doc.steps[0].entry_path = 'prompts/gone.prompt.md'; }],
   ['P7 no interface', 'interface-missing', r => writeFileSync(join(r, 'prompts/place_order.prompt.md'), '# Place an order\n')],
   ['P7 two interfaces', 'pdd-two-interfaces', r => { const f = join(r, 'prompts/place_order.prompt.md'), s = readFileSync(f, 'utf8'); writeFileSync(f, s + s.slice(s.indexOf('<details>'))); }],
-  ['P7 draft', 'interface-unapproved', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('"approved"', '"draft"')); }],
+  ['P7 draft stale', 'interface-stale', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('"approved"', '"draft"').replace('Use this menu.', 'Use this menu now.')); }],
   ['P7 stale', 'interface-stale', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('Use this menu.', 'Use this menu now.')); }],
   ['P8 operation', 'entry-operation-missing', (r, doc) => { doc.steps[0].operation = 'cancel_order'; }],
   ['P9 input', 'invalid-input', (r, doc) => { doc.steps[0].input.items[0].quantity = 0; }],
   ['P10 unknown error', 'pdd-unknown-error', (r, doc) => { doc.steps[0].expected_error = 'sold-out'; doc.steps[0].checks.push({ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', value: 'sold-out' }); }],
   ['P10 error check', 'missing-error-check', (r, doc) => { doc.steps[0].expected_error = 'unknown-item'; }],
-  ['P11 two tests', 'pdd-story-has-two-tests', r => cpSync(join(r, 'tests/place-order.json'), join(r, 'tests/place-order-2.json'))],
 ];
 
 // Wrong: a broken test reaches the server, or the refusal does not name the rule that broke.
-test('RUNTIME-RULES1: each rule P1-P11 refuses with its code and nothing is sent', async t => {
+test('RUNTIME-RULES1: each rule P1-P10 refuses with its code and nothing is sent', async t => {
   for (const [name, code, edit] of RULES) {
     const { repo, home } = harbor(t), file = join(repo, 'tests/place-order.json'), doc = readJson(file);
     if (edit(repo, doc) === undefined && edit.length === 2) writeJson(file, doc);
-    const result = await check(repo, home, [name.startsWith('P11') ? 'tests/place-order.json' : 'place-order']);
+    const result = await check(repo, home, ['place-order']);
     assert.equal(result.code, 4, `${name}: ${result.err}`);
     assert.deepEqual(result.calls, { fetch: 0, gh: 0 }, name);
     assert.equal(result.json.rows[0].state, 'refused', name);
@@ -128,9 +127,10 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   assert.match(result.out, /Warning: the AC1 check expects 899, but the AC1 text says 900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
-  const unapproved = await check(repo, home, ['unknown-item'], {});
-  assert.equal(unapproved.code, 4); assert.deepEqual(unapproved.calls, { fetch: 0, gh: 0 });
-  assert.match(unapproved.out, /pdd: prompts\/place_order\.prompt\.md is "draft"\. The person must approve it first\./);
+  writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
+  const stale = await check(repo, home, ['unknown-item'], {});
+  assert.equal(stale.code, 4); assert.deepEqual(stale.calls, { fetch: 0, gh: 0 });
+  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd check --fill-hash\./);
 });
 
 // Wrong: an unknown story sends every test, or the error hides the stories that exist.
@@ -224,7 +224,8 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
   assert.ok(readJson(join(root, 'package.json')).files.includes('RUNBOOK.md'));
   assert.equal(readFileSync(join(root, 'skills/pdd-prompting/RUNBOOK.md'), 'utf8'), runbook);
   assert.match(readFileSync(join(root, 'skills/pdd-setup/SKILL.md'), 'utf8'), /read RUNBOOK\.md in the pdd-prompting skill/);
-  const commands = [...runbook.matchAll(/`?(pdd (?:check|try)[^`#\n]*?)\s*(?:`|#|\n)/g)].map(match => match[1].trim());
+  // Commands are in backticks or start a code line; prose like "pdd checks the files" is not a command.
+  const commands = [...runbook.matchAll(/(?:`|^)(pdd (?:check|try)(?=[ `]|$)[^`#\n]*?)\s*(?:`|#|$)/gm)].map(match => match[1].trim());
   assert.ok(commands.length >= 6, commands.join(' | '));
   for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
 });
@@ -239,4 +240,25 @@ test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may
   assert.equal(named.json.rows[0].refusals[0].code, 'invalid-input');
   doc.steps[0].model = 7; writeJson(file, doc);
   assert.equal((await check(repo, home, ['place-order'])).json.rows[0].refusals[0].code, 'invalid-step-model');
+});
+
+// Wrong: a draft prompt is refused before it reaches the runtime (Serhan, Oct 27: drafts may run, marked DRAFT).
+test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and is marked as a draft', async t => {
+  const { repo, home } = harbor(t), prompt = join(repo, 'prompts/place_order.prompt.md');
+  writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
+  const result = await check(repo, home, ['place-order']);
+  assert.equal(result.code, 5, result.err);
+  assert.equal(result.calls.gh, 1);
+  assert.match(result.err, /Run gh auth login/);
+});
+
+// Wrong: a second test file for a story (another starting world) is refused (lead, Oct 27: P11 removed).
+test('RUNTIME-RULES4: a story may have two test files; each one must still cover every criterion', async t => {
+  const { repo, home } = harbor(t), second = join(repo, 'tests/place-order-2.json');
+  cpSync(join(repo, 'tests/place-order.json'), second);
+  const both = await check(repo, home, ['place-order']);
+  assert.equal(both.code, 5, both.err); assert.equal(both.calls.gh, 1);
+  const doc = readJson(second); doc.criteria.pop(); doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC3'); writeJson(second, doc);
+  const partial = await check(repo, home, ['tests/place-order-2.json']);
+  assert.equal(partial.code, 4); assert.equal(partial.json.rows[0].refusals[0].code, 'story-criterion-mismatch');
 });

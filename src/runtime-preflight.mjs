@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2a63bcfbf9662ba402ac2841f4210a4d60adead0bba2e20bd7d16ab8b7c51130).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 32644f79879c49b6200a6a88be12b231e1dc6c209a208de36af6b0345925aacb).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -221,7 +221,9 @@ export function readPrompt(root, visible, path) {
   return { path, text, blocks, interface: value, prose: proseSha256(text) };
 }
 
-export const draftHint = path => `pdd: ${path} is "draft". The person must approve it first.`;
+// Drafts may run (Serhan, Oct 27); until the server takes them, its refusal gets this plain text.
+export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
+const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd check --fill-hash.`;
 export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
@@ -234,11 +236,13 @@ const PROMPT_MESSAGES = {
 // Rule P7 for one prompt. Returns null or a refusal (without the step).
 export function promptRefusal(prompt, section) {
   if (prompt.error) return refusal(prompt.error, section, PROMPT_MESSAGES[prompt.error](prompt.path));
-  if (prompt.interface.status !== 'approved') {
-    return refusal('interface-unapproved', section, `${prompt.path} is not approved.`, { hint: draftHint(prompt.path) });
+  const status = prompt.interface.status;
+  if (status !== 'approved' && status !== 'draft') {
+    return refusal('interface-unapproved', section, `${prompt.path} has status ${show(status)}. Use "draft" or "approved".`);
   }
   if (prompt.interface.prose_sha256 !== prompt.prose) {
-    return refusal('interface-stale', section, `${prompt.path} changed after its interface was approved.`, { hint: staleHint });
+    return status === 'draft' ? refusal('interface-stale', section, `${prompt.path} has a prose_sha256 that is not current.`, { hint: draftStaleHint(prompt.path) })
+      : refusal('interface-stale', section, `${prompt.path} changed after its interface was approved.`, { hint: staleHint });
   }
   return null;
 }
@@ -284,7 +288,7 @@ function firstDifference(testTexts, storyTexts) {
   return `The story has this criterion, but the test does not: "${left[0]}"`;
 }
 
-function checkTest(root, found, test, prompts, storyTests) {
+function checkTest(root, found, test, prompts) {
   const doc = test.doc;
   if (test.error) return refusal('invalid-document', 'scenario', `${test.path} is not valid JSON: ${test.error}`);
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
@@ -294,8 +298,6 @@ function checkTest(root, found, test, prompts, storyTests) {
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
-  const others = storyTests.get(doc.story_path);
-  if (others.length > 1) return refusal('pdd-story-has-two-tests', 'story_path', `${doc.story_path} has ${others.length} tests: ${others.join(', ')}. Keep one test for each story.`);
   if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
     return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
   }
@@ -356,15 +358,15 @@ function checkTest(root, found, test, prompts, storyTests) {
   return null;
 }
 
-// Rules P1-P11 for the selected tests. Returns rows and warnings; never throws for a test problem.
+// Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
 export function preflight({ root, found, selected }) {
-  const prompts = new Map(), storyTests = new Map(), warnings = [];
-  for (const test of found.tests) if (test.storyPath) storyTests.set(test.storyPath, [...(storyTests.get(test.storyPath) ?? []), test.path]);
+  const prompts = new Map(), warnings = [];
   const rows = selected.map(test => {
-    const refused = checkTest(root, found, test, prompts, storyTests);
+    const refused = checkTest(root, found, test, prompts);
     const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused] : [], warnings: numberWarnings(test.doc),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
-      criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0 };
+      criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
+    row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
     if (!refused) for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step.operation);
       const input = entry ? checkInput(step.input, entry.input_schema, index) : null;

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: c214a0355879515347f837fe7943aa967bdbb5637e3a1db70464698336916017).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: bd1c1b6e76c47f2bcc7b6b1186f06cdae3a77021d42788916f2664fdf618ef93).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -62,7 +62,9 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
-    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider };
+    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
+    // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
+    draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
 
 const isObjectLike = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -75,12 +77,12 @@ export function jsonRow(row) {
     failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null,
+    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
-  return { batch, repo, exit_code: exitCode, summary_line: line, rows: rows.map(jsonRow), warnings };
+  return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft), rows: rows.map(jsonRow), warnings };
 }
 
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
@@ -93,13 +95,13 @@ export function summaryLine(rows) {
   const calls = known.reduce((sum, row) => sum + row.calls, 0), unknownCalls = sent.length - known.length;
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
-  return [`Runtime check: ${rows.length && rows.every(row => row.state === 'passed') ? '✓' : '✗'} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  return [`Runtime check${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${rows.length && rows.every(row => row.state === 'passed') ? '✓' : '✗'} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    RESULT_WORDS[row.state] ?? row.state, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -143,7 +145,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
-    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`);
+    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
+      '  To try again, run `pdd check` again (a new request).');
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,
@@ -154,7 +157,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   const linked = rows.filter(row => row.report_url);
   if (linked.length) {
     const width = Math.max(...linked.map(row => row.story.length));
-    out.push('Reports (anyone with a link can open it):', ...linked.map(row => `  ${row.story.padEnd(width)}  ${row.report_url}`));
+    out.push('Reports (anyone with a link can open it):', ...linked.map(row => `  ${row.story.padEnd(width)}  ${row.report_url}${row.draft ? '  (DRAFT)' : ''}`));
   }
   const rest = [...warnings, ...rows.filter(row => row.state !== 'failed').flatMap(row => (row.warnings ?? []).map(text => `${text} (${row.test})`))];
   out.push(...rest);

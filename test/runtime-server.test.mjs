@@ -178,11 +178,10 @@ test('RUNTIME-SERVER8: lint refuses tests that reach a bad prompt; unknown lint 
   const setup = harbor(t);
   const draft = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
     ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [{ target: 'prompts/menu.prompt.md' }] } },
-      { path: 'prompts/menu.prompt.md', state: 'draft', admission_state: 'draft', interface: { calls: [] } }]) } : f.normal(entry));
+      { path: 'prompts/menu.prompt.md', state: 'stale', admission_state: 'stale', interface: { calls: [] } }]) } : f.normal(entry));
   const refused = await check(setup, draft, [], { '--json': true });
   assert.equal(refused.code, 4); assert.deepEqual(draft.posts.map(post => post.command), ['lint']);
-  assert.deepEqual(refused.json.rows.map(row => row.refusals[0].code), ['interface-unapproved', 'interface-unapproved']);
-  assert.equal(refused.json.rows[0].refusals[0].hint, 'pdd: prompts/menu.prompt.md is "draft". The person must approve it first.');
+  assert.deepEqual(refused.json.rows.map(row => row.refusals[0].code), ['interface-stale', 'interface-stale']);
   const lost = await fakeRuntime(t, entry => entry.method === 'POST' ? { destroy: true } : { status: 404, json: { error: { code: 'not-found' } } });
   const unknown = await check(setup, lost, []);
   assert.equal(unknown.code, 3); assert.deepEqual(lost.posts.map(post => post.command), ['lint']);
@@ -390,6 +389,7 @@ test('RUNTIME-SERVER19: a provider failure gets its own UNKNOWN block, exit 3 an
   assert.equal(result.code, 3);
   assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the AI provider failed during the run\. It is not a failed check\. Do not send it again yet\.$/m);
   assert.doesNotMatch(result.out, /FAILED|REFUSED/);
+  assert.match(result.out, /graph-provider-failure \(transport_unknown, internal-retry\)[^\n]*\n {2}To try again, run `pdd check` again \(a new request\)\.$/m);
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.rows[0].reason.code, 'graph-provider-failure');
@@ -416,4 +416,51 @@ test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engi
   assert.equal(json.json.warnings.some(text => warned.test(text)), false);
   const tomorrow = await check(setup, fake, ['place-order'], {}, { now: () => Date.parse('2026-10-28T16:27:47Z') });
   assert.match(tomorrow.out, warned);
+});
+
+const DRAFT_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
+const draftRepo = t => harbor(t, repo => {
+  const file = join(repo, PLACE); writeFileSync(file, readFileSync(file, 'utf8').replace('"approved"', '"draft"'));
+});
+const draftLint = (entry, f) => entry.method === 'POST' && entry.command === 'lint'
+  ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'draft', admission_state: 'draft', interface: { calls: [] } }]) } : null;
+
+// Wrong: a draft run looks like an approved one in the table, the links, the PR line or --json (Serhan, Oct 27).
+test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary line and --json says DRAFT', async t => {
+  const setup = draftRepo(t), fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 0, result.err + result.out);
+  assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed \(DRAFT\) +1\/1/m);
+  assert.match(result.out, /^Runtime check \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
+  assert.match(result.out, /^ {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {2}\(DRAFT\)$/m);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(json.json.draft, true); assert.equal(json.json.rows[0].draft, true);
+  assert.match(json.json.summary_line, /^Runtime check \(DRAFT\): ✓/);
+  const approved = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order'], { '--json': true });
+  assert.equal(approved.json.draft, false); assert.doesNotMatch(approved.json.summary_line, /DRAFT/);
+});
+
+// Wrong: until the server takes drafts, its refusal reads like a broken prompt instead of a plain reason.
+test('RUNTIME-DRAFT3: the server refusal of a draft prompt says plainly that drafts do not run yet (exit 4)', async t => {
+  const setup = draftRepo(t);
+  const fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? (entry.method === 'GET'
+    ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], [{ code: 'interface-unapproved', section: 'steps[0]',
+      message: 'The runtime refused this job. See the reported reason.', engine_message: 'interface-unapproved' }]) } : f.normal(entry)));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 4);
+  assert.match(result.out, /REFUSED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}interface-unapproved {2}steps\[0\] {2}The server does not run draft prompts yet\./);
+  assert.ok(result.out.includes(DRAFT_TEXT));
+});
+
+// Wrong: pdd guesses DRAFT locally even when the server says which prompts were drafts (prompt-runtime #365).
+test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; without the field the local guess stays', async t => {
+  const setup = draftRepo(t);
+  const said = list => async (entry, f) => draftLint(entry, f) ?? (entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), draft_prompts: list } } : f.normal(entry));
+  const server = await check(setup, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
+  assert.equal(server.json.rows[0].draft, true);
+  const cleared = await check(setup, await fakeRuntime(t, await said([])), ['place-order'], { '--json': true });
+  assert.equal(cleared.json.rows[0].draft, false); assert.doesNotMatch(cleared.json.summary_line, /DRAFT/);
+  const plain = harbor(t);
+  const flagged = await check(plain, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
+  assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
 });
