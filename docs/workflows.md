@@ -25,7 +25,7 @@ PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat shows the plan. You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Runtime check (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
@@ -39,7 +39,7 @@ What each step does:
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
 | visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. |
 | prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
-| check | Runs `pdd check` on every Story as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. Puts one `Runtime check` line for each Story and the report links in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
+| check | Runs `pdd check` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. Puts one `Runtime check` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
 | try? | Makes a `pdd try` link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. |
 | build | Builds only what you approved. Tests through the public interface. |
 | verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the exact commands and their real output. |
@@ -92,7 +92,7 @@ After the check and try steps, the chat shows one `Runtime check` line for each 
 
 The PR 1 body is short:
 
-1. The `Runtime check` lines and their report links (report links expire after 7 days).
+1. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
 2. `Part of #N`, and that the code comes in PR 2 only when you ask.
 3. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
 4. One short line for each step.

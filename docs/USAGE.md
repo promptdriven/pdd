@@ -99,7 +99,7 @@ which -a pdd
 pdd --version   # PDD Alpha prints 0.1.6
 ```
 
-Remove the old one with the tool you used to install it:
+Remove the old one with the tool that installed it:
 
 ```sh
 uv tool uninstall pdd-cli     # if you used uv
@@ -235,7 +235,7 @@ The areas of the three workflows (you act at the **bold** ones):
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
 
-**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat shows the plan. You can answer, for example:
+**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can answer, for example:
 
 - "Make it one Story."
 - "Split part 5."
@@ -288,7 +288,7 @@ Rules:
 
 Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve 42`."
 
-The PR 1 body is short. At the top are the `Runtime check` lines and their report links. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Try links.
+The PR 1 body is short. At the top is one `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. A `Report (<story>)` link follows for each Story. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Try links.
 
 - **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
 - **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
@@ -338,6 +338,7 @@ Both commands sign in with your GitHub login (`gh auth status`). They send every
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing
 pdd check --files         # list the files a check would send; sends nothing
+pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story
 pdd check --read          # show the last results again; sends nothing new
@@ -348,6 +349,8 @@ pdd try --stop place-order
 After the table, `pdd check` prints one `Runtime check:` line that you can paste into a PR, for example `Runtime check: ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`.
 
 With many Stories, `pdd check` prints one `Runtime check` line for each Story, then the overall line.
+
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 

@@ -13,6 +13,7 @@ What this alpha contains:
 - A big feature request gets a plan first: `user_stories/PLAN.md`, many Stories, one test file for each Story, and one `Runtime check` line for each Story. `status` shows `Stories: N of M pass`.
 - The agents run the tests. A fresh subagent that did not write the code does the verify step. pdd does not run tests and never merges. Only a person approves a gate, and only a person approves a prompt (`pdd approve PROMPT` at a terminal, or the Approve button on the Try page that the owner's `pdd try` picks up). Agents use `pdd workflow done` and `pdd workflow ask`.
 - `docs/cli.md` shows every command form of `pdd --help`. `test/docs-commands.test.mjs` fails when a form is missing, so update `docs/cli.md` with each change to the command catalog.
+- The README and the docs describe pdd as it is today, as if this were the first version. Put history and change notes only in the GitHub release notes. The one exception is the short note for people who have the Python pdd installed. `test/docs-first-time.test.mjs` fails on history words.
 - Agents start in full-access mode. pdd does not write global agent config, copy credentials or touch the person's default Herdr session.
 
 Keep the package self-contained: no private dependencies and no credentials. Only `pdd check` and `pdd try` call the PDD runtime, with the user's gh token; the address is one setting (`PDD_RUNTIME_URL`, default `DEFAULT_RUNTIME_URL` in `src/runtime-client.mjs`). Do not import captured conversations or operational fixtures.
