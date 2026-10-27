@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 64819a051b7c3014875a94a145f220d0ae3407ac2bd12c7b0fc4b6ac8187d6b7).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2fcd9098bc93a3f4a978b88cf4afd016ef6d03a4965545eccc7c87ad2f6aa789).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -290,6 +290,18 @@ function applyAnswer(row, answer, context) {
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
 }
 
+// Before a check of every story (cli 12b): about one AI call for each step plus the calls its prompt may make; the cap is the sum of max_calls.
+function costLine(rows, root, visible) {
+  const prompts = new Map(), callsOf = path => {
+    if (!prompts.has(path)) prompts.set(path, readPrompt(root, visible, path));
+    const calls = prompts.get(path)?.interface?.calls;
+    return (Array.isArray(calls) ? calls : []).reduce((sum, call) => sum + (Number.isInteger(call?.max_calls) ? call.max_calls : 0), 0);
+  };
+  const about = rows.reduce((sum, row) => sum + row.steps.reduce((steps, step) => steps + 1 + callsOf(step?.entry_path), 0), 0);
+  const most = rows.reduce((sum, row) => sum + row.max_calls, 0);
+  return `Checking all ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}: about ${about} AI call${about === 1 ? '' : 's'} (at most ${most}).`;
+}
+
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
@@ -554,6 +566,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   context.warnings = [...found.warnings, ...checked.warnings];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
+  if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
   const capture = captureSource(root);
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);

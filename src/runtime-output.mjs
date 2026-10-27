@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: bd1c1b6e76c47f2bcc7b6b1186f06cdae3a77021d42788916f2664fdf618ef93).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 156695f64ddc43161b32318727ed4ae86acc41f2fe36f24af92df3dd61d002fb).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -95,7 +95,11 @@ export function summaryLine(rows) {
   const calls = known.reduce((sum, row) => sum + row.calls, 0), unknownCalls = sent.length - known.length;
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
-  return [`Runtime check${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${rows.length && rows.every(row => row.state === 'passed') ? '✓' : '✗'} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
+  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state));
+  const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
+    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : 'unknown ·';
+  return [`Runtime check${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 

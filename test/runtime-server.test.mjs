@@ -218,7 +218,8 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check: ✗ 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Runtime check: running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
 });
@@ -487,4 +488,26 @@ test('RUNTIME-ADDRESS2: Try and report links on the IP origin pass; links on any
   for (const bad of ['https://34.72.131.99/r/abc', 'https://evil.example/r/abc', 'http://34.72.131.98/r/abc', 'https://34.72.131.98/s/abc/']) {
     assert.equal(validLink(bad, origin, 'report'), null, bad);
   }
+});
+
+// Wrong: a check of every story starts with no word on what it costs (cli 12b).
+test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses; a check of one story does not', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const all = await check(setup, fake, []);
+  assert.equal(all.code, 0);
+  const lines = all.err.split('\n');
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') >= 0, all.err);
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') < lines.findIndex(text => text.startsWith('Lint passed')));
+  const one = await check(setup, fake, ['place-order']);
+  assert.doesNotMatch(one.err, /Checking all/);
+});
+
+// Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
+test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, until a row really fails', async () => {
+  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
+  assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: unknown · /);
+  assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
+  assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
 });
