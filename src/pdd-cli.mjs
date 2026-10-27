@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d66506ffd417afac2f958619420943a6284d7b825ee6eff9f4e8fc6dffc75a56).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 5b100905e51337f4b8c8a446f169bd7f8f5598b8d956820052d5b0bd623e3b21).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -85,6 +85,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
         return 3;
       }
+    case 'prompt-approve': {
+      const { runApprove } = await import('./prompt-approve.mjs');
+      return runApprove({ words: [...plan.operands], cwd }, { stdout, stderr });
+    }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
       try {
