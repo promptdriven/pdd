@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f8626e4204a4cc773923ef57c28a566d84968a0cf291590fbd4247524d66cc6d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5b4be9507ccdc5f4e9b65433760f11678fc9443c31086dd9955ec9890c962728).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -66,7 +66,7 @@ async function areaMessage(run, index, p, packageRoot) {
   const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   return [
-    `Use the ${run.skill} skill. This is a pdd workflow run.${index ? ' The person approved the earlier areas.' : ''}`,
+    `Use the ${run.skill} skill: ${join(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md')}. This is a pdd workflow run.${index ? ' The person approved the earlier areas.' : ''}`,
     `Issue: ${run.repo}#${run.number} "${oneLine(run.issue.title)}" ${run.issue.url}`,
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
@@ -80,7 +80,6 @@ async function areaMessage(run, index, p, packageRoot) {
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
     `All PDD skills are in ${join(packageRoot ?? PACKAGE_ROOT, 'skills')} (use them if a skill is not installed).`,
-    ...(run.skillDir && run.skillDir !== join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill) ? [`This run's ${run.skill} skill is ${join(run.skillDir, 'SKILL.md')}.`] : []),
   ].join('\n') + '\n';
 }
 

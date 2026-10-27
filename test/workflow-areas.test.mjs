@@ -43,3 +43,15 @@ test('a pr gate before the last area needs then ask-code; the last area needs a 
     assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }), error => error.code === 'workflow_invalid');
   }
 });
+
+test('a pdd-installed copy in a home folder (marker .pdd-skill.json) never shadows the running package; a hand-made home skill still wins', t => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-areas-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
+  const home = join(base, 'home'), pkg = join(base, 'package');
+  put(join(pkg, 'skills'), 'bug', areas('new'));
+  put(join(home, '.agents/skills'), 'bug', areas('stale'));
+  writeFileSync(join(home, '.agents/skills/pdd-bug/.pdd-skill.json'), JSON.stringify({ package: 'pdd', version: '0.1.2', digest: 'x' }));
+  const found = readWorkflowAreas({ packageRoot: pkg, name: 'bug', home });
+  assert.equal(found.areas[0].name, 'new'); assert.equal(found.source, 'package'); assert.equal(found.dir, join(pkg, 'skills/pdd-bug'));
+  rmSync(join(home, '.agents/skills/pdd-bug/.pdd-skill.json'));
+  assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'bug', home }).areas[0].name, 'stale');
+});

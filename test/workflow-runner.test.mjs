@@ -142,7 +142,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
-  for (const part of ['Use the pdd-small-change skill', '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
+  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
     assert.ok(message.includes(part), part);
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
