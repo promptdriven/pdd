@@ -1,4 +1,4 @@
-// Generated from prompts/cli/session-intro.prompt.md (sha256: 9e09cc6f49b5d77f9d15d7e1037f26f7a6c659d8ef0371926e627866b906bf0b).
+// Generated from prompts/cli/session-intro.prompt.md (sha256: 28724ffcaf96d053a7185a793ba4de3ba25781219e0c65d080851f8967d3590e).
 import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 

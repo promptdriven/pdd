@@ -11,6 +11,7 @@
     "LICENSE",
     "CONTRIBUTING.md",
     "AGENTS.md",
+    "RUNBOOK.md",
     "bin/",
     "src/",
     "prompts/cli/",

@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureSource, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
+import { parseArgv } from '../src/argument-parser.mjs';
+import { renderSessionIntro } from '../src/session-intro.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const HARBOR = join(root, 'test/fixtures/harbor');
@@ -214,4 +216,15 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   }
   const filled = pdd('check', '--fill-hash');
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
+});
+
+// Wrong: the package has no runbook, so the intro and check steps never mention pdd check, or the runbook names commands pdd refuses.
+test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the intro names it, and its commands parse', () => {
+  const runbook = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
+  assert.ok(readJson(join(root, 'package.json')).files.includes('RUNBOOK.md'));
+  const intro = renderSessionIntro({ packageRoot: root, cwd: '/work/project' }).split('\n');
+  assert.ok(intro.includes(`Runtime: read ${join(root, 'RUNBOOK.md')} before you run a check.`));
+  const commands = [...runbook.matchAll(/`?(pdd (?:check|try)[^`#\n]*?)\s*(?:`|#|\n)/g)].map(match => match[1].trim());
+  assert.ok(commands.length >= 6, commands.join(' | '));
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
 });

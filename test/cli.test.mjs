@@ -60,7 +60,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const pack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', sandbox],
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
-  for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
+  for (const required of ['bin/pdd.mjs', 'RUNBOOK.md', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
     '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-definition-loader.mjs', '.pdd/workflows/feature/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
