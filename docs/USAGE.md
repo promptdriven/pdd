@@ -105,12 +105,23 @@ PDD is four skills. A skill is a folder of plain Markdown that your agent reads 
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-feature` | A workflow for new behavior |
 
-Each pdd command checks the skills first. If they are missing or older than your pdd, pdd copies them into the skills folders of your agents:
+Each pdd command checks the skills first and copies them into the skills folders of your agents:
 
 - `~/.agents/skills/` for Codex
 - `~/.claude/skills/` for Claude Code
+- `$CLAUDE_CONFIG_DIR/skills/` too, when you set that variable
 
-pdd never copies them into your repo. Each copied folder has a `.pdd-skill.json` file. This file shows that pdd owns the folder and replaces it on an update. Do not edit these folders. To change a workflow, [make your own](#7-make-your-own-workflow).
+pdd never copies them into your repo. Each copied folder has a marker file, `.pdd-skill.json`. It shows that pdd owns the folder.
+
+| The installed skill folder | What pdd does |
+|---|---|
+| Is missing | Copies the skill |
+| Is older than your pdd | Replaces it |
+| Has the same version, but its files changed | Replaces it |
+| Is newer than your pdd | Keeps it |
+| Is a symlink, or has no `.pdd-skill.json` file | Keeps it. It belongs to you |
+
+So do not edit the installed folders: pdd replaces your edits. To change a workflow, [make your own](#7-make-your-own-workflow).
 
 The skills work in any Codex or Claude Code chat, also one that you open yourself. Ask the agent, for example: "Use the pdd-bug skill for this."
 
@@ -126,7 +137,7 @@ pdd session
 What happens:
 
 1. PDD starts Codex in your project folder, in full-access mode.
-2. The first message is short. It says that prompts are the source. It names the `pdd-prompting` skill and lists its core rules. It names the three workflow skills and the `pdd workflow run` command.
+2. The first message is short (about 1.6 KB). It says that prompts are the source. It names the `pdd-prompting` skill and lists its core rules. It names the three workflow skills and the `pdd workflow run` command. If your project has a `RUNBOOK.md` file, it adds one line: read `RUNBOOK.md` before a check.
 3. The agent asks what you want to work on.
 
 The agent reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.
@@ -314,7 +325,7 @@ npm install -g github:promptdriven/pdd#alpha
 pdd --version
 ```
 
-The next pdd command replaces the installed PDD skills with the new ones. It does not touch a skill folder that has no `.pdd-skill.json` file. Such a folder belongs to you.
+The next pdd command replaces the installed PDD skills with the new ones. It does not touch a symlink or a skill folder that has no `.pdd-skill.json` file. Such a folder belongs to you.
 
 Uninstall:
 
@@ -322,6 +333,7 @@ Uninstall:
 npm uninstall -g pdd
 rm -rf ~/.agents/skills/pdd-prompting ~/.agents/skills/pdd-small-change ~/.agents/skills/pdd-bug ~/.agents/skills/pdd-feature
 rm -rf ~/.claude/skills/pdd-prompting ~/.claude/skills/pdd-small-change ~/.claude/skills/pdd-bug ~/.claude/skills/pdd-feature
+# If you set CLAUDE_CONFIG_DIR, also remove the four pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 ```
 

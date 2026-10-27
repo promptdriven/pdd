@@ -17,7 +17,7 @@ PDD Alpha gives your agent (Codex or Claude Code) four skills:
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-feature` | A workflow for new behavior |
 
-pdd copies them into your agent's own skills folders (`~/.agents/skills` and `~/.claude/skills`). It never writes them into your repo. Then pdd can take a GitHub issue to a real pull request. You approve each plan. pdd opens the PR. You merge it.
+pdd copies them into your agent's own skills folders (`~/.agents/skills`, `~/.claude/skills`, and `$CLAUDE_CONFIG_DIR/skills` if you set it). It never writes them into your repo. Then pdd can take a GitHub issue to a real pull request. You approve each plan. pdd opens the PR. You merge it.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex and Claude Code in full-access mode, so they do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.

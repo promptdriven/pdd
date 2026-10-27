@@ -1,6 +1,6 @@
 # CLI reference
 
-`pdd --help` shows all commands. `help` and `-h` also work. Each command first checks the [PDD skills](USAGE.md#4-the-pdd-skills) and installs them when they are missing or old.
+`pdd --help` shows all commands. `help` and `-h` also work. Each command first checks the [PDD skills](USAGE.md#4-the-pdd-skills). It copies a skill that is missing, older, or changed in the same version.
 
 ## Sessions
 
@@ -11,7 +11,7 @@
 
 Codex is the default agent. Both commands start the agent in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`. PDD does not choose a model and does not change your agent's settings, sign-in or config. Use `--` to end the PDD options before a request that starts with `-`.
 
-The intro has the folder, the core rules of the `pdd-prompting` skill, the names of the workflow skills and the full path of this pdd. The agent uses that full path, so another `pdd` on its PATH does not matter.
+The intro is about 1.6 KB. It has the folder, the core rules of the `pdd-prompting` skill, the names of the workflow skills and the full path of this pdd. If the project has a `RUNBOOK.md` file, the intro adds one line: read `RUNBOOK.md` before a check. The agent uses that full path, so another `pdd` on its PATH does not matter.
 
 ## Runs on a GitHub issue
 

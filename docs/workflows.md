@@ -117,9 +117,18 @@ node --test examples/ticket-status/test/status.test.mjs
 | For one project (commit it) | `.agents/skills/` in the repo | `.claude/skills/` in the repo |
 | For you, in all projects | `~/.agents/skills/` | `~/.claude/skills/` |
 
-`pdd workflow run NAME` finds the skill folder `pdd-NAME` with a `workflow.json` in any of these four folders. Put your copy where your agent reads it, or in both folders of a level.
+If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-pdd installs its four skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a folder without that file.
+`pdd workflow run NAME` finds the skill folder `pdd-NAME` with a `workflow.json` in any of these folders. Put your copy where your agent reads it, or in both folders of a level.
+
+pdd installs its four skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a symlink or a folder without that file.
+
+Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
+
+| Project folder | Codex | Claude Code |
+|---|---|---|
+| New name, for example `pdd-mybug` | Uses it | Uses it |
+| Same name as a PDD skill, for example `pdd-bug` | Uses the project copy first | Uses only the user copy. The project copy has no effect |
 
 ### Copy and edit
 
