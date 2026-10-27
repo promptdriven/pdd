@@ -276,10 +276,15 @@ For all workflows:
 
 ```sh
 pdd workflow status 42
-pdd workflow status        # all runs in this repo
+pdd workflow status               # all runs in this repo
+pdd workflow status --all         # every run on this machine, in all repos
+pdd workflow status --cancelled   # also show the cancelled runs
+pdd workflow status --all --json  # the same list as data
 ```
 
-`status` shows the area, the step, what the run waits for, and the PR with its CI state. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
+`status` shows the area, the step, what the run waits for, and the PRs with their CI state. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
+
+`--all` lists every run on this machine, in all repos. Plain `status` outside a Git repo does the same. The list shows the runs that wait for you first, then the runs that work, then the runs with an open PR, then the runs that are done. Cancelled runs are hidden. `--cancelled` shows them. `--json` gives the same list as data.
 
 ### 6.9 Close the terminal or restart
 
