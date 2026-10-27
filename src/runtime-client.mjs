@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 10b4eaecc3bcbec0249d68ebf348249ffa097cc600cbd042b7819bdf260bc3d3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0cd92f5d563f9e07bc329a0742e3f71071401ff375a2a3e6772ca34cecd0aab9).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderLocal, renderText, summaryLine, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -492,16 +492,54 @@ function runFiles(root, ports) {
   return 0;
 }
 
-// pdd check --local: discovery, preflight (P1-P10, schema rules, hashes) and the capture limits; nothing is sent (2048 session).
-function runLocal(context, cwd, words) {
-  const { ports } = context, { root, found, normalized } = localSetup(cwd, words);
-  const checked = preflight({ root, found, selected: select(found, normalized, root) });
-  const rows = localRows(checked.rows);
-  const warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
-  const capture = rows.some(row => row.state === 'ready') ? captureSource(root) : null;
-  const exitCode = rows.some(row => row.state === 'refused') ? 4 : 0;
-  if (context.json) line(ports.stdout, JSON.stringify(renderJson({ repo: root, rows, warnings, exitCode })));
-  else ports.stdout.write(renderLocal({ rows, warnings, capture }));
+// pdd check --lint (Serhan: runtime logic belongs on the server): only the server's lint (0 AI calls) on the captured files.
+// Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
+async function runLintOnly(context, cwd, words, setRelease) {
+  const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
+  const rows = select(found, normalized, root).map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
+    refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
+  const capture = captureSource(root), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
+    secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
+  context.folder = context.store.folder('batches', batch);
+  saveBatch(context);
+  setRelease(interruptible(context));
+  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  const lint = await runLint(context);
+  if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
+  const answer = lint.answer, program = answer?.result?.report?.program;
+  const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
+    : (answer?.state === 'refused' && !isObject(program) ? projectAnswer(answer, { origin, secrets: context.secrets }).refusals.map(item => ({ ...item, path: null })) : []);
+  if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
+    throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
+  }
+  for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
+    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null });
+  }
+  const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
+  for (const [row, problem] of verdicts) {
+    Object.assign(row, { state: 'refused', refusals: [problem] });
+    const path = /^(\S+?\.prompt\.md)\b/.exec(problem.message ?? '')?.[1] ?? null;
+    if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
+  }
+  if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  for (const row of rows) if (row.state === 'ready') row.state = 'passed';
+  const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
+  const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
+  if (context.json) {
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: answer?.state ?? lint.kind, summary_line: summary, problems,
+      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
+    return exitCode;
+  }
+  const out = [];
+  if (problems.length) {
+    out.push('Lint problems (from the PDD runtime):');
+    for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
+  }
+  for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : `refused: ${row.refusals.map(item => item.code).join(', ')}`}`);
+  out.push(summary, ...found.warnings);
+  ports.stdout.write(`${out.join('\n')}\n`);
   return exitCode;
 }
 
@@ -577,17 +615,17 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    const modes = ['--read', '--fill-hash', '--files', '--request', '--local'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--local'].includes(modes[0])));
+    const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
     if (modes[0] === '--files') return runFiles(root, ports);
-    if (modes[0] === '--local') return runLocal(context, cwd, words);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
+    if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
     return await runBatch(context, cwd, words, options, value => { release = value; });
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }

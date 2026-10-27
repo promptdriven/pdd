@@ -40,10 +40,6 @@ The first match from the top wins:
 6. `X of Y stories passed. Model asked for: M.` Skip the model part when it is not known. Time is shown only for ended rows.
 7. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
 
-## Local check (`pdd check --local`)
-
-The table (`ready` for a test that would be sent), the `REFUSED before sending` block, `Local check: N of M tests are ready to send (F files, S). Nothing was sent.`, then the warnings. No `Runtime check` lines.
-
 ## JSON (stdout, `--json`)
 
 One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title, test, state, checks, criteria, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, draft, reason, summary_line}], warnings}`. A row's `summary_line` is the paste line of its Story. `draft` is true for a row that ran a draft prompt, and at the top when any row did. When the server answer has `draft_prompts` (a list of repo paths), a nonempty list means DRAFT and an empty one means not DRAFT; it wins over pdd's local guess. Older servers without the field keep the local guess. `reason` is `{code, message}` for a row that was not run or is unknown (`graph-provider-failure` for a provider failure), else null. Nothing else goes to stdout.

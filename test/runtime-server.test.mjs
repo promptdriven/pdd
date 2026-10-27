@@ -586,3 +586,46 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
   const reading = await check(setup, onRead, ['place-order']);
   assert.ok(reading.err.includes(said.json.message), reading.err);
 });
+
+// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules (Serhan: runtime logic on the server).
+test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
+  const setup = harbor(t, repo => {
+    const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
+    doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
+  });
+  const ok = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--lint': true });
+  assert.equal(ok.code, 0, ok.err + ok.out);
+  assert.match(ok.out, /^Lint: 2 of 2 tests pass\. 0 AI calls\. No checks were sent\.$/m);
+  assert.doesNotMatch(ok.out + ok.err, /invalid-input|Runtime check|If pdd stops/);
+  const refusing = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
+    ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'refused', admission_state: 'refused', interface: null }],
+      [{ code: 'graph-schema-type-list', path: PLACE, section: 'Runtime interface.entries[0].input_schema', message: 'graph executable schema is invalid: type list' },
+        { code: 'invalid-interface', path: 'prompts/other.prompt.md', section: 'Runtime interface', message: 'invalid-interface' }]) } : f.normal(entry));
+  const bad = await check(setup, refusing, [], { '--lint': true });
+  assert.equal(bad.code, 4);
+  assert.match(bad.out, /^ {2}graph-schema-type-list {2}prompts\/place_order\.prompt\.md {2}Runtime interface\.entries\[0\]\.input_schema {2}graph executable schema is invalid: type list$/m);
+  assert.match(bad.out, /^ {2}invalid-interface {2}prompts\/other\.prompt\.md /m);
+  assert.match(bad.out, /^Lint: 0 of 2 tests pass\. 0 AI calls\. No checks were sent\.$/m);
+  const json = await check(setup, refusing, ['place-order'], { '--lint': true, '--json': true });
+  assert.equal(json.code, 4); assert.equal(json.json.problems.length, 2); assert.equal(json.json.rows[0].state, 'refused');
+  assert.deepEqual(refusing.posts.map(post => post.command), ['lint', 'lint']);
+});
+
+// Wrong: --lint hides not-invited, update-required or no room behind a problem list, or sends files with secrets.
+test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option rules', async t => {
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'deploy.pem'), 'x'));
+  const quiet = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const secret = await check(setup, quiet, [], { '--lint': true });
+  assert.equal(secret.code, 4); assert.match(secret.err, /deploy\.pem: the name looks like a secret/); assert.equal(quiet.posts.length, 0);
+  const clean = harbor(t);
+  for (const [reply, said] of [[{ status: 403, json: { code: 'not-invited', login: 'octo' } }, /octo is not on the PDD runtime invite list/],
+    [{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /Please update pdd\./],
+    [{ status: 503, json: { error: { code: 'pool-low-room', message: 'The runtime model account has too little room for this job. Try again later.' } } }, /too little room/]]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
+    const result = await check(clean, fake, [], { '--lint': true });
+    assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+  }
+  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true }]) {
+    assert.equal((await check(clean, quiet, [], options)).code, 2, JSON.stringify(options));
+  }
+});

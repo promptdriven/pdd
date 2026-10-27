@@ -207,7 +207,7 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
   const help = pdd('check', '--help');
   assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\]/);
-  assert.match(help.stdout, /pdd check --local \[STORY\.\.\.\] \[--json\] +.*sends nothing/);
+  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/); assert.doesNotMatch(help.stdout, /--local/);
   assert.doesNotMatch(help.stdout, /--request/);
   assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
@@ -431,26 +431,3 @@ test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance cr
   assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test.']);
 });
 
-// Wrong: agents import pdd's source files by hand to get a local lint (2048 session: 23 calls into pdd/src).
-test('RUNTIME-LOCAL1: pdd check --local runs every local rule and limit, prints the same refusals and sends nothing', async t => {
-  const { repo, home } = harbor(t);
-  const ok = await check(repo, home, [], { '--local': true });
-  assert.equal(ok.code, 0, ok.err); assert.deepEqual(ok.calls, { fetch: 0, gh: 0 });
-  assert.match(ok.out, /^Place a coffee order +tests\/place-order\.json +ready/m);
-  assert.match(ok.out, /^Local check: 2 of 2 tests are ready to send \(6 files, \d+ KB\)\. Nothing was sent\.$/m);
-  assert.doesNotMatch(ok.out, /Runtime check/);
-  const file = join(repo, 'tests/place-order.json'), doc = readJson(file);
-  doc.steps[0].input.items[0].quantity = 0; writeJson(file, doc);
-  const refused = await check(repo, home, ['place-order'], { '--local': true });
-  assert.equal(refused.code, 4); assert.deepEqual(refused.calls, { fetch: 0, gh: 0 });
-  assert.match(refused.out, /REFUSED before sending \(not sent, 0 AI calls\)\n {2}tests\/place-order\.json {2}step 1 {2}invalid-input\n {2}steps\[0\] input \/items\/0\/quantity is 0\. The prompt allows 1 to 20\./);
-  assert.match(refused.out, /^Local check: 0 of 1 tests are ready to send/m);
-  const json = await check(repo, home, ['place-order'], { '--local': true, '--json': true });
-  assert.equal(json.code, 4); assert.equal(json.json.rows[0].refusals[0].code, 'invalid-input');
-  writeFileSync(join(repo, 'server.key'), 'x');
-  const secret = await check(repo, home, ['unknown-item'], { '--local': true });
-  assert.equal(secret.code, 4); assert.match(secret.err, /server\.key: the name looks like a secret/);
-  for (const options of [{ '--local': true, '--read': true }, { '--local': true, '--max-calls': '5' }]) {
-    assert.equal((await check(repo, home, [], options)).code, 2, JSON.stringify(options));
-  }
-});

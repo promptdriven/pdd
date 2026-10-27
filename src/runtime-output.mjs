@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: f6b9fe566c81edd7a6f2d1b114771c28c5c63602194f6e47cf8b8a01dba08c81).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 31950901b783bbac888f3427cd803ad039e81f78abfd01bf33ca9ba9cebeecd5).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -128,15 +128,6 @@ function refusalLines(item) {
   return lines;
 }
 
-// pdd check --local: the table, the same local refusal lines and the warnings; nothing was sent.
-export function renderLocal({ rows, warnings = [], capture = null }) {
-  const out = [...table(rows), ...localRefusals(rows)];
-  const ready = rows.filter(row => row.state === 'ready').length;
-  out.push(`Local check: ${ready} of ${rows.length} tests are ready to send${capture ? ` (${capture.files.length} files, ${formatBytes(capture.bytes)})` : ''}. Nothing was sent.`);
-  out.push(...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${text} (${row.test})`)));
-  return `${out.join('\n')}\n`;
-}
-
 function localRefusals(rows) {
   const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
@@ -147,7 +138,6 @@ function localRefusals(rows) {
   }
   return out;
 }
-const formatBytes = bytes => bytes < 1024 ? `${bytes} bytes` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 
 // The terminal result of a batch (stdout).
 export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {

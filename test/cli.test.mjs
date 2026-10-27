@@ -74,7 +74,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|phone|machine)\b/);
+    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|phone|machine)\b|(?<!-)\blint\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
