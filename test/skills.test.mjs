@@ -72,9 +72,9 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    // 6.5 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
-    // pdd-bug needs the most room: the story-gate verdict lines, the real-user rules (0.1.3) and the 0.1.4 Story rules.
-    assert.ok(bytes <= 6656, `${name} is ${bytes} bytes`);
+    // 7 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
+    // pdd-bug carries the verdict lines and the real-user rules; pdd-feature the many-Story plan (0.1.6).
+    assert.ok(bytes <= 7168, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -101,7 +101,9 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
   for (const name of ['pdd-bug', 'pdd-feature']) {
     assert.match(read(`${name}/steps/try.md`), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
     const text = read(`${name}/SKILL.md`);
-    assert.match(text, /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
+    // pdd-feature shows one line per Story (0.1.6); pdd-bug has one Story.
+    assert.match(text, name === 'pdd-feature' ? /Before PR 1, show one `Runtime check` line per Story with its report link, and the Try links/
+      : /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
@@ -230,7 +232,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const check = read(`${name}/steps/check.md`);
     assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
-    assert.match(check, /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
+    assert.match(check, name === 'pdd-feature' ? /Put only pdd check's `Runtime check \(<story>\):` line/ : /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
   }
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd check`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
@@ -260,4 +262,32 @@ test('SKILLS18: no skill text tells a Codex user to type /pdd-…', () => {
     const text = readFileSync(file, 'utf8');
     for (const [match] of text.matchAll(/\/pdd-[a-z-]+/g)) assert.match(text, new RegExp(`\\$${match.slice(1)}`), `${file} names ${match} without $${match.slice(1)}`);
   }
+});
+
+// Wrong (0.1.6, plan first): one big Story for a request with many behaviors, one test file for all of them,
+// one check line for everything, or a change request that redoes every Story.
+test('SKILLS19: feature plans many Stories, each with its own test file and check line; changes name one Story', () => {
+  assert.match(read('pdd-prompting/SKILL.md'), /A Story is one behavior that a person can check in about a minute: one "I can…" sentence\./);
+  const understand = read('pdd-feature/steps/understand.md'), story = read('pdd-feature/steps/prompt-story.md'), check = read('pdd-feature/steps/check.md');
+  assert.match(understand, /Count the separate behaviors/);
+  assert.match(understand, /`user_stories\/PLAN\.md`: a numbered list, one line per Story, in build order/);
+  assert.match(understand, /With 1 behavior, write one Story and no plan\./);
+  assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own `tests\/<story>\.json`/);
+  assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
+  assert.match(check, /run `pdd check` on every Story/);
+  assert.match(check, /`Runtime check \(<story>\):` line and its `Report:` line for each Story, in PLAN\.md order, then the overall `Runtime check:` and `Report:` lines/);
+  assert.match(check, /fix only the failing Stories[^\n]*check only those again/);
+  const skill = read('pdd-feature/SKILL.md');
+  assert.match(skill, /At the story gate, show the plan list/);
+  for (const words of ['"make it one Story"', '"split part 5"', '"change Story 5: …"']) assert.ok(skill.includes(words), words);
+  assert.match(skill, /A change request names a Story: redo only that Story and its test file/);
+  assert.match(skill, /one `Runtime check` line per Story/);
+  assert.match(read('pdd-feature/steps/build.md'), /Build the approved Stories in PLAN\.md order\./);
+  assert.match(read('pdd-feature/steps/build.md'), /replay test for each Story/);
+  assert.match(read('pdd-feature/steps/verify.md'), /one row group per Story/);
+  for (const name of Object.keys(AREAS)) assert.match(read(`${name}/steps/formal.md`), /Cover each Story that has `## Rules to check`\./);
+  // pdd-bug and pdd-small-change stay one Story.
+  for (const name of ['pdd-bug', 'pdd-small-change'])
+    for (const file of [`${name}/SKILL.md`, ...readdirSync(join(skills, name, 'steps')).map(step => `${name}/steps/${step}`)])
+      assert.equal(read(file).includes('PLAN.md'), false, file);
 });
