@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: d518d3cf28a6baa20e29c6f63e0b8518e9f2d525bc248a20257b3507d7189931).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 7c2e2e90882ece24afe20c36016c118089fc85e34fc28da8fd237aa2403b6512).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -25,7 +25,7 @@ function parseRoute(route, words) {
   const options = Object.create(null), operands = []; let literal = false;
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
-    if (word === '--' && route.local === 'session' && !literal) { literal = true; continue; }
+    if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
       if (!option || Object.hasOwn(options, word)) fail();
@@ -55,7 +55,7 @@ export function parseArgv(argv) {
   if (!Array.isArray(argv) || argv.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
   if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return helpFor(argv.slice(1));
-  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
+  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
     parseRoute(route, words.slice(route.prefix.length));

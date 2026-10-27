@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm, readdir, lstat, symlink, mkdir, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
-import { allocateIssueWorktree, lookupIssueWorktree } from '../src/workflow-worktree.mjs';
+import { allocateIssueWorktree, lookupIssueWorktree, releaseIssueClaim } from '../src/workflow-worktree.mjs';
 
 const execute = promisify(execFile);
 async function fixture(t) {
@@ -485,4 +485,19 @@ test('external saved assignment cannot substitute an arbitrary outside sibling p
   assert(readOnly(f.calls)); assert.equal(adds(f.calls).length, 0);
   assert.deepEqual(await snapshot(join(f.common, 'pdd', 'worktree-assignments')), before);
   assert.equal(await readFile(join(a.worktreePath, 'source.txt'), 'utf8'), 'committed base\n');
+});
+
+test('release frees only its own issue claim and keeps the old worktree, branch and run record', async t => {
+  const f = await fixture(t), first = f.input(301);
+  const a = await allocateIssueWorktree(first, f.ports);
+  assert.equal(a.state, 'ready', a.message);
+  assert.equal((await allocateIssueWorktree(f.input(301), f.ports)).state, 'conflict');
+  assert.equal((await releaseIssueClaim({ cwd: f.cwd, runId: randomUUID(), issueNumber: 301 }, f.ports)).state, 'conflict');
+  assert.equal((await releaseIssueClaim({ cwd: f.cwd, runId: first.runId, issueNumber: 301 }, f.ports)).state, 'released');
+  assert.equal((await releaseIssueClaim({ cwd: f.cwd, runId: first.runId, issueNumber: 301 }, f.ports)).state, 'released');
+  const b = await allocateIssueWorktree(f.input(301), f.ports);
+  assert.equal(b.state, 'ready', b.message);
+  assert.notEqual(b.assignment.worktreePath, a.assignment.worktreePath); assert.notEqual(b.assignment.branch, a.assignment.branch);
+  assert((await lstat(a.assignment.worktreePath)).isDirectory()); await lstat(metadata(f, first.runId));
+  assert.equal((await f.git('branch', '--list', a.assignment.branch)).stdout.trim().replace(/^[*+] /, ''), a.assignment.branch);
 });

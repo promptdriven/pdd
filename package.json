@@ -17,7 +17,6 @@
     "prompts/cli/",
     "docs/",
     "skills/",
-    ".pdd/workflows/",
     "examples/"
   ],
   "scripts": {

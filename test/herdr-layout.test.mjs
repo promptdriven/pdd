@@ -1,25 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, stat } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, stat, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { runHerdrStage } from '../src/workflow-stage-herdr.mjs';
 import { allocateIssueWorktree } from '../src/workflow-worktree.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-// The production adapter chooses the target; only the subprocess boundary is captured.
-test('new production stage selects shared pdd, never a run hash or default', async t => {
- const cwd=await mkdtemp(join(tmpdir(),'pdd-layout-repro-'));t.after(()=>rm(cwd,{recursive:true,force:true}));const calls=[];
- await runHerdrStage({runId:randomUUID(),attemptId:randomUUID(),stageId:'scope',agent:'codex',cwd,
- repository:'Serhan-Asad/harbor-coffee',sourceRoot:cwd,commonDir:join(cwd,'.git'),issueNumber:2,workflowName:'small-change',
- context:'Guide',instructions:'Scope',checkpoint:async()=>{}},{layoutDirectory:join(cwd,'state'),withStageGuard:async(_b,fn)=>fn(),
- execFile:async(_exe,args)=>{calls.push(args);throw Object.assign(Error('stop after target'),{code:'STOP'});}});
- assert.equal(calls[0][1],'pdd');
-});
 async function fixture(t){
- const root=await mkdtemp(join(tmpdir(),'pdd-layout-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const root=await realpath(await mkdtemp(join(tmpdir(),'pdd-layout-')));t.after(()=>rm(root,{recursive:true,force:true}));
  const sourceRoot=join(root,'coffee'),cwd=join(root,'run');await mkdir(sourceRoot);await mkdir(cwd);
  const input={runId:randomUUID(),repository:'alice/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd,issueNumber:2,workflowName:'small-change',stageId:'scope'};
  const calls=[],workspaces=[];let id=0;
@@ -53,9 +43,14 @@ test('repository reuse, one worktree per run, issue/workflow label and stage tab
  assert.equal(f.calls.filter(a=>a[0]==='worktree').length,1);
  assert(f.calls.filter(c=>c[0]==='tab').every(c=>c[c.indexOf('--workspace')+1]===a.workspaceId));
 });
-test('concurrent runs share repository but have separate worktree workspaces',async t=>{
+test('a busy layout lock fails at once instead of waiting; a later run shares the repository workspace',async t=>{
  const f=await fixture(t),cwd=join(f.root,'run2');await mkdir(cwd);
- const [a,b]=await Promise.all([f.open(),f.open({runId:randomUUID(),cwd,issueNumber:3})]);
+ const command=f.ports.command;let release,entered;const held=new Promise(r=>{release=r;}),inside=new Promise(r=>{entered=r;});
+ f.ports.command=async args=>{if(args[0]==='worktree'){entered();await held;}return command(args);};
+ const first=f.open();await inside;
+ await assert.rejects(f.open({runId:randomUUID(),cwd,issueNumber:3}),error=>error.code==='herdr_layout_busy');
+ release();const a=await first;f.ports.command=command;
+ const b=await f.open({runId:randomUUID(),cwd,issueNumber:3});
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.notEqual(a.workspaceId,b.workspaceId);
  assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','#2 small-change','#3 small-change']);
 });

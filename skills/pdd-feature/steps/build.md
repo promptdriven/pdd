@@ -2,4 +2,4 @@
 
 - Build only the approved Story. The prompt is the source.
 - Read the callers before you change a public interface.
-- Test through the public interface. Do not change expected results to fit the code.
+- Test through the public interface. Never change a test to make it pass.
