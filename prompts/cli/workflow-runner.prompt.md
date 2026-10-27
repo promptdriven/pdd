@@ -29,6 +29,10 @@ Keep append-only durable journal snapshots and artifacts under the actual absolu
 
 Before any native launch, push or PR create, flush its specific intent. After crash or unknown delivery, reconcile existing state; never blindly replay a native session, push or PR create. No-decision resume may inspect journal/artifacts and read existing PR/merge state, but cannot launch a new agent, push, create a PR or automatically advance into an effect. Explicit approve permits ordinary next progress, with the same guards; skip is confined to optional steps.
 
+## Attach-as-watch semantics
+
+Attach takes no long-lived lock. The controller keeps observing while a viewer is attached, records person intervention when a newer working lifecycle appears, and waits for the quiet idle window before acceptance. Acceptance/cleanup is the only guarded moment; the old pane receives a one-line accepted/moved-on notice; the controller terminal does not, because its progress renderer already prints `<stage> done` and the gate.
+
 ## Stage progression
 
 ```mermaid
@@ -85,3 +89,15 @@ The runner supplies native `ports.withStageGuard(backend, action)` using the act
 ## Independent issue stages
 
 Do not cap active or unresolved native stages across a repository. Each running stage is a full Codex or Claude session on the person's computer. Distinct issues may retain independent unresolved stages concurrently; this does not promise tested throughput or automatic cleanup. Preserve one assigned run per issue and one active stage per run, controller and attachment exclusion, exact identity/currentness checks and uncertain-delivery refusal. Do not allocate or release repository admission slots. Historical admission metadata and claims may remain on disk; ignore them without clearing or rewriting live journals or claims.
+
+## Observing foreground progress
+
+Accept an optional onProgress(event) port for run/resume. It is observational only: absent or throwing observers must not change journal bytes, allocation, decisions, stage acceptance or results. Isolate simultaneous calls. Notify after durable records, when an existing run is loaded under its lock, and on finite results. Each observation carries the saved issue title and agent with the run facts, so a person sees which issue and agent are working. Do not introduce a caller-supplied run ID or a runtime/installer requirement.
+
+Events contain a detached, minimal view: event name, actual run ID, workflow, issue number, current stage ID/kind/optional flag and ordinal/count, worktree/branch, journal path, pending kind, latest completed stage ID, actual backend session/workspace when known, latest accepted handoff summary and absolute artifact/file paths, including the current proposal JSON and prompt/Story/case files even when a later report is the latest handoff, and saved PR URLs. Do not expose guide/context, credentials, native prompts or raw DTOs. Backend polling may notify often; the renderer deduplicates identities. A result event includes its state. No new journal event or disk status file is needed for presentation. Existing journal/index files remain the rediscovery authority after terminal loss.
+
+Only the current pending backend supplies agent location. Do not present a completed stage's closed workspace as the current live location during resume or at a gate.
+
+## Herdr repository/run layout
+
+Pass the verified assignment repository, sourceRoot, commonDir, issueNumber and workflowName to every fresh or proven pre-native stage continuation. Stage IDs do not substitute for the run's workflow label. The stage adapter owns the shared pdd server, repository workspace and run worktree workspace. At a terminal completed or failed outcome with no pending stage, including an exception before PR intent such as an untracked artifact refusing publication, close the last accepted backend's run workspace through closeHerdrRun; gate, active, uncertain and merge-wait outcomes retain it. Record closure intent and confirmation durably. Closure failure becomes recovery_required and never pretends the run layout ended. No pending/unaccepted stage is closed. Git checkout remains available; no pre-merge deletion or implicit cancellation is authorized. Load [Herdr layout](workflow-herdr-layout.prompt.md) during generation and verification for the layout boundary.

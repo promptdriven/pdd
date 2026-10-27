@@ -18,7 +18,7 @@ test('editable free NAME reaches one real runner interface with exact four nativ
  assert.equal(await runPdd(['workflow','run','my-team-workflow','octo/repo#12','--agent','claude'],{workflowRunner:runner,workflowStages:transport,cwd:'/assigned invoker',packageRoot:'/package',stdout,stderr}),2);
  assert.equal(calls.length,1);assert.deepEqual(calls[0].input,{name:'my-team-workflow',issue:'octo/repo#12',agent:'claude',cwd:'/assigned invoker',packageRoot:'/package'});
  for(const [name,fn] of Object.entries(transport))assert.equal(calls[0].ports[name],fn);
- assert.equal('context' in calls[0].input,false);assert.equal(stdout.text,'waiting '+uuid+' human-review\n');assert.equal(stderr.text,'');
+ assert.equal('context' in calls[0].input,false);assert.match(stdout.text,/^Starting my-team-workflow for issue octo\/repo#12\./);assert.ok(stdout.text.endsWith('waiting '+uuid+' human-review\n'));assert.equal(typeof calls[0].ports.onProgress,'function');assert.equal(stderr.text,'');
  for(const name of ['../bad','/bad','Bad','a--b','a-','a'.repeat(65)])assert.throws(()=>parseArgv(['workflow','run',name,'1']));
 });
 

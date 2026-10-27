@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 379d91146b93850f0654f43382423d23990bc5f41e662e6b6484e71dd1cd8250).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 649c7681b1b644d3ed6d65c55fee4ebc043520aca21958057047e51794ef13b6).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -134,9 +134,30 @@ function readSaved(directory) {
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
   return saved;
 }
+const progressScope = new AsyncLocalStorage();
+function progress(s, event, state) {
+  const observe = progressScope.getStore();
+  if (typeof observe !== 'function' || !s) return;
+  const stage = s.definitions?.[s.index];
+  const directory = s.gitDir ? join(s.gitDir, 'pdd', 'workflows', s.runId) : null;
+  const last = s.completed?.at(-1);
+  const handoff = s.completed?.findLast(step => step.handoff)?.handoff;
+  const proposal = s.proposal ? s.completed?.findLast(step => s.definitions?.find(def => def.id === step.id)?.protocol === 'proposal')?.handoff : null;
+  const backend = s.pending?.backend;
+  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, issue: s.issue?.number, title: s.issue?.title, agent: s.agent,
+    stage: stage ? { id: stage.id, kind: stage.kind, optional: !!stage.optional } : null,
+    ordinal: s.index + 1, total: s.definitions?.length, root: s.root, branch: s.assignment?.branch,
+    journal: directory ? join(directory, 'journal.jsonl') : null, pending: s.pending?.kind,
+    ended: last?.id, backend: backend ? { session: backend.session, workspaceId: backend.workspaceId } : null,
+    summary: handoff?.summary, files: directory ? [...new Set([handoff, proposal].filter(Boolean).flatMap(item => [join(directory, item.path),
+      ...item.files.map(file => resolve(s.root, file.path))]))] : [],
+    prs: (s.completed ?? []).filter(step => step.pr).map(step => step.pr.url)
+  })); } catch { /* Observation cannot change workflow authority or progress. */ }
+}
 function record(s, directory, event) {
   s.seq = (s.seq ?? 0) + 1;
   durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
+  progress(s, event);
 }
 function lock(root) {
   ensureDirectory(dirname(root)); ensureDirectory(root);
@@ -162,6 +183,7 @@ function lock(root) {
   return () => unlinkSync(path);
 }
 function result(s, state, message) {
+  progress(s, 'result', state);
   const runId = s?.runId ?? null, stage = s?.definitions?.[s.index]?.id ?? null;
   return { exitCode: ['failed', 'recovery_required'].includes(state) ? 1 : state === 'waiting' ? 2 : 0,
     state, runId, stage, message: `${state}: run ${runId ?? '(not started)'}${stage ? ` / ${stage}` : ''}. ${message}` };
@@ -227,6 +249,13 @@ async function handoff(s, stage, r, directory) {
 function nativePorts(s, directory, r, options, p) {
   const guard = stageGuard(s);
   return {
+    quietMs: options.attachQuietMs ?? p.attachQuietMs ?? 10000,
+    onPersonSteppedIn: async backend => {
+      if (!s.pending?.personSteppedIn) {
+        s.pending.personSteppedIn = { seq: backend.evidence?.personSteppedInSeq ?? null };
+        record(s, directory, 'agent.person.stepped_in', { seq: backend.evidence?.personSteppedInSeq ?? null });
+      }
+    },
     withStageGuard: (backend, action) => guard(backend, async () => {
       await validateInput(s, options, p);
       if (['ready', 'prompt_intent'].includes(backend.phase)) await current(s, r, p);
@@ -264,6 +293,21 @@ function agentInstructions(s, stage, directory, attemptId, handoffPath, inputRev
     accepted: s.accepted ?? null };
   return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated work.\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Project files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
 }
+function herdrLayoutInput(s) {
+  return {repository:s.assignment.repository,sourceRoot:s.assignment.sourceRoot,commonDir:s.assignment.commonDir,
+    issueNumber:s.assignment.issueNumber,workflowName:s.assignment.workflowName};
+}
+async function finishRunLayout(outcome, s, directory, p) {
+  if (!s?.assignment || !directory || !['completed','failed'].includes(outcome.state) || s.pending || s.herdrLayoutClosed) return outcome;
+  const backend=s.completed.findLast(entry=>entry.backend?.phase==='closed')?.backend;
+  if (!backend || backend.session!=='pdd') return outcome;
+  if (typeof p.closeHerdrRun!=='function') return result(s,'recovery_required','Run workspace cleanup is unavailable.');
+  record(s,directory,'run.layout_close_intent');
+  const closed=await p.closeHerdrRun({backend}, {withStageGuard:stageGuard(s),checkpoint:async()=>record(s,directory,'run.layout_close_checkpoint')});
+  if(closed.state!=='closed') return result(s,'recovery_required',closed.reason||'Run workspace cleanup is uncertain.');
+  s.herdrLayoutClosed=true;record(s,directory,'run.layout_closed');
+  return outcome;
+}
 async function runAgent(s, stage, r, directory, options, p) {
   if (typeof p.runHerdrStage !== 'function' || typeof p.inspectHerdrStage !== 'function' || typeof p.closeHerdrStage !== 'function')
     fail('Background native run, inspection and cleanup ports are required.');
@@ -281,7 +325,7 @@ async function runAgent(s, stage, r, directory, options, p) {
   const previous = s.completed.filter(entry => entry.backend?.phase === 'closed').at(-1)?.backend;
   let outcome;
   try {
-    outcome = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId, agent: s.agent, cwd: r.root,
+    outcome = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId, agent: s.agent, cwd: r.root, ...herdrLayoutInput(s),
       context, instructions, backend: previous, checkpoint: portOptions.checkpoint }, portOptions);
     candidateIdentity(s, stage, outcome);
   } catch { return result(s, 'recovery_required', 'Background launch or delivery is uncertain; no automatic relaunch. Inspect the saved attempt.'); }
@@ -419,7 +463,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
       await current(s, r, p);
       try {
         seen = await p.runHerdrStage({ runId: s.runId, stageId: stage.id, attemptId: s.pending.attemptId,
-          agent: s.agent, cwd: r.root, context: s.context, instructions, backend: s.pending.backend,
+          agent: s.agent, cwd: r.root, ...herdrLayoutInput(s), context: s.context, instructions, backend: s.pending.backend,
           checkpoint: portOptions.checkpoint }, portOptions);
         candidateIdentity(s, stage, seen);
       } catch { return result(s, 'recovery_required', 'Original first dispatch is unconfirmed; preserve this same attempt for inspection.'); }
@@ -637,12 +681,12 @@ async function assignedRepository(assignment, p) {
 }
 async function execute(options, ports, resume) {
   const p = dependencies(ports);
-  let s, unlock;
+  let s, unlock, directory;
   try {
     if (!text(options?.packageRoot) || typeof p.loadGuidance !== 'function') fail('A package root and canonical guidance port are required.');
     if (resume && (!UUID.test(options.runId ?? '') || options.decision !== undefined && !['approve', 'skip'].includes(options.decision))) fail('Supply a UUIDv4 run and optional approve/skip decision.');
     if (!resume && !['codex', 'claude'].includes(options.agent ?? 'codex')) fail('Choose codex or claude.');
-    let assignment, input, r, directory;
+    let assignment, input, r;
     if (resume) {
       const found = await assignmentFor(options, p, true, options.runId);
       if (found.state !== 'ready' || !found.assignment) return result({ runId: options.runId }, 'recovery_required', found.message || 'Original worktree assignment is not proved.');
@@ -652,10 +696,11 @@ async function execute(options, ports, resume) {
       unlock = lock(join(r.gitDir, 'pdd', 'workflows'));
       s = readSaved(directory);
       if (!isDeepStrictEqual(s.assignment, assignment)) fail('Saved assignment identity changed.');
+      progress(s, 'run.loaded');
       const binding = await resolveWorkflowIssue({ cwd: r.root, issue: s.issue.url }, p.commandPorts);
       r.repo = binding.repository; r.base = binding.defaultBranch;
       await validateInput(s, options, p);
-      return await advance(s, r, directory, options, p, options.decision, false);
+      return await finishRunLayout(await advance(s, r, directory, options, p, options.decision, false), s, directory, p);
     }
     const source = await repository(options.cwd, p);
     const definition = loadWorkflowDefinition({ name: options.name, cwd: source.root, packageRoot: options.packageRoot });
@@ -695,12 +740,15 @@ async function execute(options, ports, resume) {
       expected: await fingerprint(r, p), pending: null };
     record(s, directory, 'run.started');
     await validateInput(s, options, p);
-    return await advance(s, r, directory, options, p, undefined, true);
-  } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }
+    return await finishRunLayout(await advance(s, r, directory, options, p, undefined, true), s, directory, p);
+  } catch (error) {
+    const outcome=result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.');
+    return unlock ? await finishRunLayout(outcome,s,directory,p) : outcome;
+  }
   finally { unlock?.(); }
 }
-export async function runWorkflow(options, ports) { return execute(options, ports, false); }
-export async function resumeWorkflow(options, ports) { return execute(options, ports, true); }
+export async function runWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, false)); }
+export async function resumeWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, true)); }
 
 export async function attachWorkflow(options, ports) {
   const p = dependencies(ports);
@@ -716,20 +764,15 @@ export async function attachWorkflow(options, ports) {
     if (!s.pending?.backend || s.pending.backend.phase === 'closed') return result(s, 'waiting', 'No live stage is retained. Completed stage history is archived; no conversation was started.');
     if (s.pending.kind === 'cleanup') return result(s, 'waiting', 'The stage is already accepted for cleanup; it is archived for workflow purposes.');
     if (typeof p.attachHerdrStage !== 'function') fail('Active native attachment is unavailable.');
-    const guard = stageGuard(s);
-    return await guard(s.pending.backend, async () => {
-      // Acceptance/cleanup may have won the guard after the initial lookup.
-      s = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
-      if (!isDeepStrictEqual(s.assignment, found.assignment)) fail('Saved assignment changed.');
-      await assignedRepository(s.assignment, p);
-      if (!s.pending?.backend || s.pending.backend.phase === 'closed' || s.pending.kind === 'cleanup')
-        return result(s, 'waiting', 'The stage is already accepted or archived. No live conversation was attached.');
-      await validateInput(s, options, p);
-      attachmentEpoch(s, true);
-      const code = await p.attachHerdrStage({ backend: s.pending.backend }, { withStageGuard: guard });
-      return result(s, code === 0 ? 'waiting' : 'recovery_required', code === 0
-        ? 'Detached from the original active stage. Resume its saved run to inspect; attachment does not certify stage success.'
-        : 'The exact original stage could not be attached. No replacement was started.');
-    });
+    s = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
+    if (!isDeepStrictEqual(s.assignment, found.assignment)) fail('Saved assignment changed.');
+    await assignedRepository(s.assignment, p);
+    if (!s.pending?.backend || s.pending.backend.phase === 'closed' || s.pending.kind === 'cleanup')
+      return result(s, 'waiting', 'The stage is already accepted or archived. No live conversation was attached.');
+    await validateInput(s, options, p);
+    const code = await p.attachHerdrStage({ backend: s.pending.backend }, {});
+    return result(s, code === 0 ? 'waiting' : 'recovery_required', code === 0
+      ? 'Watching the original active stage. The run continues while this view is open.'
+      : 'The exact original stage could not be attached. No replacement was started.');
   } catch (error) { return result(s, 'recovery_required', error.message); }
 }
