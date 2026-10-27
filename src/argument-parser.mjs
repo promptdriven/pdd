@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 5b7a57fa779d31954698591f5b9a92320012d925123d21a069b3c8c8f45ec9d8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: fd2ff3084d349a247b20393b0a7bd4689baf3e8c19a87ef8d2ef82079b420d73).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -27,7 +27,7 @@ function parseRoute(route, words) {
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (value === undefined || !value.length || value.startsWith('--') || option.choices && !option.choices.includes(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -42,6 +42,17 @@ function parseRoute(route, words) {
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
+  }
+  if (route.optionalClient) {
+    const present = name => options[name] !== undefined;
+    if (present('--id') && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(options['--id'])) fail();
+    if (present('--rev') && (!/^[1-9][0-9]*$/.test(options['--rev']) || !Number.isSafeInteger(Number(options['--rev'])))) fail();
+    if (['agent.send','agent.keys','agent.resume','agent.stop'].includes(route.id) && !present('--id')) fail();
+    if (route.id === 'agent.stop' && !present('--how')) fail();
+    if (route.id === 'accounts.quota-decide' && (!present('--decision') || !present('--rev'))) fail();
+    if (route.id === 'accounts.add' && (present('--from-pool') && operands[0]!=='codex' || present('--replace') && operands[0]==='codex')) fail();
+    if (route.id === 'accounts.allow' && !present('--machine')) fail();
+    if (route.id === 'accounts.policy' && present('--pinned') !== present('--then')) fail();
   }
   return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });

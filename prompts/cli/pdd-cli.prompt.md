@@ -26,3 +26,23 @@ workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoo
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root, workflow group and exact workflow run/resume/attach help describe the commands without preview labels or a claim that real workflow PRs are unproven. Retain command syntax, the real push/PR side-effect warning, foreground controller/explicit resume and saved active attachment facts. Help is exit0/local, with no runner/native/loader/network/auth effects and no added refusal, gate, flag or success claim.
+
+## Optional client registration
+
+Register an add-on module by calling `runPdd(argv, {clientAdapter, ports, stdout, stderr, cwd, packageRoot})` from its composition entrypoint. Preserve the legacy `phoneCli` alias only when clientAdapter is undefined. The standard bin supplies no client. Registration is explicit dependency injection, with no global registry, environment switch, private imports or filesystem/module discovery.
+
+After successful parsing, look up the command family in this fixed table:
+
+| Family | Adapter method | Arguments |
+| --- | --- | --- |
+| phone | runPhoneCommand | argv.slice(1) |
+| link | runLinkCommand | argv.slice(1) |
+| fleet | runFleetCommand | argv.slice(1) |
+| agents, agent, open | runAgentCommand | full argv copy |
+| accounts | runAccountsCommand | argv.slice(1) |
+| setup | runSetupCommand | argv.slice(1) |
+| join | runJoinCommand | argv.slice(1) |
+
+Methods receive `(args, {...ports, stdout, stderr, cwd, packageRoot})`, preserve their adapter receiver, and are called exactly once. Streams and location match the CLI invocation. Return an integer exit status 0 through 255 unchanged; the adapter owns output. A missing method or registration prints exactly `This command needs the optional client.` on stderr and returns1. Throws or invalid exit values print `Optional client command unconfirmed. Inspect local state before retrying.` and return1, without exception details or retries. No automatic setup or service effects precede dispatch.
+
+Help, version, guidance, completion and all local command branches remain independent of the adapter. Unknown or invalid optional syntax returns2 before adapter lookup. Do not forward arbitrary unknown argv or allow registration to override local commands. Use a fresh argv array so adapter code cannot mutate the caller's input.
