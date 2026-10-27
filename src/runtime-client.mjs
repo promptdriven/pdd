@@ -5,7 +5,7 @@ import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, 
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { PreflightError, captureSource, checkInput, draftHint, fillHashes, findTests, formatSize, gitFiles, otherFiles,
-  preflight, readPrompt, selectTests, STALE_HINT } from './runtime-preflight.mjs';
+  preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, validLink } from './runtime-output.mjs';
 
 const DEFAULT_ORIGIN = 'https://runtime.34-72-131-98.sslip.io';
@@ -243,7 +243,7 @@ function judgeLint(answer, rows, root, visible, secrets = []) {
       else if (!prompt) problem = { code: 'unknown-target', section: 'lint', message: `${path} is not in the lint report.` };
       else if (state !== 'approved') {
         const local = readPrompt(root, visible, path);
-        problem = state === 'stale' ? { code: 'interface-stale', section: 'lint', message: `${path} changed after its interface was approved.`, hint: STALE_HINT }
+        problem = state === 'stale' ? { code: 'interface-stale', section: 'lint', message: `${path} changed after its interface was approved.`, hint: staleHint }
           : state === 'draft' ? { code: 'interface-unapproved', section: 'lint', message: `${path} is not approved.`, hint: draftHint(path) }
           : { code: `interface-${cleanText(state, secrets) || 'unapproved'}`, section: 'lint', message: `${path} has no approved Runtime interface${local.error ? ` (${local.error})` : ''}.` };
       } else for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
@@ -264,7 +264,7 @@ function addHints(row, root, visible) {
       const local = entry ? checkInput(step.input, entry.input_schema, index) : null;
       if (local?.message) item.hint = local.message;
     } else if (['interface-unapproved', 'interface-stale'].includes(item.code) && prompt.interface) {
-      item.hint = prompt.interface.status !== 'approved' ? draftHint(step.entry_path) : STALE_HINT;
+      item.hint = prompt.interface.status !== 'approved' ? draftHint(step.entry_path) : staleHint;
     }
   }
 }

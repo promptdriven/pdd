@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: d8bea28da5fa83511820d894ba69a71bcc276ba2a0919ddf8e0f31d3a2bd8e12).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a93d5a4a3a3d4258434053a917baf9d4c37e19d9224fc45b81121f5200226f20).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -223,6 +223,7 @@ export function readPrompt(root, visible, path) {
 
 export const draftHint = path => `pdd: ${path} is "draft". The person must approve it first.`;
 export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
+export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
   'interface-missing': path => `${path} has no Runtime interface block.`,
@@ -237,7 +238,7 @@ export function promptRefusal(prompt, section) {
     return refusal('interface-unapproved', section, `${prompt.path} is not approved.`, { hint: draftHint(prompt.path) });
   }
   if (prompt.interface.prose_sha256 !== prompt.prose) {
-    return refusal('interface-stale', section, `${prompt.path} changed after its interface was approved.`, { hint: STALE_HINT });
+    return refusal('interface-stale', section, `${prompt.path} changed after its interface was approved.`, { hint: staleHint });
   }
   return null;
 }
