@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
 import { findTests, preflight } from '../src/runtime-preflight.mjs';
-import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
 async function tryStory(setup, fake, words, options = {}, extra = {}) {
   const opened = [];
@@ -300,4 +300,52 @@ test('RUNTIME-TRY14: a saved case is added to a one-line test file without rewri
   const text = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8'), close = original.lastIndexOf(']');
   assert.ok(text.startsWith(original.slice(0, close)), text.slice(0, 200));
   assert.equal(JSON.parse(text).steps.length, 2);
+});
+
+// Wrong: on a branch without the story, pdd try --stop says "No tests found" and the open link cannot be stopped (issue 14).
+test('RUNTIME-TRY15: pdd try --stop finds the Try by story name in the state, without the story on this branch', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  rmSync(join(setup.repo, 'tests'), { recursive: true }); rmSync(join(setup.repo, 'user_stories'), { recursive: true });
+  const unknown = await tryStory(setup, fake, ['refund'], { '--stop': true });
+  assert.equal(unknown.code, 2); assert.match(unknown.err, /No open Try for "refund"\. Open Try links: place-order/);
+  const stopped = await tryStory(setup, fake, ['place-order'], { '--stop': true });
+  assert.equal(stopped.code, 0, stopped.err); assert.equal(fake.deletes.length, 1);
+  assert.equal(stopped.out, 'The Try link for "Place a coffee order" is stopped.\n');
+  assert.equal((await tryStory(setup, fake, [], { '--stop': true })).code, 2);
+});
+
+// Wrong: a saved case from anyone with the Try link writes outside the repo, follows a symlink, or edits a non-test file (runtime review).
+test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into non-test files', async t => {
+  const outside = temp(t);
+  const run = async (setup, saved) => {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && entry.url.endsWith('/tests') ? { status: 200, json: { tests: [saved] } } : trying()(entry, f));
+    return tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  };
+  const story = harbor(t), parent = readdirSync(join(story.repo, '..')).sort();
+  const escape = await run(story, savedCase('a', { story: '../../package' }));
+  assert.equal(escape.code, 0); assert.match(escape.out, /^not added: its story "\.\.\/\.\.\/package" is not a story file in this repository\.$/m);
+  assert.deepEqual(readdirSync(join(story.repo, '..')).filter(name => name !== 'state').sort(), parent); assert.equal(existsSync(join(story.repo, 'tests/package.json')), false);
+  const refund = { story: 'user_stories/refund.md', criterion: { id: 'AC1', text: 'A refund returns the total.' } };
+  const addRefund = repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
+  const named = harbor(t, addRefund);
+  assert.equal((await run(named, { ...savedCase('b', refund), path: '../x.json' })).code, 0);
+  assert.equal(existsSync(join(named.repo, '../x.json')), false); assert.equal(existsSync(join(named.repo, 'x.json')), false);
+  assert.ok(existsSync(join(named.repo, 'tests/refund.json')));
+  const linked = harbor(t, repo => {
+    addRefund(repo); mkdirSync(join(repo, 'scenarios'));
+    for (const name of ['place-order.json', 'unknown-item.json']) writeFileSync(join(repo, 'scenarios', name), readFileSync(join(repo, 'tests', name)));
+    rmSync(join(repo, 'tests'), { recursive: true }); symlinkSync(outside, join(repo, 'tests')); writeFileSync(join(repo, '.gitignore'), 'tests\n');
+  });
+  const viaLink = await run(linked, savedCase('c', refund));
+  assert.match(viaLink.out, /^not added: tests\/ is a symbolic link\. pdd writes test files only inside the repository\.$/m);
+  assert.deepEqual(readdirSync(outside), []);
+  const pkg = harbor(t, repo => {
+    const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
+    writeFileSync(join(repo, 'package.json'), JSON.stringify(doc)); rmSync(join(repo, 'tests/place-order.json'));
+  });
+  const before = readFileSync(join(pkg.repo, 'package.json'), 'utf8');
+  const intoPackage = await run(pkg, savedCase('d'));
+  assert.match(intoPackage.out, /^not added: package\.json is not a file pdd adds steps to\. Move the test to tests\/\.$/m);
+  assert.equal(readFileSync(join(pkg.repo, 'package.json'), 'utf8'), before);
 });

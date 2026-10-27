@@ -364,3 +364,16 @@ test('RUNTIME-SCHEMA4: the number warning skips calls and world targets and coun
       { criterion_id: 'AC1', target: 'result', path: '/status', op: 'equals', value: 400 }] }] };
   assert.deepEqual(numberWarnings(doc), ['Warning: the AC1 check expects 400, but the AC1 text says 409.']);
 });
+
+// Wrong: the number warning fires when the check measures something else than the number in the text (lead, Oct 27: 8 false warnings).
+test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number in the criterion text', () => {
+  const warn = (text, value, extra = {}) => numberWarnings({ criteria: [{ id: 'AC1', text }],
+    steps: [{ checks: [{ criterion_id: 'AC1', target: 'result', path: '/x', op: 'equals', value, ...extra }] }] });
+  assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0), []);
+  assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0, { target: 'calls', path: '/resources/store' }), []);
+  assert.deepEqual(warn('The shelf shows 2 of 5 books.', 3), []);
+  assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 899),
+    ['Warning: the AC1 check expects 899, but the AC1 text says 900.']);
+  assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 900), []);
+  assert.deepEqual(warn('No number here.', 5), []);
+});

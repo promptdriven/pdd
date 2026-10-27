@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 33c4fdde1f56e60d04e5c2ba62b739a0083b1434127f1974dcca5fcdea5a547e).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5c0730ed11ff62c76469aaca3fa0a002d1c646625c357c9cf9110f8b99999268).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -390,6 +390,8 @@ export function numberWarnings(doc) {
     for (const value of values) {
       if (typeof value !== 'number' || !found.length || found.some(item => item.value === value)) continue;
       const closest = found.reduce((best, item) => Math.abs(item.value - value) < Math.abs(best.value - value) ? item : best);
+      // Only a near miss (within 10%) looks like a typo; a far number (0 calls vs status 409) measures something else.
+      if (Math.abs(closest.value - value) > 0.1 * Math.max(Math.abs(closest.value), Math.abs(value))) continue;
       warnings.add(`Warning: the ${check.criterion_id} check expects ${value}, but the ${check.criterion_id} text says ${closest.text}.`);
     }
   }

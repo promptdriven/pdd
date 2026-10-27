@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 47ad74d55342c3ca7dce061d2c7780bf4186532501e33bfba7bd85f7bfced3f1).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 04d7c563d5ad6ae52ffa116f7f1b5c5ad7a4958a385ee1a6759b76ea90c2065a).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, PreflightError, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
@@ -656,21 +656,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   try {
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
-    const origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    const appMap = options['--stop'] ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    const origin = runtimeOrigin(ports.env);
+    if (options['--stop']) return await stopByName(context, cwd, words, origin);
+    const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
-    if (options['--stop']) {
-      if (!record) throw new Stop(2, `No open Try for "${test.title}".`);
-      const identity = signIn(ports.gh, context.store);
-      context.secrets = [identity.token];
-      context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
-      await stopTry(context, record);
-      delete repoState.tries[test.path];
-      store.saveRepo(root, repoState);
-      line(ports.stdout, `The Try link for "${test.title}" is stopped.`);
-      return 0;
-    }
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
     const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
@@ -741,6 +732,28 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); }
+}
+
+// pdd try --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
+async function stopByName(context, cwd, words, origin) {
+  const { ports } = context, root = repoRoot(cwd), store = stateFor(ports.env, root), repoState = store.repo(root);
+  const entries = Object.entries(repoState.tries ?? {}), word = words[0]?.replace(/^\.\//, '');
+  const names = entries.map(([path, record]) => record.story ?? basename(path, '.json')).join(', ') || 'none';
+  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.story, path, basename(path, '.json')].includes(word));
+  if (hits.length !== 1) {
+    throw new Stop(2, word !== undefined ? `No open Try for "${cleanText(word)}". Open Try links: ${names}.`
+      : entries.length ? `Name the Try to stop. Open Try links: ${names}.` : 'No open Try in this repository.');
+  }
+  const [path, record] = hits[0], title = record.title ?? record.story ?? path;
+  Object.assign(context, { root, store, origin });
+  const identity = signIn(ports.gh, store);
+  context.secrets = [identity.token];
+  context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
+  await stopTry(context, record);
+  delete repoState.tries[path];
+  store.saveRepo(root, repoState);
+  line(ports.stdout, `The Try link for "${title}" is stopped.`);
+  return 0;
 }
 
 async function checkLint(context, rows) {
@@ -816,22 +829,45 @@ function appendStep(text, doc, step) {
   return `${JSON.stringify(want, null, 2)}\n`;
 }
 
-// One saved case → a new step in its story's test file. Returns the line to print.
+// Anyone with a Try link can save a case, so a saved case is untrusted: pdd writes only to a real file inside the repo,
+// only to a scenario test file found by discovery or a new tests/<story>.json, and never follows a symbolic link.
+const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json|jsconfig\.json|composer\.json|deno\.json|bower\.json|app-map\.json|.+\.config\.json)$/;
+const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
+
+// One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
 function addSavedCase(root, saved) {
+  try { return addSavedCaseSafely(realpathSync(root), saved); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+}
+
+function addSavedCaseSafely(root, saved) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
   if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
-  const target = findTests({ root }).tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const found = findTests({ root });
+  if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
+    return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
+  }
+  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
   if (!target) {
-    // A story with no test gets tests/<story>.json, as the runbook names test files.
-    const base = slug(story.split('/').at(-1).replace(/\.md$/, '')) || (/^tests\/[A-Za-z0-9._-]+\.json$/.test(saved.path ?? '') ? saved.path.slice(6, -5) : 'saved');
+    // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
+    const folder = statOrNull(join(root, 'tests'));
+    if (folder?.isSymbolicLink()) return 'not added: tests/ is a symbolic link. pdd writes test files only inside the repository.';
+    if (folder && !folder.isDirectory()) return 'not added: tests is not a folder.';
+    const base = slug(story.split('/').at(-1).replace(/\.md$/, '')) || 'saved';
     let path = `tests/${base}.json`;
     for (let number = 2; statOrNull(join(root, path)); number += 1) path = `tests/${base}-${number}.json`;
-    mkdirSync(join(root, 'tests'), { recursive: true });
+    if (!folder) mkdirSync(join(root, 'tests'));
+    if (!inRepo(root, 'tests')) return 'not added: tests/ is not inside the repository.';
     writeFileSync(join(root, path), `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
     return `added to ${path} as step ${cleanText(test.steps.map(step => step?.step_id).join(', '))}`;
   }
-  const file = join(root, target.path), text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
+  if (!target.path.endsWith('.json') || NOT_TEST_FILES.test(target.path.split('/').at(-1))) {
+    return `not added: ${target.path} is not a file pdd adds steps to. Move the test to tests/.`;
+  }
+  const file = join(root, target.path), stat = statOrNull(file);
+  if (!stat?.isFile() || !inRepo(root, target.path)) return `not added: ${target.path} is not a regular file inside the repository.`;
+  const text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
+  if (!isObject(doc) || doc.schema_version !== TEST_SCHEMA || !Array.isArray(doc.steps)) return `not added: ${target.path} is not a "${TEST_SCHEMA}" test.`;
   const byText = new Map((Array.isArray(doc.criteria) ? doc.criteria : []).map(item => [item.text, item.id]));
   const savedText = new Map((Array.isArray(test.criteria) ? test.criteria : []).map(item => [item.id, item.text]));
   let next = text, current = doc;
