@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: ce7906e634761cdb7857aa6c1ed348ea7ddda09125dcde4423cf34782266dfec).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 28b61cbdae566b1d757d0dde3c965805d89a47b297027523d4e209092e07f07b).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -67,7 +67,7 @@ async function command(rt, session, args, cwd, timeout = 10000) {
     try { structured = JSON.parse(error.stderr); } catch { /* Never expose execFile's command/prompt message. */ }
     throw commandError(structured, args, typeof error.code === 'string' ? error.code : 'herdr_command_failed');
   }
-  if (args[0] === 'pane' && args[1] === 'send-text' && response.stdout.trim() === '') return;
+  if (args[0] === 'pane' && ['send-text','run'].includes(args[1]) && response.stdout.trim() === '') return;
   let result;
   try { result = JSON.parse(response.stdout); }
   catch { throw commandError(null, args, 'herdr_invalid_json'); }
@@ -204,6 +204,7 @@ export async function runHerdrStage(input, ports = {}) {
       || typeof ports.withStageGuard !== 'function') {
       throw issue('invalid_stage_input');
     }
+    if(input.areaChat && !['plan','build'].includes(input.areaChat.id))throw issue('invalid_area_chat');
     const cwd = await realpath(input.cwd);
     const prompt = `${input.context}\n\n# Current workflow stage\n${input.instructions}`;
     const promptDigest = hash(prompt);
@@ -215,7 +216,7 @@ export async function runHerdrStage(input, ports = {}) {
         if (b.promptDigest !== promptDigest || b.agent !== input.agent) throw issue('stage_input_changed');
         if (prePrompt(b)) continuingStartup = true;
         else if (preNative(b)) recoveringBootstrap = true;
-        else return inspectHerdrStage({ backend: b, cwd }, ports);
+        else return input.startOnly ? inspectHerdrChat({backend:b,cwd},ports) : inspectHerdrStage({ backend: b, cwd }, ports);
         priorServer = b.server ? clone(b.server) : undefined;
       } else {
         if (b.session !== PDD_HERDR_SESSION) throw issue('legacy_layout_requires_inspection');
@@ -262,13 +263,19 @@ export async function runHerdrStage(input, ports = {}) {
       checkpoint: () => save(b, input.checkpoint)
     });
     Object.assign(b, layout);
+    if(input.areaChat) {
+      const renamed=await command(rt,b.session,['tab','rename',b.tabId,input.areaChat.label],cwd);
+      if(renamed.result?.tab?.tab_id!==b.tabId) throw issue('area_tab_label_unconfirmed');
+      // Set the marker in the owned shell; the shared server may predate this run.
+      await command(rt,b.session,['pane','run',b.paneId,`export PDD_AGENT_SESSION=${input.runId}/${input.areaChat.id}`],cwd);
+    }
     b.phase = 'start_intent';
     await save(b, input.checkpoint);
     let started;
     try {
       started = await command(rt, b.session, ['agent', 'start', b.agentName, '--kind', b.agent,
         '--pane', b.paneId, '--timeout', String(rt.startupMs),
-        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`] : ['--', '--dangerously-skip-permissions'])], cwd, rt.startupMs + 5000);
+        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`, '-c', `shell_environment_policy.set={PDD_AGENT_SESSION=${JSON.stringify(`${b.runId}/${input.areaChat?.id??b.stageId}`)}}`] : ['--', '--dangerously-skip-permissions', '--settings', JSON.stringify({env:{PDD_AGENT_SESSION:`${b.runId}/${input.areaChat?.id??b.stageId}`}})])], cwd, rt.startupMs + 5000);
     } catch (error) {
       if (error.code !== 'agent_not_ready') throw error;
       const existing = await checkAgent(rt, b);
@@ -309,6 +316,7 @@ export async function runHerdrStage(input, ports = {}) {
     });
     }, {directory: ports.layoutDirectory}));
     if (startupResult) return startupResult;
+    if(input.startOnly) return {state:'active',backend:clone(b),evidence:clone(b.evidence)};
     const startedAt = rt.now(), deadline = startedAt + rt.timeoutMs;
     let activityDeadline = startedAt + rt.activityMs;
     while (rt.now() < deadline) {
@@ -329,6 +337,29 @@ export async function runHerdrStage(input, ports = {}) {
   } catch (error) {
     return { ...fail(b, typeof error.code === 'string' ? error.code : 'stage_transport_uncertain'),
       ...(error.detail ? { detail: error.detail } : {}) };
+  }
+}
+
+export async function inspectHerdrChat({backend,cwd},ports={}) {
+  const rt=runtime(ports),b=clone(backend);
+  try {
+    assertBackend(b);
+    if(!['submitted','prompt_intent'].includes(b.phase)) throw issue('area_chat_not_submitted');
+    if(await realpath(cwd??b.cwd)!==b.cwd)throw issue('stage_cwd_changed');
+    sameServer(compatible(await status(rt,b.session,b.cwd),b.session),b.server);
+    const agent=await checkAgent(rt,b);recordAgent(b,agent);
+    return {state:'active',backend:b,evidence:clone(b.evidence)};
+  }catch(error){
+    if(['native_agent_unavailable','agent_not_found'].includes(error.code)) {
+      try {
+        const reply=await command(rt,b.session,['pane','get',b.paneId],b.cwd),pane=reply.result?.pane;
+        if(reply.result?.type==='pane_info' && pane?.pane_id===b.paneId && pane.terminal_id===b.terminalId
+          && pane.tab_id===b.tabId && pane.workspace_id===b.workspaceId && !pane.agent && !pane.launch_pending
+          && pane.agent_status!=='working' && await realpath(pane.cwd??pane.foreground_cwd??'')===b.cwd)
+          return {state:'stopped',backend:b,reason:'native_chat_stopped'};
+      }catch{} // Missing/replaced panes do not prove safe replacement.
+    }
+    return fail(b,error.code??'area_chat_unavailable');
   }
 }
 

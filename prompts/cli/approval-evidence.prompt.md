@@ -51,7 +51,10 @@ Skip symlink entries and refuse over-depth discovery rather than silently trunca
 
 Codex discovery recursively reads `rollout-*.jsonl` under
 `(codexHome | env.CODEX_HOME | home/.codex)/sessions`. Its `session_meta`
-record supplies UUID `id`, exact `cwd` and start `timestamp`. Accept user text
+record supplies UUID `id`, exact `cwd` and start `timestamp`. Exclude any
+file identified by `payload.source.subagent`: parent-agent tasks can have user
+roles inside subagents and cannot prove a person replied. Excluded subagents
+neither authorize decisions nor make a main conversation ambiguous. Accept user text
 from `response_item` payloads with `type:message, role:user` (string content or
 `input_text`/`text` blocks), and `event_msg` payloads with `type:user_message`
 and string `message`. The outer record's timestamp dates the user turn.

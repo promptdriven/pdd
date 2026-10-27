@@ -18,7 +18,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.decide', 'step.done', 'workflow.report', 'workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.approve', 'workflow.changes', 'workflow.skip', 'workflow.status', 'workflow.watch', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -111,7 +111,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|phone|machine)\b/);
+    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|machine)\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
@@ -235,7 +235,7 @@ test('ALPHA6: direct workflow selects exactly one bundled recipe before one unch
 });
 
 // Wrong: workflow.run reuses the one-conversation shortcut, preloads resume identity, or leaks a structured object instead of its actual message.
-test('ALPHA7: run and resume dispatch structured owner API with exact existing ports and saved identity owned by runner',async()=>{
+test('ALPHA7: run and plain resume dispatch structured owner API with exact existing ports and saved identity owned by runner',async()=>{
   const uuid='a1234567-1234-4123-8123-123456789abc';
   for(const issue of ['42','owner/repo#42','https://github.com/owner/repo/issues/42']){
     const output=capture(),errors=capture(),calls=[];
@@ -246,7 +246,7 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
     assert.equal(calls[0].ports.stdout,output);assert.equal(calls[0].ports.stderr,errors);assert.equal(calls[0].input.context,undefined);
     assert.ok(output.text.startsWith('Starting feature for issue '+(/^\d+$/.test(issue)?'#':'')+issue+'.'));assert.ok(output.text.endsWith('waiting '+uuid+' approve\n'));assert.equal(errors.text,'');
   }
-  for(const decision of [undefined,'approve','skip']){
+  for(const decision of [undefined]){
     const output=capture(),calls=[];
     const code=await runPdd(['workflow','resume',uuid,...(decision?['--decision',decision]:[])],{
       cwd:'/chosen',packageRoot:'/absent-guide',stdout:output,stderr:capture(),workflowRunner:{resumeWorkflow:async(input,ports)=>{

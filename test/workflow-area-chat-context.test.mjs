@@ -74,3 +74,22 @@ test('runner integration retains exact attempt command and returned next-stage p
   assert.throws(() => buildAreaChatInstructions({ ...args, area: { ...args.area, gate: 'merge' } }), /area/);
   assert.throws(() => buildAreaChatInstructions({ ...args, reportCommand: 'pdd\nfalse' }), /reportCommand/);
 });
+
+
+test('build receives the exact merge-observation command and requires it at integration',()=>{
+  const snapshot=structuredClone(prompts);snapshot.build='{{resumeCommand}}';
+  const generated=buildAreaChatPrompt({...input,area:'build',prompts:snapshot,pddCommand:['/actual package/node','/actual package/pdd.mjs']});
+  assert.ok(generated.endsWith("'/actual package/node' '/actual package/pdd.mjs' workflow resume 45"));
+});
+
+test('build integration preserves its supplied resume command without parsing it',async()=>{
+  const {buildAreaChatInstructions}=await import('../src/workflow-area-chat-context.mjs');
+  const snapshot=structuredClone(prompts);snapshot.build='{{resumeCommand}}';
+  const args={area:{id:'build',label:'Chat 2: build',gate:'merge'},stageInstructions:'Exact build packet',
+    reportCommand:'pdd step done change run attempt',approvalCommand:'pdd workflow approve 45',prompts:snapshot};
+  assert.throws(()=>buildAreaChatInstructions(args),/resumeCommand/);
+  const resumeCommand="'/actual package/node' '/actual package/pdd.mjs' workflow resume 45";
+  const rendered=buildAreaChatInstructions({...args,resumeCommand});
+  assert.ok(rendered.includes(resumeCommand));assert.ok(!rendered.includes('{{resumeCommand}}'));
+  assert.throws(()=>buildAreaChatInstructions({...args,resumeCommand:'pdd\nfalse'}),/resumeCommand/);
+});

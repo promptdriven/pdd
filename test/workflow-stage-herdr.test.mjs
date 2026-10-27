@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { runHerdrStage, inspectHerdrStage, attachHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
+import { runHerdrStage, inspectHerdrStage, inspectHerdrChat, attachHerdrStage, closeHerdrStage } from '../src/workflow-stage-herdr.mjs';
 
 const runId = '12345678-1234-4123-8123-123456789abc';
 const sessionFor = () => 'pdd';
@@ -59,7 +59,7 @@ function harness(cwd, options = {}) {
         if(options.requireNoDaemon && !a.includes('--no-daemon'))throw Object.assign(Error('unsupported daemon'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Cannot use the shared background server: api_key_model_discovery must be disabled'}})});
         if(options.requireTrust && a[a.indexOf('-c')+1]!==`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`)throw Object.assign(Error('folder trust required'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Trust this folder'}})});
         if(options.startBlocked)throw Object.assign(Error('pending'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Native startup awaits person'}})});
-        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]:['--','--dangerously-skip-permissions'])]);
+        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`,'-c',`shell_environment_policy.set={PDD_AGENT_SESSION=${JSON.stringify(`${options.runId??runId}/check`)}}`]:['--','--dangerously-skip-permissions','--settings',JSON.stringify({env:{PDD_AGENT_SESSION:`${options.runId??runId}/check`}})])]);
         return encode({result:{agent:options.startAck?options.startAck(agent()):agent()}});
       }
       if (a[0] === 'agent' && a[1] === 'prompt') {
@@ -404,4 +404,30 @@ test('real Herdr pane send-text empty success still permits accepted tab cleanup
  h.ports.execFile=async(...args)=>args[1][2]==='pane'&&args[1][3]==='send-text'?{stdout:'',stderr:''}:exec(...args);
  const closed=await closeHerdrStage({backend:first.backend,acceptance:acceptance(first.backend)},{...h.ports,checkpoint:h.input.checkpoint});
  assert.equal(closed.state,'closed',closed.reason);assert.equal(h.closed(),true);
+});
+
+
+test('area main chat returns after durable delivery without polling for stage completion', async t => {
+  const cwd=await mkdtemp(join(tmpdir(),'pdd-chat-transport-'));t.after(()=>rm(cwd,{recursive:true,force:true}));
+  const h=harness(cwd,{stalled:true});
+  const result=await runHerdrStage({...h.input,startOnly:true},h.ports);
+  assert.equal(result.state,'active',result.reason);
+  assert.equal(result.backend.phase,'submitted');
+  assert.equal(h.checkpoints.at(-1).phase,'submitted');
+});
+
+
+test('chat replacement requires the same stopped pane; a missing or replaced terminal is uncertain',async t=>{
+  const cwd=await mkdtemp(join(tmpdir(),'pdd-chat-stopped-'));t.after(()=>rm(cwd,{recursive:true,force:true}));
+  const h=harness(cwd,{vanishAfter:true}), launched=await runHerdrStage({...h.input,startOnly:true},h.ports);
+  assert.equal(launched.state,'active');
+  const original=h.ports.execFile;let replaced=false;
+  h.ports.execFile=async(bin,argv,opts)=>{
+    if(argv[2]==='pane'&&argv[3]==='get')return {stdout:JSON.stringify({result:{type:'pane_info',pane:{
+      workspace_id:launched.backend.workspaceId,tab_id:launched.backend.tabId,pane_id:launched.backend.paneId,
+      terminal_id:replaced?'replacement':launched.backend.terminalId,cwd,agent:null,agent_status:'unknown'}}})};
+    return original(bin,argv,opts);
+  };
+  assert.equal((await inspectHerdrChat({backend:launched.backend,cwd},h.ports)).state,'stopped');
+  replaced=true;assert.equal((await inspectHerdrChat({backend:launched.backend,cwd},h.ports)).state,'recovery_required');
 });

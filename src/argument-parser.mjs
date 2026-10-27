@@ -1,4 +1,5 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 08c4985eac708efcd7569dd061e10951fa020027cbf8b58f03544c59f58ca005).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: d85f17d23e6be9927dffbcb9660581910b8bccffd206f0e2ea3c023da0705fef).
+import { validDecisionInput } from './workflow-decide.mjs';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -28,7 +29,7 @@ function parseRoute(route, words) {
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (typeof value !== 'string' || value.startsWith('--') || option.choices && !option.choices.includes(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -39,11 +40,15 @@ function parseRoute(route, words) {
     const type = route.operands[Math.min(index, route.operands.length - 1)].type;
     const word = operands[index];
     const valid = type === 'text' || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || type === 'issue'
-      && /^(?:[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      && /^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      || type === 'run-ref' && (/^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word) || /^[a-f0-9]{8,}$/i.test(word) || /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word))
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
+  if (route.local === 'workflow-decide' && (!/^[1-9][0-9]*$/.test(options['--expect-seq']??'')
+    || !validDecisionInput({runId:operands[0],decisionId:options['--id'],decision:options['--decision'],
+      expectStage:options['--expect-stage'],expectSeq:Number(options['--expect-seq']),text:options['--text'],via:options['--via'],phoneId:options['--phone'],approval:options['--approval']}))) fail();
   return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }

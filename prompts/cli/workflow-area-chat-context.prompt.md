@@ -7,12 +7,13 @@ This module returns text only. Preserve existing non-chat recipe behavior and th
 runner's exact supplied stage identities and handoff protocol.
 
 `buildAreaChatInstructions({area, stageInstructions, reportCommand,
-approvalCommand, changesText, prompts})` is the runner integration entrypoint.
+approvalCommand, resumeCommand, changesText, prompts})` is the runner integration entrypoint.
 `area` is `{id,label,gate}` matching plan/Chat 1: plan/approve-plan or
 build/Chat 2: build/merge. It returns instructions to append AFTER the runner's
 full saved guide-first context. The runner supplies nonempty current-stage
 instructions, exact report command (including run/stage/attempt arguments) and
-issue-form approval command as trusted command strings. Preserve these strings
+issue-form approval command as trusted command strings. Build additionally
+requires the exact resumeCommand for observing the person's GitHub merge. Preserve these strings
 verbatim; this entrypoint does not tokenize or reconstruct them. Reject line
 breaks/NUL in command strings. Optional `changesText` (absent or null means none) is trusted runner guidance
 for the supported change route. Optional `prompts` is the saved template object;
@@ -51,8 +52,10 @@ fields, paths and identities.
 The templates own the human gate wording, stage tasks and crash rules. Chat
 approval requires the person's new user message after the gate question and
 PDD's native-session evidence check. A refusal cannot become agent approval.
-Build starts in a new main session after recorded plan approval. Merge approval
-does not authorize an agent to merge: PDD observes the person's normal merge.
+Build starts in a new main session after recorded plan approval. At merge wait
+there is no approve decision: the person merges using the normal GitHub process,
+then runs the supplied resumeCommand so PDD observes that exact merge. Never
+suggest workflow approve or relay a chat approval at the merge gate.
 
 ## Dependencies
 
@@ -83,7 +86,7 @@ separate words. Generated commands use the assigned worktree cwd. Do not execute
 them from this module. Never silently fall back from an invalid supplied prefix.
 
 `prompts` must contain all eight nonempty strings named by their filenames without
-`.md`. Replace only `{{approveCommand}}`, `{{scopeCommand}}`,
+`.md`. Replace only `{{approveCommand}}`, `{{resumeCommand}}`, `{{scopeCommand}}`,
 `{{changeCommand}}`, `{{verifyCommand}}`, `{{openPrCommand}}` and
 `{{waitMergeCommand}}` in template text. Do not interpolate supplied context,
 identities or runner instructions as templates. Invalid inputs throw an Error

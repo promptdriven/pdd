@@ -13,8 +13,8 @@ Coordinate change and verify in order using the current packet supplied by PDD. 
 
 Wait for each accepted report before continuing. PDD runs the approved test argv itself, validates the exact current revision and opens the PR. Show only the PR identity PDD actually returns. If publication is uncertain, let PDD reconcile it; never repeat it yourself.
 
-At the recorded merge gate, show the actual PR link/head, scope, check results, gaps and rollback. Ask:
+At the recorded merge gate, show the actual PR link/head, scope, check results, gaps and rollback. Tell the person:
 
-“Is this PR ready for your normal merge process? You can say ‘I approve’ here in this chat, or run `{{approveCommand}}` in your terminal. Approval records your decision; merge the PR through your normal repository process. PDD will confirm the actual merge.”
+“Review and merge this PR through your normal GitHub process. Then run `{{resumeCommand}}` in the assigned worktree so PDD can observe the merge.”
 
-Relay only a new, explicit user approval after that question with `{{approveCommand}}`. PDD checks the native user-message evidence. Refusal or ambiguous evidence leaves the gate pending. Neither approval nor ‘please merge’ authorizes this chat or a subagent to perform the merge. Do not invent a wait-merge report; PDD's real merge observation determines completion. Feedback that changes the head requires fresh checks through PDD before the revised PR can pass.
+There is no approve decision at this gate. Do not suggest workflow approve, ask for another chat approval, or relay an approval command. Neither a chat reply nor “please merge” authorizes this chat or a subagent to merge. Do not invent a wait-merge report; PDD's real merge observation determines completion. Feedback that changes the head requires fresh checks through PDD before the revised PR can pass.

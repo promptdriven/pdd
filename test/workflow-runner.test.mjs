@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync, openSync, closeSync, writeSync, readSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync, openSync, closeSync, writeSync, readSync, statSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { constants as bufferConstants } from 'node:buffer';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile as callbackExec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import * as areaRunner from '../src/workflow-runner.mjs';
 import { runWorkflow, resumeWorkflow, attachWorkflow, WORKFLOW_STAGES } from '../src/workflow-runner.mjs';
 import { loadGuidance as actualGuidance } from '../src/guidance.mjs';
 import { runHerdrStage, inspectHerdrStage, closeHerdrStage, closeHerdrRun } from '../src/workflow-stage-herdr.mjs';
@@ -68,7 +69,9 @@ async function fixture(t, options = {}) {
     }
     throw Error(`Unexpected fake GitHub command: ${args.join(' ')}`);
   }
-  const ports = { execFile, stdout: output, stderr: output,
+  const runIndexHome=mkdtempSync(join(tmpdir(),'pdd-test-home-'));
+  t.after(()=>rmSync(runIndexHome,{recursive:true,force:true}));
+  const ports = { execFile, stdout: output, stderr: output, runIndexHome,
     async loadGuidance(value) { contexts.push(value); return actualGuidance(value); },
     async launchNativeSession(value) {
       const input = JSON.parse(value.request.split('PDD_STAGE_INPUT_JSON\n')[1].split('\nPDD_STAGE_INPUT_END')[0]);
@@ -1040,4 +1043,236 @@ test('real runner passes repository layout binding to the production stage adapt
  assert.equal(observed.repository,'example/project');assert.equal(observed.issueNumber,17);assert.equal(observed.workflowName,'small-change');
  assert.equal(observed.sourceRoot,f.sourceCwd);assert.equal(observed.commonDir,join(f.sourceCwd,'.git'));
  assert.notEqual(observed.cwd,f.sourceCwd);assert.equal(f.saved(outcome.runId).pending.backend.session,'pdd');
+});
+
+async function areaFixture(t, options = {}) {
+  const f = await fixture(t, options);
+  f.chats = [];
+  f.ports.buildAreaChatInstructions=({stageInstructions})=>stageInstructions;
+  f.ports.runHerdrStage = async (input) => {
+    assert.equal(input.startOnly, true, 'area startup must return after delivery');
+    const backend = { version: 1, runId: input.runId, stageId: input.stageId, attemptId: input.attemptId,
+      agent: input.agent, cwd: input.cwd, phase: 'submitted', session: 'pdd',
+      terminalId: `terminal-${input.attemptId}`, nativeSession: {kind:'id',value:`native-${input.attemptId}`},
+      promptDigest: sha(`${input.context}\n\n# Current workflow stage\n${input.instructions}`), evidence: {readySeq:1} };
+    await input.checkpoint(backend);
+    f.chats.push(input);
+    return {state:'active',backend,evidence:backend.evidence};
+  };
+  f.ports.inspectHerdrChat = async ({backend}) => ({state:'active',backend});
+  f.runChat = () => runWorkflow({name:'small-change',issue:'17',agent:'codex',chat:true,cwd:f.sourceCwd,packageRoot},f.ports);
+  f.report = async (runId, {write = true, attemptId} = {}) => {
+    const saved=f.saved(runId), pending=saved.pending;
+    if(write) await f.ports.launchNativeSession({request:pending.instructions,cwd:f.cwd,agent:'codex'});
+    return areaRunner.reportWorkflowStage({runId,stageId:pending.stage,attemptId:attemptId??pending.attemptId,cwd:f.cwd,packageRoot},f.ports);
+  };
+  return f;
+}
+
+test('CHAT: startup is finite; scope report stops at person gate and keeps Chat 1 open', async t => {
+  const f=await areaFixture(t), started=await f.runChat();
+  assert.equal(started.state,'running',started.message);
+  assert.equal(f.chats.length,1);assert.equal(f.native.length,0);
+  assert.equal(f.chats[0].areaChat.label,'Chat 1: plan');
+  const reported=await f.report(started.runId);
+  assert.equal(reported.state,'waiting',reported.message);
+  assert.equal(reported.stage,'change');assert.equal(f.closes,0);assert.equal(f.chats.length,1);
+  assert.equal(f.pr,null);assert.ok(f.saved(started.runId).gateAskedAt);
+  const status=JSON.parse(readFileSync(join(f.gitDir,'pdd/workflows',started.runId,'status.json')));
+  assert.equal(status.area.id,'plan');assert.deepEqual(status.waitingFor.decisions,['approve','changes']);
+  assert.equal(status.steps[0].session.id,f.saved(started.runId).completed[0].backend.nativeSession.value);
+  assert.ok(status.steps[0].endedAt>=status.steps[0].startedAt);
+});
+
+test('CHAT: wrong report attempt and missing handoff cannot advance or publish', async t => {
+  const f=await areaFixture(t), started=await f.runChat();
+  const wrong=await f.report(started.runId,{write:false,attemptId:randomUUID()});
+  assert.equal(wrong.state,'failed');assert.equal(f.saved(started.runId).index,0);
+  const absent=await f.report(started.runId,{write:false});
+  assert.equal(absent.state,'failed');assert.equal(f.saved(started.runId).index,0);
+  assert.equal(f.chats.length,1);assert.equal(f.pr,null);
+});
+
+test('CHAT: duplicate scope report preserves the accepted result without another native or gate receipt', async t => {
+  const f=await areaFixture(t), started=await f.runChat(), pending=f.saved(started.runId).pending;
+  await f.report(started.runId); const first=f.saved(started.runId);
+  const again=await areaRunner.reportWorkflowStage({runId:started.runId,stageId:'scope',attemptId:pending.attemptId,cwd:f.cwd,packageRoot},f.ports);
+  assert.equal(again.state,'waiting',again.message);assert.equal(f.chats.length,1);
+  assert.equal(f.saved(started.runId).gateAskedAt,first.gateAskedAt);
+  assert.equal(f.saved(started.runId).completed.length,1);
+});
+
+async function chatDecision(f,runId,decision='approve',overrides={}) {
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs');
+  const state=f.saved(runId);
+  return decideWorkflow({runId,decision,decisionId:randomUUID(),expectStage:state.definitions[state.index].id,expectSeq:state.seq,
+    cwd:f.cwd,packageRoot,...overrides},{...f.ports,workflowRunner:areaRunner,env:{},stdin:{isTTY:true},stderr:{isTTY:true,write(){}},confirm:async()=>true});
+}
+
+test('CHAT: one shared decision starts Chat 2; change and verify report in that same main chat; PDD opens PR after checks', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);
+  const approvalId=randomUUID();
+  const before=f.saved(started.runId);
+  const approved=await chatDecision(f,started.runId,'approve',{decisionId:approvalId});
+  assert.equal(approved.state,'started',approved.message);assert.equal(f.chats.length,2);
+  assert.equal(f.chats[1].areaChat.label,'Chat 2: build');
+  assert.notEqual(f.chats[0].attemptId,f.chats[1].attemptId);
+  assert.equal(f.saved(started.runId).approvalRecord.kind,'terminal');
+  const change=await f.report(started.runId);
+  assert.equal(change.state,'running',change.message);assert.match(change.nextStageInstructions,/verify/);
+  assert.equal(f.chats.length,2);assert.equal(f.saved(started.runId).pending.backend.terminalId, f.saved(started.runId).completed.find(s=>s.id==='change').backend.terminalId);
+  assert.equal(f.pr,null);
+  const verified=await f.report(started.runId);
+  assert.equal(verified.state,'waiting',verified.message);assert.equal(verified.stage,'wait-merge');
+  assert.equal(f.saved(started.runId).completed.find(s=>s.id==='verify').handoff.checks[0].exitCode,0);
+  assert.equal(f.chats.length,2);assert.equal(f.calls.filter(c=>c.file==='gh'&&c.args[1]==='create').length,1);
+  const repeated=await chatDecision(f,started.runId,'approve',{decisionId:approvalId,expectStage:'change',expectSeq:before.seq});
+  assert.equal(repeated.state,'recorded');assert.equal(f.chats.length,2);
+});
+
+test('CHAT: no human evidence, raw resume decisions and stale bindings cannot start build', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs'), state=f.saved(started.runId);
+  const noPerson=await decideWorkflow({runId:started.runId,decision:'approve',decisionId:randomUUID(),expectStage:'change',expectSeq:state.seq,cwd:f.cwd,packageRoot},
+    {...f.ports,workflowRunner:areaRunner,env:{PDD_AGENT_SESSION:started.runId+'/plan'},stdin:{isTTY:true},readApprovalEvidence:async()=>({ok:false,message:'No user turn after gate'})});
+  assert.equal(noPerson.state,'refused');assert.equal(f.chats.length,1);
+  const raw=await f.resume(started.runId,'approve');assert.equal(raw.state,'failed');assert.equal(f.chats.length,1);
+  const stale=await chatDecision(f,started.runId,'approve',{expectSeq:state.seq-1});assert.equal(stale.code,'stale_decision');assert.equal(f.chats.length,1);
+});
+
+test('CHAT: failing real approved checks blocks PR publication', async t => {
+  const f=await areaFixture(t,{wrongBehavior:true}), started=await f.runChat();await f.report(started.runId);
+  await chatDecision(f,started.runId);await f.report(started.runId);
+  const checked=await f.report(started.runId);
+  assert.equal(checked.state,'failed',checked.message);assert.equal(f.pr,null);assert.equal(f.chats.length,2);
+});
+
+test('CHAT: request changes uses shared decision and starts a fresh plan chat with retained revision history', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);
+  const decision=await chatDecision(f,started.runId,'changes',{text:'Keep the same expectations and clarify the scope.'});
+  assert.equal(decision.state,'started',decision.message);assert.equal(f.chats.length,2);assert.equal(f.chats[1].areaChat.id,'plan');
+  const saved=f.saved(started.runId);assert.equal(saved.index,0);assert.equal(saved.revisionHistory.length,1);
+  assert.equal(saved.changes[0].text,'Keep the same expectations and clarify the scope.');
+  assert.equal(saved.accepted,undefined);assert.equal(f.pr,null);
+});
+
+
+test('CHAT: plain resume observes the same active main session without another prompt', async t => {
+  const f=await areaFixture(t), started=await f.runChat();
+  const resumed=await f.resume(started.runId);
+  assert.equal(resumed.state,'running',resumed.message);assert.equal(f.chats.length,1);
+  assert.equal(f.saved(started.runId).pending.attemptId,f.chats[0].attemptId);
+});
+
+test('CHAT: crash after accepted change resumes from saved acceptance and returns verify in same chat', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);await chatDecision(f,started.runId);
+  await f.report(started.runId);
+  const path=join(f.gitDir,'pdd/workflows',started.runId,'journal.jsonl');
+  const rows=readFileSync(path,'utf8').trimEnd().split('\n').map(JSON.parse);
+  const accepted=rows.findLastIndex(row=>row.event==='agent.accepted'&&row.state.pending.stage==='change');
+  writeFileSync(path,rows.slice(0,accepted+1).map(JSON.stringify).join('\n')+'\n');
+  const resumed=await f.resume(started.runId);
+  assert.equal(resumed.state,'running',resumed.message);assert.equal(resumed.stage,'verify');
+  assert.equal(f.chats.length,2);assert.equal(f.saved(started.runId).completed.filter(s=>s.id==='change').length,1);
+  const verified=await f.report(started.runId);assert.equal(verified.stage,'wait-merge',verified.message);
+  assert.equal(f.calls.filter(c=>c.file==='gh'&&c.args[1]==='create').length,1);
+});
+
+test('CHAT: retained main remains attachable at plan gate without a lifetime mutation lock', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);
+  let attached=0;
+  f.ports.attachHerdrStage=async ({backend},ports)=>{attached++;assert.equal(backend.terminalId,f.saved(started.runId).areaChats.active.backend.terminalId);assert.equal(ports.withStageGuard,undefined);return 0;};
+  const viewed=await attachWorkflow({runId:started.runId,cwd:f.cwd,packageRoot},f.ports);
+  assert.equal(viewed.state,'waiting');assert.equal(attached,1);
+});
+
+test('CHAT: proved stopped native resumes in a new main chat, retaining accepted scope and partial build files', async t => {
+  const f=await areaFixture(t), started=await f.runChat();await f.report(started.runId);await chatDecision(f,started.runId);
+  const previous=f.saved(started.runId).pending.attemptId;
+  writeFileSync(join(f.cwd,'value.mjs'),'export const value = 2;\n');
+  f.ports.inspectHerdrChat=async({backend})=>({state:'stopped',backend,reason:'native_chat_stopped'});
+  const resumed=await f.resume(started.runId);
+  assert.equal(resumed.state,'running',resumed.message);assert.equal(f.chats.length,3);
+  const saved=f.saved(started.runId);assert.equal(saved.completed.length,1);assert.equal(saved.completed[0].id,'scope');
+  assert.notEqual(saved.pending.attemptId,previous);assert.equal(readFileSync(join(f.cwd,'value.mjs'),'utf8'),'export const value = 2;\n');
+  assert.equal(saved.areaChats.interrupted[0].attemptId,previous);assert.ok(saved.accepted);
+});
+
+
+test('failed journal durability preserves the previous whole phone projection', async t => {
+  const f=await fixture(t);let before,path;
+  const native=f.ports.runHerdrStage;
+  f.ports.runHerdrStage=async(input,ports)=>{
+    const dir=join(f.gitDir,'pdd','workflows',input.runId);
+    path=join(dir,'status.json');before=readFileSync(path,'utf8');
+    chmodSync(join(dir,'journal.jsonl'),0o400);
+    return native(input,ports);
+  };
+  const outcome=await f.run();assert.equal(outcome.state,'recovery_required');
+  assert.equal(readFileSync(path,'utf8'),before);
+  assert.equal(JSON.parse(before).journalSeq,f.saved(outcome.runId).seq);
+});
+
+
+test('shared decide admits recovery of the same unresolved default stage', async t => {
+  const f=await fixture(t,{nativeCode:9});const first=await f.run();
+  assert.equal(first.state,'recovery_required');const saved=f.saved(first.runId);
+  const gate=await areaRunner.readWorkflowDecision({runId:first.runId,cwd:f.cwd},f.ports);
+  assert.equal(gate.state,'ready');assert.deepEqual(saved.waitingDecision.decisions,['approve']);
+  const decision=await chatDecision(f,first.runId);
+  assert.equal(decision.state,'uncertain');assert.equal(f.native.length,1);
+  assert.equal(f.saved(first.runId).pending.attemptId,saved.pending.attemptId);
+});
+
+test('CHAT: an admitted approval interrupted before launch resumes once without another person decision', async t => {
+  const f=await areaFixture(t),started=await f.runChat();await f.report(started.runId);
+  const before=f.saved(started.runId),id=randomUUID();
+  const builder=f.ports.buildAreaChatInstructions;
+  f.ports.buildAreaChatInstructions=()=>{throw Error('interrupted before launch');};
+  const decided=await chatDecision(f,started.runId,'approve',{decisionId:id});
+  assert.equal(decided.state,'uncertain');assert.equal(f.chats.length,1);
+  f.ports.buildAreaChatInstructions=builder;
+  const repeated=await chatDecision(f,started.runId,'approve',{decisionId:id,expectStage:'change',expectSeq:before.seq});
+  assert.equal(repeated.state,'recorded');assert.equal(f.chats.length,1);
+  const resumed=await f.resume(started.runId);
+  assert.equal(resumed.state,'running',resumed.message);assert.equal(f.chats.length,2);
+  assert.equal(f.saved(started.runId).decisions.length,1);
+});
+
+test('CHAT: uncertain prompt delivery never resends on resume', async t => {
+  const f=await areaFixture(t);let launches=0;
+  f.ports.runHerdrStage=async(input)=>{
+    launches++;const backend={version:1,runId:input.runId,stageId:input.stageId,attemptId:input.attemptId,
+      agent:input.agent,cwd:input.cwd,phase:'prompt_intent',session:'pdd',terminalId:'original-terminal',
+      promptDigest:sha(`${input.context}\n\n# Current workflow stage\n${input.instructions}`)};
+    await input.checkpoint(backend);throw Error('lost prompt acknowledgment');
+  };
+  const first=await f.runChat();assert.equal(first.state,'recovery_required');
+  const second=await f.resume(first.runId);
+  assert.equal(second.state,'recovery_required');assert.equal(launches,1);
+  assert.match(second.message,/no prompt was resent/);
+});
+
+
+test('CHAT: verified USER evidence must belong to the saved main session when its ID is known', async t => {
+  const f=await areaFixture(t),first=await f.runChat();await f.report(first.runId);
+  const saved=f.saved(first.runId),native=saved.areaChats.active.backend.nativeSession.value;
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs');
+  const input={runId:first.runId,decision:'approve',decisionId:randomUUID(),expectStage:'change',expectSeq:saved.seq,cwd:f.cwd,packageRoot};
+  const ports={...f.ports,workflowRunner:areaRunner,env:{PDD_AGENT_SESSION:first.runId+'/plan'},stdin:{isTTY:false},
+    readApprovalEvidence:async()=>({ok:true,agent:'codex',sessionId:'another-session',userMessage:'I approve',userMessageAt:saved.waitingDecision.at+1})};
+  const other=await decideWorkflow(input,ports);assert.equal(other.code,'person_required');assert.equal(f.chats.length,1);
+  ports.readApprovalEvidence=async()=>({ok:true,agent:'codex',sessionId:native,userMessage:'I approve',userMessageAt:saved.waitingDecision.at+1});
+  const own=await decideWorkflow(input,ports);assert.equal(own.state,'started');assert.equal(f.chats.length,2);
+  assert.equal(f.saved(first.runId).approvalRecord.sessionId,native);
+});
+
+
+test('CHAT: an old plan report retry cannot receive the new build chat packet',async t=>{
+  const f=await areaFixture(t),first=await f.runChat(),attempt=f.saved(first.runId).pending.attemptId;
+  await f.report(first.runId);await chatDecision(f,first.runId);
+  const before=f.saved(first.runId).seq;
+  const repeated=await areaRunner.reportWorkflowStage({runId:first.runId,stageId:'scope',attemptId:attempt,cwd:f.cwd,packageRoot},f.ports);
+  assert.equal(repeated.state,'running');assert.equal(repeated.nextStageInstructions,undefined);assert.equal(repeated.reportCommand,undefined);
+  assert.equal(f.chats.length,2);assert.equal(f.saved(first.runId).seq,before);
 });

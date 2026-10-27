@@ -167,3 +167,15 @@ test('missing or invalid stage/gate/decision refuses before discovery', async ()
     assert.equal((await readApprovalEvidence(request, { now: () => now })).code, 'invalid_request');
   }
 });
+
+test('W7 a Codex subagent task is not a person approval message',async t=>{
+ const f=await fixture(t);
+ await f.write([meta({source:{subagent:{thread_spawn:{parent_thread_id:otherId,depth:1,agent_path:'/root/review'}}}}),user('The parent agent asks you to approve the plan.')]);
+ const result=await f.read();
+ assert.equal(result.ok,false,'agent-authored subagent user-role task must not count as person evidence');
+});
+test('W7 a Codex subagent must not make the real main session ambiguous',async t=>{
+ const f=await fixture(t);await f.write([meta(),user('I approve this plan.')]);
+ await f.write([meta({id:otherId,source:{subagent:{thread_spawn:{parent_thread_id:id,depth:1}}}}),user('Subagent task from main agent.')],join(f.directory,'rollout-child.jsonl'));
+ assert.equal((await f.read()).ok,true);
+});

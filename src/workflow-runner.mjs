@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fffbdd730f3bfb302682b78830109aae4b19a4cddc99e271766f4506d76abf30).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0581a789f64eb8592ea305d3ed67f82c5976c1f9d22e207b5e354606561a2630).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -6,15 +6,21 @@ import { constants, fstatSync, openSync, closeSync, writeSync, readSync, fsyncSy
   lstatSync, realpathSync, unlinkSync, readlinkSync, existsSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep, basename, dirname } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { validDecisionInput } from './workflow-decide.mjs';
+import { loadAreaChatPrompts } from './workflow-area-chat-context.mjs';
 import { WORKFLOW_STAGES } from './workflow-definitions.mjs';
 import { loadWorkflowDefinition } from './workflow-definition-loader.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from './workflow-github.mjs';
 import { readWorkflowHandoff, assertWorkflowArtifacts, runWorkflowTestCommands } from './workflow-artifacts.mjs';
+import { runStatusFromState, writeRunStatus, appendRunIndex } from './workflow-run-records.mjs';
+import { areaChatForStage, areaChatStatus } from './workflow-area-chats.mjs';
 export { WORKFLOW_STAGES } from './workflow-definitions.mjs';
 
 const ordinaryExec = promisify(execFileCallback);
 const defaultExec = (file, args, { cwd }) => ordinaryExec(file, args, { cwd, encoding: 'utf8', shell: false, maxBuffer: 16 * 1024 * 1024 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const durableStates=new WeakMap();
+const failedJournalStates=new WeakSet();
 const digest = value => createHash('sha256').update(value).digest('hex');
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const fail = message => { throw Error(message); };
@@ -132,6 +138,7 @@ function readSaved(directory) {
     || saved.version !== 2 || !Array.isArray(saved.completed) || !saved.definition || !saved.assignment
     || !['codex', 'claude'].includes(saved.agent) || !isDeepStrictEqual(saved.definitions, saved.definition.stages)
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
+  durableStates.set(saved,structuredClone(saved));
   return saved;
 }
 const progressScope = new AsyncLocalStorage();
@@ -144,7 +151,7 @@ function progress(s, event, state) {
   const handoff = s.completed?.findLast(step => step.handoff)?.handoff;
   const proposal = s.proposal ? s.completed?.findLast(step => s.definitions?.find(def => def.id === step.id)?.protocol === 'proposal')?.handoff : null;
   const backend = s.pending?.backend;
-  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, issue: s.issue?.number, title: s.issue?.title, agent: s.agent,
+  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, repo:s.repo, issue: s.issue?.number, title: s.issue?.title, agent: s.agent,
     stage: stage ? { id: stage.id, kind: stage.kind, optional: !!stage.optional } : null,
     ordinal: s.index + 1, total: s.definitions?.length, root: s.root, branch: s.assignment?.branch,
     journal: directory ? join(directory, 'journal.jsonl') : null, pending: s.pending?.kind,
@@ -154,10 +161,22 @@ function progress(s, event, state) {
     prs: (s.completed ?? []).filter(step => step.pr).map(step => step.pr.url)
   })); } catch { /* Observation cannot change workflow authority or progress. */ }
 }
-function record(s, directory, event) {
+async function writeStatus(s, directory, event, outcome) {
+  if(failedJournalStates.has(s))return;
+  s=durableStates.get(s);if(!s)return;
+  const base = runStatusFromState(s, {phase:outcome && outcome.state!=='running' ? 'exit' : 'record',outcome,now:Date.now()});
+  const projection = areaChatStatus({state:s,base,event}) ?? base;
+  const written = await writeRunStatus(directory, projection);
+  if (!written.ok) process.stderr.write(`Workflow status could not be saved (${written.code}); journal is retained.\n`);
+}
+async function record(s, directory, event) {
+  if(failedJournalStates.has(s))fail('Journal durability failed; inspect the saved run before continuing.');
   s.seq = (s.seq ?? 0) + 1;
-  durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
-  progress(s, event);
+  try { durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s }); }
+  catch(error){failedJournalStates.add(s);throw error;}
+  durableStates.set(s,structuredClone(s));
+  progress(s, event, event==='decision.waiting'?'waiting':undefined);
+  await writeStatus(s,directory,event);
 }
 function lock(root) {
   ensureDirectory(dirname(root)); ensureDirectory(root);
@@ -253,7 +272,7 @@ function nativePorts(s, directory, r, options, p) {
     onPersonSteppedIn: async backend => {
       if (!s.pending?.personSteppedIn) {
         s.pending.personSteppedIn = { seq: backend.evidence?.personSteppedInSeq ?? null };
-        record(s, directory, 'agent.person.stepped_in', { seq: backend.evidence?.personSteppedInSeq ?? null });
+        await record(s, directory, 'agent.person.stepped_in', { seq: backend.evidence?.personSteppedInSeq ?? null });
       }
     },
     withStageGuard: (backend, action) => guard(backend, async () => {
@@ -271,7 +290,8 @@ function nativePorts(s, directory, r, options, p) {
           fail('An established native backend identity changed.');
       }
       pending.backend = structuredClone(backend);
-      record(s, directory, 'agent.backend');
+      if(s.chat && s.areaChats?.active) s.areaChats.active.backend=structuredClone(backend);
+      await record(s, directory, 'agent.backend');
     }
   };
 }
@@ -291,24 +311,130 @@ function agentInstructions(s, stage, directory, attemptId, handoffPath, inputRev
     inputFingerprint: inputRevision.hash, handoffPath, priorArtifacts: s.completed.flatMap(step => step.handoff?.files ?? []),
     priorReports: s.completed.filter(step => step.handoff).map(step => ({ stageId: step.id, summary: step.handoff.summary, handoffPath: join(directory, step.handoff.path), revision: step.revision })),
     accepted: s.accepted ?? null };
-  return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated work.\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Project files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
+  const area = s.chat === true ? areaChatForStage(s.name, stage.id) : null;
+  const areaText = area ? `\nThis is ${area.label}. The main area chat coordinates this stage's subagent. Report only this stage; the person, outside the agent, owns the ${area.gate} gate.` : '';
+  return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated changes.${areaText}\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Project files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
 }
 function herdrLayoutInput(s) {
   return {repository:s.assignment.repository,sourceRoot:s.assignment.sourceRoot,commonDir:s.assignment.commonDir,
     issueNumber:s.assignment.issueNumber,workflowName:s.assignment.workflowName};
 }
 async function finishRunLayout(outcome, s, directory, p) {
+  if(failedJournalStates.has(s))return outcome;
+  if(s){await finishDecisionGate(s,directory,outcome,p);await writeStatus(s,directory,'result',outcome);}
+  if (s?.chat) return outcome;
   if (!s?.assignment || !directory || !['completed','failed'].includes(outcome.state) || s.pending || s.herdrLayoutClosed) return outcome;
   const backend=s.completed.findLast(entry=>entry.backend?.phase==='closed')?.backend;
   if (!backend || backend.session!=='pdd') return outcome;
   if (typeof p.closeHerdrRun!=='function') return result(s,'recovery_required','Run workspace cleanup is unavailable.');
-  record(s,directory,'run.layout_close_intent');
-  const closed=await p.closeHerdrRun({backend}, {withStageGuard:stageGuard(s),checkpoint:async()=>record(s,directory,'run.layout_close_checkpoint')});
+  await record(s,directory,'run.layout_close_intent');
+  const closed=await p.closeHerdrRun({backend}, {withStageGuard:stageGuard(s),checkpoint:async()=>await record(s,directory,'run.layout_close_checkpoint')});
   if(closed.state!=='closed') return result(s,'recovery_required',closed.reason||'Run workspace cleanup is uncertain.');
-  s.herdrLayoutClosed=true;record(s,directory,'run.layout_closed');
+  s.herdrLayoutClosed=true;await record(s,directory,'run.layout_closed');
   return outcome;
 }
+const shellArg = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+function reportCommand(s, options) {
+  return [process.execPath,join(options.packageRoot,'bin','pdd.mjs'),'step','done',s.pending.stage,s.runId,s.pending.attemptId].map(shellArg).join(' ');
+}
+function chatStageReply(s, options) {
+  return {...result(s,'running',`${s.areaChats.active.label} is working. Open its Herdr tab to discuss progress.`),
+    nextStageInstructions:s.pending.instructions,reportCommand:reportCommand(s,options)};
+}
+async function inspectChat(s,p,allowStopped=false) {
+  if(typeof p.inspectHerdrChat!=='function') fail('Area-chat identity inspection is unavailable.');
+  const backend=s.pending?.backend ?? s.areaChats?.active?.backend;
+  if(!backend) fail('The saved area-chat identity is unavailable; inspect the original launch.');
+  const seen=await p.inspectHerdrChat({backend,cwd:s.root},{withStageGuard:stageGuard(s)});
+  if((seen.state!=='active'&&!(allowStopped&&seen.state==='stopped'))||!seen.backend) fail('The original area chat is unavailable; no replacement was started.');
+  for(const field of ['runId','stageId','attemptId','agent','cwd','session','server','workspaceId','tabId','paneId','terminalId','agentName','promptDigest'])
+    if(!isDeepStrictEqual(seen.backend[field],backend[field])) fail('The original area-chat identity changed.');
+  if(backend.nativeSession && !isDeepStrictEqual(seen.backend.nativeSession,backend.nativeSession)) fail('The original native session changed.');
+  return seen;
+}
+async function resumeChat(s,r,directory,options,p) {
+  if(s.pending?.kind==='agent') {
+    const pending=s.pending;
+    if(!pending.backend || ['server_intent','start_intent','ready'].includes(pending.backend.phase)) {
+      if(!pending.launchInstructions) fail('The original chat launch request is unavailable.');
+      await current(s,r,p);
+      const portOptions=nativePorts(s,directory,r,options,p);
+      const outcome=await p.runHerdrStage({runId:s.runId,stageId:pending.stage,attemptId:pending.attemptId,agent:s.agent,cwd:r.root,
+        ...herdrLayoutInput(s),context:s.context,instructions:pending.launchInstructions,
+        areaChat:areaChatForStage(s.name,pending.stage),startOnly:true,backend:pending.backend,checkpoint:portOptions.checkpoint},portOptions);
+      candidateIdentity(s,s.definitions[s.index],outcome);
+      if(outcome.state!=='active')return result(s,'recovery_required',outcome.reason??'Original chat startup remains unresolved.');
+      pending.backend=outcome.backend;s.areaChats.active.backend=outcome.backend;
+      s.areaChats.active.readyAt??=Date.now();s.chatDecision=null;
+      await record(s,directory,'chat.launch.recovered');
+    }else {
+      if(pending.backend.phase==='prompt_intent')return result(s,'recovery_required','Original chat prompt delivery is uncertain. Inspect its conversation; no prompt was resent.');
+      const seen=await inspectChat(s,p,true);
+      if(seen.state==='stopped') {
+        await sourceValid(s,r);await assignedRepository(s.assignment,p);
+        await git(p,r.root,'merge-base','--is-ancestor',pending.input.head,'HEAD');
+        s.areaChats.interrupted??=[];s.areaChats.interrupted.push(structuredClone(pending));
+        s.areaChats.history.push(s.areaChats.active);s.areaChats.active=null;
+        s.pending=null;s.expected=await fingerprint(r,p);
+        await record(s,directory,'chat.interrupted');
+        return runChatStage(s,s.definitions[s.index],r,directory,options,p);
+      }
+      pending.backend=seen.backend;s.areaChats.active.backend=seen.backend;
+    }
+    return chatStageReply(s,options);
+  }
+  if(s.pending?.kind==='cleanup') {
+    const stopped=await cleanupAgent(s,s.definitions[s.index],r,directory,options,p,true);
+    return stopped??advance(s,r,directory,options,p,undefined,true);
+  }
+  if(s.chatDecision && !s.pending) return applyAreaChatDecision(s,r,directory,options,p);
+  return advance(s,r,directory,options,p,undefined,false);
+}
+async function runChatStage(s,stage,r,directory,options,p) {
+  const area=areaChatForStage(s.name,stage.id);
+  if(!area) fail('This stage has no supported chat area.');
+  await validateInput(s,options,p);
+    if(s.pending?.kind==='agent'){await sourceValid(s,r);await git(p,r.root,'merge-base','--is-ancestor',s.pending.input.head,'HEAD');}
+    else await current(s,r,p);
+  s.areaChats??={history:[]};
+  const continuing=s.areaChats.active?.id===area.id;
+  if(continuing) await inspectChat(s,p);
+  const attemptId=randomUUID(),handoffPath=join(directory,'artifacts',`${stage.id}-${attemptId}.json`);
+  const instructions=agentInstructions(s,stage,directory,attemptId,handoffPath,s.expected);
+  s.pending={kind:'agent',stage:stage.id,agent:s.agent,attemptId,startedAt:Date.now(),input:s.expected,handoffPath,instructions,
+    backend:continuing?s.areaChats.active.backend:null,transport:null};
+  if(continuing) {
+    s.pending.promptDigest=s.pending.backend.promptDigest;
+    await record(s,directory,'chat.stage.intent');
+    return chatStageReply(s,options);
+  }
+  if(s.areaChats.active) s.areaChats.history.push(s.areaChats.active);
+  s.areaChats.active={id:area.id,label:area.label,startedAt:Date.now(),readyAt:null,backend:null};
+  const builder=p.buildAreaChatInstructions ?? (await import('./workflow-area-chat-context.mjs')).buildAreaChatInstructions;
+  const launchInstructions=await builder({area,stageInstructions:instructions,reportCommand:reportCommand(s,options),
+    approvalCommand:[process.execPath,join(options.packageRoot,'bin','pdd.mjs'),'workflow','approve',String(s.issue.number)].map(shellArg).join(' '),
+    resumeCommand:[process.execPath,join(options.packageRoot,'bin','pdd.mjs'),'workflow','resume',String(s.issue.number)].map(shellArg).join(' '),
+    ...(s.areaChats.changesText?{changesText:s.areaChats.changesText}:{}),prompts:s.areaChatPrompts});
+  if(!text(launchInstructions)) fail('Area-chat prompt context is unavailable.');
+  s.pending.launchInstructions=launchInstructions;
+  s.pending.promptDigest=digest(`${s.context}\n\n# Current workflow stage\n${launchInstructions}`);
+  await record(s,directory,'chat.launch.intent');
+  const portOptions=nativePorts(s,directory,r,options,p);
+  let outcome;
+  try {
+    outcome=await p.runHerdrStage({runId:s.runId,stageId:stage.id,attemptId,agent:s.agent,cwd:r.root,
+      ...herdrLayoutInput(s),context:s.context,instructions:launchInstructions,areaChat:area,startOnly:true,
+      checkpoint:portOptions.checkpoint},portOptions);
+    candidateIdentity(s,stage,outcome);
+  } catch {return result(s,'recovery_required','Area-chat launch is uncertain; inspect the saved attempt without relaunching.');}
+  s.pending.backend=outcome.backend;s.areaChats.active.backend=outcome.backend;
+  if(outcome.state==='active') s.areaChats.active.readyAt=Date.now();
+  await record(s,directory,'chat.launched');
+  return outcome.state==='active' ? chatStageReply(s,options)
+    : result(s,outcome.state==='blocked'?'waiting':'recovery_required',outcome.reason??'Original area chat needs inspection.');
+}
 async function runAgent(s, stage, r, directory, options, p) {
+  if (s.chat) return runChatStage(s,stage,r,directory,options,p);
   if (typeof p.runHerdrStage !== 'function' || typeof p.inspectHerdrStage !== 'function' || typeof p.closeHerdrStage !== 'function')
     fail('Background native run, inspection and cleanup ports are required.');
   await validateInput(s, options, p);
@@ -317,11 +443,11 @@ async function runAgent(s, stage, r, directory, options, p) {
   const handoffPath = join(directory, 'artifacts', `${stage.id}-${randomUUID()}.json`);
   const attemptId = randomUUID();
   const instructions = agentInstructions(s, stage, directory, attemptId, handoffPath, s.expected);
-  s.pending = { kind: 'agent', stage: stage.id, attemptId, input: s.expected, handoffPath, backend: null, instructions,
+  s.pending = { kind: 'agent', stage: stage.id, agent:s.agent, attemptId, startedAt: Date.now(), input: s.expected, handoffPath, backend: null, instructions,
     promptDigest: digest(`${context}\n\n# Current workflow stage\n${instructions}`), transport: null };
   const guard = stageGuard(s), portOptions = nativePorts(s, directory, r, options, p);
   await guard({ runId: s.runId, cwd: s.root }, async () => { s.pending.attachmentEpoch = attachmentEpoch(s); });
-  record(s, directory, 'agent.intent');
+  await record(s, directory, 'agent.intent');
   const previous = s.completed.filter(entry => entry.backend?.phase === 'closed').at(-1)?.backend;
   let outcome;
   try {
@@ -330,21 +456,21 @@ async function runAgent(s, stage, r, directory, options, p) {
     candidateIdentity(s, stage, outcome);
   } catch { return result(s, 'recovery_required', 'Background launch or delivery is uncertain; no automatic relaunch. Inspect the saved attempt.'); }
   s.pending.backend = structuredClone(outcome.backend); s.pending.transport = outcome;
-  record(s, directory, 'agent.transport');
+  await record(s, directory, 'agent.transport');
   if (outcome.state !== 'settled') return result(s, outcome.state === 'blocked' ? 'waiting' : 'recovery_required', outcome.reason || 'The original background stage needs inspection; no resend.');
   return acceptAgent(s, stage, r, directory, options, p, outcome);
 }
-async function acceptAgent(s, stage, r, directory, options, p, outcome) {
+async function acceptAgent(s, stage, r, directory, options, p, outcome, report = false) {
   const portOptions = nativePorts(s, directory, r, options, p);
   return portOptions.withStageGuard(outcome.backend, async () => {
-    if (s.pending.attachmentEpoch !== attachmentEpoch(s)) {
+    if (!report && s.pending.attachmentEpoch !== attachmentEpoch(s)) {
       s.pending.attachmentEpoch = attachmentEpoch(s); s.pending.transport = null;
-      record(s, directory, 'agent.candidate.invalidated_by_attach');
+      await record(s, directory, 'agent.candidate.invalidated_by_attach');
       return result(s, 'waiting', 'Attachment invalidated the earlier candidate. Resume with approve to inspect and validate the same original attempt afresh.');
     }
-    const observed = await p.inspectHerdrStage({ backend: outcome.backend, cwd: r.root }, portOptions);
-    candidateIdentity(s, stage, observed);
-    if (observed.state !== 'settled' || !isDeepStrictEqual(observed.evidence, outcome.evidence))
+    const observed = report ? await inspectChat(s,p) : await p.inspectHerdrStage({ backend: outcome.backend, cwd: r.root }, portOptions);
+    if (!report) candidateIdentity(s, stage, observed);
+    if (!report && (observed.state !== 'settled' || !isDeepStrictEqual(observed.evidence, outcome.evidence)))
       return result(s, 'recovery_required', 'Native activity or identity changed before validation; the earlier candidate was not accepted.');
     await validateInput(s, options, p);
     await assignedRepository(s.assignment, p);
@@ -357,14 +483,14 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
     const plan = s.accepted?.testCommands;
     if (!plan?.length || h.testCommands.length && !isDeepStrictEqual(plan, h.testCommands)) return result(s, 'failed', 'Verification must execute the actual accepted native test plan.');
     s.pending.testCommands = plan; s.pending.executionInput = await fingerprint(r, p);
-    record(s, directory, 'test.intent');
+    await record(s, directory, 'test.intent');
     const checked = await runWorkflowTestCommands({ cwd: r.root, testCommands: plan }, p.commandPorts);
     h.checks = checked.results;
     s.pending.checks = checked.results;
     for (const check of checked.results) {
       p.stdout.write(String(check.stdout ?? '')); p.stderr.write(String(check.stderr ?? ''));
     }
-    record(s, directory, checked.passed ? 'test.completed' : 'test.failed');
+    await record(s, directory, checked.passed ? 'test.completed' : 'test.failed');
     if (!checked.passed) return result(s, 'failed', 'A real native project check failed or could not run.');
     if (!isDeepStrictEqual(s.pending.executionInput, await fingerprint(r, p)))
       fail('Native checks changed their execution input; the changed result is not verified.');
@@ -378,9 +504,9 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
   s.expected = await fingerprint(r, p);
   if (stage.protocol === 'proposal') s.proposal = { approval: stage.approval, files: h.files.filter(f => stage.requiredRoles.includes(f.role)), testCommands: h.testCommands };
   if (!isDeepStrictEqual(outputInput, await fingerprint(r, p))) fail('Stage output changed during validation; the changed result is not accepted.');
-  const finalObservation = await p.inspectHerdrStage({ backend: observed.backend, cwd: r.root }, portOptions);
-  candidateIdentity(s, stage, finalObservation);
-  if (finalObservation.state !== 'settled' || !isDeepStrictEqual(finalObservation.evidence, observed.evidence))
+  const finalObservation = report ? await inspectChat(s,p) : await p.inspectHerdrStage({ backend: observed.backend, cwd: r.root }, portOptions);
+  if (!report) candidateIdentity(s, stage, finalObservation);
+  if (!report && (finalObservation.state !== 'settled' || !isDeepStrictEqual(finalObservation.evidence, observed.evidence)))
     fail('Native state changed during validation; no acceptance or cleanup.');
   const evidenceRecord = { runId: s.runId, stageId: stage.id, attemptId: s.pending.attemptId,
     backend: finalObservation.backend, handoff: h, handoffSha256: digest(readFileSync(s.pending.handoffPath)),
@@ -391,7 +517,7 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
   const verification = stage.protocol === 'verify' ? { output: s.expected, testCommands: s.accepted.testCommands,
     evidenceDigest: acceptance.evidenceDigest } : null;
   s.pending = { ...s.pending, kind: 'cleanup', backend: finalObservation.backend, handoff: h, acceptance, evidenceRecord, verification };
-  record(s, directory, 'agent.accepted');
+  await record(s, directory, 'agent.accepted');
   return cleanupAgent(s, stage, r, directory, options, p, true);
   });
 }
@@ -404,23 +530,31 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
     if (digest(JSON.stringify(s.pending.evidenceRecord)) !== s.pending.acceptance.evidenceDigest
       || digest(readFileSync(s.pending.handoffPath)) !== s.pending.evidenceRecord.handoffSha256)
       fail('The accepted stage evidence or closed handoff changed before cleanup.');
-    if (s.pending.backend.phase !== 'closed') {
+    if (!s.chat && s.pending.backend.phase !== 'closed') {
       if (s.pending.backend.phase !== 'candidate') return result(s, 'recovery_required', 'Original cleanup may already have happened. Inspect it; no blind repeat.');
       const closed = await p.closeHerdrStage({ backend: s.pending.backend, acceptance: s.pending.acceptance }, portOptions);
       if (closed.state !== 'closed' || closed.backend?.phase !== 'closed') return result(s, 'recovery_required', closed.reason || 'Owned cleanup is uncertain; no stage was resent.');
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
       p.stdout.write(`pdd accepted ${stage.id} and moved on.\n`);
     }
-    s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
+    s.completed.push({ id: stage.id, kind: stage.kind, agent:s.agent, attemptId:s.pending.attemptId, startedAt:s.pending.startedAt, endedAt:Date.now(), handoff: s.pending.handoff,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });
-    s.pending = null; s.index++; record(s, directory, 'agent.completed');
+    if (s.chat) {
+      s.areaChats.active.backend = s.pending.backend;
+      s.chatDecision=null;
+      if (stage.protocol === 'proposal') {
+        s.gateAskedAt = Date.now();
+        s.waitingPerson = {decisions:['approve','changes'],what:'Approve the current proposal and test plan',askedAt:s.gateAskedAt};
+      }
+    }
+    s.pending = null; s.index++; await record(s, directory, 'agent.completed');
     return null;
   });
 }
 
 async function completePr(s, stage, intent, pr, directory) {
-  s.completed.push({ id: stage.id, kind: stage.kind, pr, intent });
-  s.pending = null; s.index++; record(s, directory, 'pr.completed');
+  s.completed.push({ id: stage.id, kind: stage.kind, startedAt:s.pending?.startedAt??null,endedAt:Date.now(),pr, intent });
+  s.pending = null; s.index++; await record(s, directory, 'pr.completed');
 }
 async function makePr(s, stage, r, directory, p) {
   await current(s, r, p);
@@ -438,7 +572,7 @@ async function makePr(s, stage, r, directory, p) {
   const intent = await prepareWorkflowPr({ cwd: r.root, runId: s.runId, stageId: stage.id,
     repository: s.repo, baseBranch: s.base, bodyFile: join(directory, `pr-${stage.id}.md`) }, p.commandPorts);
   await current(s, r, p);
-  s.pending = { kind: 'pr', stage: stage.id, intent }; record(s, directory, 'pr.intent');
+  s.pending = { kind: 'pr', stage: stage.id, startedAt:Date.now(),intent }; await record(s, directory, 'pr.intent');
   let outcome;
   try { outcome = await publishWorkflowPr({ cwd: r.root, intent }, p.commandPorts); }
   catch { return result(s, 'recovery_required', 'PR effect is uncertain; no blind resend.'); }
@@ -469,7 +603,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
         candidateIdentity(s, stage, seen);
       } catch { return result(s, 'recovery_required', 'Original first dispatch is unconfirmed; preserve this same attempt for inspection.'); }
       s.pending.backend = structuredClone(seen.backend); s.pending.transport = seen;
-      record(s, directory, 'agent.transport');
+      await record(s, directory, 'agent.transport');
     } else {
       seen = await p.inspectHerdrStage({ backend: s.pending.backend, cwd: r.root }, portOptions);
       candidateIdentity(s, stage, seen);
@@ -482,7 +616,7 @@ async function reconcile(s, r, directory, options, p, canAdvance) {
     let outcome = await reconcileWorkflowPr({ cwd: r.root, intent: s.pending.intent }, p.commandPorts);
     if (outcome.state === 'recovery_required' && canAdvance) {
       await current(s, r, p);
-      record(s, directory, 'pr.unpublished_retry_intent');
+      await record(s, directory, 'pr.unpublished_retry_intent');
       outcome = await publishWorkflowPr({ cwd: r.root, intent: s.pending.intent, unpublishedOnly: true }, p.commandPorts);
     }
     if (!['open', 'merged'].includes(outcome.state) || !outcome.pr)
@@ -506,7 +640,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       await git(p, r.root, 'merge-base', '--is-ancestor', merged.mergeCommit, 'HEAD');
       const previous = s.expected; s.expected = fresh;
       s.inputTransitions ??= []; s.inputTransitions.push({ previous, current: fresh, reason: 'merged_proposal_base' });
-      record(s, directory, 'human.merged_base.accepted');
+      await record(s, directory, 'human.merged_base.accepted');
     }
   }
   if (s.pending?.kind === 'agent') { await sourceValid(s, r); await git(p, r.root, 'merge-base', '--is-ancestor', s.pending.input.head, 'HEAD'); }
@@ -526,7 +660,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       if (!selected) {
         if (!choice) return result(s, 'waiting', 'Optional step: resume with --decision approve to run it or --decision skip to omit it.');
         s.optional ??= {}; selected = { decision: choice, input: s.expected };
-        s.optional[stage.id] = selected; record(s, directory, 'optional.decision');
+        s.optional[stage.id] = selected; await record(s, directory, 'optional.decision');
       }
       if (!['approve', 'skip'].includes(selected.decision) || !isDeepStrictEqual(selected.input, s.expected))
         fail('The saved optional decision does not match the current input.');
@@ -534,7 +668,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       choice = undefined;
       if (selected.decision === 'skip') {
         s.completed.push({ id: stage.id, kind: stage.kind, skipped: true, input: selected.input }); s.index++;
-        record(s, directory, 'optional.skipped'); continue;
+        await record(s, directory, 'optional.skipped'); continue;
       }
     }
     if (stage.kind === 'human') {
@@ -543,11 +677,11 @@ async function advance(s, r, directory, options, p, decision, initial) {
       await assertWorkflowArtifacts({ cwd: r.root, files: s.proposal.files });
       s.accepted = { ...s.proposal, input: s.expected };
       s.completed.push({ id: stage.id, kind: stage.kind, input: s.expected }); s.index++;
-      record(s, directory, 'human.approved'); choice = undefined; continue;
+      await record(s, directory, 'human.approved'); choice = undefined; continue;
     }
     if (stage.kind === 'merge') {
       const prior = s.completed.find(step => step.id === stage.prStage);
-      if (prior?.skipped) { s.completed.push({ id: stage.id, kind: stage.kind, skipped: true }); s.index++; record(s, directory, 'merge.skipped'); continue; }
+      if (prior?.skipped) { s.completed.push({ id: stage.id, kind: stage.kind, skipped: true }); s.index++; await record(s, directory, 'merge.skipped'); continue; }
       if (!prior?.pr) fail('No original PR is saved for this merge step.');
       const outcome = await reconcileWorkflowPr({ cwd: r.root, intent: prior.intent }, p.commandPorts);
       if (outcome.pr && (outcome.pr.number !== prior.pr.number || outcome.pr.url !== prior.pr.url))
@@ -558,7 +692,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       const mergeCommit = outcome.pr.mergeCommit;
       if (!/^[a-f0-9]{40,64}$/.test(mergeCommit ?? '')) fail('Actual merged revision was not supplied by GitHub.');
       s.completed.push({ id: stage.id, kind: stage.kind, pr: outcome.pr, mergeCommit }); s.index++;
-      record(s, directory, 'merge.observed');
+      await record(s, directory, 'merge.observed');
       if (!canAdvance) return result(s, s.index === s.definitions.length ? 'completed' : 'waiting', 'Actual merge observed; no new stage was launched. Resume with approve to advance.');
       continue;
     }
@@ -567,7 +701,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
       if (s.proposal !== priorProposal || decision !== 'approve')
         return result(s, 'waiting', 'Review the independent proposal and test plan; resume with approve to advance.');
       if (!s.proposal.files.length || !s.proposal.testCommands.length) fail('A complete independent proposal and test plan is required.');
-      s.accepted = { ...s.proposal, input: s.expected }; record(s, directory, 'proposal.accepted');
+      s.accepted = { ...s.proposal, input: s.expected }; await record(s, directory, 'proposal.accepted');
     }
     if (stage.requiresMerge) {
       const merged = s.completed.find(entry => entry.id === stage.requiresMerge);
@@ -592,7 +726,7 @@ function canonicalOverview(packageRoot) {
 }
 function snapshotDigest(input) {
   return digest(JSON.stringify({ runId: input.runId, sourceRoot: input.sourceRoot,
-    definition: input.definition, baseContext: input.baseContext, overview: input.overview }));
+    definition: input.definition, baseContext: input.baseContext, overview: input.overview, ...(input.areaPrompts?{areaPrompts:input.areaPrompts}:{}) }));
 }
 function inputDirectory(commonDir, runId) { return join(commonDir, 'pdd', 'workflow-inputs', runId); }
 function saveInput(input, commonDir) {
@@ -619,6 +753,7 @@ async function validateInput(s, options, p) {
   if (!isDeepStrictEqual(live, s.definition)) fail('Workflow definition or Markdown source changed; no saved run input was replaced.');
   const base = await p.loadGuidance({ packageRoot: options.packageRoot, cwd: s.assignment.sourceRoot, workflows: false });
   if (base !== input.baseContext || canonicalOverview(options.packageRoot) !== input.overview) fail('Canonical guide/skill/context changed; the saved context was not replaced.');
+  if(s.chat && (!isDeepStrictEqual(s.areaChatPrompts,input.areaPrompts)||!isDeepStrictEqual(input.areaPrompts,loadAreaChatPrompts()))) fail('Area-chat prompt snapshot changed.');
   const context = stageContext(input, s.root);
   if (s.context !== context || s.contextDigest !== digest(context)) fail('Saved full stage context changed.');
 }
@@ -687,6 +822,7 @@ async function execute(options, ports, resume) {
     if (!text(options?.packageRoot) || typeof p.loadGuidance !== 'function') fail('A package root and canonical guidance port are required.');
     if (resume && (!UUID.test(options.runId ?? '') || options.decision !== undefined && !['approve', 'skip'].includes(options.decision))) fail('Supply a UUIDv4 run and optional approve/skip decision.');
     if (!resume && !['codex', 'claude'].includes(options.agent ?? 'codex')) fail('Choose codex or claude.');
+    if (!resume && options.chat === true && options.name !== 'small-change') fail('Area chats currently support only the small-change workflow.');
     let assignment, input, r;
     if (resume) {
       const found = await assignmentFor(options, p, true, options.runId);
@@ -698,10 +834,11 @@ async function execute(options, ports, resume) {
       s = readSaved(directory);
       if (!isDeepStrictEqual(s.assignment, assignment)) fail('Saved assignment identity changed.');
       progress(s, 'run.loaded');
+      if(s.chat && options.decision) fail('Area-chat decisions require the shared workflow decide seam.');
       const binding = await resolveWorkflowIssue({ cwd: r.root, issue: s.issue.url }, p.commandPorts);
       r.repo = binding.repository; r.base = binding.defaultBranch;
       await validateInput(s, options, p);
-      return await finishRunLayout(await advance(s, r, directory, options, p, options.decision, false), s, directory, p);
+      return await finishRunLayout(s.chat ? await resumeChat(s,r,directory,options,p) : await advance(s, r, directory, options, p, options.decision, false), s, directory, p);
     }
     const source = await repository(options.cwd, p);
     const definition = loadWorkflowDefinition({ name: options.name, cwd: source.root, packageRoot: options.packageRoot });
@@ -709,7 +846,7 @@ async function execute(options, ports, resume) {
     const runId = randomUUID();
     const baseContext = await p.loadGuidance({ packageRoot: options.packageRoot, cwd: source.root, workflows: false });
     if (!text(baseContext)) fail('Full guide-first context is unavailable.');
-    input = { runId, sourceRoot: source.root, definition, baseContext, overview: canonicalOverview(options.packageRoot) };
+    input = { runId, sourceRoot: source.root, definition, baseContext, overview: canonicalOverview(options.packageRoot), ...(options.chat?{areaPrompts:loadAreaChatPrompts()}:{}) };
     // Preserve complete guide and recipe bytes BEFORE the allocator can create a checkout.
     saveInput(input, source.commonDir);
     s = { runId, name: options.name, definitions: definition.stages, index: 0 };
@@ -735,11 +872,12 @@ async function execute(options, ports, resume) {
     if (existsSync(directory)) fail('Run journal already exists; do not overwrite it.');
     ensureDirectory(directory); ensureDirectory(join(directory, 'artifacts')); syncDirectory(directory);
     const context = stageContext(input, r.root);
-    s = { version: 2, seq: 0, runId, name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
+    s = { version: 2, seq: 0, runId, name: options.name, agent: options.agent ?? 'codex', startedAt:Date.now(), ...(options.chat === true ? { chat: true,areaChatPrompts:input.areaPrompts } : {}), root: r.root, gitDir: r.gitDir,
       repo: r.repo, base: r.base, issue: binding.issue, assignment, definition, definitions: definition.stages,
       inputDigest: snapshotDigest(input), context, contextDigest: digest(context), index: 0, completed: [],
       expected: await fingerprint(r, p), pending: null };
-    record(s, directory, 'run.started');
+    await record(s, directory, 'run.started');
+    await appendRunIndex({v:1,runId,workflow:s.name,repo:s.repo,issue:s.issue,agent:s.agent,root:s.root,runDir:directory,startedAt:s.startedAt},{home:p.runIndexHome??process.env.HOME});
     await validateInput(s, options, p);
     return await finishRunLayout(await advance(s, r, directory, options, p, undefined, true), s, directory, p);
   } catch (error) {
@@ -748,6 +886,165 @@ async function execute(options, ports, resume) {
   }
   finally { unlock?.(); }
 }
+function gateDecisions(s) {
+  const stage=s.definitions[s.index];
+  if(!stage)return [];
+  if(s.pending)return s.chat?[]:['approve'];
+  if(stage.optional&&!s.optional?.[stage.id])return ['approve','skip'];
+  if(stage.kind==='human'||s.proposal?.approval==='next-advance'&&!s.accepted)return ['approve','changes'];
+  return [];
+}
+async function finishDecisionGate(s,directory,outcome,p) {
+  if(failedJournalStates.has(s))return outcome;
+  const decisions=['waiting','recovery_required'].includes(outcome.state)?gateDecisions(s):[];
+  if(decisions.length) {
+    const stage=s.definitions[s.index].id;
+    if(!s.waitingDecision||s.waitingDecision.seq!==s.seq||s.waitingDecision.stage!==stage||!isDeepStrictEqual(s.waitingDecision.input,s.expected)) {
+      const active=s.areaChats?.active, native=s.pending??s.completed.findLast(d=>d.backend),at=(p.now??Date.now)();
+      const evidenceStage={agent:s.agent,root:s.root,startedAt:active?.startedAt??native?.startedAt,endedAt:active?.readyAt??native?.endedAt??at};
+      s.waitingDecision={stage,seq:s.seq+1,at,decisions,input:structuredClone(s.expected),evidenceStage};
+      await record(s,directory,'decision.waiting');
+    }
+  }
+  return outcome;
+}
+
+export async function readWorkflowDecision(options,ports={}) {
+  try {
+    const p=dependencies(ports),found=await assignmentFor(options,p,true,options.runId);
+    if(found.state!=='ready'||!found.assignment)throw Error('unknown_run');
+    const a=found.assignment,s=readSaved(join(a.gitDir,'pdd','workflows',options.runId));
+    if(!isDeepStrictEqual(s.assignment,a))throw Error('changed_assignment');
+    const gate=s.waitingDecision;
+    if(!gate||gate.seq!==s.seq||gate.stage!==s.definitions[s.index]?.id)return {state:'refused',code:'run_not_waiting',message:'No current person gate is saved. Inspect or resume the run without a decision first.'};
+    return {state:'ready',runId:s.runId,stage:gate.stage,journalSeq:gate.seq,issue:s.issue,repo:s.repo,root:s.root};
+  }catch{return {state:'refused',code:'unknown_run',message:'The saved run and current gate could not be read.'};}
+}
+
+// The shared seam calls this function with person authorization composed by its host.
+export async function applyWorkflowDecision(options,ports={}) {
+  const p=dependencies(ports);let s,unlock,admitted=false;
+  const answer=(state,code=null,message=null)=>({exitCode:['recorded','started'].includes(state)?0:code==='bad_args'?2:1,
+    state,code,runId:options?.runId??null,decisionId:options?.decisionId??null,decision:options?.decision??null,
+    stage:s?.definitions?.[s.index]?.id??null,journalSeq:s?.seq??null,controller:null,
+    ...(s?.approvalRecord?{approvalRecord:s.approvalRecord}:{}),message:message??`${state}: ${code??'person decision recorded'}.`});
+  if(!validDecisionInput(options))return answer('refused','bad_args');
+  try {
+    const found=await assignmentFor(options,p,true,options.runId);
+    if(found.state!=='ready'||!found.assignment)return answer('refused','unknown_run');
+    const assignment=found.assignment,r=await assignedRepository(assignment,p);
+    const directory=join(r.gitDir,'pdd','workflows',options.runId);
+    try{unlock=lock(join(r.gitDir,'pdd','workflows'));}catch{return answer('refused','run_not_waiting');}
+    s=readSaved(directory);
+    if(!isDeepStrictEqual(s.assignment,assignment))return answer('failed');
+    const binding={decision:options.decision,text:options.text??null,expectStage:options.expectStage,expectSeq:options.expectSeq};
+    const prior=(s.decisions??[]).filter(d=>d.decisionId===options.decisionId);
+    if(prior.length)return prior.every(d=>isDeepStrictEqual(d.binding,binding))?answer('recorded'):answer('refused','bad_args');
+    const gate=s.waitingDecision,stage=s.definitions[s.index];
+    if(!stage||options.expectStage!==stage.id||options.expectSeq!==s.seq||gate?.stage!==stage.id||gate?.seq!==s.seq)
+      return answer('refused','stale_decision');
+    if(!gate.decisions.includes(options.decision)||!gateDecisions(s).includes(options.decision))return answer('refused','run_not_waiting');
+    let proposalIndex=-1;
+    if(options.decision==='changes') {
+      for(let n=s.index-1;n>=0;n--)if(s.definitions[n].protocol==='proposal'){proposalIndex=n;break;}
+      if(proposalIndex<0||s.completed.some(d=>s.definitions.findIndex(x=>x.id===d.id)>=proposalIndex&&(d.pr||d.mergeCommit)))return answer('refused','unsupported');
+    }
+    const issue=await resolveWorkflowIssue({cwd:r.root,issue:s.issue.url},p.commandPorts);
+    r.repo=issue.repository;r.base=issue.defaultBranch;
+    await validateInput(s,options,p);
+    if(s.pending?.kind==='agent'){await sourceValid(s,r);await git(p,r.root,'merge-base','--is-ancestor',s.pending.input.head,'HEAD');}
+    else await current(s,r,p);
+    const auth=await p.authorizeDecision?.({input:options,state:structuredClone(s)});
+    if(auth?.ok!==true||!auth.approvalRecord)return answer('refused',auth?.code??'person_required',auth?.message);
+    const mainSession=s.areaChats?.active?.backend?.nativeSession;
+    if(s.chat && auth.approvalRecord.kind==='chat'
+      && (auth.approvalRecord.agent!==s.agent || mainSession?.kind==='id' && auth.approvalRecord.sessionId!==mainSession.value))
+      return answer('refused','person_required','Approval evidence does not belong to the saved main conversation.');
+    // Confirmation can take arbitrarily long. Check artifacts again after it.
+    await validateInput(s,options,p);
+    if(s.pending?.kind==='agent'){await sourceValid(s,r);await git(p,r.root,'merge-base','--is-ancestor',s.pending.input.head,'HEAD');}
+    else await current(s,r,p);
+    const at=(p.now??Date.now)();
+    s.approvalRecord=structuredClone(auth.approvalRecord);
+    s.decisions??=[];s.decisions.push({decisionId:options.decisionId,binding,approvalRecord:s.approvalRecord,at});
+    s.waitingDecision=null;
+    if(s.chat)s.chatDecision={decisionId:options.decisionId,decision:options.decision,...(options.text?{text:options.text}:{})};
+    if(options.decision==='changes') {
+      const removed=s.completed.filter(d=>s.definitions.findIndex(x=>x.id===d.id)>=proposalIndex);
+      s.revisionHistory??=[];s.revisionHistory.push({at,completed:removed,proposal:s.proposal??null,accepted:s.accepted??null});
+      s.completed=s.completed.filter(d=>s.definitions.findIndex(x=>x.id===d.id)<proposalIndex);
+      s.changes??=[];s.changes.push({stage:stage.id,round:s.changes.length+1,text:options.text,at});
+      s.index=proposalIndex;delete s.proposal;delete s.accepted;
+      for(const d of s.definitions.slice(proposalIndex))if(s.optional)delete s.optional[d.id];
+    }
+    await record(s,directory,'decision.received');admitted=true;
+    const choice=options.decision==='changes'?undefined:options.decision;
+    const outcome=await finishDecisionGate(s,directory,
+      s.chat ? await applyAreaChatDecision(s,r,directory,options,p)
+        : await advance(s,r,directory,{...options,decision:choice},p,choice,options.decision==='changes'),p);
+    await writeStatus(s,directory,'decision.result',outcome);
+    if(outcome.state==='running')return answer('started',null,outcome.message);
+    if(outcome.state==='failed')return answer('failed',null,outcome.message);
+    if(outcome.state==='recovery_required')return answer('uncertain',null,outcome.message);
+    return answer('recorded',null,`Person decision recorded. ${outcome.message}`);
+  }catch{return answer(admitted?'uncertain':'failed');}
+  finally{unlock?.();}
+}
+
+async function applyAreaChatDecision(s,r,directory,options,p) {
+  options={...options,...s.chatDecision};
+  // Shared decide has already checked the person and persisted its receipt.
+  s.waitingPerson=null;
+  if(options.decision==='changes') {
+    if(s.areaChats.active)s.areaChats.history.push(s.areaChats.active);
+    s.areaChats.active=null;s.areaChats.changesText=options.text;
+  }
+  await record(s,directory,'chat.decision.continuation');
+  const outcome=await advance(s,r,directory,options,p,options.decision==='changes'?undefined:options.decision,options.decision==='changes');
+  if(outcome.state==='running'){s.chatDecision=null;await record(s,directory,'chat.decision.started');}
+  return outcome;
+}
+
+export async function reportWorkflowStage(options, ports) {
+  const p=dependencies(ports); let s,unlock,directory;
+  try {
+    if (!UUID.test(options?.runId??'') || !UUID.test(options.attemptId??'') || !text(options.stageId)) fail('A saved run, stage and attempt are required.');
+    const found=await assignmentFor(options,p,true,options.runId);
+    if(found.state!=='ready'||!found.assignment) fail('The original worktree is unavailable.');
+    const r=await assignedRepository(found.assignment,p);
+    directory=join(r.gitDir,'pdd','workflows',options.runId);
+    unlock=lock(join(r.gitDir,'pdd','workflows'));
+    s=readSaved(directory);
+    if(!s.chat || !isDeepStrictEqual(s.assignment,found.assignment)) fail('This is not the assigned area-chat run.');
+    r.repo=s.repo;r.base=s.base;
+    await validateInput(s,options,p);
+    const done=s.completed.find(step=>step.id===options.stageId&&step.attemptId===options.attemptId);
+    if(!done && (s.pending?.stage!==options.stageId||s.pending?.attemptId!==options.attemptId)) fail('Report does not match the current saved attempt.');
+    const active=s.areaChats?.active?.backend;
+    if(done && (!active || done.backend?.attemptId!==active.attemptId || done.backend?.terminalId!==active.terminalId))
+      return result(s,s.pending?'running':s.index===s.definitions.length?'completed':'waiting',
+        'This stage was already accepted in an earlier conversation. Continue in the current area chat.');
+    let outcome;
+    if(!done) {
+      const stage=s.definitions[s.index];
+      if(s.pending.kind==='cleanup') outcome=await cleanupAgent(s,stage,r,directory,options,p,true);
+      else if(s.pending.kind==='agent') outcome=await acceptAgent(s,stage,r,directory,options,p,await inspectChat(s,p),true);
+      else fail('This attempt is not accepting a stage report.');
+    }
+    if(!outcome) {
+      if(s.pending?.kind==='agent') outcome=chatStageReply(s,options);
+      else outcome=await advance(s,r,directory,options,p,undefined,true);
+    }
+    await finishDecisionGate(s,directory,outcome,p);
+    await writeStatus(s,directory,'report',outcome);
+    return outcome;
+  } catch(error) {
+    const outcome=result(s,'failed',error.message);
+    if(s&&unlock)await writeStatus(s,directory,'report.failed',outcome);
+    return outcome;
+  } finally {unlock?.();}
+}
+
 export async function runWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, false)); }
 export async function resumeWorkflow(options, ports) { return progressScope.run(ports?.onProgress, () => execute(options, ports, true)); }
 
@@ -762,6 +1059,13 @@ export async function attachWorkflow(options, ports) {
     const r = await assignedRepository(found.assignment, p);
     s = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
     if (!isDeepStrictEqual(s.assignment, found.assignment)) fail('Saved assignment changed.');
+    if(s.chat) {
+      await validateInput(s,options,p);
+      const seen=await inspectChat(s,p);
+      if(typeof p.attachHerdrStage!=='function') fail('Area-chat attachment is unavailable.');
+      const code=await p.attachHerdrStage({backend:seen.backend},{});
+      return result(s,code===0?'waiting':'recovery_required',code===0?'The retained area chat remains available in Herdr. Opening it does not pause work.':'The original chat could not be opened.');
+    }
     if (!s.pending?.backend || s.pending.backend.phase === 'closed') return result(s, 'waiting', 'No live stage is retained. Completed stage history is archived; no conversation was started.');
     if (s.pending.kind === 'cleanup') return result(s, 'waiting', 'The stage is already accepted for cleanup; it is archived for workflow purposes.');
     if (typeof p.attachHerdrStage !== 'function') fail('Active native attachment is unavailable.');

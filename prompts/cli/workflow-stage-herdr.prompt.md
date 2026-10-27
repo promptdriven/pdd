@@ -75,3 +75,33 @@ Observation maps only WORKFLOW_STAGE_BUSY to active/stage_temporarily_guarded an
 ## Full-access native launch
 
 Start every new workflow stage in full-access mode without approval prompts. Codex native arguments after Herdr's -- boundary are --no-daemon --dangerously-bypass-approvals-and-sandbox followed by -c and one invocation-only projects={"<actual assigned absolute cwd>"={trust_level="trusted"}} override; use the simple root override key projects because Codex 0.159.1 splits override keys on literal dots. Encode the path as a quoted TOML inline-table VALUE key so dots, spaces, quotes, backslashes and equals signs remain one exact worktree key; native config selects an exact cwd entry before a parent repo-root entry; Claude uses --dangerously-skip-permissions. Preserve canonical installed agent, cwd/environment/auth/provider/model/effort and actual stage identity/first-prompt/noresend checks. No permission/config/sandbox fallback or global writes. Existing startup/consent/root failure remains actionable/finite, no autoanswer or mode retry. Never persist trust/config/auth/environment changes, automate update choices or alter an existing live agent. Existing live runs/agents must not be relaunched or modified when launch options change. Preserve the four exports and controller semantics.
+
+## Finite area-chat transport
+
+`runHerdrStage` additionally accepts `startOnly:true` and `areaChat:{id,label}`.
+This opens one area main native, uses the shared layout module, renames its tab
+to the area label and checkpoints prompt delivery before returning `active`.
+It must not poll for completion in this mode. Startup/uncertain prompt recovery
+retains the same original identity and never resends a possibly delivered prompt.
+Area agent environments carry `PDD_AGENT_SESSION=<run>/<area>`; set it inside
+the owned pane before native startup, since a preexisting shared server cannot
+inherit a newly set parent environment. Normal stage behavior is preserved.
+
+`inspectHerdrChat({backend,cwd},ports)` checks the saved server, pane, terminal,
+agent, native-session identity when known, and cwd; it returns `active` with
+the live backend even while the agent invokes a report command. It makes no
+claim about artifact validity or person intent and never sends a prompt.
+The runner owns those checks. Chat attachment remains a view and holds no
+mutation guard for its interactive lifetime.
+
+When the named agent is unavailable, chat inspection may return stopped only
+if a fresh pane get proves the exact saved workspace/tab/pane/terminal and cwd,
+no native agent, no pending launch and no working state. Missing or replaced
+panes remain uncertain. This evidence authorizes explicit runner continuation,
+not an automatic transport restart.
+
+W1b decision integration: every native stage receives PDD_AGENT_SESSION using
+Codex's per-invocation shell_environment_policy.set config or Claude's per-
+invocation settings.env. Use run/stage for stage mode and run/area for chat
+mode. No global settings are written; this marker routes decisions to evidence
+verification and is not a hard security boundary.

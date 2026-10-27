@@ -1,6 +1,6 @@
 # Local workflow runner
 
-`src/workflow-runner.mjs` owns sequential local workflows for the user's current Git project. It resolves a real same-repository GitHub issue, starts a fresh native coding-agent conversation for each agent stage, preserves observable file handoffs, asks for human choices, creates actual PRs and observes their merge. The supplied background stage adapter owns the assigned issue worktree and full-access native launch policy, preserving native login without global configuration writes. Do not merge automatically or embed credentials.
+`src/workflow-runner.mjs` owns sequential local workflows for the user's current Git project. The default stage mode resolves a real same-repository GitHub issue, starts a fresh native coding-agent conversation for each agent stage, preserves observable file handoffs, asks for human choices, creates actual PRs and observes their merge. With `chat:true`, the small-change run projects two labelled area chats and writes the additive C3 status fields; the default path is unchanged. The supplied background stage adapter owns the assigned issue worktree and full-access native launch policy, preserving native login without global configuration writes. Do not merge automatically or embed credentials.
 
 ## Public module functions and ports
 
@@ -27,7 +27,7 @@ Accept ISSUE as a positive decimal, owner/repo#number or HTTPS github.com/owner/
 
 Keep append-only durable journal snapshots and artifacts under the actual absolute Git directory's `pdd/workflows/<UUID>/`, never a tracked product file or global config. Metadata directories and journal files must be canonical ordinary paths, never symlink redirects or multiply linked journal files; refuse before writing through an alias. Serialize active commands with an exclusive local lock; a concurrent live owner refuses. Resume acquires the assigned controller lock before reading its journal snapshot, checking the saved assignment or selecting progress; never act on a snapshot read before exclusion was acquired. A stale dead-owner lock can be recovered without restarting or killing a process; simultaneous recovery must never displace a live successor. An interrupted lock acquisition that cannot be proved stale refuses for inspection. Bind every snapshot to the saved repository/worktree, stage and current expected HEAD. Refuse changed definition source or canonical context, and retain the exact saved definition/Markdown/context snapshots. New runs use loader selection from the original project root before allocation; a complete local recipe overrides the bundle, including for arbitrary safe workflow names. Read durable JSONL incrementally with memory bounded by the current record rather than total journal size. Validate every historical sequence and run binding in order before returning the complete latest state; a large valid journal must not require one whole-file string. Preserve append-only bytes, terminal-newline completeness, malformed-history refusal and controller-lock ordering; do not compact, drop records or replace saved context. A malformed or torn journal refuses rather than inventing state.
 
-Before any native launch, push or PR create, flush its specific intent. After crash or unknown delivery, reconcile existing state; never blindly replay a native session, push or PR create. No-decision resume may inspect journal/artifacts and read existing PR/merge state, but cannot launch a new agent, push, create a PR or automatically advance into an effect. Explicit approve permits ordinary next progress, with the same guards; skip is confined to optional steps.
+Before any native launch, push or PR create, flush its specific intent. After crash or unknown delivery, reconcile existing state; never blindly replay a native session, push or PR create. In default stage mode, no-decision resume may inspect journal/artifacts and read existing PR/merge state, but cannot launch a new agent, push, create a PR or automatically advance into an effect. Explicit approve permits ordinary next progress, with the same guards; skip is confined to optional steps.
 
 ## Attach-as-watch semantics
 
@@ -67,6 +67,11 @@ Read back the actual PR and require exact repo, branch, base, head commit and ma
 
 ## Dependencies
 
+- [Area prompt context](workflow-area-chat-context.prompt.md): required runtime/generation input for snapshotted main-chat and subagent instructions.
+- [Area mapping](workflow-area-chats.prompt.md): required runtime/generation area labels and additive projection.
+- [Shared decisions](workflow-decide.prompt.md): required runtime/generation person admission, phone signatures and evidence interface.
+- [Run records](workflow-run-records.prompt.md): required runtime/generation shared C3 status and W4 machine index; append discoverable identity after run.started is durable.
+
 - [Artifact handoffs](workflow-artifacts.prompt.md): required helper for closed handoff validation, regular contained files/hash checks and real native test argv. Caller retains HEAD/currentness, accepted source and journal decisions.
 - [GitHub effects](workflow-github.prompt.md): required helper for actual same-repository issue binding, prepared PR intent, publish and read-only original reconciliation. Caller durably saves intent before publish; helper never owns journal, stage advance or merge.
 - [Stage definitions](workflow-definitions.prompt.md): required orchestration input at authoring and runtime through `src/workflow-definitions.mjs`.
@@ -84,7 +89,7 @@ Additional required dependencies: [editable definition loader](workflow-definiti
 
 ## Shared attach and acceptance exclusion
 
-The runner supplies native `ports.withStageGuard(backend, action)` using the actual assignment commonDir and runId. This is a shared exclusive filesystem guard distinct from the controller's command lock. Hold it for the whole foreground attachment or for fresh candidate/currentness/handoff/test validation through durable acceptance and cleanup, never throughout native polling. Same-call nested native inspection/cleanup may reenter through async-local ownership; concurrent processes or independent calls may not. Active guard contention pauses rather than displacing its owner. After acquiring the guard, reload the actual journal and revalidate assignment and saved inputs before selecting an active backend; a previously read pending stage may already be accepted or closed. Attach records a separate fsynced attachment epoch without racing the controller's journal sequence. A captured candidate predating attachment cannot be accepted; preserve and invalidate it, then require explicit fresh same-attempt inspection under the guard. New activity/input changes invalidate prior evidence. Do not supply a no-op guard.
+The runner supplies native `ports.withStageGuard(backend, action)` using the actual assignment commonDir and runId. This is a shared exclusive filesystem guard distinct from the controller's command lock. Hold it only for fresh candidate/currentness/handoff/test validation through durable acceptance and cleanup; attachment is a nonblocking view, never throughout native polling. Same-call nested native inspection/cleanup may reenter through async-local ownership; concurrent processes or independent calls may not. Active guard contention pauses rather than displacing its owner. After acquiring the guard, reload the actual journal and revalidate assignment and saved inputs before selecting an active backend; a previously read pending stage may already be accepted or closed. Legacy attachment epochs remain readable, but the nonblocking view does not create new epoch writes. A captured candidate predating attachment cannot be accepted; preserve and invalidate it, then require explicit fresh same-attempt inspection under the guard. New activity/input changes invalidate prior evidence. Do not supply a no-op guard.
 
 ## Independent issue stages
 
@@ -101,3 +106,86 @@ Only the current pending backend supplies agent location. Do not present a compl
 ## Herdr repository/run layout
 
 Pass the verified assignment repository, sourceRoot, commonDir, issueNumber and workflowName to every fresh or proven pre-native stage continuation. Stage IDs do not substitute for the run's workflow label. The stage adapter owns the shared pdd server, repository workspace and run worktree workspace. At a terminal completed or failed outcome with no pending stage, including an exception before PR intent such as an untracked artifact refusing publication, close the last accepted backend's run workspace through closeHerdrRun; gate, active, uncertain and merge-wait outcomes retain it. Record closure intent and confirmation durably. Closure failure becomes recovery_required and never pretends the run layout ended. No pending/unaccepted stage is closed. Git checkout remains available; no pre-merge deletion or implicit cancellation is authorized. Load [Herdr layout](workflow-herdr-layout.prompt.md) during generation and verification for the layout boundary.
+
+## Opt-in area execution
+
+For `small-change --chat`, the finite runner opens one main native conversation
+per area and returns after durable prompt delivery. `scope` belongs to plan;
+`change`, `verify`, PR and merge belong to build. The default stage runner is
+preserved. Context text comes from the separately owned area-chat context
+builder; it delegates current stages to native subagents. Stage reports use
+`reportWorkflowStage({runId,stageId,attemptId,cwd,packageRoot},ports)` and the
+public `workflow report RUN_ID STAGE ATTEMPT` command. The report returns JSON
+including `nextStageInstructions` and `reportCommand` when the same main chat
+has another stage. A report cannot make a person decision.
+
+Durable prompt delivery precedes a successful launch reply. A finite report
+checks the exact saved attempt and live main-chat identity even when that chat
+is working (it is invoking the report command). Idle/settled transitions are
+not stage evidence in chat mode. All ordinary handoff, artifact, ancestry,
+accepted-plan, test-execution and before/after fingerprint checks still apply.
+Successful change returns verify instructions without another native launch;
+successful verify runs the approved checks in PDD and uses existing PR
+publication. Accepted handoffs are durable before any next-stage/PR effect.
+Duplicate reports must not rerun tests or publish twice; inconsistent attempts
+refuse. Recovery uses saved acceptance and existing publication intents.
+
+A completed plan leaves its main chat open and saves gateAskedAt and the main
+session start window for the shared decide/evidence seam. Gate state is a
+journal fact, never inferred from a status projection. Approval via terminal,
+phone or the main chat is admitted by `workflow-decide.mjs`; area continuation
+uses only that durable receipt and starts one fresh build chat directly.
+Legacy resume decisions must not bypass shared admission in chat mode.
+
+Area tabs are retained for discussion. Opening/attaching takes no lifetime
+lock. Each report holds only the ordinary short mutation lock. Current stage
+reports bind to the same saved area backend; stage transitions do not rewrite
+that backend's original session/attempt identity. C3 timing is recorded on
+stage intent/completion, and unknown native session IDs stay null. Reuse the
+shared status projection when present, adding area metadata instead of writing
+a second incompatible phone format. Status write failures are visible.
+
+`pdd step done STAGE RUN_ID ATTEMPT` is the area-report alias and emitted form; both forms bind the same saved run/stage/attempt and return the same JSON.
+
+Plain chat resume inspects the active original without another prompt. Accepted
+report cleanup continues from durable acceptance. If transport proves the exact
+owned pane/terminal still exists but its native agent is stopped, explicit
+resume archives that interrupted attempt and opens a new main chat for the
+current stage, retaining accepted stages and partial project work. Recheck
+accepted artifact hashes and ancestry before recording the continuation input.
+A missing/replaced pane, uncertain identity or active native never permits a
+replacement. Keep interrupted handoffs inspectable; their outputs are not yet
+accepted. A durable admitted decision interrupted before chat startup is
+continued by plain resume; duplicate decision requests themselves have no effect.
+
+Status projections use only the last successfully persisted state, including
+when a later journal write fails. Unsaved memory cannot become phone progress.
+After a failed durable append, the current command must not append again, publish
+a new projection or attempt cleanup; retain its recovery outcome and the last
+whole status. A new command must reread and validate the journal before progress.
+Retained area chats remain attachable at their person gate without a lifetime
+mutation lock.
+
+The opt-in area execution section refines the default per-stage lifecycle above. It intentionally retains main chats for gate discussion; stage-mode terminal layout cleanup is unchanged. Lost prompt-delivery acknowledgment stays recovery_required on plain resume and is never resent. A later exact live report may validate that original attempt.
+
+Default stage-mode unresolved pending attempts expose the shared approve-only
+recovery gate. Admission rechecks accepted artifact hashes and original ancestry
+for a pending native attempt, then reconciles that same attempt. Area-chat
+recovery continues through its finite resume/report rules above without another
+person gate. Refresh a saved gate after any new journal sequence.
+
+For chat-relayed approval, require the evidence agent to match the saved agent
+and, when the active main backend has an actual native session ID, require the
+evidence sessionId to equal it. A stage subagent or another chat is not the
+current person conversation. Unknown IDs remain unknown; W11 must still find
+exactly one session in the main launch interval and a USER message after gate.
+
+Supply the area context builder with exact installed-package approvalCommand and
+resumeCommand strings. The build chat uses resumeCommand only after the person
+merges in GitHub; the merge gate does not admit another approval.
+
+An accepted report retried from an earlier area returns finite saved progress,
+without the next area's stage instructions or report command. Only a retry from
+the active main conversation's accepted stage may receive its next same-area
+packet. Approval already launched the new main; an old plan report must not
+turn that retained plan chat into a second build coordinator.

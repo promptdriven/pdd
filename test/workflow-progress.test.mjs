@@ -8,7 +8,7 @@ const capture=()=>({text:'',write(value){this.text+=value;}});
 const view={runId:id,name:'small-change',issue:17,stage:{id:'scope',kind:'agent'},ordinal:1,total:5,root:'/project worktree',branch:'pdd/change',journal:'/git/run/journal.jsonl',files:[],prs:[]};
 const stages=Object.fromEntries(['runHerdrStage','inspectHerdrStage','attachHerdrStage','closeHerdrStage'].map(name=>[name,()=>assert.fail('No stage effects')]));
 
-test('progress deduplicates polling, shows actual location, review artifacts, full resume command and PR',()=>{
+test('progress deduplicates polling, shows actual location, review artifacts, short approval command and PR',()=>{
  const stdout=capture(),progress=createWorkflowProgress({stdout,now:()=>0});
  progress.observe({...view,event:'run.started'});
  progress.observe({...view,event:'agent.intent'});
@@ -22,7 +22,7 @@ test('progress deduplicates polling, shows actual location, review artifacts, fu
  assert.match(stdout.text,/Read: \/git\/run\/scope.json/);
  assert.match(stdout.text,/Read: \/project worktree\/cases.md/);
  assert.match(stdout.text,/Summary: Recommend feature/);assert.doesNotMatch(stdout.text,/\x1b/);
- assert.ok(stdout.text.includes(`Approve: pdd workflow resume ${id} --decision approve`));
+ assert.ok(stdout.text.includes('Approve: pdd workflow approve #17'));
  const before=stdout.text.length;
  progress.observe({...view,event:'result',state:'waiting',stage:{id:'wait-merge',kind:'merge'},prs:['https://github.com/example/repo/pull/2']});
  assert.match(stdout.text.slice(before),/PR: https:\/\/github.com\/example\/repo\/pull\/2/);
@@ -49,7 +49,7 @@ test('SIGINT reports same saved run and exits 130; early interruption invents no
   const workflowRunner={async runWorkflow(input,ports){if(prepared)ports.onProgress({...view,event:'run.started'});signalSource.emit('SIGINT');return {state:'waiting',exitCode:2,message:'stopped'};}};
   await runPdd(['workflow','run','small-change','17'],{stdout,stderr:capture(),signalSource,exit:code=>{exitCode=code;},workflowRunner,workflowStages:stages});
   assert.equal(exitCode,130);assert.equal(signalSource.listenerCount('SIGINT'),0);
-  if(prepared)assert.ok(stdout.text.includes(`pdd workflow resume ${id} --decision approve`));
+  if(prepared)assert.ok(stdout.text.includes('pdd workflow approve #17'));
   else {assert.match(stdout.text,/before a run identity was confirmed/);assert.doesNotMatch(stdout.text,/pdd workflow resume/);}
  }
 });
@@ -81,7 +81,7 @@ test('header names the issue title, times are local HH:MM, one watch line, no in
  assert.match(out,/^16:00  waiting for you before change$/m);
  assert.doesNotMatch(out,/\d{4}-\d{2}-\d{2}T/);
  assert.equal(out.match(/pdd workflow attach/g).length,1);
- assert.match(out,/^Open the agent: pdd workflow attach \S+ \(pdd pauses while you are attached; close it to let the run go on\)$/m);
+ assert.match(out,/^Open the agent: pdd workflow attach \S+ \(opens a view; the run keeps working\)$/m);
  assert.doesNotMatch(out,/journal\.jsonl|Saved run/);
  assert.doesNotMatch(out,/preparing/);
  assert.equal(out.match(/Herdr session/g).length,1);

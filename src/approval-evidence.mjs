@@ -1,4 +1,4 @@
-// Contract: prompts/cli/approval-evidence.prompt.md.
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 6a7312ca7f39b0e0c74652948ab17f5d52438e215b64d9740dcc51b028551ec2).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -108,6 +108,8 @@ async function sessionCandidates(stage, ports) {
   const matches = [];
   for (const path of files) {
     const parsed = parseRows(await fs.readFile(path, 'utf8'));
+    if(stage.agent==='codex' && parsed.rows.some(row=>row.type==='session_meta'
+      && row.payload?.source && typeof row.payload.source==='object' && Object.hasOwn(row.payload.source,'subagent'))) continue;
     const identities = parsed.rows.map(row => identity(row, stage.agent)).filter(Boolean);
     const meta = identities[0];
     if (!meta) {

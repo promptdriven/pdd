@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-area-chat-context.prompt.md (sha256: e7b0c4f70eb9299cd69a29e6a2309f2b43787087dbf97750986cc11c59f85f21).
+// Generated from prompts/cli/workflow-area-chat-context.prompt.md (sha256: 04692ae47bc252582a249edd31b93a90e371201f590b2d9c917de1e7adbedf5b).
 import { readFileSync } from 'node:fs';
 
 const names = ['common', 'plan', 'build', 'scope', 'change', 'verify', 'open-pr', 'wait-merge'];
@@ -21,13 +21,13 @@ function commandPrefix(argv = ['pdd']) {
   return argv.map(arg => /^[a-zA-Z0-9_./:-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", "'\\''")}'`).join(' ');
 }
 function substitutions(prefix, issueNumber) {
-  return { approveCommand: `${prefix} workflow approve ${issueNumber}`,
+  return { approveCommand: `${prefix} workflow approve ${issueNumber}`, resumeCommand: `${prefix} workflow resume ${issueNumber}`,
     scopeCommand: `${prefix} step done scope`, changeCommand: `${prefix} step done change`,
     verifyCommand: `${prefix} step done verify`, openPrCommand: `${prefix} step done open-pr`,
     waitMergeCommand: `${prefix} step done wait-merge` };
 }
 function render(template, values) {
-  return template.replace(/\{\{(approveCommand|scopeCommand|changeCommand|verifyCommand|openPrCommand|waitMergeCommand)\}\}/g,
+  return template.replace(/\{\{(approveCommand|resumeCommand|scopeCommand|changeCommand|verifyCommand|openPrCommand|waitMergeCommand)\}\}/g,
     (_, key) => values[key]);
 }
 export function buildAreaChatPrompt({ area, agent, issueNumber, runId, context, prompts, pddCommand } = {}) {
@@ -48,17 +48,17 @@ export function buildAreaStageTask({ stageId, instructions, prompts, pddCommand 
   return `${render(prompts[stageId], values)}\n\n# Exact current-stage request from PDD\n${instructions}`;
 }
 
-export function buildAreaChatInstructions({ area, stageInstructions, reportCommand, approvalCommand,
+export function buildAreaChatInstructions({ area, stageInstructions, reportCommand, approvalCommand, resumeCommand,
   changesText, prompts = loadAreaChatPrompts() } = {}) {
   const expected = { plan: ['Chat 1: plan', 'approve-plan'], build: ['Chat 2: build', 'merge'] }[area?.id];
   if (!expected || area.label !== expected[0] || area.gate !== expected[1]) throw Error('Invalid area identity.');
   required(stageInstructions, 'stageInstructions'); templates(prompts);
-  for (const [field, value] of Object.entries({ reportCommand, approvalCommand })) {
+  for (const [field, value] of Object.entries({ reportCommand, approvalCommand, ...(area.id==='build'||resumeCommand!==undefined?{resumeCommand}:{}) })) {
     required(value, field);
     if (/[\0\r\n]/.test(value)) throw Error(`Invalid ${field}.`);
   }
   if (changesText != null) required(changesText, 'changesText');
-  const values = { approveCommand: approvalCommand };
+  const values = { approveCommand: approvalCommand, resumeCommand };
   for (const [key, stage] of Object.entries({ scopeCommand: 'scope', changeCommand: 'change',
     verifyCommand: 'verify', openPrCommand: 'open-pr', waitMergeCommand: 'wait-merge' })) {
     values[key] = area.id === 'plan' && stage === 'scope' ? reportCommand
