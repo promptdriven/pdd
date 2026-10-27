@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 7a240ce7923ab09256f0a30e24afe147f805e12f9111ac686979ece39c9c3932).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: dbaa2d9267d705cdfec71d89088002eee9636643769321122c839cfe054aab1a).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -29,10 +29,12 @@ function parse(name, file) {
   if (data?.version !== 2 || !Array.isArray(data.areas) || !data.areas.length) throw invalid('it needs version 2 and at least one area');
   return data.areas.map((area, index) => {
     const last = index === data.areas.length - 1;
+    const askCode = !last && area?.gate === 'pr' && area.then === 'ask-code';
     if (!word(area?.name) || !Array.isArray(area.steps) || !area.steps.length || !area.steps.every(word)
       || !Array.isArray(area.optional ?? []) || !(area.optional ?? []).every(step => area.steps.includes(step))
-      || area.gate !== (last ? 'pr' : 'approve')) throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? 'pr' : 'approve'}`);
-    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate };
+      || !(last ? area.gate === 'pr' && area.then === undefined : area.gate === 'approve' && area.then === undefined || askCode))
+      throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? '"pr"' : '"approve", or "pr" with "then":"ask-code"'}`);
+    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}) };
   });
 }
 

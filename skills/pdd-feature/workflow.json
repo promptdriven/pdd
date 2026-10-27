@@ -1,4 +1,4 @@
 {"version":2,"areas":[
-{"name":"solution","steps":["understand","visual"],"optional":["visual"],"gate":"approve"},
-{"name":"story","steps":["prompt-story","check","try"],"optional":["try"],"gate":"approve"},
-{"name":"build","steps":["build","verify"],"optional":[],"gate":"pr"}]}
+{"name":"story","steps":["understand","visual","prompt-story"],"optional":["visual"],"gate":"approve"},
+{"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","then":"ask-code"},
+{"name":"code","steps":["build","verify"],"optional":[],"gate":"pr"}]}

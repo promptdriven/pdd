@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: c0a76352ebbd0b636c84594b70e5db6d125ba0b8ad737eac4a5b93766f647894).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 8484ba0289fc4cd973d887c7e1d30f61432e328233dffa7d8e3573d5e30565ff).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -60,7 +60,9 @@ export function statusView(run) {
   const areas = Array.isArray(run.areas) ? run.areas : [], area = areas[run.area] ?? null, done = object(run.done) ? run.done : {};
   const flat = areas.flatMap((item, index) => item.steps.map(step => ({ step, area: item.name, index, optional: item.optional.includes(step) })));
   const chatFor = name => [...(run.chats ?? [])].reverse().find(chat => chat.area === name) ?? null;
-  const current = ended(run) ? null : run.pr?.length ? 'merge' : run.gate ? 'approve' : area?.steps.find(step => !done[step]) ?? null;
+  const lastPr = (run.pr ?? []).some(pr => pr.stage === areas.at(-1)?.name);
+  const gate = run.gate && run.state !== 'cancelled' && (run.state !== 'completed' || run.gate.kind === 'ask-code');
+  const current = gate ? 'approve' : ended(run) ? null : lastPr ? 'merge' : area?.steps.find(step => !done[step]) ?? null;
   const total = flat.length;
   const stage = !current ? null : current === 'merge' ? { id: 'merge', kind: 'merge', index: total, total }
     : current === 'approve' ? { id: 'approve', kind: 'human', index: flat.filter(item => item.index <= run.area).length, total }
@@ -74,12 +76,11 @@ export function statusView(run) {
     return { id: item.step, kind: 'agent', area: item.area, optional: item.optional, state, startedAt: state === 'next' ? null : startedAt,
       endedAt: record?.at ?? null, agent: run.agent ?? null, session: chat?.session ?? null, summary: record?.summary ?? null };
   });
-  const gate = run.gate && !ended(run);
-  const waitingFor = gate ? { decisions: ['approve', 'changes'], what: `Approve the ${run.gate.area} area or ask for changes` }
-    : run.state === 'waiting' && run.pr?.length ? { decisions: [], what: 'Review and merge the PR on GitHub' } : { decisions: [], what: null };
+  const waitingFor = gate ? { decisions: ['approve', 'changes'], what: run.gate.kind === 'ask-code' ? 'Make the code PR now, or stop here and merge PR 1' : `Approve the ${run.gate.area} area or ask for changes` }
+    : run.state === 'waiting' && lastPr ? { decisions: [], what: 'Review and merge the PR on GitHub' } : { decisions: [], what: null };
   const chat = ended(run) ? null : currentChat(run);
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],
-    waitingDecision: gate ? { stage: 'approve', area: run.gate.area, at: run.gate.at, decisions: ['approve', 'changes'] } : null,
+    waitingDecision: gate ? { stage: 'approve', area: run.gate.area, kind: run.gate.kind ?? 'approve', at: run.gate.at, decisions: ['approve', 'changes'] } : null,
     ...(chat?.workspaceId ? { herdr: { session: 'pdd', workspaceId: chat.workspaceId, label: `#${run.number} ${run.workflow}` } } : {}),
     stageAgent: chat ? { kind: run.agent, nativeSessionId: chat.session?.id ?? null, herdrSession: 'pdd', paneId: chat.paneId ?? null } : null,
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };

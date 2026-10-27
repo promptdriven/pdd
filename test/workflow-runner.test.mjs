@@ -73,22 +73,40 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   git(source, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
   git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
-  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false };
+  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
   async function execFile(file, args, opts) {
-    if (file === 'git' && args[0] === 'push') { f.pushes.push(args); return { stdout: '' }; }
-    if (file === 'git' && args[0] === 'fetch') { f.fetches++; return { stdout: '' }; }
+    if (file === 'git' && args[0] === 'push') {
+      f.pushes.push(args);
+      // Like a real push, keep the remote-tracking branch current.
+      const [from, to] = args[2].split(':'), sha = (await exec('git', ['rev-parse', from], { cwd: opts.cwd })).stdout.trim();
+      await exec('git', ['update-ref', to.replace('refs/heads/', 'refs/remotes/origin/'), sha], { cwd: opts.cwd });
+      return { stdout: '' };
+    }
+    if (file === 'git' && args[0] === 'fetch') {
+      f.fetches++;
+      const merged = f.prs.find(pr => f.mergedNumbers.includes(pr.number) && pr.baseRefName === args[2]);
+      if (merged) await exec('git', ['update-ref', `refs/remotes/origin/${args[2]}`, merged.headRefOid], { cwd: opts.cwd });
+      return { stdout: '' };
+    }
     if (file !== 'gh') return exec(file, args, { ...opts, encoding: 'utf8' });
     if (args[0] === 'repo' && args[1] === 'view') return { stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/example/project' }) };
     if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.' }) };
     if (args[0] === 'pr' && args[1] === 'create') {
       const value = flag => args[args.indexOf(flag) + 1];
-      const pr = { number: 23, url: 'https://github.com/example/project/pull/23', state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
+      const number = 23 + f.prs.length;
+      const pr = { number, url: `https://github.com/example/project/pull/${number}`, state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
         headRefOid: (await exec('git', ['rev-parse', 'HEAD'], { cwd: opts.cwd })).stdout.trim(), body: readFileSync(value('--body-file'), 'utf8'), title: value('--title'),
         headRepository: { name: 'project' }, headRepositoryOwner: { login: 'example' }, isCrossRepository: false, mergeCommit: null };
       f.prs.push(pr); return { stdout: pr.url + '\n' };
     }
-    if (args[0] === 'pr' && args[1] === 'list') return { stdout: JSON.stringify(f.prs) };
-    if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ state: f.merged ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci }) };
+    if (args[0] === 'pr' && args[1] === 'list') {
+      const head = args.includes('--head') ? args[args.indexOf('--head') + 1] : null, search = args.includes('--search') ? args[args.indexOf('--search') + 1].split('"')[1] : null;
+      return { stdout: JSON.stringify(f.prs.filter(pr => (!head || pr.headRefName === head) && (!search || pr.body.includes(search)))) };
+    }
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const pr = f.prs.find(item => item.url === args[2]);
+      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci }) };
+    }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
@@ -239,19 +257,19 @@ test('done warns on unknown and out-of-order steps but records them and never br
   assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
 });
 
-for (const [name, areas] of [['bug', [['solution', ['reproduce', 'prompt-story', 'check', 'try']], ['build', ['build', 'verify']]]],
-  ['feature', [['solution', ['understand', 'visual']], ['story', ['prompt-story', 'check', 'try']], ['build', ['build', 'verify']]]]]) {
-  test(`${name}: every approve gate starts a new area chat and only the last build step opens the PR`, async t => {
+for (const [name, areas] of [['bug', [['story', ['reproduce', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]],
+  ['feature', [['story', ['understand', 'visual', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]]]) {
+  test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
     const report = 'https://checks.example.test/r/k3y-123';
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
-    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+solution-start\.md'\)"$/);
+    assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
-      const optional = await import('node:fs').then(fs => JSON.parse(fs.readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional);
+      const optional = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas[index].optional;
       for (const step of steps) {
-        if (area === 'build' && step === 'build') { writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'fix'); }
+        if (step === 'prompt-story' || step === 'build') { writeFileSync(join(run.root, `${step}.txt`), `${step}\n`); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', step); }
         f.tick();
         const summary = optional.includes(step) ? 'skipped' : step === 'check' ? `Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}` : `${step} done`;
         const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts());
@@ -259,15 +277,17 @@ for (const [name, areas] of [['bug', [['solution', ['reproduce', 'prompt-story',
         const next = steps[steps.indexOf(step) + 1];
         if (next && optional.includes(next)) assert.match(out.message, /optional/i);
       }
+      assert.equal(f.prs.length, Math.max(0, index));
       if (index < areas.length - 1) {
-        assert.equal(f.prs.length, 0); assert.equal(f.record().state, 'waiting');
+        assert.equal(f.record().state, 'waiting');
         f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
         assert.equal(f.record().chats.length, index + 2);
       }
     }
-    assert.equal(f.prs.length, 1); assert.equal(f.record().stage.id, 'merge');
-    assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in the PR body');
+    assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
+    assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
     assert.match(f.prs[0].body, /Runtime report links expire after 7 days\./);
+    assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
   });
@@ -365,4 +385,77 @@ test('after cancel a new run on the same issue gets a fresh worktree and branch,
   assert.deepEqual(fresh.previous.map(item => [item.root, item.branch, item.runDir]), [[old.root, old.branch, archived]]);
   const refused = await f.run();
   assert.equal(refused.exitCode, 1); assert.match(refused.message, /already has a run/);
+});
+
+const featureAreas = { version: 2, areas: [
+  { name: 'story', steps: ['understand', 'visual', 'prompt-story'], optional: ['visual'], gate: 'approve' },
+  { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
+  { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] };
+async function featureToPr1(t) {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('understand', 'understood'); await done('visual', 'skipped');
+  writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt and Story');
+  await done('prompt-story', 'Story and cases written');
+  f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const promptMessage = readFileSync(join(run.runDir, 'prompt-pr-start.md'), 'utf8');
+  assert.match(promptMessage, /opens PR 1 \(prompt, Story and tests\)/);
+  await done('check', 'Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call https://checks.example.test/r/k3y');
+  const pr1 = await done('try', 'Try: https://checks.example.test/t/abc');
+  return { f, run, done, pr1 };
+}
+
+test('feature: story, approve, PR 1 with prompt work only, then the person asks for code and PR 2 stacks on PR 1', async t => {
+  const { f, run, done, pr1 } = await featureToPr1(t);
+  assert.match(pr1.message, /pdd opens PR 1 now/); assert.match(pr1.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(pr1.message, /Runtime check: ✓ 3 of 3/); assert.match(pr1.message, /Try: https/);
+  assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
+  assert.match(f.prs[0].body, /^Part of #17/); assert.doesNotMatch(f.prs[0].body, /Closes #17/);
+  assert.match(f.prs[0].body, /Runtime report links expire after 7 days/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
+  let record = f.record();
+  assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
+  const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /pdd workflow approve 17 any time to make the code PR/);
+
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message); assert.match(f.prompts.at(-1), /Make the code PR now/); assert.match(code.message, /stacked/);
+  record = f.record();
+  assert.equal(record.areas[record.area].name, 'code'); assert.equal(record.branch, `${run.branch}-code`); assert.equal(record.prBase, run.branch);
+  assert.equal(f.git(run.root, 'branch', '--show-current'), `${run.branch}-code`); assert.equal(record.chats.length, 3);
+  const codeMessage = readFileSync(join(run.runDir, 'code-start.md'), 'utf8');
+  assert.match(codeMessage, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(codeMessage, /opens PR 2/);
+
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'code');
+  await done('build', 'value is two');
+  writeFileSync(join(run.runDir, 'verify.md'), '$ node --test\n# pass 4\n');
+  const pr2 = await done('verify', 'tests pass');
+  assert.match(pr2.message, /pdd opens PR 2 now/); assert.match(pr2.message, /pull\/24/);
+  assert.equal(f.prs.length, 2);
+  assert.equal(f.prs[1].title, 'Use value two (code)'); assert.equal(f.prs[1].headRefName, `${run.branch}-code`); assert.equal(f.prs[1].baseRefName, run.branch);
+  assert.match(f.prs[1].body, /^Closes #17/); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
+  assert.doesNotMatch(f.prs[1].body, /Story and cases written/, 'PR 2 lists only the code area');
+  record = f.record(); assert.equal(record.stage.id, 'merge'); assert.deepEqual(record.pr.map(pr => pr.number), [23, 24]);
+  f.mergedNumbers.push(24); await runStatus({ ref: '17', cwd: f.source }, f.ports); assert.equal(f.record().state, 'completed');
+});
+
+test('feature: when PR 1 merges while the run waits, the run is done at PR 1, and approve later builds PR 2 on the default branch', async t => {
+  const { f, run, done } = await featureToPr1(t);
+  f.mergedNumbers.push(23);
+  const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(shown.message, /done at PR 1/); assert.equal(f.record().state, 'completed'); assert.equal(f.record().doneAt, 'PR 1');
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message); assert.match(code.message, /PR 1 is merged/);
+  const record = f.record();
+  assert.equal(record.state, 'running'); assert.equal(record.prBase, 'main');
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), f.prs[0].headRefOid, 'the code branch starts from the merged prompts');
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'code');
+  await done('build', 'value is two'); await done('verify', 'tests pass');
+  assert.equal(f.prs[1].baseRefName, 'main'); assert.doesNotMatch(f.prs[1].body, /stacked/);
 });
