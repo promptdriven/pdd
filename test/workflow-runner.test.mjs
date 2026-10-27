@@ -766,7 +766,13 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   const inspection=await f.resume(first.runId);assert.equal(inspection.state,'waiting',inspection.message);
   assert.equal(calls.filter(x=>x==='prompt').length,0);assert.equal(calls.filter(x=>x==='start').length,1);
   const live=[...sessions.values()][0].active;live.agent_status='idle';live.interactive_ready=true;
-  const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
+  const {runPdd}=await import('../src/pdd-cli.mjs');
+  const {readWorkflowDecision,applyWorkflowDecision}=await import('../src/workflow-runner.mjs');
+  const output={text:'',write(x){this.text+=x;}};
+  const continued=await runPdd(['workflow','resume',first.runId,'--decision','approve'],{
+    cwd:f.cwd,packageRoot:f.packageRoot,stdout:output,stderr:{isTTY:true,write(){}},stdin:{isTTY:true},env:{},confirm:async()=>true,
+    workflowRunner:{readWorkflowDecision:(i)=>readWorkflowDecision(i,f.ports),applyWorkflowDecision:(i,p)=>applyWorkflowDecision(i,{...f.ports,authorizeDecision:p.authorizeDecision})}});
+  assert.equal(continued,0,output.text);assert.equal(f.saved(first.runId).definitions[f.saved(first.runId).index].id,'change');
   const accepted=f.saved(first.runId).completed[0];
   assert.equal(accepted.backend.attemptId,original.attemptId);assert.equal(accepted.backend.terminalId,original.backend.terminalId);
   assert.equal(calls.filter(x=>x==='start').length,1);assert.equal(calls.filter(x=>x==='create').length,1);
@@ -960,4 +966,130 @@ test('first-dispatch continuation refuses changed original request or worktree b
   writeFileSync(join(f.cwd, 'value.mjs'), 'export const value = 9;\n');
   const changed = await f.resume(first.runId, 'approve');
   assert.equal(changed.state, 'failed'); assert.match(changed.message, /HEAD or worktree changed/); assert.equal(calls.length, 1);
+});
+
+test('live observations use saved identities, follow durable stage/test/PR records and cannot mutate the run', async t => {
+  const f = await fixture(t), events = [];
+  f.ports.onProgress = event => {
+    events.push(structuredClone(event));
+    if (event.event === 'run.started') assert.equal(f.saved(event.runId).runId, event.runId);
+    event.runId = 'mutated';
+    if (event.stage) event.stage.id = 'mutated';
+  };
+  const start = await f.run();
+  assert.equal(start.state, 'waiting');
+  const gate = events.at(-1);
+  assert.equal(gate.title, 'Use value two');assert.equal(gate.agent, 'claude');
+  assert.equal(gate.state, 'waiting');assert.equal(gate.stage.id, 'change');assert.equal(gate.backend,null,'closed prior workspace is not current');
+  assert.ok(gate.files.some(path => path.endsWith('cases.json')));
+  assert.match(gate.summary, /Completed current scope/);
+  assert.ok(events.some(e => e.event === 'agent.intent' && e.stage.id === 'scope'));
+  assert.ok(events.some(e => e.event === 'agent.completed' && e.ended === 'scope'));
+  const result = await f.resume(start.runId, 'approve');
+  assert.equal(result.stage, 'wait-merge');
+  assert.ok(events.some(e => e.event === 'test.intent'));
+  assert.ok(events.some(e => e.event === 'test.completed'));
+  assert.deepEqual(events.at(-1).prs, ['https://github.com/example/project/pull/23']);
+  assert.ok(events.every(e => e.runId === start.runId));
+  f.ports.onProgress = () => { throw Error('broken display'); };
+  f.merged = true;
+  assert.equal((await f.resume(start.runId)).state, 'completed');
+});
+
+test('feature approval progress retains proposal artifacts after later report-only stages', async t => {
+  const f = await fixture(t), events = [];
+  f.ports.onProgress = event => events.push(event);
+  let result = await f.run('feature');
+  while (result.state === 'waiting' && result.stage !== 'approve') {
+    result = await f.resume(result.runId, 'skip');
+  }
+  assert.equal(result.stage, 'approve', result.message);
+  const gate = events.at(-1);
+  for (const name of ['module.prompt.md', 'STORY.md', 'cases.json']) assert.ok(gate.files.some(path => path.endsWith(name)), name);
+  assert.ok(gate.files.some(path => /prompt-story-.*\.json$/.test(path)));
+});
+
+async function decideAt(f, runId, overrides={}, ports={}) {
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs');
+  const s=f.saved(runId), gate=s.waitingDecision;
+  return decideWorkflow({runId,decisionId:randomUUID(),decision:'approve',expectStage:gate?.stage,expectSeq:gate?.seq,cwd:f.cwd,packageRoot:f.packageRoot,...overrides},
+    {...f.ports,env:{},stdin:{isTTY:true},stderr:{isTTY:true,write(){}},confirm:async()=>true,...ports});
+}
+test('bound decision records person evidence before launch and duplicate never launches twice',async t=>{
+ const f=await fixture(t),started=await f.run(),s=f.saved(started.runId),gate=s.waitingDecision;
+ assert.equal(gate.stage,'change');assert.equal(gate.seq,s.seq);assert.ok(gate.at>=s.startedAt);assert.deepEqual(gate.decisions,['approve','changes']);
+ const id=randomUUID(),r=await decideAt(f,started.runId,{decisionId:id});assert.equal(r.state,'recorded');assert.equal(f.native.length,3);assert.equal(f.saved(started.runId).approvalRecord.kind,'terminal');
+ const retry=await decideAt(f,started.runId,{decisionId:id,expectStage:gate.stage,expectSeq:gate.seq});assert.equal(retry.state,'recorded');assert.equal(f.native.length,3);
+ const changed=await decideAt(f,started.runId,{decisionId:id,decision:'changes',text:'Different',expectStage:gate.stage,expectSeq:gate.seq});assert.equal(changed.code,'bad_args');
+});
+test('stale binding, refused person and nonoptional skip leave journal and stages untouched',async t=>{
+ const f=await fixture(t),started=await f.run(),before=f.saved(started.runId);
+ for(const [patch,ports,code] of [[{expectSeq:before.seq-1},{},'stale_decision'],[{decision:'skip'},{},'run_not_waiting'],[{}, {confirm:async()=>false},'person_required']]){assert.equal((await decideAt(f,started.runId,patch,ports)).code,code);assert.deepEqual(f.saved(started.runId),before);assert.equal(f.native.length,1);}
+});
+test('changes starts a fresh proposal attempt, preserves prior evidence and gates again',async t=>{
+ const f=await fixture(t),started=await f.run(),before=f.saved(started.runId);
+ const r=await decideAt(f,started.runId,{decision:'changes',text:'Include the edge case.'});assert.equal(r.state,'recorded');const after=f.saved(started.runId);
+ assert.equal(f.native.length,2);assert.equal(f.native[1].input.stageId,'scope');assert.match(f.native[1].request,/Include the edge case/);assert.equal(after.changes[0].text,'Include the edge case.');assert.deepEqual(after.revisionHistory[0].completed,before.completed);assert.equal(after.accepted,undefined);assert.ok(after.waitingDecision.at>=before.waitingDecision.at);assert.ok(after.waitingDecision.seq>before.seq);assert.ok(after.waitingDecision.evidenceStage.startedAt>before.waitingDecision.evidenceStage.startedAt);assert.ok(after.waitingDecision.evidenceStage.endedAt<=after.waitingDecision.at);
+});
+test('two simultaneous decisions admit one and preserve one following stage chain',async t=>{
+ const f=await fixture(t),started=await f.run();const results=await Promise.all([decideAt(f,started.runId),decideAt(f,started.runId)]);assert.equal(results.filter(r=>r.state==='recorded').length,1);assert.equal(f.native.length,3);assert.equal(f.saved(started.runId).decisions.length,1);
+});
+
+test('phone nonce history is run-wide across phones and survives restart for the full ten-minute window',async t=>{
+ const {webcrypto}=await import('node:crypto');
+ const f=await fixture(t),started=await f.run(),now=Date.now(),nonce=randomUUID();
+ const key=await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+ const phone={phoneId:'persisted-phone',removed:false,state:'active',publicKeyJwk:await webcrypto.subtle.exportKey('jwk',key.publicKey)};
+ const sign=async(gate,decision,text,signingKey=key,phoneKeyId=phone.phoneId)=>{const payload={runId:started.runId,stage:gate.stage,decision,expectSeq:gate.seq,phoneId:phoneKeyId,time:now+300000,nonce,...(text?{text}:{})};const signature=Buffer.from(await webcrypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},signingKey.privateKey,new TextEncoder().encode(JSON.stringify(payload)))).toString('base64url');return Buffer.from(JSON.stringify({v:1,alg:'ES256',payload,signature})).toString('base64url');};
+ const gate=f.saved(started.runId).waitingDecision;
+ const first=await decideAt(f,started.runId,{decision:'changes',text:'Add boundary coverage.',via:'phone',phoneId:phone.phoneId,approval:await sign(gate,'changes','Add boundary coverage.')},{now:()=>now,lookupPhone:async()=>phone});
+ assert.equal(first.state,'recorded');
+ const saved=f.saved(started.runId),current=saved.waitingDecision;
+ const secondKey=await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+ const secondPhone={phoneId:'second-active-phone',removed:false,state:'active',publicKeyJwk:await webcrypto.subtle.exportKey('jwk',secondKey.publicKey)};
+ const request={runId:started.runId,decisionId:randomUUID(),decision:'approve',expectStage:current.stage,expectSeq:current.seq,via:'phone',phoneId:secondPhone.phoneId,approval:await sign(current,'approve',undefined,secondKey,secondPhone.phoneId),cwd:f.cwd,packageRoot:f.packageRoot};
+ const probe=join(f.gitDir,'nonce-restart.mjs');
+ writeFileSync(probe,`import {decideWorkflow} from ${JSON.stringify(new URL('../src/workflow-decide.mjs',import.meta.url).href)};
+import {loadGuidance} from ${JSON.stringify(new URL('../src/guidance.mjs',import.meta.url).href)};
+import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+const exec=promisify(execFile),assignment=${JSON.stringify(saved.assignment)},phone=${JSON.stringify(secondPhone)};
+const result=await decideWorkflow(${JSON.stringify(request)},{loadGuidance,now:()=>${now+600000},lookupPhone:async()=>phone,
+ lookupIssueWorktree:async()=>({state:'ready',assignment}),execFile:async(file,args,options)=>{
+ if(file!=='gh')return exec(file,args,options);
+ if(args[0]==='repo')return {stdout:JSON.stringify({nameWithOwner:'example/project',defaultBranchRef:{name:'main'},url:'https://github.com/example/project'})};
+ if(args[0]==='api')return {stdout:JSON.stringify({number:17,html_url:'https://github.com/example/project/issues/17',title:'Use value two',body:'The observable result must be two.',state:'OPEN',isPullRequest:false})};
+ throw Error('Unexpected GitHub operation');}});console.log(JSON.stringify(result));`);
+ const restarted=JSON.parse((await exec(process.execPath,[probe],{cwd:f.cwd})).stdout);
+ assert.equal(restarted.code,'phone_token_replayed');assert.equal(restarted.exitCode,1);assert.deepEqual(f.saved(started.runId),saved);assert.equal(f.native.length,2);
+});
+
+test('real Codex chat intent refuses without journal writes and records clear approval before advance',async t=>{
+ let readApprovalEvidence;
+ try {({readApprovalEvidence}=await import(process.env.PDD_TEST_APPROVAL_EVIDENCE_MODULE??new URL('../src/approval-evidence.mjs',import.meta.url).href));}
+ catch(error) {
+  if(process.env.PDD_TEST_APPROVAL_EVIDENCE_MODULE||error.code!=='ERR_MODULE_NOT_FOUND')throw error;
+  t.skip('optional W11 evidence module is not installed');return;
+ }
+ const f=await fixture(t),started=await f.run('small-change','codex'),before=f.saved(started.runId);
+ const home=mkdtempSync(join(tmpdir(),'pdd-chat-intent-'));t.after(()=>rmSync(home,{recursive:true,force:true}));
+ mkdirSync(join(home,'sessions'));
+ const journal=join(f.gitDir,'pdd/workflows',started.runId,'journal.jsonl');
+ const original=readFileSync(journal,'utf8'),sessionId=randomUUID(),at=before.waitingDecision.at+1;
+ const rows=[{type:'session_meta',payload:{id:sessionId,cwd:f.cwd,timestamp:before.waitingDecision.evidenceStage.startedAt}}];
+ const ports={env:{PDD_AGENT_SESSION:'test'},stdin:{isTTY:false},codexHome:home,now:()=>at+10,readApprovalEvidence};
+ for(const [index,message] of ['Do not approve this plan.','What does this change do?','I approve this plan.'].entries()) {
+  rows.push({type:'response_item',timestamp:at+index,payload:{type:'message',role:'user',content:[{type:'input_text',text:message}]}});
+  writeFileSync(join(home,'sessions','rollout-intent.jsonl'),rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+  const result=await decideAt(f,started.runId,{},ports);
+  if(index<2) {
+   assert.equal(result.code,'person_required');assert.equal(f.native.length,1);
+   assert.equal(readFileSync(journal,'utf8'),original);
+  } else {
+   assert.equal(result.state,'recorded');assert.equal(f.native.length,3);
+   const events=readFileSync(journal,'utf8').trim().split('\n').map(JSON.parse);
+   const receipt=events.find(row=>row.event==='decision.received');
+   assert.deepEqual(receipt.state.approvalRecord,{kind:'chat',agent:'codex',sessionId,userMessage:message,userMessageAt:at+index,at:at+10});
+   assert.equal(f.saved(started.runId).decisions.length,1);
+  }
+ }
 });

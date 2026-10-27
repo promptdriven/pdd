@@ -1,9 +1,11 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 5b7a57fa779d31954698591f5b9a92320012d925123d21a069b3c8c8f45ec9d8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: f9040e216dfe5c379e8b89aaf6ea470b47656c553314ccb0844a85b6ddce645c).
+import {validDecisionInput} from './workflow-decide.mjs';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
 }
+const HELP_WORDS = ['--help', '-h', '-help'];
 const fail = () => { throw new CommandInputError('Unsupported command or options in PDD Alpha. Run pdd --help for local authoring tools.'); };
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
@@ -27,7 +29,7 @@ function parseRoute(route, words) {
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (typeof value !== 'string' || value.startsWith('--') || option.choices && !option.choices.includes(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -38,25 +40,35 @@ function parseRoute(route, words) {
     const type = route.operands[Math.min(index, route.operands.length - 1)].type;
     const word = operands[index];
     const valid = type === 'text' || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || type === 'issue'
-      && /^(?:[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      && /^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      || type === 'run-ref' && (/^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word) || /^[a-f0-9]{8,}$/i.test(word) || /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word))
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
+  if (['workflow-approve','workflow-changes','workflow-skip'].includes(route.local) && ['--via','--phone','--approval'].some(k=>options[k]!==undefined)
+    && !(options['--via']==='phone' && options['--phone'] && options['--approval'])) fail();
+  if (route.local === 'workflow-decide' && (!/^[1-9][0-9]*$/.test(options['--expect-seq']??'')
+    || !validDecisionInput({runId:'00000000-0000-4000-8000-000000000000',decisionId:options['--id'],decision:options['--decision'],
+      expectStage:options['--expect-stage'],expectSeq:Number(options['--expect-seq']),text:options['--text'],via:options['--via'],phoneId:options['--phone'],approval:options['--approval']}))) fail();
   return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }
 export function parseArgv(argv) {
   if (!Array.isArray(argv) || argv.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
-  if (!argv.length || argv.length === 1 && ['--help', '-h'].includes(argv[0])) return help([]);
+  if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return helpFor(argv.slice(1));
-  if (['--help', '-h'].includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
+  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
     parseRoute(route, words.slice(route.prefix.length));
     return help(route.prefix);
   }
   const route = findRoute(argv);
+  if (!route && !argv[0].startsWith('-') && !routes.some(candidate => candidate.prefix[0] === argv[0])) {
+    const word = argv[0].replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 64);
+    throw new CommandInputError(`Unknown command "${word}". Run pdd --help to see the commands.`);
+  }
   if (!route) fail();
   return parseRoute(route, argv.slice(route.prefix.length));
 }

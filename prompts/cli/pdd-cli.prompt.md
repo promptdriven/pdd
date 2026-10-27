@@ -12,7 +12,7 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 For a named workflow plan, use the existing session branch/native launcher with workflowName selecting only that provided recipe. No new process/approval/permission/transport path. Session without a named recipe retains all-recipes context.
 
-Workflow run/resume binds the DISTINCT public `src/workflow-runner.mjs` exports, with injection only for tests: runWorkflow({name,issue,agent,cwd,packageRoot},ports), resumeWorkflow({runId,cwd,packageRoot,decision},ports). Both resolve {exitCode,state,runId,stage,message}. ports contains exact existing loadGuidance/launchNativeSession plus stdout/stderr. Do not preload guessed context or saved agent; runner owns that and fresh native invocation per agent stage. Do not edit runner/definitions or their owning prompts.
+Workflow run/resume binds the DISTINCT public `src/workflow-runner.mjs` exports, with injection only for tests: runWorkflow({name,issue,agent,cwd,packageRoot},ports), resumeWorkflow({runId,cwd,packageRoot,decision},ports). Both resolve {exitCode,state,runId,stage,message}. ports contains exact existing loadGuidance/launchNativeSession plus stdout/stderr. Do not preload guessed context or saved agent; runner owns that and fresh native invocation per agent stage. Preserve runner authority and definition semantics.
 
 Print the actual returned message ONCE, never dump result objects/private DTOs; return exitCode. Runner-owned mapping completed0, waiting2, failed/recovery_required1; pass the actual exitCode unchanged; waiting is not completion or pass. Missing module/export, invalid result or thrown failure is finite1 with no retry/private fallback. No native0-as-completion inference, direct journal/GitHub/approval action, same-command resume, new status flag, or automatic next stage. The runner's explicit resume owns identity/reconciliation/decisions. Existing guidance/native APIs/process behavior unchanged.
 
@@ -22,7 +22,37 @@ Bind the four workflow-stage-herdr exports into workflow run/resume/attach ports
 
 workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoot}), producing {workflows:[{name,source}],default:null}; no native/runner start. Use dynamic loader import (injectable in tests), no duplicate schema or silent fallback to legacy Markdown-only files. Invalid/missing loader returns finite1. Local help/version/skill/completion rendering do not import or call loader/backend unnecessarily.
 
+Short decision commands resolve saved runs through the local repository's run records, including linked worktrees. Outside a repository they use the machine runs index; `--all` shows every waiting or running run. A bare issue number is scoped to the current repository. If multiple repositories share the number, refuse and list each `<repo>#N "<title>"` with its exact issue-form command. Approve, changes and skip require a real TTY for a person and refuse no-TTY terminal calls; `--yes` is accepted only with a TTY. When `PDD_AGENT_SESSION` is set, an agent relay may proceed only after the shared evidence seam verifies a USER message after the current gate. The confirmation question includes repository, issue and title. `workflow changes ISSUE "text"` uses the accepted shared decision seam, which supports proposal revisions. Every printed next-step command uses an issue reference rather than a UUID. All decisions, including legacy resume --decision, call the shared bound decision seam without a separate confirmation. Read the current gate through readWorkflowDecision; never infer its sequence from a display record. Resolve outside-repository invocations to the matched saved root before asking the runner to validate its assignment. Phone shortcuts forward via, phoneId and approval unchanged; the signature must match the current gate, never upgrade its binding. JSON mode emits one result line and sends progress to stderr. Approval continuation retains progress and SIGINT handling until its next gate. No-argument watch resolves one run just like resume; ambiguity remains a refusal.
+
 
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root, workflow group and exact workflow run/resume/attach help describe the commands without preview labels or a claim that real workflow PRs are unproven. Retain command syntax, the real push/PR side-effect warning, foreground controller/explicit resume and saved active attachment facts. Help is exit0/local, with no runner/native/loader/network/auth effects and no added refusal, gate, flag or success claim.
+
+## Live foreground workflow output
+
+For workflow run/resume, print a short starting/inspection line immediately after parsing (a bare issue number is shown as `#N`), before dynamic imports, repository or provider work. State that the terminal stays busy until a gate. Create the [progress renderer](workflow-progress.prompt.md) and pass its observe function as the runner's optional onProgress port. Keep the runner's final returned message exactly once and unchanged. Attach, sessions and discovery keep their existing behavior.
+
+While run/resume is active, handle SIGINT by printing the renderer's truthful interruption guidance and exiting 130. The foreground controller stops; the agent may keep working in Herdr, and an inspection-only resume does not advance it. Explain the exact inspection command and subsequent explicit approve command. Never claim the whole run progresses in the background, cancel/kill a Herdr agent, invent an ID, or change run allocation. Remove the signal listener on every ordinary return/error. signalSource and exit dependencies may be injected for tests; production uses process and process.exit.
+
+For resume, retain the already parsed UUID in the progress renderer before lookup so an early interruption can still name the exact saved-run commands. This is display state only; do not pass a generated run ID into runWorkflow.
+
+workflow.decide calls the shared decide module with declared binding and normal
+runner/stage/guidance ports, plus stdin/env for person verification. It never
+provides a phone-authentication port from argv or environment. A JSON invocation
+prints exactly one v:1 result line without exitCode; send progress to stderr.
+Otherwise print the returned finite message. Preserve existing runner routes.
+
+Legacy `workflow resume RUN_ID --decision approve|skip` also resolves its current
+journal gate with `readWorkflowDecision` and enters decideWorkflow (new UUID),
+so a non-TTY/agent caller cannot bypass person evidence via the older spelling.
+Plain resume keeps its previous inspect/reconcile behavior. Phone decision input
+is forwarded as via,phoneId,approval; lookupPhone is trusted host composition,
+never a key or secret supplied through CLI argv.
+
+The private installed entrypoint can pass
+`clientAdapter:createPhoneLookupAdapter({home,linkDir,signal})` from mobile's
+signed-ledger adapter. Preserve its lookupPhone receiver when routing phone
+verification. An explicit lookupPhone port takes precedence; neither argv nor
+token chooses adapter paths, home or keys. The public package imports no private
+client; its uncomposed bin continues to refuse unavailable ledger authority.

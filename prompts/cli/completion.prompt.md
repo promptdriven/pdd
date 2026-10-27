@@ -11,3 +11,7 @@ Offer feature, bug and small-change alongside workflow list. Complete --agent ch
 Offer workflow run/resume, three named workflow operands for run, --agent choices codex/claude and --decision approve/skip. Complete choices immediately after each option at any argument position, including after NAME and ISSUE. No status command.
 
 Offer workflow attach as well as run/resume. For NAME after workflow run, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the former no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke run/attach/native/network. Invalid/unavailable listing yields no names. Preserve static bundled one-conversation shortcuts and agent/decision choices.
+
+Option values are scoped to their command route: workflow decide offers
+approve/changes/skip, while legacy resume retains approve/skip. A later route
+with the same option name must not overwrite another route's choices.
