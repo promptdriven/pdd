@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c5cc4aea0c8fae9db1e992a36904e4ec01b522ba5fd93af7f5b262fad73c4dae).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 80edf7c2339fd1566c176af6c58851d17ca7a8ddb69e567cad35e9c5d4641145).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -600,8 +600,10 @@ async function readUntil(context, id, command, isDone, ms) {
   }
 }
 
+// A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
+const LIVE_SESSION = new Set(['running', 'paused']);
 function tryLink(answer, origin) {
-  return answer?.state === 'passed' && answer.result?.session?.state === 'running' ? validLink(answer.result?.url, origin, 'try') : null;
+  return answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) ? validLink(answer.result?.url, origin, 'try') : null;
 }
 
 async function stopTry(context, record) {
@@ -827,11 +829,11 @@ async function watchSavedTests(context, tryId, wait) {
     if (!wait || context.interrupted) return;
     if (!told) { line(ports.stdout, 'Waiting for tests saved on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
     await ports.sleep(ports.watchMs, context.signal);
-    if (context.interrupted) return;
+    if (context.interrupted) { line(ports.stdout, 'Stopped waiting. The Try link stays open. Run pdd try again to add tests saved later.'); return; }
     polls += 1;
     if (polls % 6 === 0) {
       const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
-      if (read.kind === 'state' && read.answer.result?.session?.state !== 'running') { wait = false; line(ports.stdout, 'The Try has ended.'); }
+      if (read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) { wait = false; line(ports.stdout, 'The Try has ended.'); }
     }
   }
 }

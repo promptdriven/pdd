@@ -189,3 +189,17 @@ test('RUNTIME-TRY8: --no-wait returns at once; a runtime with no saved-tests end
   const waiting = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
   assert.equal(waiting.code, 0); assert.match(waiting.out, /The runtime does not keep saved tests yet/);
 });
+
+// Wrong: the live server pauses an idle Try, and pdd then thinks the Try is gone or unknown (seen on the live server, Oct 27).
+test('RUNTIME-TRY9: a paused Try is reused like a running one', async t => {
+  const setup = harbor(t);
+  let made = false;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'GET' && made && !entry.url.endsWith('/tests')) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1), undefined, 'paused') };
+    return trying()(entry, f);
+  });
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  made = true;
+  const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(again.code, 0, again.err); assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+});
