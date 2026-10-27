@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
-import { exitCodeFor } from '../src/runtime-output.mjs';
+import { exitCodeFor, validLink } from '../src/runtime-output.mjs';
 import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root, sha } from './runtime-fake.mjs';
 
 async function check(setup, fake, words = [], options = {}, extra = {}) {
@@ -329,8 +329,8 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
   assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
-  assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
-  assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
+  assert.equal(DEFAULT_RUNTIME_URL, 'https://34.72.131.98');
+  assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', 'runtime.promptdriven.ai', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://runtime.example' }), 'https://runtime.example');
   for (const bad of ['http://runtime.example', 'https://u:p@runtime.example', 'https://runtime.example/v1', 'ftp://x']) assert.throws(() => runtimeOrigin({ PDD_RUNTIME_URL: bad }), bad);
@@ -468,4 +468,21 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
   const plain = harbor(t);
   const flagged = await check(plain, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
   assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
+});
+
+// Wrong: the runtime runs on a bare IP (Serhan, Oct 27), and pdd refuses its own links or accepts a link to another host.
+test('RUNTIME-ADDRESS2: Try and report links on the IP origin pass; links on any other host, port or scheme fail', async () => {
+  const { runtimeOrigin } = await import('../src/runtime-client.mjs');
+  const origin = runtimeOrigin({});
+  assert.equal(origin, 'https://34.72.131.98');
+  const token = 'GzKhkowPRTBHXC8Px6XKK8bjrEpWNWk7E-igsV6aA-s';
+  assert.equal(validLink(`https://34.72.131.98/s/${token}/`, origin, 'try'), `https://34.72.131.98/s/${token}/`);
+  assert.equal(validLink('https://34.72.131.98/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f', origin, 'report'), 'https://34.72.131.98/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f');
+  for (const bad of [`https://34.72.131.99/s/${token}/`, `https://runtime.example/s/${token}/`, `http://34.72.131.98/s/${token}/`,
+    `https://34.72.131.98:8443/s/${token}/`, `https://u:p@34.72.131.98/s/${token}/`, `https://34.72.131.98/s/${token}`]) {
+    assert.equal(validLink(bad, origin, 'try'), null, bad);
+  }
+  for (const bad of ['https://34.72.131.99/r/abc', 'https://evil.example/r/abc', 'http://34.72.131.98/r/abc', 'https://34.72.131.98/s/abc/']) {
+    assert.equal(validLink(bad, origin, 'report'), null, bad);
+  }
 });
