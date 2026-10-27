@@ -85,7 +85,13 @@ async function fixture(t, options = {}) {
         if (contents !== null) writeFileSync(join(cwd, path), contents);
         files.push({ path, sha256: sha(readFileSync(join(cwd, path))), role });
       };
-      if (input.protocol === 'proposal') add('cases.json', '[{"expected":2}]\n', 'cases');
+      if (input.protocol === 'proposal' && !options.runCases) add('cases.json', '[{"expected":2}]\n', 'cases');
+      if (input.protocol === 'proposal' && options.runCases) {
+        assert.ok(input.artifactDirectory, 'runner must supply a private run artifact directory');
+        const contents = '[{"expected":2}]\n';
+        writeFileSync(join(input.artifactDirectory, 'scope.cases.json'), contents);
+        files.push({path:'scope.cases.json',sha256:sha(contents),role:'cases',storage:'run'});
+      }
       if (input.protocol === 'proposal' && input.requiredRoles.includes('prompt')) {
         add('module.prompt.md', 'Return the observable value two.\n', 'prompt');
         add('STORY.md', 'The person sees two.\n', 'story');
@@ -104,6 +110,8 @@ async function fixture(t, options = {}) {
         await git('add', '.');
         if (await git('status', '--porcelain')) await git('commit', '-m', input.stageId);
       }
+      if (input.protocol === 'verify' && options.personDirty)
+        writeFileSync(join(cwd, 'my personal notes.txt'), 'Keep my unfinished work.\n');
       const h = { version: 1, runId: input.runId, stageId: input.stageId, issueUrl,
         inputRevision: options.staleHandoff ? initial.replace(/^./, initial[0] === 'a' ? 'b' : 'a') : input.inputRevision,
         summary: `Completed current ${input.stageId}; observable expectations remain independent.`, files };
@@ -1040,4 +1048,30 @@ test('real runner passes repository layout binding to the production stage adapt
  assert.equal(observed.repository,'example/project');assert.equal(observed.issueNumber,17);assert.equal(observed.workflowName,'small-change');
  assert.equal(observed.sourceRoot,f.sourceCwd);assert.equal(observed.commonDir,join(f.sourceCwd,'.git'));
  assert.notEqual(observed.cwd,f.sourceCwd);assert.equal(f.saved(outcome.runId).pending.backend.session,'pdd');
+});
+
+
+test('real runner keeps scope cases in run artifacts through approval, verify and PR', async t => {
+  const f = await fixture(t, {runCases:true, defaultWorktree:true});
+  const first = await f.run();
+  assert.equal(first.state, 'waiting', first.message);
+  assert.equal(await f.git('status', '--porcelain'), '');
+  const outcome = await f.resume(first.runId, 'approve');
+  assert.equal(outcome.state, 'waiting', outcome.message);
+  assert.equal(outcome.stage, 'wait-merge', outcome.message);
+  assert.ok(f.pr);
+  assert.equal(await f.git('status', '--porcelain'), '');
+  assert.equal(await f.git('diff', '--name-only', f.initial, 'HEAD'), 'value.mjs');
+  const artifact = f.native[0].input.artifactDirectory;
+  assert.equal(readFileSync(join(artifact, 'scope.cases.json'), 'utf8'), '[{"expected":2}]\n');
+});
+
+test('real runner refuses person dirty file by name without publishing or removing it', async t => {
+  const f = await fixture(t, {personDirty:true});
+  const first = await f.run();
+  const outcome = await f.resume(first.runId, 'approve');
+  assert.equal(outcome.state, 'failed');
+  assert.match(outcome.message, /my personal notes\.txt/);
+  assert.equal(f.pr, null);
+  assert.equal(readFileSync(join(f.cwd, 'my personal notes.txt'), 'utf8'), 'Keep my unfinished work.\n');
 });

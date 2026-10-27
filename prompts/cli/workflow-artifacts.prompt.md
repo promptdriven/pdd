@@ -9,10 +9,10 @@ owns Git HEAD, approval/currentness, journal and publication decisions.
 
 ## Public module functions
 
-- `readWorkflowHandoff({handoffPath,cwd,expected:{runId,stageId,issueUrl,inputRevision},requiredRoles:[]}, ports={})`
+- `readWorkflowHandoff({handoffPath,cwd,artifactDirectory,expected:{runId,stageId,issueUrl,inputRevision},requiredRoles:[]}, ports={})`
   asynchronously returns the validated handoff only after its identities,
   required roles and actual file bytes agree.
-- `assertWorkflowArtifacts({cwd,files}, ports={})` returns `Promise<void>` after
+- `assertWorkflowArtifacts({cwd,files,artifactDirectory}, ports={})` returns `Promise<void>` after
   checking every listed artifact against its actual file and digest.
 - `runWorkflowTestCommands({cwd,testCommands}, ports={})` returns a promise of
   `{passed,results:[{argv,exitCode,stdout,stderr}]}`. `passed` requires all
@@ -35,11 +35,11 @@ Schema V1 has exactly `version:1`, `runId`, `stageId`, `issueUrl`,
 values and summary are nonempty strings; each expected identity is supplied by
 the caller and must match exactly, without normalization. `files` is an array; empty is allowed when requiredRoles is empty for
 report-only stages, whose executable-evidence classification remains caller-owned.
-Every requested role must still be present. Each entry has exactly `path`, `sha256`, `role`. SHA256 is a 64-digit hexadecimal
+Every requested role must still be present. Each entry has `path`, `sha256`, `role` and optionally `storage:"run"`. Omitted storage preserves project-relative behavior; no other storage value is accepted. SHA256 is a 64-digit hexadecimal
 digest compared with the actual bytes; hexadecimal letter case is immaterial.
 Roles are `prompt`, `story`, `cases`, `implementation`, `tests`, `evidence`,
 `notes`. Required roles are caller-selected from that set and must be present;
-prompt/Story callers select prompt/story/cases. Duplicate artifact paths and
+prompt/Story callers select prompt/story/cases. Duplicate (storage, path) identities and
 unknown keys/roles are errors. Return the original parsed values without
 manufacturing evidence, defaults or approval.
 
@@ -55,7 +55,14 @@ handoff. Missing Git metadata or a handoff outside the selected metadata fails.
 
 Artifacts use canonical project-relative slash paths: no absolute/drive paths,
 backslashes, empty/dot/traversal components or `.git` component (case-insensitive).
-Resolve from the actual selected project directory. Every ancestor inside that
+Resolve from the actual selected project directory unless storage is `run`.
+Run storage is only for cases, notes and evidence, relative to caller-supplied
+`artifactDirectory`, exactly `<actual gitDir>/pdd/workflows/<runId>/artifacts`.
+The reader binds runId to expected.runId; the assertion caller supplies its saved
+run directory. Validate all metadata ancestors, rejecting redirects. Missing
+artifactDirectory refuses run storage. Never permit absolute paths, traversal,
+other-run access or implementation/test/prompt/Story files in run storage.
+This lets plan-only files remain inspectable and hash-pinned without dirtying a PR. Every ancestor inside that
 root must be a real directory and every artifact a regular file, never a symlink
 or directory. Apply the same no-symlink rule to the selected root and the
 handoff path beneath its actual Git metadata root. Read through a no-follow
