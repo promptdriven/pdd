@@ -511,3 +511,25 @@ test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, u
   assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
   assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
 });
+
+const NOT_INVITED = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'This GitHub login is not on the invite list.' } };
+const INVITE_LINE = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+
+// Wrong: a person who is not invited sees a table of failures or a retry hint instead of one plain line (invite list, Oct 27).
+test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check is sent', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? NOT_INVITED : f.normal(entry));
+  for (const options of [{}, { '--json': false }]) {
+    const result = await check(setup, fake, [], options);
+    assert.equal(result.code, 5); assert.equal(result.out, '');
+    assert.ok(result.err.trimEnd().split('\n').includes(INVITE_LINE), result.err);
+    assert.doesNotMatch(result.err, /Lint passed|Sent \d/);
+  }
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']);
+  const later = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { ...NOT_INVITED, json: { error: { code: 'not-invited', message: 'not invited' }, login: 'octo' } } : f.normal(entry));
+  const viaCheck = await check(setup, later, ['place-order']);
+  assert.equal(viaCheck.code, 5); assert.ok(viaCheck.err.includes(INVITE_LINE), viaCheck.err);
+  const gate = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 503, text: 'The runtime opens soon.' } : f.normal(entry));
+  const opens = await check(setup, gate, ['place-order']);
+  assert.equal(opens.code, 5); assert.match(opens.out + opens.err, /The runtime opens soon\./);
+});

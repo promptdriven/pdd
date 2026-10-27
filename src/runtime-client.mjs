@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6354b0cc9d76b06962620100b830efcd35e35d7107a88d76e21e63d1e0fb9807).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ca8bfe0fc8b0f7619ea2022c007feac58b55b74519b8e7ae86f70c915820c6c3).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -159,12 +159,22 @@ class Runtime {
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
+// The invite list (Oct 27): a login that is not invited gets 403 {"code": "not-invited", "login": …}. One plain line, exit 5.
+function notInvited(reply) {
+  const json = reply.json, code = json?.code ?? json?.error?.code;
+  if (reply.status !== 403 || code !== 'not-invited') return null;
+  const login = typeof json.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(json.login) ? json.login : null;
+  return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD runtime invite list yet. Ask the PDD team to add you.`;
+}
+
 const sameJob = (json, id, command) => isObject(json) && json.requestId === id && json.id === id && json.command === command && JOB_STATES.has(json.state);
 const gateText = reply => reply.status === 503 && !reply.json && String(reply.text ?? '').includes('The runtime opens soon.');
 
 // One answer to a POST, as the row table of the spec.
 function judgePost(reply, id, command, secrets) {
   if (reply.lost) return { kind: 'unknown', why: 'The answer to the request was lost.' };
+  const uninvited = notInvited(reply);
+  if (uninvited) return { kind: 'stop', note: { code: 'not-invited', message: uninvited }, notInvited: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
@@ -187,6 +197,8 @@ function judgePost(reply, id, command, secrets) {
 // One answer to a GET of a known request ID.
 function judgeGet(reply, id, command) {
   if (reply.lost) return { kind: 'again' };
+  const uninvited = notInvited(reply);
+  if (uninvited) return { kind: 'not-invited', message: uninvited };
   if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
   if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
@@ -337,7 +349,7 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
-  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; }
+  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.notInvited) context.notInvited = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
   else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Math.max(context.deadline, context.ports.now() + LOST_READ_MS) });
 }
@@ -348,6 +360,7 @@ async function readRow(context, row) {
   if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
   else if (verdict.kind === 'auth') context.readStop = 'Run gh auth login';
+  else if (verdict.kind === 'not-invited') context.readStop = verdict.message;
   else if (verdict.kind === 'gate') context.readStop = 'The runtime opens soon.';
 }
 
@@ -364,6 +377,7 @@ async function runLint(context) {
       await context.ports.sleep(verdict.wait, context.signal); continue;
     }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (verdict.notInvited) throw new Stop(5, verdict.note.message);
     if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // A lost lint answer is read by the same ID, like a lost check.
@@ -375,6 +389,7 @@ async function runLint(context) {
       const read = judgeGet(await context.runtime.get(id), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
+      else if (read.kind === 'not-invited') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
@@ -404,6 +419,7 @@ async function checkBatch(context, rows) {
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
+  if (context.notInvited && !toSend.some(isOpen)) throw new Stop(5, context.notInvited);
   let waitingShown = -1;
   // Read open rows until the timeout; a row whose POST answer was lost is read for at least 5 min.
   const readable = row => isOpen(row) && (ports.now() < context.deadline || ports.now() < (row.read_until ?? 0));
@@ -627,6 +643,7 @@ async function readUntil(context, id, command, isDone, ms) {
     if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
     else if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    else if (read.kind === 'not-invited') throw new Stop(5, read.message);
     if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }
@@ -688,6 +705,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (record) {
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+      if (read.kind === 'not-invited') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
@@ -721,6 +739,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
       if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
       if (verdict.kind === 'refused') { Object.assign(row, { state: 'refused', phase: 'server', refusals: [verdict.refusal] }); return printTryProblem(context, row); }
+      if (verdict.notInvited) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
     }
@@ -907,7 +926,7 @@ function addSavedCaseSafely(root, saved) {
 async function collectSavedTests(context, tryId) {
   const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
   const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
-  if ([401, 410].includes(reply.status)) return 'ended';
+  if ([401, 403, 410].includes(reply.status)) return 'ended';
   if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
   const done = store.read(path) ?? {};
   for (const saved of reply.json.tests) {
@@ -925,7 +944,7 @@ async function collectSavedTests(context, tryId) {
 async function collectApprovals(context, tryId, story, answers) {
   const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.approvals.json`);
   const reply = await context.runtime.send(`/v1/try/${tryId}/approvals`, { method: 'GET' }, GET_MS);
-  if ([401, 410].includes(reply.status)) return 'ended';
+  if ([401, 403, 410].includes(reply.status)) return 'ended';
   if (reply.status !== 200 || !Array.isArray(reply.json?.approvals)) return reply.lost ? 'ok' : 'missing';
   const handled = store.read(path) ?? {};
   for (const request of reply.json.approvals) {

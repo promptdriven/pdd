@@ -33,6 +33,7 @@ Order:
 | 429 without `dispatch: "not_started"` | not run | no new attempt |
 | 503 JSON `pool-low-room`, `pool-copy-*`, `github-unavailable` | not run | no new attempt; show the server text |
 | 503 text `The runtime opens soon.`, or 401 | not run | send no more POSTs; the gate text or `Run gh auth login` |
+| 403 `not-invited` (top-level `code` or `error.code`, with `login`) | not run | stop the batch: one plain line `Your GitHub login <login> is not on the PDD runtime invite list yet. Ask the PDD team to add you.`, exit 5 (lint, checks, GETs, `pdd try` and its stop alike) |
 | 400, 413, 415, 422 JSON | refused | no new attempt; show code and message |
 | timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch |
 

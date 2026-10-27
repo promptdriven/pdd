@@ -394,3 +394,18 @@ test('RUNTIME-TRY18: without a terminal pdd try only names the approval request;
   assert.match(result.out, /The Try page asks to approve prompts\/place_order\.prompt\.md\. A person answers it in a terminal: pdd try place-order/);
   assert.equal(fake.jsonPosts.length, 0); assert.match(readFileSync(join(setup.repo, PLACE), 'utf8'), /"status": "draft"/);
 });
+
+// Wrong: pdd try hides a not-invited answer behind a Try or link message (invite list, Oct 27).
+test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, and makes no Try', async t => {
+  const line = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+  const denied = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'not invited' } };
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? denied : trying()(entry, f));
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(result.code, 5); assert.equal(result.out, ''); assert.ok(result.err.includes(line), result.err);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+  const open = harbor(t), first = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(open, first, ['place-order'], { '--no-open': true })).code, 0);
+  const now = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? denied : trying()(entry, f));
+  const reuse = await tryStory(open, now, ['place-order'], { '--no-open': true });
+  assert.equal(reuse.code, 5); assert.ok(reuse.err.includes(line), reuse.err); assert.equal(now.posts.length, 0);
+});
