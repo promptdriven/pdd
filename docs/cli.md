@@ -1,16 +1,16 @@
 # CLI reference
 
-`pdd --help` shows all commands. `help` and `-h` also work. Each command first checks the [PDD skills](USAGE.md#4-the-pdd-skills). It copies a skill that is missing, older, or changed in the same version.
+`pdd --help` shows all commands. `help` and `-h` also work.
 
-There is no `pdd session` command. Open Codex or Claude Code as usual and call a PDD skill: `/pdd-feature`, `/pdd-bug`, `/pdd-small-change` or `/pdd-prompting`.
+You need the pdd command only for runs with PRs and for `pdd check` and `pdd try`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with `/pdd-setup` in your agent. Then call a PDD skill in Codex or Claude Code: `/pdd-feature`, `/pdd-bug`, `/pdd-small-change` or `/pdd-prompting`. There is no `pdd session` command. See [Install](USAGE.md#2-install).
 
 ## Set up a repo
 
 | Command | What it does |
 |---|---|
-| `pdd setup` | Add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. A second run changes nothing |
+| `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. A second run changes nothing |
 
-The skill `/pdd-setup` does the same in a chat. Run it in the top folder of the repo.
+If `npx skills` already installed the skills, `pdd setup` copies nothing. No other pdd command copies skills. The skill `/pdd-setup` writes the same block in a chat. Run it in the top folder of the repo.
 
 ## Runs on a GitHub issue
 
