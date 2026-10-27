@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '..');
@@ -63,7 +63,7 @@ function fakeHerdr() {
       return {};
     }
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
-    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
+    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);
   };
   h.paneOf = chat => h.panes.find(p => p.pane_id === chat.paneId);
@@ -649,4 +649,41 @@ test('a first verify.md line that starts with ✗ goes to the top of the PR body
   writeFileSync(join(run.runDir, 'verify.md'), '\n✗ 2 vectors fail\n\n| case | result |\n|---|---|\n| a | different |\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'two cases still fail', cwd: run.root }, f.agentPorts()));
   assert.equal(f.prs[0].body.split('\n')[0], '✗ 2 vectors fail'); assert.match(f.prs[0].body, /\| a \| different \|/);
+});
+
+// Seen with a CLI tester: the chat asked a question in the middle of a step, status still said "the agent works",
+// and pdd workflow changes could not reach the chat while it showed a question dialog.
+test('ask marks the run as waiting for the person; changes answers it in the same chat; the next done clears it', async t => {
+  const f = await fixture(t);
+  f.ports.timeZone = 'UTC';
+  await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]); f.tick();
+  const asked = await askPerson({ text: 'Should -h also print the usage?', cwd: run.root }, f.agentPorts());
+  assert.equal(asked.exitCode, 0, asked.message);
+  assert.match(asked.message, /plain chat message/); assert.match(asked.message, /end your turn/); assert.match(asked.message, /pdd workflow changes 17/);
+  let record = f.record();
+  assert.equal(record.question.text, 'Should -h also print the usage?'); assert.equal(record.state, 'waiting');
+  assert.deepEqual(record.waitingFor, { decisions: ['changes'], what: 'Should -h also print the usage?' });
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: Should -h also print the usage\?/);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /^example\/project#17 · small-change · plan · waiting for you: Should -h also print the usage\? · /);
+  f.tick();
+  const answered = await changeRun({ ref: '17', text: 'Yes, the same text as --help.', cwd: f.source }, f.ports);
+  assert.equal(answered.exitCode, 0, answered.message); assert.match(answered.message, /answer/);
+  assert.match(pane.agent.prompts.at(-1), /^The person answers your question: Yes, the same text as --help\./);
+  record = f.record(); assert.equal(record.question, null); assert.equal(record.state, 'running');
+  await askPerson({ text: 'One more?', cwd: run.root }, f.agentPorts());
+  f.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  assert.equal(f.record().question, null); assert.equal(f.record().gate.kind, 'approve');
+  const outside = await askPerson({ text: 'x', cwd: f.source }, f.agentPorts());
+  assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
+});
+
+test('a chat that shows a question dialog is waiting for the person in status, and changes says to answer in the chat', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  pane.agent.agent_status = 'blocked';
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: the chat asks a question in its window \(pdd workflow open 17\)/);
+  const refused = await changeRun({ ref: '17', text: 'yes', cwd: f.source }, f.ports);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /question dialog/); assert.match(refused.message, /pdd workflow open 17/);
+  pane.agent.agent_status = 'idle';
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
 });

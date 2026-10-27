@@ -11,6 +11,7 @@ There is no `session` route and no `workflow feature|bug|small-change` chat rout
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.run `workflow run NAME ISSUE [--agent codex|claude]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex.
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
+- workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`, workflow.open `workflow open ISSUE`.

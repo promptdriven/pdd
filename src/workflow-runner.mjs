@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ec6b9c65519baa986731b5ead89b722ed1062c4999f1380dc4bc077ddedd29a7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7fbf5fa5872a452c44ac6938555696106fabf66b93736331952a3d19b664a02f).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { interfaceBlocks } from './runtime-preflight.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
+const ANSWER_PREFIX = 'The person answers your question';
 // At the code gate a chat reply must say yes in plain words; at other gates any reply from the person counts.
 const YES_WORDS = /\b(?:yes|approved?|build the code|go ahead|code pr now|continue)\b/i;
 // Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
@@ -107,9 +108,12 @@ async function pr1Drafts(run, p) {
   return pr1 ? draftPrompts(run, p, pr1.branch, pr1.base) : [];
 }
 
-function describe(run) {
+// blocked: Herdr shows the chat waiting in a question dialog (read by the caller; describe itself makes no calls).
+function describe(run, blocked = false) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return 'cancelled';
+  if (run.question && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
+  if (blocked && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). Run pdd workflow approve ${run.number} any time to make the code PR`;
   if (run.state === 'completed') return 'complete: the PR is merged';
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. Run pdd workflow approve ${run.number} any time to make the code PR`;
@@ -259,6 +263,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
   }
+  run.question = null;
   // A step that runs again (for example build after failed vectors) makes the later steps of its area stale.
   const later = area.steps.includes(step) && run.done[step] ? area.steps.slice(area.steps.indexOf(step) + 1).filter(item => run.done[item]) : [];
   if (later.length) {
@@ -335,7 +340,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     if (!chat.session?.id) { const live = await chatSession(chat, p); if (live.sessionId) chat.session = { agent: run.agent, id: live.sessionId }; }
     const read = p.readApprovalEvidence ?? (await import('./approval-evidence.mjs')).readApprovalEvidence;
     const evidence = await read({ stage: { agent: run.agent, root: run.root, startedAt: chat.startedAt, endedAt: p.now(), ...(chat.session?.id ? { sessionId: chat.session.id } : {}) },
-      gateAskedAt: run.gate.at, decision: 'approve', ignorePrefixes: [CHANGE_PREFIX] },
+      gateAskedAt: run.gate.at, decision: 'approve', ignorePrefixes: [CHANGE_PREFIX, ANSWER_PREFIX] },
     { env: p.env, now: p.now, ...(chat.configDir ? (run.agent === 'claude' ? { claudeConfigDir: chat.configDir } : { codexHome: chat.configDir }) : {}) });
     if (evidence?.ok !== true) return fail(`Only the person can approve. Ask them in this chat and wait for their answer, then run this again. Or the person runs "pdd workflow approve ${run.number}" in a terminal. (${oneLine(evidence?.message) || 'no chat evidence'})`);
     if (askCode && !YES_WORDS.test(evidence.userMessage ?? '')) return fail(`Not sure you approved. Run \`pdd workflow approve ${run.number}\` in your terminal.`);
@@ -364,6 +369,21 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
 }
 
+// The agent asks the person in the middle of a step: status shows the question until the next done or the answer.
+export async function askPerson({ text, cwd }, ports) {
+  const p = deps(ports);
+  const run = await runForWorktree(cwd, p);
+  if (!run) return fail('pdd workflow ask works only in a run worktree. cd to the worktree that pdd made for this run.');
+  if (ended(run)) return done(`The run for #${run.number} is ${run.state}. Stop working on it.`);
+  const question = String(text ?? '').trim().slice(0, 500);
+  if (!question) return fail('Write the question after pdd workflow ask.');
+  run.question = { text: question, at: p.now(), area: run.areas[run.area].name }; if (!run.gate) run.state = 'waiting';
+  writeRun(run, p);
+  return done([`pdd shows the person: waiting for you: ${question.split('\n')[0]}`,
+    'Now ask the question in a plain chat message (not a question dialog) and end your turn.',
+    `The person answers in this chat, or from their shell with: pdd workflow changes ${run.number} "answer". Then go on with the step and run done as usual.`].join('\n'));
+}
+
 export async function changeRun({ ref, text, cwd }, ports) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
@@ -373,15 +393,20 @@ export async function changeRun({ ref, text, cwd }, ports) {
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
   const request = oneLine(text);
   if (!request) return fail('Write the change request after the issue number.');
-  const sent = await sendToChat(chat, `${CHANGE_PREFIX}: ${request} Revise in this chat, run done again for the step you changed, then show the result and ask again.`, p);
-  if (!sent.ok) return fail(sent.code === 'agent_not_found' ? `The ${area.name} chat is not running. Open it with "pdd workflow open ${run.number}", then type the change there.`
-    : sent.code === 'agent_blocked' ? `The ${area.name} chat waits for an answer in its window. Open it: pdd workflow open ${run.number}`
-    : `pdd could not send the change to the ${area.name} chat (${sent.code}). Open it: pdd workflow open ${run.number}`);
+  // After pdd workflow ask the text is the person's answer; otherwise it is a change request.
+  const answer = Boolean(run.question);
+  const sent = await sendToChat(chat, answer ? `${ANSWER_PREFIX}: ${request} Go on with the step.`
+    : `${CHANGE_PREFIX}: ${request} Revise in this chat, run done again for the step you changed, then show the result and ask again.`, p);
+  if (!sent.ok) return fail(sent.code === 'agent_not_found' ? `The ${area.name} chat is not running. Open it with "pdd workflow open ${run.number}", then type the text there.`
+    : sent.code === 'agent_blocked' ? `The ${area.name} chat shows a question dialog, and pdd cannot type into it. Answer it in the chat: pdd workflow open ${run.number}`
+    : `pdd could not send the text to the ${area.name} chat (${sent.code}). Open it: pdd workflow open ${run.number}`);
   const now = p.now();
-  run.changes.push({ stage: area.name, round: run.changes.filter(change => change.stage === area.name).length + 1, text: request, at: now });
-  if (run.gate) run.gate.at = now;
+  run.changes.push({ stage: area.name, round: run.changes.filter(change => change.stage === area.name).length + 1, text: request, at: now, ...(answer ? { answer: true } : {}) });
+  if (answer) { run.question = null; if (!run.gate) run.state = 'running'; }
+  else if (run.gate) run.gate.at = now;
   writeRun(run, p);
-  return done(`Sent your change request to the ${area.name} chat of #${run.number}. The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}`);
+  return done(answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
+    : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
 }
 
 export async function cancelRun({ ref, cwd }, ports) {
@@ -408,7 +433,12 @@ async function refreshPr(run, p) {
   if (JSON.stringify([run.state, run.pr]) !== before) writeRun(run, p);
 }
 
-function detail(run, drafts = []) {
+async function chatBlocked(run, p) {
+  const chat = run.state === 'running' ? currentChat(run) : null;
+  return chat ? (await chatSession(chat, p)).status === 'blocked' : false;
+}
+
+function detail(run, drafts = [], blocked = false) {
   const area = run.areas[run.area], chat = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${run.done[step].summary.slice(0, 120)}")` : ''}`);
@@ -416,7 +446,7 @@ function detail(run, drafts = []) {
     : run.gate ? `pdd workflow approve ${run.number}   or   pdd workflow changes ${run.number} "what to change"`
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
   return [`${run.repo}#${run.number} "${oneLine(run.issue.title)}" · ${run.workflow} · ${run.agent}`,
-    `State: ${describe(run)}`,
+    `State: ${describe(run, blocked)}`,
     ...(area ? [`Area ${run.area + 1} of ${run.areas.length}: ${area.name} — ${steps.join(', ')}`] : []),
     ...(chat && !ended(run) ? [`Chat: Herdr session pdd, tab "${chat.label}" — pdd workflow open ${run.number}`] : []),
     ...(run.pr ?? []).map(pr => { const label = prLabel(run, run.areas.find(item => item.name === pr.stage) ?? {}); return `${label === 'the PR' ? 'PR' : label}: ${pr.url} — ${pr.state ?? 'open'}, ${ci(pr)}${pr.base && pr.base !== run.baseBranch ? ` (stacked on ${pr.base})` : ''}`; }),
@@ -426,12 +456,15 @@ function detail(run, drafts = []) {
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
-function summary(run, timeZone) {
+function summary(run, timeZone, blocked = false) {
   const area = run.areas[run.area], ask = askArea(run);
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.gate ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done'
+    : run.gate || run.question || blocked && run.state === 'running' ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? 'cancelled'
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : run.question ? `waiting for you: ${run.question.text.split('\n')[0]}`
+    : !run.gate && blocked ? `waiting for you: the chat asks a question in its window`
     : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
@@ -446,7 +479,9 @@ function summary(run, timeZone) {
 
 async function listStatus(runs, { json, cancelled, scope }, p) {
   for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
-  const all = runs.map(run => summary(run, p.timeZone)), hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
+  const all = [];
+  for (const run of runs) all.push(summary(run, p.timeZone, await chatBlocked(run, p)));
+  const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
@@ -464,8 +499,9 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   if (found.error) return fail(found.error);
   await refreshPr(found.run, p);
   const run = found.run, drafts = run.gate?.kind === 'ask-code' ? await pr1Drafts(run, p) : [];
-  if (json) { const { line, ...item } = summary(run, p.timeZone); return done(JSON.stringify({ runs: [item] }, null, 2)); }
-  return done(detail(run, drafts));
+  const blocked = await chatBlocked(run, p);
+  if (json) { const { line, ...item } = summary(run, p.timeZone, blocked); return done(JSON.stringify({ runs: [item] }, null, 2)); }
+  return done(detail(run, drafts, blocked));
 }
 
 export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
