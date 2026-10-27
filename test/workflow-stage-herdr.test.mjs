@@ -171,13 +171,18 @@ test('missing guard refuses before provision; attach does not hold the stage gua
 test('quiet window delays acceptance until the configured idle period',async t=>{
   const h=harness(await temp(t)); h.ports.quietMs=10; h.ports.timeoutMs=20;
   const r=await runHerdrStage(h.input,h.ports);
-  assert.equal(r.state,'settled'); assert.ok(h.checkpoints.some(x=>Number.isSafeInteger(x.evidence?.candidateSince)));
+  assert.equal(r.state,'settled'); assert.equal(h.ports.now()-r.evidence.candidateSince,10);
+  const defaultWindow=harness(await temp(t)); delete defaultWindow.ports.quietMs;
+  defaultWindow.ports.pollMs=1000; defaultWindow.ports.timeoutMs=20000;
+  const defaultResult=await runHerdrStage(defaultWindow.input,defaultWindow.ports);
+  assert.equal(defaultResult.state,'settled');
+  assert.equal(defaultWindow.ports.now()-defaultResult.evidence.candidateSince,10000);
 });
 
 test('a prompt sent after the stage candidate reopens observation and is accepted after idle',async t=>{
   const h=harness(await temp(t),{personStepsIn:true}); h.ports.quietMs=5; h.ports.timeoutMs=30; const stepped=[]; h.ports.onPersonSteppedIn=b=>{stepped.push(b.evidence.personSteppedInSeq);};
   const r=await runHerdrStage(h.input,h.ports);
-  assert.equal(r.state,'settled'); assert.deepEqual(stepped,[13]); assert.equal(r.evidence.settledSeq,14);
+  assert.equal(r.state,'settled'); assert.deepEqual(stepped,[13]); assert.equal(r.evidence.settledSeq,14); assert.equal(h.ports.now()-r.evidence.candidateSince,5);
   const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...h.ports,checkpoint:h.input.checkpoint});
   assert.equal(closed.state,'closed'); assert.ok(h.calls.some(x=>x[0]==='herdr'&&x[1][2]==='pane'&&x[1][3]==='send-text'));
 });

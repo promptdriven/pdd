@@ -701,6 +701,21 @@ test('cross-process watch stays open while the controller accepts and reaches it
   assert.equal(await closed, 0, errors);
 });
 
+test('acceptance of a previous step does not hide failure to attach the active step', async t => {
+  const f=await fixture(t); const first=await f.run();
+  let release; f.options.pauseNative=new Promise(resolve=>{release=resolve;});
+  const advancing=f.resume(first.runId,'approve');
+  try {
+    for(let i=0;i<500 && f.native.length<2;i++) await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(f.native.length,2);
+    f.ports.attachHerdrStage=async()=>1;
+    const watched=await attachWorkflow({runId:first.runId,cwd:f.sourceCwd,packageRoot},f.ports);
+    assert.equal(watched.state,'recovery_required');
+    assert.match(watched.message,/could not be attached/);
+    assert.equal(f.saved(first.runId).pending.kind,'agent');
+  } finally {release(); await advancing;}
+});
+
 test('fresh-process resume refuses edited source before any replacement stage delivery', async t => {
   const f = await fixture(t); const directory = projectWorkflow(f); const first = await f.run('snapshot-check');
   const assignment = f.saved(first.runId).assignment;
@@ -725,7 +740,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   function transport(base) {
     return {...base, quietMs: 0, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
       sleep: async () => {},
-      spawnAttach: async () => { viewerOpen = true; return new Promise(resolve => { releaseViewer = () => { viewerOpen = false; resolve(0); }; }); },
+      spawnAttach: async () => { viewerOpen = true; return new Promise(resolve => { releaseViewer = () => { viewerOpen = false; resolve(1); }; }); },
       spawnServer: async (session, cwd) => { assert.equal(cwd,f.cwd); sessions.set(session,{seed:'seed',active:null}); calls.push('server'); },
       execFile: async (file, argv, options) => {
         assert.equal(file,'herdr'); assert.equal(options.cwd,f.cwd); assert.equal(options.shell,false);
@@ -751,7 +766,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           return reply({result:{agent:acknowledgement}});
         }
         if(a[0]==='pane'&&a[1]==='send-text') return {stdout:'',stderr:''};
-        if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;return reply({id:'cli:workspace:close',result:{type:'ok'}});}
+        if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;releaseViewer?.();return reply({id:'cli:workspace:close',result:{type:'ok'}});}
         assert.fail('Unexpected stand-in Herdr operation '+JSON.stringify(a));
       }};
   }
@@ -769,7 +784,11 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   while(!viewerOpen) await new Promise(resolve=>setTimeout(resolve,1));
   try {
     const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
-    assert.equal(viewerOpen,true,'controller reaches gate without viewer exit');
+    assert.equal(viewerOpen,false,'accepted workspace closure ends the real viewer');
+    const watched=await viewer;
+    assert.equal(watched.state,'waiting',watched.message);
+    assert.match(watched.message,/pdd accepted scope\. This step is done\./);
+    assert.doesNotMatch(watched.message,/could not be attached/);
   } finally { releaseViewer(); await viewer; }
 
   const accepted=f.saved(first.runId).completed[0];

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 58784ed38e0e151b66601ea30a6b6aa4c7fd399ad9ae6e621fcf8b827f5cbbbf).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2912876030694b8765ffa8a4c325addf78cb9eb4950ab9f091273dff075b13e8).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -753,8 +753,16 @@ export async function attachWorkflow(options, ports) {
     if (!s.pending?.backend || s.pending.backend.phase === 'closed' || s.pending.kind === 'cleanup')
       return result(s, 'waiting', 'The stage is already accepted or archived. No live conversation was attached.');
     await validateInput(s, options, p);
-    const code = await p.attachHerdrStage({ backend: s.pending.backend }, {});
-    return result(s, code === 0 ? 'waiting' : 'recovery_required', code === 0
+    const watched = s.pending.backend;
+    const code = await p.attachHerdrStage({ backend: watched }, {});
+    const latest = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
+    if (!isDeepStrictEqual(latest.assignment, found.assignment)) fail('Saved assignment changed.');
+    const accepted = [...latest.completed, ...(latest.pending?.kind === 'cleanup' ? [latest.pending] : [])]
+      .some(entry => entry.acceptance && ['runId', 'stageId', 'attemptId', 'promptDigest', 'terminalId']
+        .every(key => entry.acceptance[key] === watched[key]));
+    if (accepted) return result(latest, 'waiting',
+      `pdd accepted ${watched.stageId}. This step is done. Messages here no longer change the run.`);
+    return result(latest, code === 0 ? 'waiting' : 'recovery_required', code === 0
       ? 'Watching the original active stage. The run continues while this view is open.'
       : 'The exact original stage could not be attached. No replacement was started.');
   } catch (error) { return result(s, 'recovery_required', error.message); }
