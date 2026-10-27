@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-progress.prompt.md (sha256: 3d0b9f97c85c496147e163920341f97bad247ca6bd4d3ab78f0b7c0d05be6d0a).
+// Generated from prompts/cli/workflow-progress.prompt.md (sha256: 3e1522ccdd18f454aea3c3b6f29dab1687750a548769c7b63ea692758f4bc009).
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
 const uuid = value => /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value ?? '');
 const AGENTS = { codex: 'Codex', claude: 'Claude' };
@@ -6,7 +6,7 @@ const HEARTBEAT_MS = 2 * 60 * 1000;
 const clock = (ms, timeZone) => new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(ms));
 
 export function createWorkflowProgress({ stdout = process.stdout, now = () => Date.now(), timeZone } = {}) {
-  let current, running = null;
+  let current, running = null, gate = false;
   const seen = new Set();
   const line = text => stdout.write(`${text}\n`);
   const timed = text => line(`${clock(now(), timeZone)}  ${text}`);
@@ -22,7 +22,7 @@ export function createWorkflowProgress({ stdout = process.stdout, now = () => Da
     }
     const backend = value.backend;
     if (backend?.session && backend.workspaceId) once(`backend:${id}:${backend.session}:${backend.workspaceId}`,
-      `${AGENTS[value.agent] ?? 'The agent'} is working in Herdr session ${clean(backend.session)}, workspace ${clean(backend.workspaceId)}.`);
+      `${AGENTS[value.agent] ?? 'The agent'} is working in Herdr session ${clean(backend.session)}, workspace "#${clean(value.issue)} ${clean(value.name)}".`);
     const stage = clean(value.stage?.id ?? 'complete');
     if (['agent.intent', 'pr.intent'].includes(value.event)) { timed(`${stage} started`); running = { stage, since: now(), beats: 0 }; }
     else if (running) {
@@ -38,13 +38,15 @@ export function createWorkflowProgress({ stdout = process.stdout, now = () => Da
     if (value.state !== 'waiting') timed(`${stage}: ${clean(value.state)}`);
     else timed(value.stage?.kind === 'merge' ? 'waiting for you to merge the PR' : `waiting for you before ${stage}`);
     if (value.state === 'waiting') {
+      gate = true;
       if (value.stage?.kind === 'merge') {
         line(`Review and merge the PR on GitHub. PDD never merges.\nCheck merge: pdd workflow resume ${id}`);
       } else if (value.pending) {
         line(`Inspect: pdd workflow resume ${id}\nWatch: pdd workflow attach ${id}\nAfter reviewing the saved state, continue: pdd workflow resume ${id} --decision approve`);
       } else {
         if (value.summary) line(`Summary: ${clean(value.summary).slice(0, 1200)}`);
-        for (const path of value.files ?? []) line(`Read: ${clean(path)}`);
+        const files = value.files ?? [], inside = value.root ? files.filter(path => String(path).startsWith(`${value.root}/`)) : [];
+        for (const path of inside.length ? inside : files) line(`Read: ${clean(path)}`);
         line(`Approve: pdd workflow resume ${id} --decision approve`);
         if (value.stage?.optional) line(`Skip: pdd workflow resume ${id} --decision skip`);
       }
@@ -58,5 +60,5 @@ export function createWorkflowProgress({ stdout = process.stdout, now = () => Da
       line(`Watch: pdd workflow attach ${id}\nInspect: pdd workflow resume ${id}\nAfter the agent finishes, review its result. PDD moves on when you run: pdd workflow resume ${id} --decision approve`);
     } else line('Preparation was interrupted before a run identity was confirmed. Check .git/pdd/workflow-inputs in your repository for any saved run ID.');
   };
-  return { observe, interrupt };
+  return { observe, interrupt, gateShown: () => gate };
 }

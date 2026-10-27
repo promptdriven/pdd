@@ -14,12 +14,13 @@ test('progress deduplicates polling, shows actual location, review artifacts, fu
  progress.observe({...view,event:'agent.intent'});
  const backend={session:'pdd-real-hash',workspaceId:'workspace-42'};
  for(let i=0;i<50;i++)progress.observe({...view,event:'agent.backend',backend});
- assert.equal(stdout.text.match(/workspace-42/g).length,1);
+ assert.equal(stdout.text.match(/Herdr session/g).length,1);
+ assert.match(stdout.text,/workspace "#17 small-change"/);
  assert.equal(stdout.text.match(/scope started/g).length,1);
  assert.match(stdout.text,/^\d{2}:\d{2}  scope started$/m);
  progress.observe({...view,event:'agent.completed',ended:'scope',stage:{id:'change',kind:'agent'}});
  progress.observe({...view,event:'result',state:'waiting',stage:{id:'change',kind:'agent'},summary:'Recommend feature.\n\x1b[2J',files:['/git/run/scope.json','/project worktree/cases.md']});
- assert.match(stdout.text,/Read: \/git\/run\/scope.json/);
+ assert.doesNotMatch(stdout.text,/Read: \/git\/run\/scope.json/);
  assert.match(stdout.text,/Read: \/project worktree\/cases.md/);
  assert.match(stdout.text,/Summary: Recommend feature/);assert.doesNotMatch(stdout.text,/\x1b/);
  assert.ok(stdout.text.includes(`Approve: pdd workflow resume ${id} --decision approve`));
@@ -85,7 +86,7 @@ test('header names the issue title, times are local HH:MM, one watch line, no in
  assert.doesNotMatch(out,/journal\.jsonl|Saved run/);
  assert.doesNotMatch(out,/preparing/);
  assert.equal(out.match(/Herdr session/g).length,1);
- assert.match(out,/^Codex is working in Herdr session pdd-real-hash, workspace w1\.$/m);
+ assert.match(out,/^Codex is working in Herdr session pdd-real-hash, workspace "#17 small-change"\.$/m);
 });
 
 test('a long stage prints a still-working line every two minutes, not on every poll',()=>{
@@ -111,4 +112,26 @@ test('CLI start line marks a bare issue number with #',async()=>{
  const workflowRunner={async runWorkflow(){return {state:'waiting',exitCode:2,message:'done'};}};
  await runPdd(['workflow','run','small-change','17'],{stdout,stderr:capture(),signalSource,workflowRunner,workflowStages:stages});
  assert.match(stdout.text,/^Starting small-change for issue #17\. /m);
+});
+
+test('names the run workspace by its label and lists only working-copy files',()=>{
+ const stdout=capture(),progress=createWorkflowProgress({stdout,now:()=>0,timeZone:'UTC'});
+ const v={...view,agent:'codex'};
+ progress.observe({...v,event:'agent.intent'});
+ progress.observe({...v,event:'agent.backend',backend:{session:'pdd',workspaceId:'w2'}});
+ assert.equal(progress.gateShown(),false);
+ progress.observe({...v,event:'result',state:'waiting',stage:{id:'change',kind:'agent'},summary:'Plan',files:['/git/run/scope.json','/project worktree/cases.md']});
+ assert.match(stdout.text,/^Codex is working in Herdr session pdd, workspace "#17 small-change"\.$/m);
+ assert.doesNotMatch(stdout.text,/\bw2\b/);
+ assert.match(stdout.text,/^Read: \/project worktree\/cases\.md$/m);
+ assert.doesNotMatch(stdout.text,/scope\.json/);
+ assert.equal(progress.gateShown(),true);
+});
+
+test('CLI does not repeat the waiting message after the gate lines',async()=>{
+ const stdout=capture(),signalSource=new EventEmitter();
+ const workflowRunner={async runWorkflow(input,ports){ports.onProgress({...view,event:'result',state:'waiting',stage:{id:'change',kind:'agent'},summary:'Plan',files:[]});return {state:'waiting',exitCode:2,message:'waiting: run X / change. Review the proposal.'};}};
+ assert.equal(await runPdd(['workflow','run','small-change','17'],{stdout,stderr:capture(),signalSource,workflowRunner,workflowStages:stages}),2);
+ assert.match(stdout.text,/Approve: /);
+ assert.doesNotMatch(stdout.text,/waiting: run X/);
 });

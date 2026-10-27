@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fffbdd730f3bfb302682b78830109aae4b19a4cddc99e271766f4506d76abf30).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 649c7681b1b644d3ed6d65c55fee4ebc043520aca21958057047e51794ef13b6).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -409,7 +409,6 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
       const closed = await p.closeHerdrStage({ backend: s.pending.backend, acceptance: s.pending.acceptance }, portOptions);
       if (closed.state !== 'closed' || closed.backend?.phase !== 'closed') return result(s, 'recovery_required', closed.reason || 'Owned cleanup is uncertain; no stage was resent.');
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
-      p.stdout.write(`pdd accepted ${stage.id} and moved on.\n`);
     }
     s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });

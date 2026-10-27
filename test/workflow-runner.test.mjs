@@ -989,7 +989,8 @@ test('first-dispatch continuation refuses changed original request or worktree b
 });
 
 test('live observations use saved identities, follow durable stage/test/PR records and cannot mutate the run', async t => {
-  const f = await fixture(t), events = [];
+  const f = await fixture(t), events = [], out = { text: '', write(value) { this.text += value; } };
+  f.ports.stdout = out;
   f.ports.onProgress = event => {
     events.push(structuredClone(event));
     if (event.event === 'run.started') assert.equal(f.saved(event.runId).runId, event.runId);
@@ -1011,6 +1012,7 @@ test('live observations use saved identities, follow durable stage/test/PR recor
   assert.ok(events.some(e => e.event === 'test.completed'));
   assert.deepEqual(events.at(-1).prs, ['https://github.com/example/project/pull/23']);
   assert.ok(events.every(e => e.runId === start.runId));
+  assert.doesNotMatch(out.text, /moved on/, 'the controller terminal already shows "<stage> done"');
   f.ports.onProgress = () => { throw Error('broken display'); };
   f.merged = true;
   assert.equal((await f.resume(start.runId)).state, 'completed');

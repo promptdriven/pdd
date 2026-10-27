@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3ac1c04a9843d00d4408a19ea05197dc07a760730e836220c81a927ec78beb85).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d32cb11ce18ae710bb5bdd0e818317e5e61ed2d8ebaf26e973349bb6e3696b84).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,7 +73,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!result || !['completed','waiting','failed','recovery_required'].includes(result.state)
           || !Number.isInteger(result.exitCode) || result.exitCode<0 || result.exitCode>255
           || typeof result.message!=='string' || !result.message.trim()) throw Error('Invalid local workflow reply');
-        line(stdout,result.message);
+        if (!(result.state === 'waiting' && progress?.gateShown?.())) line(stdout,result.message);
         return result.exitCode;
       } catch {
         line(stderr,'The local workflow runner could not confirm this operation. Inspect its saved state before repeating a mutation; no automatic retry was sent.');

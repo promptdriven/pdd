@@ -31,7 +31,7 @@ Before any native launch, push or PR create, flush its specific intent. After cr
 
 ## Attach-as-watch semantics
 
-Attach takes no long-lived lock. The controller keeps observing while a viewer is attached, records person intervention when a newer working lifecycle appears, and waits for the quiet idle window before acceptance. Acceptance/cleanup is the only guarded moment; both controller output and the old pane receive a one-line accepted/moved-on notice.
+Attach takes no long-lived lock. The controller keeps observing while a viewer is attached, records person intervention when a newer working lifecycle appears, and waits for the quiet idle window before acceptance. Acceptance/cleanup is the only guarded moment; the old pane receives a one-line accepted/moved-on notice; the controller terminal does not, because its progress renderer already prints `<stage> done` and the gate.
 
 ## Stage progression
 
