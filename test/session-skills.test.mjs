@@ -28,9 +28,11 @@ console.log(JSON.stringify({agent:process.argv[1],argv:process.argv.slice(2),cwd
 process.exit(Number(process.env.FIXTURE_EXIT||0));
 `);
   for (const agent of ['codex', 'claude']) writeFileSync(join(native, agent), `#!${process.execPath}\nimport(${JSON.stringify(join(native, 'agent.mjs'))});\n`, { mode: 0o755 });
+  const env = { ...process.env, HOME: home, PATH: `${native}:${process.env.PATH}` };
+  delete env.CLAUDE_CONFIG_DIR;
   const run = (args, extra = {}) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), ...args],
-    { cwd: project, env: { ...process.env, HOME: home, PATH: `${native}:${process.env.PATH}`, ...extra }, encoding: 'utf8', timeout: 10000 });
-  return { sandbox, pkg, home, project, run };
+    { cwd: project, env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });
+  return { sandbox, pkg, home, project, env, run };
 }
 
 // Wrong: skills are not installed, are copied into the person's repo, or are rewritten on every command.
@@ -90,6 +92,17 @@ test('INSTALL2: reinstall only when missing, older or changed; keep newer copies
   assert.deepEqual(readdirSync(agents).sort(), [...PDD_SKILL_NAMES].sort());
 });
 
+// Wrong: Claude started with CLAUDE_CONFIG_DIR reads <dir>/skills, so it never sees the ~/.claude copy.
+test('INSTALL4: CLAUDE_CONFIG_DIR gets its own copy next to ~/.claude/skills and ~/.agents/skills', t => {
+  const { sandbox, home, run } = packageCopy(t);
+  const config = join(sandbox, 'claude config');
+  const result = run(['--version'], { CLAUDE_CONFIG_DIR: config });
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
+  for (const skillRoot of [join(config, 'skills'), join(home, '.claude/skills'), join(home, '.agents/skills')])
+    assert.deepEqual(readdirSync(skillRoot).sort(), [...PDD_SKILL_NAMES].sort(), skillRoot);
+  assert.deepEqual(readdirSync(config), ['skills']);
+});
+
 // Wrong: a home folder that cannot take the skills breaks every pdd command.
 test('INSTALL3: install failure warns once on stderr and the command still runs', t => {
   const { pkg, home, run } = packageCopy(t);
@@ -104,7 +117,7 @@ test('INSTALL3: install failure warns once on stderr and the command still runs'
 
 // Wrong: session pastes the guide or workflows, loses the core rules, or points the agent at a bare pdd.
 test('SESSION1: pdd session starts the agent with the short intro after the skills are installed', t => {
-  const { pkg, project, run } = packageCopy(t);
+  const { pkg, project, env, run } = packageCopy(t);
   const skillText = readFileSync(join(pkg, 'skills/pdd-prompting/SKILL.md'), 'utf8');
   const rules = skillText.split(/^## /m).find(part => part.startsWith('Core rules\n')).split('\n').filter(line => line.startsWith('- '));
   const guide = readFileSync(join(pkg, 'docs/prompting-guide.md'), 'utf8');
@@ -122,7 +135,7 @@ test('SESSION1: pdd session starts the agent with the short intro after the skil
       assert.ok(lines.includes('Workflows = the skills pdd-small-change, pdd-bug and pdd-feature.'));
       const command = lines.find(line => line.startsWith('Use this pdd: ')).slice('Use this pdd: '.length);
       assert.ok(lines.some(line => line.includes(`${command} workflow run <name> <issue>`)));
-      const check = spawnSync('/bin/sh', ['-c', `${command} --version`], { cwd: project, env: { ...process.env, HOME: join(pkg, '..', 'home'), PATH: '/nonexistent' }, encoding: 'utf8' });
+      const check = spawnSync('/bin/sh', ['-c', `${command} --version`], { cwd: project, env: { ...env, PATH: '/nonexistent' }, encoding: 'utf8' });
       assert.equal(check.status, 0, check.stderr);
       assert.equal(check.stdout, JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')).version + '\n');
       assert.equal(lines.at(-1), request.length ? request[0] : 'Ask what the person wants to work on.');

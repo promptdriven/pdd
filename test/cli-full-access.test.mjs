@@ -14,7 +14,7 @@ test('actual public native entry uses explicit full access for both agents with 
  for(const agent of ['codex','claude'])writeFileSync(join(native,agent),script,{mode:0o755});
  const request='Summarize guide only; $(touch no-shell-effect)';
  for(const agent of ['codex','claude']){
-  const r=spawnSync(process.execPath,[bin,'session','--agent',agent,request],{cwd,env:{...process.env,HOME:home,PATH:native,NATIVE_SETTING_EXAMPLE:'ordinary',FIXTURE_EXIT:agent==='claude'?'7':'0'},input:'native terminal input\n',encoding:'utf8',timeout:5000});
+  const r=spawnSync(process.execPath,[bin,'session','--agent',agent,request],{cwd,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:'',PATH:native,NATIVE_SETTING_EXAMPLE:'ordinary',FIXTURE_EXIT:agent==='claude'?'7':'0'},input:'native terminal input\n',encoding:'utf8',timeout:5000});
   assert.equal(r.status,agent==='claude'?7:0,r.stderr);assert.equal(r.stderr,'');const actual=JSON.parse(r.stdout);
   assert.equal(actual.args.length,agent==='codex'?5:2);assert.deepEqual(actual.args.slice(0,-1),agent==='codex'?['--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]:['--dangerously-skip-permissions']);
   assert.ok(actual.args.at(-1).startsWith('This is a PDD session in '));assert.ok(actual.args.at(-1).endsWith('\n'+request));assert.equal(actual.cwd,cwd);assert.equal(actual.input,'native terminal input\n');assert.equal(actual.setting,'ordinary');

@@ -72,7 +72,7 @@ The method is in four skills. The agent loads a skill only when it needs it:
 | `pdd-prompting` | The Prompting guide, its core rules and how to review |
 | `pdd-small-change`, `pdd-bug`, `pdd-feature` | The workflows: areas, steps and gates |
 
-Each `pdd` command keeps a copy of these skills in `~/.agents/skills/` (Codex) and `~/.claude/skills/` (Claude Code). So they also work in a chat that you open yourself. PDD never copies them into your repo. A folder there that PDD did not make stays as it is.
+Each `pdd` command keeps a copy of these skills in `~/.agents/skills/` (Codex) and `~/.claude/skills/` (Claude Code). So they also work in a chat that you open yourself. If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/`, so PDD copies them there too. PDD never copies them into your repo. A folder there that PDD did not make stays as it is.
 
 You can also give the first request, or pick Claude Code:
 

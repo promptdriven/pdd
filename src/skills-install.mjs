@@ -1,10 +1,9 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: e9c462b10ba1529c7a735dcf60c0378776dc175fa306400b2bdc9f615bca8884).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 359079f797cf5a077988546cbd75955ed88211a3c031cb8de3439486c01bd299).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-small-change', 'pdd-bug', 'pdd-feature']);
-const SKILL_ROOTS = ['.agents/skills', '.claude/skills'];
 const MARKER = '.pdd-skill.json';
 
 const relativeFiles = (dir, prefix = '') => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
@@ -49,14 +48,17 @@ function installRoot(parent, skills, version, installed, kept) {
   }
 }
 
-export function installSkills({ packageRoot, home }) {
+export function installSkills({ packageRoot, home, claudeConfigDir }) {
   const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
   const skills = PDD_SKILL_NAMES.map(name => ({ name, source: join(packageRoot, 'skills', name) }))
     .map(skill => ({ ...skill, digest: digest(skill.source) }));
   const installed = [], kept = [], errors = [];
-  // A broken root (for example a file named ~/.agents) must not stop the other agent's copy.
-  for (const skillRoot of SKILL_ROOTS) {
-    try { installRoot(join(home, skillRoot), skills, version, installed, kept); } catch (error) { errors.push(error); }
+  // Claude reads <CLAUDE_CONFIG_DIR>/skills instead of ~/.claude/skills when that variable is set.
+  const roots = [join(home, '.agents/skills'), join(home, '.claude/skills')];
+  if (claudeConfigDir && isAbsolute(claudeConfigDir) && resolve(claudeConfigDir) !== resolve(home, '.claude')) roots.push(join(claudeConfigDir, 'skills'));
+  // A broken root (for example a file named ~/.agents) must not stop the other agents' copies.
+  for (const parent of roots) {
+    try { installRoot(parent, skills, version, installed, kept); } catch (error) { errors.push(error); }
   }
   if (errors.length) throw errors[0];
   return { installed, kept };

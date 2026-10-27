@@ -355,7 +355,7 @@ Uninstall:
 npm uninstall -g pdd
 ```
 
-PDD Alpha copies its skills to `~/.agents/skills/pdd-*` and `~/.claude/skills/pdd-*`. Delete those folders after you uninstall. Other leftovers are only in your clones: `.git/pdd`, the `*.pdd-worktrees` folders, `pdd/...` branches and the `pdd-` Herdr sessions. See [Clean up after a run](#clean-up-after-a-run).
+PDD Alpha copies its skills to `~/.agents/skills/pdd-*` and `~/.claude/skills/pdd-*` (and `$CLAUDE_CONFIG_DIR/skills/pdd-*` if you set that variable). Delete those folders after you uninstall. Other leftovers are only in your clones: `.git/pdd`, the `*.pdd-worktrees` folders, `pdd/...` branches and the `pdd-` Herdr sessions. See [Clean up after a run](#clean-up-after-a-run).
 
 ## 11. Known limits
 

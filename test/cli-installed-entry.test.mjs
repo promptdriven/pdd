@@ -15,7 +15,7 @@ test('native session intro and runner stage context pin real absolute executable
  const pkg=join(tmp,'installed package'),old=join(tmp,'old-bin'),home=join(tmp,'home');mkdirSync(pkg);mkdirSync(old);mkdirSync(home);
  for(const name of ['src','bin','package.json','docs','skills','.pdd'])cpSync(join(root,name),join(pkg,name),{recursive:true});
  writeFileSync(join(old,'pdd'),'#!/bin/sh\necho OLD_PRIVATE_PDD\nexit 77\n',{mode:0o755});
- const env={...process.env,HOME:home,PATH:old};
+ const env={...process.env,HOME:home,CLAUDE_CONFIG_DIR:'',PATH:old};
  const context=loadGuidance({packageRoot:pkg,cwd:tmp});
  const encoded=context.match(/Exact installed PDD argv prefix: (.+)/)[1];
  assert.deepEqual(JSON.parse(encoded),[process.execPath,resolve(pkg,'bin/pdd.mjs')]);
