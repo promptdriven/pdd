@@ -44,11 +44,11 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const pack = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', sandbox],
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
-  for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
-    '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
+  for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd-prompting/SKILL.md', 'examples/ticket-status/README.md',
+    'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui)\//.test(name)), false);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);

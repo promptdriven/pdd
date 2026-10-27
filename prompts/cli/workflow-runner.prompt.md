@@ -6,7 +6,7 @@ Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few 
 
 Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
 
-- `startRun({name, issue, agent, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. Fetch the default branch (a failure is only a warning). Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
+- `startRun({name, issue, agent, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. After a cancelled run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. Fetch the default branch (a failure is only a warning). Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
 - `stepDone({step, summary, cwd})`: only the agent calls this, from the worktree. Find the run from cwd. Record the step with its summary and time. An unknown or out-of-order step prints a warning and is still recorded. Then print one of:
   - the next step of the area and the exact `done` command (an optional step is a question to the person, and "skipped" is a valid summary);
   - at an `approve` gate: show the result, ask the person, stop, never approve for them; how they approve; how to handle changes (revise here, run done again, ask again);
@@ -26,7 +26,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 - Light checks warn and never break the run. Errors that stop a command say what to do next.
 - Never merge. Never push to the default branch. Never touch the person's default Herdr session.
 - Messages to the agent are short. The first message of an area chat is about 10 lines: "Use the pdd-NAME skill", the issue number, title and URL, the worktree, the run folder, the area and its steps, the `done` rule and the gate rule. Never paste the guide or the workflow text.
-- Commands that pdd prints for the agent use this package's absolute node and `bin/pdd.mjs` paths.
+- Commands that pdd prints for the agent use this package's absolute node and `bin/pdd.mjs` paths, shell-quoted. Export them as `pddCommand(packageRoot)`, so a bare `pdd` on an older PATH is never used.
 
 ## Dependencies
 
