@@ -359,7 +359,8 @@ export function preflight({ root, found, selected }) {
   const rows = selected.map(test => {
     const refused = checkTest(root, found, test, prompts, storyTests);
     const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused] : [], warnings: numberWarnings(test.doc),
-      max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [] };
+      max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
+      criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0 };
     if (!refused) for (const [index, step] of row.steps.entries()) {
       const prompt = prompts.get(step.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step.operation);
       const input = entry ? checkInput(step.input, entry.input_schema, index) : null;

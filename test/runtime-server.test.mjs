@@ -6,7 +6,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { exitCodeFor } from '../src/runtime-output.mjs';
-import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, sha } from './runtime-fake.mjs';
+import { PLACE, TOKEN, fakeRuntime, filesUnder, harbor, portsFor, root, sha } from './runtime-fake.mjs';
 
 async function check(setup, fake, words = [], options = {}, extra = {}) {
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
@@ -42,7 +42,8 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
   assert.match(result.err, /Lint passed\. Sent 2 checks \(6 files, \d+ KB\) at \d\d:\d\d:\d\d\./);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
-  assert.match(result.out, /^Runtime check: 2 of 2 stories passed\. AI calls: 2\. Model asked for: gpt-6\.1-sol\.$/m);
+  assert.equal(result.out.split('\n')[3], 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls');
+  assert.match(result.out, /^2 of 2 stories passed\. Model asked for: gpt-6\.1-sol\.$/m);
   assert.match(result.out, /^Reports \(anyone with a link can open it\):\n {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/[0-9a-f]+$/m);
   assert.doesNotMatch(result.out + result.err, new RegExp(checks[0].request.requestId));
 });
@@ -215,7 +216,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /AI calls: 0 \(and 1 unknown\)/);
+  assert.match(result.out, /^Runtime check: ✗ 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
 });
@@ -295,4 +296,48 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
   assert.match(result.out, /Warning: the runtime engine is eae2202a0123, but pdd's local checks copy engine 7b03d3ea\. The engine stays the judge\./);
   const same = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order']);
   assert.doesNotMatch(same.out, /runtime engine is/);
+});
+
+// Wrong: the PR line hides a failure, or --json lacks the line an agent pastes (Serhan, Oct 27).
+test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
+  const setup = harbor(t);
+  const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
+    { criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam', actual: 'Sam', passed: true }];
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const id = entry.url.split('/').at(-1), place = f.posts.find(post => post.request.requestId === id).request.scenario === 'tests/place-order.json';
+    return { status: 200, json: place ? f.check(id, 'failed', failed) : f.check(id) };
+  });
+  const text = await check(setup, fake, []);
+  assert.equal(text.code, 1);
+  assert.equal(text.out.split('\n')[3], 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
+  const json = await check(setup, fake, [], { '--json': true });
+  assert.equal(json.json.summary_line, 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
+  const refused = harbor(t, repo => {
+    const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
+    doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
+  });
+  const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+});
+
+// Wrong: the runtime address is written in more than one place, so a move needs many edits (Serhan, Oct 27).
+test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIME_URL overrides it', async () => {
+  const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime-client.mjs');
+  const host = new URL(DEFAULT_RUNTIME_URL).host;
+  const hits = spawnSync('git', ['grep', '-n', '-F', host], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
+  assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
+  assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://runtime.example' }), 'https://runtime.example');
+  for (const bad of ['http://runtime.example', 'https://u:p@runtime.example', 'https://runtime.example/v1', 'ftp://x']) assert.throws(() => runtimeOrigin({ PDD_RUNTIME_URL: bad }), bad);
+});
+
+// Wrong: --read of a running row claims it ran for the full timeout.
+test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
+  const first = await check(setup, fake, ['place-order'], { '--timeout': '1' });
+  assert.equal(first.code, 3);
+  const read = await check(setup, fake, [], { '--read': true });
+  assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
 });

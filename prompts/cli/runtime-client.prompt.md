@@ -5,7 +5,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 ## Setup
 
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
-- `PDD_RUNTIME_URL`, default `https://runtime.34-72-131-98.sslip.io`. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
+- The runtime address is one setting: `PDD_RUNTIME_URL`, else the exported constant `DEFAULT_RUNTIME_URL` in this module. No other code, prompt, test or doc names the address; tests use the override or import the constant. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
 - Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`. Read the environment only from `env`.
 

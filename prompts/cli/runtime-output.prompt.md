@@ -26,20 +26,21 @@ The first match from the top wins:
 
 1. Exit 3: the first line is `pdd check --read <batch>`.
 2. The table: `Story`, `Test`, `Result`, `Checks`, `Time`. Story = the story title. Result `not run` for `not_run`. Checks `n/m` or `-`. Time `21.0 s` or `-`.
-3. A block for each problem row, failed rows first:
+3. The summary line, one line that an agent can paste into a PR: `Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call`. ✓ only when every row passed, else ✗. Criteria come from the report's `criterion_results`; a row with no such list counts its test's criteria, all passed only when the row passed. Rows that are refused, not run, unknown, queued or running add `· N refused` (and so on). Calls count only ended rows; others add ` + N unknown`.
+4. A block for each problem row, failed rows first:
    - `FAILED  <title> (<test>)`, one line for each failed check `  AC1  result /totalCents  expected 899, got 900`, the row warnings, then `  Report: <url>   Next: show the person this check. Do not change the expected value yourself.`
    - `REFUSED before sending (not sent, 0 AI calls)`, then for each row `  <test>  step N  <code>` and the message and hint lines.
    - `REFUSED  <title> (<test>)`, then `  <code>  <section>  <message>`, the engine message when it adds detail, and the `pdd:` hint.
    - `NOT RUN  <title> (<test>): <message> (<code>)`.
-   - `STILL RUNNING after N min: <title>. Do not send it again.` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`)
+   - `STILL RUNNING after N min: <title>. Do not send it again.` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`; in `--read`: `STILL RUNNING: …`)
    - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.
-4. With `--details`: every check of each row, failed checks first.
-5. `Runtime check: X of Y stories passed. AI calls: N. Model asked for: M.` Calls count only ended rows; others add `(and K unknown)`. Skip the model part when it is not known. Time is shown only for ended rows.
-6. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
+5. With `--details`: every check of each row, failed checks first.
+6. `X of Y stories passed. Model asked for: M.` Skip the model part when it is not known. Time is shown only for ended rows.
+7. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
 
 ## JSON (stdout, `--json`)
 
-One object: `{batch, repo, exit_code, rows: [{story, title, test, state, checks, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, reason}], warnings}`. `reason` is `{code, message}` for a row that was not run or is unknown, else null. Nothing else goes to stdout.
+One object: `{batch, repo, exit_code, summary_line, rows: [{story, title, test, state, checks, criteria, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, reason}], warnings}`. `reason` is `{code, message}` for a row that was not run or is unknown, else null. Nothing else goes to stdout.
 
 ## Dependencies
 

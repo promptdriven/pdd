@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8315cfb30ce7bb8af7f9c9396e2661a830289259c8f861f7d2152029370d3c3e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 2400dd4d31867996451a02c09a322847346c3ad95aa281fe85503c1d0817a52b).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -6,9 +6,10 @@ import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { PreflightError, captureSource, checkInput, draftHint, fillHashes, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
-const DEFAULT_ORIGIN = 'https://runtime.34-72-131-98.sslip.io';
+// The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
+export const DEFAULT_RUNTIME_URL = 'https://runtime.34-72-131-98.sslip.io';
 const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 'unknown']);
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -52,7 +53,7 @@ function repoRoot(cwd) {
 }
 
 export function runtimeOrigin(env) {
-  const raw = env.PDD_RUNTIME_URL || DEFAULT_ORIGIN;
+  const raw = env.PDD_RUNTIME_URL || DEFAULT_RUNTIME_URL;
   let url;
   try { url = new URL(raw); } catch { url = null; }
   const loopback = url && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
@@ -271,7 +272,7 @@ function addHints(row, root, visible) {
 
 function applyAnswer(row, answer, context) {
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets });
-  Object.assign(row, { state: view.state, checks: view.checks, failed_checks: view.failed_checks, all_checks: view.all_checks,
+  Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha });
   if (row.state === 'refused') addHints(row, context.root, context.visible);
@@ -286,7 +287,7 @@ function batchRecord(context) {
     created_at: new Date(context.startedAt).toISOString(), lint, warnings,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
-      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps,
+      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       engine_sha: row.engine_sha ?? null })) };
 }
 
@@ -407,7 +408,7 @@ function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && sha !== ENGINE_SHA))];
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 8)}. The engine stays the judge.`)];
-  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode,
+  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode, summaryLine: summaryLine(rows),
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.readStop) line(ports.stderr, context.readStop);
@@ -415,7 +416,7 @@ function printResult(context, rows, extra = {}) {
   const scrub = text => (context.secrets ?? []).reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value, text);
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, warnings, details: context.details, timeoutMin: context.timeoutMin,
-    interrupted: context.interrupted || !!context.readStop, exitCode, secrets: context.secrets, ...extra })));
+    interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
   if (exitCode === 3 && context.batch) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   return exitCode;
 }
