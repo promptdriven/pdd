@@ -14,7 +14,7 @@ Add the PDD skills to your agent:
 npx skills add promptdriven/pdd
 ```
 
-Then open Codex or Claude Code in your project, as usual, and run these once:
+Then open Codex or Claude Code in your project, as usual. Run `/pdd-setup` once, then call a skill:
 
 ```
 /pdd-setup
