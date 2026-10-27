@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runHerdrStage } from '../src/workflow-stage-herdr.mjs';
+import { allocateIssueWorktree } from '../src/workflow-worktree.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 // The production adapter chooses the target; only the subprocess boundary is captured.
 test('new production stage selects shared pdd, never a run hash or default', async t => {
@@ -99,4 +102,44 @@ test('Ctrl+C leaves a proved-dead layout owner recoverable by the next process',
  const ready=new Promise(resolve=>child.stdout.once('data',resolve));const ended=new Promise(resolve=>child.once('exit',resolve));
  await ready;child.kill('SIGINT');assert.equal(await ended,130);
  let acquired=false;await f.module.withHerdrLayoutLock(()=>{acquired=true;},f.ports);assert.equal(acquired,true);
+});
+
+for (const origin of ['https://github.com/Serhan-Asad/harbor-coffee.git',
+  'git@github.com:Serhan-Asad/harbor-coffee.git', 'ssh://git@github.com/Serhan-Asad/harbor-coffee.git']) {
+ test(`HD2: different-folder workspace collision uses owner/repo from ${origin}`,async t=>{
+  const f=await fixture(t),sourceRoot=join(f.root,'local-checkout'),otherFolder=join(f.root,'different-folder');
+  await mkdir(sourceRoot);await mkdir(otherFolder);
+  const execute=promisify(execFile),git=(...args)=>execute('git',args,{cwd:sourceRoot});
+  await git('init','-b','main');
+  await git('-c','user.name=Layout test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','Base');
+  await git('remote','add','origin',origin);
+  const existing={workspace_id:'personal',label:'harbor-coffee',
+   worktree:{checkout_path:otherFolder,repo_key:join(otherFolder,'.git'),is_linked_worktree:false}};
+  f.workspaces.push(structuredClone(existing));
+  // The real allocator checks origin and creates the real assigned Git worktree.
+  // Only the external Herdr transport is captured; no fake setup or runner.
+  const allocated=await allocateIssueWorktree({cwd:sourceRoot,repository:'Serhan-Asad/harbor-coffee',
+   issueNumber:2,runId:f.input.runId,workflowName:'small-change',baseRef:'main'});
+  assert.equal(allocated.state,'ready',allocated.message);
+  const a=allocated.assignment;
+  const layout=await f.open({repository:a.repository,sourceRoot:a.sourceRoot,commonDir:a.commonDir,cwd:a.worktreePath});
+  assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'Serhan-Asad/harbor-coffee');
+  assert.deepEqual(f.workspaces.find(w=>w.workspace_id==='personal'),existing);
+  assert(!f.calls.some(args=>args[0]==='workspace'&&['rename','close'].includes(args[1])));
+  const again=await f.open({repository:a.repository,sourceRoot:a.sourceRoot,commonDir:a.commonDir,cwd:a.worktreePath,stageId:'change'});
+  assert.equal(again.repoWorkspaceId,layout.repoWorkspaceId);
+  assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
+  const foreign=await allocateIssueWorktree({cwd:sourceRoot,repository:'WrongOwner/harbor-coffee',
+   issueNumber:3,runId:randomUUID(),workflowName:'small-change',baseRef:'main'});
+  assert.notEqual(foreign.state,'ready','a supplied owner cannot override origin identity');
+ });
+}
+test('HD2: an occupied owner/repo label refuses without adopting or renaming another folder',async t=>{
+ const f=await fixture(t),other=join(f.root,'another-folder');await mkdir(other);
+ f.workspaces.push({workspace_id:'short',label:'coffee',worktree:{checkout_path:other}},
+  {workspace_id:'qualified',label:'alice/coffee',worktree:{checkout_path:other}});
+ const before=structuredClone(f.workspaces);
+ await assert.rejects(f.open(),/repository_label_unavailable/);
+ assert.deepEqual(f.workspaces,before);
+ assert(f.calls.every(args=>args[0]==='workspace'&&args[1]==='list'));
 });
