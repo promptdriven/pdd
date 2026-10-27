@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 78b197f8f79f2f6dc338b91bed195cbcaadda94a15509fbabd0390b747087696).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: bdf15ed38d3f777b73470b7511c09119e0426aa65a6bbed54cf6b08f774afed4).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -45,6 +45,8 @@ function identity(row, agent) {
   if (agent === 'codex') {
     if (row.type !== 'session_meta') return null;
     meta = row.payload;
+    // A step subagent is not the person's chat, even though it shares the worktree cwd.
+    if (meta?.thread_source === 'subagent' || meta?.parent_thread_id || meta?.source?.subagent) return null;
   } else {
     if (!['user', 'assistant'].includes(row.type) || row.isMeta === true || row.isSidechain === true) return null;
     meta = { id: row.sessionId, cwd: row.cwd, timestamp: row.timestamp };
@@ -138,8 +140,9 @@ export async function readApprovalEvidence(request, ports = {}) {
   try {
     const matches = await sessionCandidates(stage, ports);
     if (matches.length === 0) return refuse('session_not_found');
-    if (matches.length !== 1) return refuse('session_ambiguous');
-    const { meta, rows } = matches[0];
+    // A resumed session can continue in another file with the same id; that is still one session.
+    if (new Set(matches.map(match => match.meta.id)).size !== 1) return refuse('session_ambiguous');
+    const { meta } = matches[0], rows = matches.flatMap(match => match.rows);
     let latest = null;
     for (const row of rows) {
       const at = epoch(row.timestamp);
@@ -162,6 +165,6 @@ export async function readApprovalEvidence(request, ports = {}) {
 export async function findNativeSessions(stage, ports = {}) {
   if (!stage || !['codex', 'claude'].includes(stage.agent) || typeof stage.root !== 'string' || !isAbsolute(stage.root)
     || !Number.isFinite(stage.startedAt) || !Number.isFinite(stage.endedAt)) return [];
-  try { return (await sessionCandidates(stage, ports)).map(match => ({ id: match.meta.id, startedAt: match.meta.timestamp })); }
+  try { return [...new Map((await sessionCandidates(stage, ports)).map(match => [match.meta.id, { id: match.meta.id, startedAt: match.meta.timestamp }])).values()]; }
   catch { return []; }
 }
