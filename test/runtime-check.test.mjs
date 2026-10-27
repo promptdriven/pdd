@@ -228,7 +228,11 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
   assert.equal(readFileSync(join(root, 'skills/pdd-prompting/RUNBOOK.md'), 'utf8'), runbook);
   assert.match(readFileSync(join(root, 'skills/pdd-setup/SKILL.md'), 'utf8'), /read RUNBOOK\.md in the pdd-prompting skill/);
   // Commands are in backticks or start a code line; prose like "pdd checks the files" is not a command.
-  const commands = [...runbook.matchAll(/(?:`|^)(pdd (?:check|try)(?=[ `]|$)[^`#\n]*?)\s*(?:`|#|$)/gm)].map(match => match[1].trim());
+  // Every pdd command the runbook names must parse; `pdd replay` is named only as a command that does not exist yet.
+  const fenced = [...runbook.matchAll(/^```[a-z]*\n([\s\S]*?)^```/gm)].flatMap(match => match[1].split('\n')).filter(text => text.startsWith('pdd '));
+  const commands = [...[...runbook.matchAll(/`(pdd (?!replay\b)[a-z][^`]*)`/g)].map(match => match[1]), ...fenced.map(text => text.split('#')[0])]
+    .map(text => text.trim()).filter(Boolean);
+  assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
   for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
 });
