@@ -184,7 +184,7 @@ test('a prompt sent after the stage candidate reopens observation and is accepte
   const r=await runHerdrStage(h.input,h.ports);
   assert.equal(r.state,'settled'); assert.deepEqual(stepped,[13]); assert.equal(r.evidence.settledSeq,14); assert.equal(h.ports.now()-r.evidence.candidateSince,5);
   const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...h.ports,checkpoint:h.input.checkpoint});
-  assert.equal(closed.state,'closed'); assert.ok(h.calls.some(x=>x[0]==='herdr'&&x[1][2]==='pane'&&x[1][3]==='send-text'));
+  assert.equal(closed.state,'closed'); assert.equal(h.calls.some(x=>x[0]==='herdr'&&x[1][2]==='pane'&&x[1][3]==='send-text'),false);
 });
 
 test('two concurrent issue assignments keep actual cwd/backend and native kind separate',async t=>{
@@ -394,4 +394,23 @@ test('persistent viewer contention remains bounded with original intent and no r
   const result=await runHerdrStage(h.input,h.ports);
   assert.equal(result.state,'recovery_required');assert.equal(h.promptCount(),1,'no delivery after native identity or readiness changes');
  }
+});
+
+for (const failNotice of [false, true]) test(`accepted cleanup never sends terminal input, including notice EIO=${failNotice}`, async t => {
+  const h = harness(await temp(t));
+  const settled = await runHerdrStage(h.input, h.ports);
+  const exec = h.ports.execFile;
+  const terminalInput = [];
+  h.ports.execFile = async (bin, argv, cfg) => {
+    if (argv[2] === 'pane' && argv[3] === 'send-text') {
+      terminalInput.push(argv);
+      if (failNotice) throw Object.assign(Error('notice unavailable'), {code:'EIO'});
+    }
+    return exec(bin, argv, cfg);
+  };
+  const closed = await closeHerdrStage({backend:settled.backend, acceptance:acceptance(settled.backend)}, {...h.ports, checkpoint:h.input.checkpoint});
+  assert.equal(closed.state, 'closed');
+  assert.equal(h.closed(), true);
+  assert.deepEqual(terminalInput, [], 'acceptance must not alter or submit an unsent viewer draft');
+  assert.equal((await inspectHerdrStage({backend:closed.backend}, h.ports)).reason, 'stage_archived');
 });

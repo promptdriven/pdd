@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: b95c6e5c48e86e532e49e11f1bbedd7f5fb0202dfa765cba5f5c22fa4c684a73).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 8f2ef8b76e8b7edff106f3b053632034acde0dca03e502b6117da4cd0e795d1c).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -70,7 +70,6 @@ async function command(rt, session, args, cwd, timeout = 10000) {
     try { structured = JSON.parse(error.stderr); } catch { /* Never expose execFile's command/prompt message. */ }
     throw commandError(structured, args, typeof error.code === 'string' ? error.code : 'herdr_command_failed');
   }
-  if (args[0] === 'pane' && args[1] === 'send-text' && response.stdout.trim() === '') return null;
   let result;
   try { result = JSON.parse(response.stdout); }
   catch { throw commandError(null, args, 'herdr_invalid_json'); }
@@ -403,8 +402,6 @@ export async function closeHerdrStage({ backend, acceptance }, ports = {}) {
     b.acceptanceDigest = hash(canonical(acceptance));
     b.phase = 'close_intent';
     await save(b, checkpoint);
-    await command(rt, b.session, ['pane', 'send-text', b.paneId,
-      `pdd accepted ${b.stageId} and moved on. This step is done. Messages here no longer change the run.\n`], b.cwd);
     // This workspace was created for this stage only; its seed belongs to the run's server separately.
     const closed = await command(rt, b.session, ['workspace', 'close', b.workspaceId], b.cwd);
     if (Array.isArray(closed) || closed.id !== 'cli:workspace:close' || closed.result?.type !== 'ok') {

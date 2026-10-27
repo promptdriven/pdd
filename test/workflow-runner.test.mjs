@@ -737,6 +737,7 @@ test('fresh-process resume refuses edited source before any replacement stage de
 test('main joins frozen native adapter through same-agent first dispatch, accepted cleanup and next-stage server donation', async t => {
   const f = await fixture(t, { defaultWorktree: true }); const foreground = f.ports.launchNativeSession;
   const sessions = new Map(), calls = []; let viewerOpen = false, releaseViewer;
+  let controllerOutput = ''; f.ports.stdout = {write: text => {controllerOutput += text;}};
   function transport(base) {
     return {...base, quietMs: 0, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
       sleep: async () => {},
@@ -766,7 +767,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           return reply({result:{agent:acknowledgement}});
         }
         if(a[0]==='pane'&&a[1]==='send-text') return {stdout:'',stderr:''};
-        if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;releaseViewer?.();return reply({id:'cli:workspace:close',result:{type:'ok'}});}
+        if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;releaseViewer?.();await new Promise(resolve=>setTimeout(resolve,25));return reply({id:'cli:workspace:close',result:{type:'ok'}});}
         assert.fail('Unexpected stand-in Herdr operation '+JSON.stringify(a));
       }};
   }
@@ -780,7 +781,13 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   assert.equal(calls.filter(x=>x==='prompt').length,0);assert.equal(calls.filter(x=>x==='start').length,1);
   const live=[...sessions.values()][0].active;live.agent_status='idle';live.interactive_ready=true;
   f.ports.attachHerdrStage=(input,ports)=>attachHerdrStage(input,transport(ports));
-  const viewer=attachWorkflow({runId:first.runId,cwd:f.sourceCwd,packageRoot},f.ports);
+  const viewer=attachWorkflow({runId:first.runId,cwd:f.sourceCwd,packageRoot},f.ports).then(result=>{
+    const saved=f.saved(first.runId);
+    const watched=saved.completed.find(entry=>entry.backend?.attemptId===original.attemptId) ?? saved.pending;
+    assert.equal(watched.backend.phase,'closed','viewer notice waits for confirmed fencing');
+    return result;
+  });
+  viewer.catch(()=>{});
   while(!viewerOpen) await new Promise(resolve=>setTimeout(resolve,1));
   try {
     const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
@@ -788,6 +795,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
     const watched=await viewer;
     assert.equal(watched.state,'waiting',watched.message);
     assert.match(watched.message,/pdd accepted scope\. This step is done\./);
+    assert.doesNotMatch(controllerOutput,/pdd accepted .* and moved on/);
     assert.doesNotMatch(watched.message,/could not be attached/);
   } finally { releaseViewer(); await viewer; }
 
@@ -1025,4 +1033,38 @@ test('feature approval progress retains proposal artifacts after later report-on
   const gate = events.at(-1);
   for (const name of ['module.prompt.md', 'STORY.md', 'cases.json']) assert.ok(gate.files.some(path => path.endsWith(name)), name);
   assert.ok(gate.files.some(path => /prompt-story-.*\.json$/.test(path)));
+});
+
+test('notice output failure cannot strand an accepted stage or prevent its gate', async t => {
+  const f = await fixture(t);
+  f.ports.stdout = {write() {throw Object.assign(Error('display unavailable'), {code:'EIO'});}};
+  const result = await f.run();
+  assert.equal(result.state, 'waiting', result.message);
+  assert.equal(result.stage, 'change');
+  assert.equal(f.closes, 1);
+  assert.equal(f.saved(result.runId).pending, null);
+});
+
+test('viewer never claims messages are fenced when accepted cleanup is unconfirmed', async t => {
+  let releaseNative, releaseViewer;
+  const pauseNative = new Promise(resolve => {releaseNative = resolve;});
+  const f = await fixture(t, {pauseNative});
+  f.ports.closeHerdrStage = async ({backend}, ports) => {
+    await ports.checkpoint({...backend, phase:'close_intent'});
+    return {state:'recovery_required', reason:'close failed'};
+  };
+  f.ports.attachHerdrStage = async () => new Promise(resolve => {releaseViewer = resolve;});
+  const running = f.run();
+  while (!f.native.length) await new Promise(resolve => setTimeout(resolve, 1));
+  const runId = f.native[0].input.runId;
+  const viewer = attachWorkflow({runId,cwd:f.sourceCwd,packageRoot}, f.ports);
+  try {
+    while (!releaseViewer) await new Promise(resolve => setTimeout(resolve, 1));
+    releaseNative();
+    assert.equal((await running).state, 'recovery_required');
+    releaseViewer(1);
+    const watched = await viewer;
+    assert.equal(watched.state, 'recovery_required');
+    assert.doesNotMatch(watched.message, /Messages here no longer change the run/);
+  } finally {releaseNative(); releaseViewer?.(1); await running; await viewer;}
 });

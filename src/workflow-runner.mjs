@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 2912876030694b8765ffa8a4c325addf78cb9eb4950ab9f091273dff075b13e8).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 32ec505ca679cf6353a6e9a5fad5bdfa6e2a0f9af2f60bcaac0cf04bd38df13b).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -394,7 +394,6 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
       const closed = await p.closeHerdrStage({ backend: s.pending.backend, acceptance: s.pending.acceptance }, portOptions);
       if (closed.state !== 'closed' || closed.backend?.phase !== 'closed') return result(s, 'recovery_required', closed.reason || 'Owned cleanup is uncertain; no stage was resent.');
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
-      p.stdout.write(`pdd accepted ${stage.id} and moved on.\n`);
     }
     s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });
@@ -755,10 +754,22 @@ export async function attachWorkflow(options, ports) {
     await validateInput(s, options, p);
     const watched = s.pending.backend;
     const code = await p.attachHerdrStage({ backend: watched }, {});
-    const latest = readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId));
+    // Closing the workspace can end attach before the controller checkpoints its
+    // absence proof. Wait only after attach exits, then read under that same guard.
+    const guard = stageGuard(s), deadline = Date.now() + 30000;
+    let latest;
+    for (;;) {
+      try {
+        latest = await guard(watched, () => readSaved(join(r.gitDir, 'pdd', 'workflows', options.runId)));
+        break;
+      } catch (error) {
+        if (error.code !== 'WORKFLOW_STAGE_BUSY' || Date.now() >= deadline) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
     if (!isDeepStrictEqual(latest.assignment, found.assignment)) fail('Saved assignment changed.');
     const accepted = [...latest.completed, ...(latest.pending?.kind === 'cleanup' ? [latest.pending] : [])]
-      .some(entry => entry.acceptance && ['runId', 'stageId', 'attemptId', 'promptDigest', 'terminalId']
+      .some(entry => entry.backend?.phase === 'closed' && entry.acceptance && ['runId', 'stageId', 'attemptId', 'promptDigest', 'terminalId']
         .every(key => entry.acceptance[key] === watched[key]));
     if (accepted) return result(latest, 'waiting',
       `pdd accepted ${watched.stageId}. This step is done. Messages here no longer change the run.`);
