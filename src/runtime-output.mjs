@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: bdfee8f30f9612538b0e8e66d30fc2cf059391ca732e554000ec39a10f00a911).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: bd1c1b6e76c47f2bcc7b6b1186f06cdae3a77021d42788916f2664fdf618ef93).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -62,7 +62,9 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
-    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider };
+    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
+    // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
+    draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
 
 const isObjectLike = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -143,7 +145,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
-    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`);
+    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
+      '  To try again, run `pdd check` again (a new request).');
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,

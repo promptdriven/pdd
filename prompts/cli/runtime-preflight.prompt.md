@@ -11,6 +11,8 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 
 ## Rules (engine 7b03d3ea codes; `pdd-*` codes are pdd only)
 
+A story may have more than one test file (for example a different starting world). Each file must still cover every criterion of its story (P5, P6). There is no P11.
+
 Check each selected test. Stop at the first broken rule; that test is refused and is not sent.
 
 | # | Rule | Code |
@@ -25,7 +27,6 @@ Check each selected test. Stop at the first broken rule; that test is refused an
 | P8 | `operation` is in the interface `entries` | `entry-operation-missing` |
 | P9 | `input` matches `input_schema`. Skip an input that holds `$step_result` | `invalid-input` |
 | P10 | An error step's `expected_error` is in the entry `errors`, with one `equals` check on `error` `/code` | `pdd-unknown-error`, `missing-error-check` |
-| P11 | Only one test names a story | `pdd-story-has-two-tests` |
 
 A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. pdd is never stricter than the live engine.
 - Default `max_calls` for a test: 4 for each step, at least 6, at most 100 (steps with saved data or prompt calls cost 2 to 3 AI calls each). A refusal has `code`, `section` (engine style, for example `steps[0].input.items[0].quantity`), `message`, an optional `hint` and the 1-based `step`.

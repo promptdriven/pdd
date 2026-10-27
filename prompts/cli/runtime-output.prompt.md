@@ -35,14 +35,14 @@ The first match from the top wins:
    - `NOT RUN  <title> (<test>): <message> (<code>)`.
    - `STILL RUNNING after N min: <title>. Do not send it again.` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`; in `--read`: `STILL RUNNING: …`)
    - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.
-   - An AI provider failure (state `unknown` with `graph-provider-failure`, or a sample `failure_cause.kind` of `transport_unknown`) has its own block: `UNKNOWN  <title>: the AI provider failed during the run. It is not a failed check. Do not send it again yet.`, then the code, the cause and the report link. pdd never resends it.
+   - An AI provider failure (state `unknown` with `graph-provider-failure`, or a sample `failure_cause.kind` of `transport_unknown`) has its own block: `UNKNOWN  <title>: the AI provider failed during the run. It is not a failed check. Do not send it again yet.`, then the code, the cause and the report link. The block ends with `To try again, run \`pdd check\` again (a new request).` pdd never resends it.
 5. With `--details`: every check of each row, failed checks first.
 6. `X of Y stories passed. Model asked for: M.` Skip the model part when it is not known. Time is shown only for ended rows.
 7. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
 
 ## JSON (stdout, `--json`)
 
-One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title, test, state, checks, criteria, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, draft, reason}], warnings}`. `draft` is true for a row that ran a draft prompt, and at the top when any row did. `reason` is `{code, message}` for a row that was not run or is unknown (`graph-provider-failure` for a provider failure), else null. Nothing else goes to stdout.
+One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title, test, state, checks, criteria, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, draft, reason}], warnings}`. `draft` is true for a row that ran a draft prompt, and at the top when any row did. When the server answer has `draft_prompts` (a list of repo paths), a nonempty list means DRAFT and an empty one means not DRAFT; it wins over pdd's local guess. Older servers without the field keep the local guess. `reason` is `{code, message}` for a row that was not run or is unknown (`graph-provider-failure` for a provider failure), else null. Nothing else goes to stdout.
 
 ## Dependencies
 

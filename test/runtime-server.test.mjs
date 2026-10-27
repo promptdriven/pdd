@@ -389,6 +389,7 @@ test('RUNTIME-SERVER19: a provider failure gets its own UNKNOWN block, exit 3 an
   assert.equal(result.code, 3);
   assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the AI provider failed during the run\. It is not a failed check\. Do not send it again yet\.$/m);
   assert.doesNotMatch(result.out, /FAILED|REFUSED/);
+  assert.match(result.out, /graph-provider-failure \(transport_unknown, internal-retry\)[^\n]*\n {2}To try again, run `pdd check` again \(a new request\)\.$/m);
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.rows[0].reason.code, 'graph-provider-failure');
@@ -449,4 +450,17 @@ test('RUNTIME-DRAFT3: the server refusal of a draft prompt says plainly that dra
   assert.equal(result.code, 4);
   assert.match(result.out, /REFUSED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}interface-unapproved {2}steps\[0\] {2}The server does not run draft prompts yet\./);
   assert.ok(result.out.includes(DRAFT_TEXT));
+});
+
+// Wrong: pdd guesses DRAFT locally even when the server says which prompts were drafts (prompt-runtime #365).
+test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; without the field the local guess stays', async t => {
+  const setup = draftRepo(t);
+  const said = list => async (entry, f) => draftLint(entry, f) ?? (entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), draft_prompts: list } } : f.normal(entry));
+  const server = await check(setup, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
+  assert.equal(server.json.rows[0].draft, true);
+  const cleared = await check(setup, await fakeRuntime(t, await said([])), ['place-order'], { '--json': true });
+  assert.equal(cleared.json.rows[0].draft, false); assert.doesNotMatch(cleared.json.summary_line, /DRAFT/);
+  const plain = harbor(t);
+  const flagged = await check(plain, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
+  assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
 });
