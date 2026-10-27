@@ -103,7 +103,8 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     const text = read(`${name}/SKILL.md`);
     assert.match(text, /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
-    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
+    // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
+    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd check`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
