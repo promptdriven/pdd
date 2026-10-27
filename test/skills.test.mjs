@@ -71,8 +71,9 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    // 5.5 KB: the PR 2 method lives in RUNBOOK section 14; the steps only point to it.
-    assert.ok(bytes <= 5632, `${name} is ${bytes} bytes`);
+    // 6 KB: the PR 2 method lives in RUNBOOK section 14; the steps only point to it.
+    // pdd-bug needs the most room: the story-gate verdict lines and the real-user rules (0.1.3).
+    assert.ok(bytes <= 6144, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -185,4 +186,13 @@ test('SKILLS12: with no prompt yet, prompt-story writes the smallest prompt for 
     assert.match(step, /PR 1 under about 200 lines/, name);
     assert.ok(read(`${name}/SKILL.md`).includes('"adopt PDD for this module"'), name);
   }
+});
+
+// Wrong (owner, 0.1.3): the bug story gate buries the answer; the person must see first where the bug is.
+test('SKILLS13: the bug story gate starts with exactly one of three verdict lines', () => {
+  const skill = read('pdd-bug/SKILL.md');
+  assert.match(skill, /At the story gate, start with one verdict line, then the details/);
+  for (const verdict of ['Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
+    'Verdict: the prompt is right; the bug is only in the CODE.', 'Verdict: no prompt covers this yet; the bug can only be in the code.'])
+    assert.ok(skill.includes(`"${verdict}"`), verdict);
 });
