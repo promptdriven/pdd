@@ -65,7 +65,9 @@ unknown display states and invalid links. Readers never repair files.
 ## Runner integration
 
 After every durable record, await its derived write before the next record.
-Write the final outcome before releasing the command lock. Only a command that
+Write the final outcome before releasing the command lock. If any journal
+append failed for this command, preserve the previous status instead of publishing
+the uncommitted in-memory state or sequence. Only a command that
 owns the lock and has validated its own run journal writes status. Missing runs,
 contended commands, same-issue conflict reports and attach write nothing. A
 failed write cannot fail a successful workflow or add a journal event. Area-chat

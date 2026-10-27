@@ -92,6 +92,9 @@ Use [workflow run records](workflow-run-records.prompt.md) as the required
 authoring/runtime contract for status projection and atomic writes. Await a
 status write after every durable journal record and after the final outcome,
 while holding the validated run's command lock. A failed derived write cannot
-change progression, journal, output or result. Attach and conflict reports write
+change progression, journal, output or result. If a journal append fails, do not
+publish its uncommitted in-memory state at exit or attempt another append in
+that command; retain the previous status.
+Attach and conflict reports write
 nothing. Save epoch-millisecond agent intent/completion timestamps in pending
 and completed entries; preserve the exact observed per-step native identity.

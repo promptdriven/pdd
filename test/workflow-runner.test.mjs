@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync, openSync, closeSync, writeSync, readSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, symlinkSync, linkSync, unlinkSync, cpSync, readdirSync, openSync, closeSync, writeSync, readSync, statSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { constants as bufferConstants } from 'node:buffer';
 import { join, resolve } from 'node:path';
@@ -986,4 +986,19 @@ test('a derived status write failure does not change the run or append a failure
   const seq=f.saved(first.runId).seq; const observed=await f.resume(first.runId);
   assert.equal(observed.state,'waiting'); assert.equal(f.saved(first.runId).seq,seq);
   assert.equal(f.native.length,1);assert.equal(statSync(path).isDirectory(),true);
+});
+
+
+test('a failed journal append cannot publish an uncommitted status sequence', async t => {
+  let before;
+  const f=await fixture(t,{observeStatus(status,saved){
+    const directory=join(saved.gitDir,'pdd','workflows',saved.runId);
+    before=readFileSync(join(directory,'status.json'),'utf8');
+    chmodSync(join(directory,'journal.jsonl'),0o400);
+  }});
+  const outcome=await f.run();assert.equal(outcome.state,'recovery_required');
+  const directory=join(f.gitDir,'pdd','workflows',outcome.runId);
+  const after=readFileSync(join(directory,'status.json'),'utf8');
+  assert.equal(JSON.parse(after).journalSeq,f.saved(outcome.runId).seq);
+  assert.equal(after,before,'failed journal durability leaves the previous projection whole');
 });

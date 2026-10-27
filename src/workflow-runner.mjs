@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 317dae64ce89b88a5b1d69ad81133abd2dc07b018bbcecd14b263a115f81a483).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: da4493b1c3f5c1d7a3b7c59217301ea52d5b3f200754380acfaf832d757abb73).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -135,9 +135,12 @@ function readSaved(directory) {
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
   return saved;
 }
+const failedJournalStates = new WeakSet();
 async function record(s, directory, event) {
+  if (failedJournalStates.has(s)) fail('Workflow journal durability failed; inspect the saved run before progress.');
   s.seq = (s.seq ?? 0) + 1;
-  durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
+  try { durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s }); }
+  catch (error) { failedJournalStates.add(s); throw error; }
   await writeRunStatus(directory, runStatusFromState(s, { phase: 'record', now: Date.now() }));
 }
 function lock(root) {
@@ -642,7 +645,7 @@ async function execute(options, ports, resume) {
   const p = dependencies(ports);
   let s, unlock, statusDirectory;
   const finish = async outcome => {
-    if (statusDirectory) await writeRunStatus(statusDirectory, runStatusFromState(s, { phase: 'exit', outcome, now: Date.now() }));
+    if (statusDirectory && !failedJournalStates.has(s)) await writeRunStatus(statusDirectory, runStatusFromState(s, { phase: 'exit', outcome, now: Date.now() }));
     return outcome;
   };
   try {
