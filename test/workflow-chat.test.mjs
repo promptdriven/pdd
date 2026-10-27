@@ -27,8 +27,8 @@ test('the shell line gives the native CLI the whole first message as one argumen
     else assert.deepEqual(out.argv.slice(0, -1), ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]);
   }
   assert.equal(execFileSync('/bin/sh', ['-c', `ls ${JSON.stringify(root)}`], { encoding: 'utf8' }).includes('broken'), false);
-  assert.match(chatCommand({ agent: 'claude', cwd, resumeId: id }), new RegExp(`claude --dangerously-skip-permissions --resume ${id}$`));
-  assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume ${id} --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
+  assert.match(chatCommand({ agent: 'claude', cwd, resumeId: id }), new RegExp(`claude --dangerously-skip-permissions --resume '${id}'$`));
+  assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume '${id}' --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
 });
 
 test('the real Herdr transport always targets session pdd and reports Herdr JSON errors by code', async t => {
@@ -62,4 +62,10 @@ test('a stopped pdd server starts without agent-session markers, and pdd waits o
   const dead = new EventEmitter();
   await assert.rejects(startChat({ run, area: 'solution', message: 'hi' }, { herdr: async () => ({ running: false }), env, layoutDirectory: join(root, 'layout'),
     spawnServer: async () => { setImmediate(() => dead.emit('exit', 1)); return dead; } }), error => error.code === 'herdr_server_exited');
+});
+
+test('R9: chatCommand refuses a resume id that is not a UUID and quotes a valid one', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  assert.match(chatCommand({ agent: 'codex', cwd: '/w', resumeId: id }), new RegExp(`codex resume '${id}' `));
+  for (const bad of ['$(touch x)', "x'; rm -rf ~; '", '']) assert.throws(() => chatCommand({ agent: 'claude', cwd: '/w', resumeId: bad }), /session id/);
 });
