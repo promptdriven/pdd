@@ -1,3 +1,4 @@
+// Generated from prompts/cli/workflow-run-records.prompt.md (sha256: a0919f131d0f178f25dd5a84d5b47a8eb787e8a5a18b5f6789540fba93d1385a).
 import { promises as fs } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
@@ -8,16 +9,56 @@ const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const fsOf = ports => ports.fs ?? fs;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 
-async function gitDirFor(cwd, ports = {}) {
-  const io = fsOf(ports), dot = join(cwd, '.git');
+const normalizedEntry = raw => ({ v: raw.v ?? 1, runId: raw.runId, workflow: raw.workflow ?? null,
+  repo: raw.repo ?? null, issue: object(raw.issue) ? { number: raw.issue.number ?? null, url: raw.issue.url ?? null, title: raw.issue.title ?? null } : null,
+  agent: raw.agent ?? null, root: raw.root ?? null, runDir: raw.runDir, startedAt: raw.startedAt ?? null });
+
+export async function appendRunIndex(entry, ports = {}) {
   try {
-    const stat = await io.lstat(dot);
-    if (stat.isDirectory()) return dot;
-    if (!stat.isFile()) return null;
-    const text = await io.readFile(dot, 'utf8');
-    const match = text.match(/^gitdir:\s*(.+)\s*$/m);
-    return match ? (match[1].startsWith('/') ? match[1] : join(cwd, match[1])) : null;
-  } catch { return null; }
+    const home = ports.home ?? process.env.HOME ?? homedir();
+    if (!object(entry) || !UUID.test(entry.runId ?? '') || typeof entry.runDir !== 'string' || !entry.runDir.startsWith('/')) return { ok: false, code: 'bad_input' };
+    const io = fsOf(ports), dir = join(home, '.pdd', 'runs'), path = join(dir, 'index.jsonl');
+    await io.mkdir(dir, { recursive: true, mode: 0o700 });
+    const text = JSON.stringify(normalizedEntry(entry)) + '\n';
+    if (Buffer.byteLength(text) > 4096) return { ok: false, code: 'too_large' };
+    const handle = await io.open(path, 'a', 0o600);
+    try { await handle.write(text); } finally { await handle.close(); }
+    return { ok: true };
+  } catch (error) { return { ok: false, code: error?.code ?? 'write_failed' }; }
+}
+
+async function readMachineIndex(ports = {}) {
+  try {
+    const home = ports.home ?? process.env.HOME ?? homedir(), io = fsOf(ports);
+    const text = await io.readFile(join(home, '.pdd', 'runs', 'index.jsonl'), 'utf8');
+    const map = new Map();
+    for (const line of text.split('\n')) {
+      if (!line.trim() || Buffer.byteLength(line) > 16384) continue;
+      try { const raw = JSON.parse(line); if (object(raw) && UUID.test(raw.runId ?? '') && typeof raw.runDir === 'string' && raw.runDir.startsWith('/')) map.set(raw.runId, normalizedEntry(raw)); } catch {}
+    }
+    return [...map.values()];
+  } catch { return []; }
+}
+
+async function gitDirFor(cwd, ports = {}) {
+  const io = fsOf(ports);
+  let current = cwd;
+  for (let depth = 0; depth < 64; depth++) {
+    const dot = join(current, '.git');
+    try {
+      const stat = await io.lstat(dot);
+      if (stat.isDirectory()) return dot;
+      if (stat.isFile()) {
+        const text = await io.readFile(dot, 'utf8');
+        const match = text.match(/^gitdir:\s*(.+)\s*$/m);
+        if (match) return match[1].startsWith('/') ? match[1] : join(current, match[1]);
+      }
+    } catch { /* keep walking toward the checkout root */ }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }
 async function allGitDirs(cwd, ports = {}) {
   const io = fsOf(ports), own = await gitDirFor(cwd, ports), dirs = [];
@@ -33,6 +74,14 @@ async function allGitDirs(cwd, ports = {}) {
     if (row.isDirectory?.()) dirs.push(join(common, 'worktrees', row.name));
   return [...new Set(dirs)];
 }
+export async function gitCommonDir(cwd, ports = {}) {
+  const io = fsOf(ports), own = await gitDirFor(cwd, ports);
+  if (!own) return null;
+  try {
+    const raw = (await io.readFile(join(own, 'commondir'), 'utf8')).trim();
+    return raw ? (raw.startsWith('/') ? raw : join(own, raw)) : own;
+  } catch { return own; }
+}
 
 export async function readJournalLast(runDir, ports = {}) {
   try {
@@ -47,6 +96,7 @@ export async function readJournalLast(runDir, ports = {}) {
 }
 
 export async function readRunIndex(ports = {}) {
+  if (ports.all) return { entries: await readMachineIndex(ports), dropped: 0 };
   const dirs = await allGitDirs(ports.cwd ?? process.cwd(), ports);
   const entries = [], io = fsOf(ports), seen = new Set();
   for (const gitDir of dirs) {
@@ -81,11 +131,15 @@ const toEpoch = value => {
   if (typeof value !== 'string' || !value.trim()) return null;
   const parsed = Date.parse(value); return Number.isFinite(parsed) ? parsed : null;
 };
-function sessionMeta(text) {
+function sessionMeta(text, agent) {
   for (const line of text.split(/\r?\n/, 8)) {
     if (!line) continue;
     try {
       const row = JSON.parse(line), payload = row?.payload ?? row;
+      if (agent === 'claude' && ['user','assistant'].includes(row.type) && row.isSidechain !== true) {
+        const timestamp = toEpoch(row.timestamp);
+        if (sessionId.test(row.sessionId ?? '') && typeof row.cwd === 'string' && Number.isFinite(timestamp)) return {id:row.sessionId,cwd:row.cwd,timestamp};
+      }
       const meta = row?.session_meta ?? payload?.session_meta ?? payload;
       if (row?.type !== 'session_meta' && payload?.type !== 'session_meta' && !row?.session_meta && !payload?.session_meta) continue;
       const id = meta.id ?? meta.session_id, cwd = meta.cwd, timestamp = toEpoch(meta.timestamp ?? payload.timestamp ?? row.timestamp);
@@ -97,7 +151,7 @@ function sessionMeta(text) {
 async function sessionFiles(stage, ports = {}) {
   const io = fsOf(ports), home = ports.home ?? process.env.HOME ?? homedir();
   const root = stage.agent === 'codex' ? join(ports.codexHome ?? process.env.CODEX_HOME ?? join(home, '.codex'), 'sessions')
-    : join(ports.claudeHome ?? home, '.claude', 'projects', stage.root.replaceAll('/', '-'));
+    : join(ports.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(ports.claudeHome ?? home, '.claude'), 'projects', stage.root.replace(/[^a-zA-Z0-9]/g, '-'));
   const found = [];
   async function walk(dir, depth = 0) {
     if (depth > 20) return;
@@ -105,14 +159,14 @@ async function sessionFiles(stage, ports = {}) {
     for (const row of rows) {
       if (row.isSymbolicLink?.()) continue;
       const path = join(dir, row.name);
-      if (row.isDirectory?.()) await walk(path, depth + 1);
+      if (row.isDirectory?.() && stage.agent === 'codex') await walk(path, depth + 1);
       else if (row.isFile?.() && (stage.agent === 'codex' ? sessionFile.test(row.name) : row.name.endsWith('.jsonl'))) found.push(path);
     }
   }
   await walk(root);
   const matches = [];
   for (const path of found) {
-    let meta; try { meta = sessionMeta(await io.readFile(path, 'utf8')); } catch { continue; }
+    let meta; try { meta = sessionMeta(await io.readFile(path, 'utf8'), stage.agent); } catch { continue; }
     if (meta && meta.cwd === stage.root && meta.timestamp >= stage.startedAt && meta.timestamp <= stage.endedAt)
       matches.push({ agent: stage.agent, id: meta.id, source: 'session-file' });
   }
@@ -137,8 +191,8 @@ export async function runStatusFromState(state, extras = {}, ports = {}) {
     const def = state.definitions[i], item = completed.get(def.id), pending = state.pending?.stage === def.id ? state.pending : null;
     const source = item ?? pending, backend = source?.backend, session = nativeSession(backend, state.agent);
     const row = { id: def.id, kind: def.kind, state: item?.skipped ? 'skipped' : item ? 'done' : i === state.index ? status : i > state.index ? 'next' : 'unknown',
-      startedAt: source?.startedAt ?? null, endedAt: source?.endedAt ?? null, agent: source?.agent ?? session?.agent ?? (source ? state.agent : null), session, reopen: reopenCommand(state.root, session) };
-    if (row.state === 'done' && !row.session && row.agent && Number.isFinite(row.startedAt) && Number.isFinite(row.endedAt)) {
+      startedAt: source?.startedAt ?? null, endedAt: source?.endedAt ?? null, agent: source?.agent ?? session?.agent ?? (source ? state.agent : null), session: item ? null : session, reopen: null };
+    if (row.state === 'done' && row.agent) {
       const found = await matchStageSessionFiles({ agent: row.agent, root: state.root, startedAt: row.startedAt, endedAt: row.endedAt }, ports);
       if (found.matches.length === 1) { row.session = found.matches[0]; row.reopen = reopenCommand(state.root, row.session); }
       else row.sessionReason = `session file unavailable: ${found.reason}`;
@@ -146,7 +200,7 @@ export async function runStatusFromState(state, extras = {}, ports = {}) {
     steps.push(row);
   }
   return { v: 1, runId: state.runId, workflow: state.name ?? null, repo: state.repo ?? null, issue: state.issue ?? null,
-    root: state.root ?? null, agent: state.agent ?? null, startedAt: state.startedAt ?? null, state: status, stage: current ? { id: current.id, index: state.index, total: state.definitions.length } : null, steps,
-    updatedAt: extras.now ?? null };
+    root: state.root ?? null, agent: state.agent ?? null, startedAt: state.startedAt ?? null, journalSeq: state.seq ?? 0, state: status, stage: current ? { id: current.id, index: state.index, total: state.definitions.length } : null, steps,
+    waitingFor: status === 'waiting' ? {decisions: state.waitingDecision?.decisions ?? (current?.kind === 'merge' ? [] : ['approve'])} : null, updatedAt: extras.now ?? null };
 }
 

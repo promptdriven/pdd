@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4c2879c43ad418a309e0286259f3206dbd2183acdc565e7653cd944ee9f39527).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: c1a15906d43ed6f57c65823488bbe0fe38dd260b2d5c91c09fbd8af764d8f09f).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -10,11 +10,14 @@ const routes = [
     operands:[{name:'run-id',type:'uuid'}],options:[{name:'--decision',kind:'value',choices:['approve','skip']}],
     forms:[form('pdd workflow resume RUN_ID [--decision approve|skip]', 'Inspect or continue a saved workflow; omitted decision only reads/reconciles.')] },
   { id: 'workflow.attach', prefix: ['workflow', 'attach'], local: 'workflow-attach',
-    operands:[{name:'run-id',type:'uuid'}],options:[],
-    forms:[form('pdd workflow attach RUN_ID','Attach to the saved active background stage; archived stages return information.')] },
+    operands:[{name:'issue',type:'run-ref'}],options:[],
+    forms:[form('pdd workflow attach ISSUE','Attach to the saved active background stage; archived stages return information.')] },
   { id: 'workflow.runs', prefix: ['workflow', 'runs'], local: 'workflow-runs',
-    operands:[{name:'run-id',type:'uuid',optional:true}],options:[{name:'--json',kind:'flag'}],
-    forms:[form('pdd workflow runs [RUN_ID] [--json]','List saved workflow runs or inspect one run and its finished stages.')] },
+    operands:[{name:'issue',type:'run-ref',optional:true}],options:[{name:'--json',kind:'flag'}],
+    forms:[form('pdd workflow runs [ISSUE] [--json]','List saved workflow runs or inspect one run and its finished stages.')] },
+  { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
+    operands:[{name:'issue',type:'run-ref'},{name:'stage',type:'workflow-name'}],options:[],
+    forms:[form('pdd workflow open ISSUE STAGE','Inspect a finished native session read-only after a y/N warning; use attach for live stages.')] },
   ...BUNDLED_WORKFLOW_NAMES.map(name => ({ id: `workflow.${name}`, prefix: ['workflow', name], local: 'session', workflowName: name,
     operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],

@@ -8,19 +8,40 @@ Use the package-root metadata version. For `--version`, print only that version 
 
 ## Dependencies
 
+- [Issue selection](workflow-shortcuts.prompt.md), [run records](workflow-run-records.prompt.md) and [read-only reopening](workflow-session-open.prompt.md) are required for generation/runtime/testing of history commands.
+
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
 For a named workflow plan, use the existing session branch/native launcher with workflowName selecting only that provided recipe. No new process/approval/permission/transport path. Session without a named recipe retains all-recipes context.
 
 Workflow run/resume binds the DISTINCT public `src/workflow-runner.mjs` exports, with injection only for tests: runWorkflow({name,issue,agent,cwd,packageRoot},ports), resumeWorkflow({runId,cwd,packageRoot,decision},ports). Both resolve {exitCode,state,runId,stage,message}. ports contains exact existing loadGuidance/launchNativeSession plus stdout/stderr. Do not preload guessed context or saved agent; runner owns that and fresh native invocation per agent stage. Do not edit runner/definitions or their owning prompts.
 
-`workflow runs [RUN_ID]` is a read-only local journal view. It lists saved runs, or shows one run's stages with local clock times, human durations, finished native session ids recovered from session files matching the assigned worktree and stage time window, and a safe reopen command. It never starts or resumes a stage and never prints epoch milliseconds. `--json` returns the same versioned data.
+`workflow runs [ISSUE]` is a read-only local journal view, using the shared
+[issue resolver](workflow-shortcuts.prompt.md). Without an operand, show all
+local runs and their stages; with one, resolve exactly one run or explain the
+missing/ambiguous match. Show issue/title, workflow, worktree, each stage's result,
+local start/end clock, human duration, agent and native session id (or unknown).
+Never print epoch milliseconds. `--json` returns the same versioned information.
+Finished stages with a proven session suggest `pdd workflow open ISSUE STAGE`,
+using an issue reference rather than a run UUID or an unguarded native command.
+
+`workflow open ISSUE STAGE` resolves through that same selector. A running stage
+points to `pdd workflow attach ISSUE`. A missing, skipped, unfinished or unknown-session
+stage refuses without launching. Finished stages require a real input/output TTY;
+ask a default-no y/N question naming repo, issue, title and stage, saying this is
+read-only inspection and **typing could change files after the stage was accepted**.
+Only an explicit y/yes launches the saved native session through
+[read-only reopening](workflow-session-open.prompt.md), in its saved worktree.
+Decline is successful without effects. No workflow advancement, journal writes,
+approval, fresh agent prompt or model request is sent. Native exit status is returned.
+`workflow attach` also resolves issue forms through the shared selector and then
+uses the existing runner with the resolved run id and saved cwd. Full UUID attachment retains the existing direct runner lookup.
 
 Print the actual returned message ONCE, never dump result objects/private DTOs; return exitCode. Runner-owned mapping completed0, waiting2, failed/recovery_required1; pass the actual exitCode unchanged; waiting is not completion or pass. Missing module/export, invalid result or thrown failure is finite1 with no retry/private fallback. No native0-as-completion inference, direct journal/GitHub/approval action, same-command resume, new status flag, or automatic next stage. The runner's explicit resume owns identity/reconciliation/decisions. Existing guidance/native APIs/process behavior unchanged.
 
 Help must distinguish manual/session recipe use from the explicit local workflow run/resume stages and actual PR effects, not claim the whole package never runs workflows.
 
-Bind the four workflow-stage-herdr exports into workflow run/resume/attach ports alongside unchanged loadGuidance/launchNativeSession/stdout/stderr. Test injection may supply this transport module, no public flag. Public `workflow attach RUN_ID` invokes existing main `attachWorkflow({runId,cwd,packageRoot},ports)` and uses the same returned-message-once/actual-exit contract; CLI does not resolve journals/agent IDs or start a conversation on archived history. Workflow run/resume keeps PDD's controller in the foreground while actual stage agents use owned background Herdr. Help must say progression stops if the controller exits; explicit resume reconciles originals. Session and direct conversation shortcuts remain foreground with existing native settings. Do not instruct stage agents to exit the foreground controller or claim native readiness is acceptance or the controller runs automatically in the background.
+Bind the four workflow-stage-herdr exports into workflow run/resume/attach ports alongside unchanged loadGuidance/launchNativeSession/stdout/stderr. Test injection may supply this transport module, no public flag. Public `workflow attach RUN_ID` invokes existing main `attachWorkflow({runId,cwd,packageRoot},ports)` and uses the same returned-message-once/actual-exit contract; The runner retains authority over active stage attachment; history reopening follows its separate read-only contract. Workflow run/resume keeps PDD's controller in the foreground while actual stage agents use owned background Herdr. Help must say progression stops if the controller exits; explicit resume reconciles originals. Session and direct conversation shortcuts remain foreground with existing native settings. Do not instruct stage agents to exit the foreground controller or claim native readiness is acceptance or the controller runs automatically in the background.
 
 workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoot}), producing {workflows:[{name,source}],default:null}; no native/runner start. Use dynamic loader import (injectable in tests), no duplicate schema or silent fallback to legacy Markdown-only files. Invalid/missing loader returns finite1. Local help/version/skill/completion rendering do not import or call loader/backend unnecessarily.
 

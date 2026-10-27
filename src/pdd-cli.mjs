@@ -1,4 +1,5 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 359485911c20b31db5e38a7ad7279d73575f386b41a453ac0280dbdbc502c8e2).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 05b0f90daa22f8843c3107724088b32f09997d7c1be18bcd413991dee70f3d4e).
+import { createInterface } from 'node:readline/promises';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,14 +20,14 @@ export function renderHelp(prefix = []) {
     'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',
     'Keep the PDD controller running while its native stages work in background Herdr. After controller exit, use explicit resume to reconcile the original; no background PDD daemon continues it.',
-    'Use workflow attach RUN_ID for the actual active stage; completed archives are not live sessions.'].join('\n');
+    'Use workflow attach ISSUE for the actual active stage; completed archives are not live sessions.'].join('\n');
 }
 function guidanceError(stderr) {
   line(stderr, 'The complete PDD guidance could not be read. Use a package containing the canonical guide, skill, references and manual recipes.');
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, workflowRecords } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, workflowRecords, stdin = process.stdin, confirmOpen, reopenSession } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -51,12 +52,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const stages = workflowStages ?? await import('./workflow-stage-herdr.mjs');
         const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage} = stages;
         if (![runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage].every(fn=>typeof fn==='function')) throw Error('Missing stage transport');
+        let attachRun = {runId:plan.operands[0],root:cwd};
+        if (plan.local === 'workflow-attach' && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(plan.operands[0])) {
+          const { resolveRun, formatAmbiguous } = await import('./workflow-shortcuts.mjs');
+          const selected = await resolveRun(plan.operands[0], { cwd, records: workflowRecords });
+          if (!selected.run) { line(stderr, selected.reason === 'ambiguous' ? formatAmbiguous(selected.runs, 'attach') : 'Run not found'); return 1; }
+          attachRun = selected.run;
+        }
         const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,stdout,stderr};
         const result = plan.local === 'workflow-run'
           ? await runner.runWorkflow({name:plan.operands[0],issue:plan.operands[1],
             agent:plan.options['--agent']??'codex',cwd,packageRoot},ports)
           : plan.local === 'workflow-attach'
-          ? await runner.attachWorkflow({runId:plan.operands[0],cwd,packageRoot},ports)
+          ? await runner.attachWorkflow({runId:attachRun.runId,cwd:attachRun.root,packageRoot},ports)
           : await runner.resumeWorkflow({runId:plan.operands[0],cwd,packageRoot,
             ...(plan.options['--decision']!==undefined?{decision:plan.options['--decision']}:{} )},ports);
         if (!result || !['completed','waiting','failed','recovery_required'].includes(result.state)
@@ -84,17 +92,42 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!Array.isArray(workflows)) throw Error('Invalid definition listing');
         line(stdout,formatLocalWorkflows({workflows,default:null},{json:plan.options['--json']===true}));return 0;
       } catch { line(stderr,'Workflow definitions could not be read or validated. Check the selected project definitions and bundled package.');return 1; }
+    case 'workflow-open':
     case 'workflow-runs': {
       try {
         const records = workflowRecords ?? await import('./workflow-run-records.mjs');
-        const index = await records.readRunIndex({ cwd });
+        const { resolveRun, discoverRuns, formatAmbiguous } = await import('./workflow-shortcuts.mjs');
         const requested = plan.operands[0];
-        const entries = requested ? index.entries.filter(entry => entry.runId === requested) : index.entries;
-        const runs = [];
-        for (const entry of entries) {
-          const journal = await records.readJournalLast(entry.runDir);
-          if (!journal.value?.state) continue;
-          runs.push({ ...entry, ...(await records.runStatusFromState(journal.value.state, { now: Date.now() }, { cwd })), runId: entry.runId });
+        let runs;
+        if (requested) {
+          const selected = await resolveRun(requested, { cwd, records });
+          if (!selected.run) {
+            const message = selected.reason === 'ambiguous' ? formatAmbiguous(selected.runs, plan.local === 'workflow-open' ? 'open' : 'runs') : 'Run not found';
+            line(stderr, plan.local === 'workflow-open' ? message.replace(/(pdd workflow open [^\s]+)$/gm, `$1 ${plan.operands[1]}`) : message);
+            return 1;
+          }
+          runs = [selected.run];
+        } else runs = await discoverRuns({ cwd, records });
+        // Issue references remain usable outside the original checkout as well.
+        const refFor = run => run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : run.runId;
+        if (plan.local === 'workflow-open') {
+          const run = runs[0], stage = run.steps?.find(row => row.id === plan.operands[1]);
+          if (stage?.state === 'running') { line(stderr, `This stage is live. Use pdd workflow attach ${requested}.`); return 1; }
+          if (!stage || stage.state !== 'done' || !stage.session) {
+            line(stderr, 'Finished stage session is unknown or unavailable; nothing was opened.'); return 1;
+          }
+          if (!stdin.isTTY || !stdout.isTTY) { line(stderr, 'Opening a finished session requires a terminal and y/N confirmation.'); return 1; }
+          const question = `Open ${refFor(run)} "${run.issue?.title ?? ''}" stage ${stage.id} for read-only inspection? Warning: typing could change files after the stage was accepted. Continue? (y/N) `;
+          let accepted;
+          if (confirmOpen) accepted = await confirmOpen(question);
+          else {
+            const terminal = createInterface({ input: stdin, output: stdout });
+            try { accepted = /^(y|yes)$/i.test((await terminal.question(question)).trim()); }
+            finally { terminal.close(); }
+          }
+          if (accepted !== true) { line(stdout, 'Opening declined; the run is unchanged.'); return 0; }
+          const open = reopenSession ?? (await import('./workflow-session-open.mjs')).reopenNativeSession;
+          return await open({ session: stage.session, cwd: run.root, stderr });
         }
         const localTime = value => Number.isFinite(value) ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(value)) : 'unknown';
         const age = value => {
@@ -112,22 +145,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         };
         const stateLabel = run => run.state === 'completed' ? 'done' : run.state === 'waiting' ? 'waiting for you' : run.state === 'running' ? `working: ${run.stage?.id ?? 'unknown'}` : run.state;
         const stageJson = stage => { const { startedAt, endedAt, ...rest } = stage; return { ...rest, start: localTime(startedAt), end: localTime(endedAt), duration: duration(startedAt, endedAt) }; };
-        if (requested && !runs.length) { line(stdout, plan.options['--json'] ? JSON.stringify({ v: 1, runId: requested, state: 'unknown', message: 'Run not found' }) : 'Run not found'); return 1; }
-        if (!requested) {
-          runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-          if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runs: runs.map(run => ({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, state: stateLabel(run), age: age(run.startedAt), open: `pdd workflow runs ${run.runId}` })) })); return 0; }
-          for (const run of runs) line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`}${run.issue?.title ? ` ${run.issue.title}` : ''} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · age ${age(run.startedAt)} · open: pdd workflow runs ${run.runId}`);
-          if (!runs.length) line(stdout, 'No saved runs.');
-          return 0;
-        }
-        const run = runs[0];
-        if (plan.options['--json']) { line(stdout, JSON.stringify({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, root: run.root, state: stateLabel(run), stages: (run.steps ?? []).map(stageJson) })); return 0; }
-        line(stdout, `${run.repo && run.issue?.number ? `${run.repo}#${run.issue.number}` : `run#${run.issue?.number ?? '?'}`} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · worktree ${run.root ?? 'unknown'}`);
-        for (const stage of run.steps ?? []) {
-          const session = stage.session ? ` · ${stage.session.agent} session ${stage.session.id}` : '';
-          const reopen = stage.reopen ? ` · reopen: ${stage.reopen}` : '';
-          const reason = !stage.session && stage.sessionReason ? ` · ${stage.sessionReason}` : '';
-          line(stdout, `${stage.id ?? 'unknown'} · ${stage.state ?? 'unknown'} · start ${localTime(stage.startedAt)} · end ${localTime(stage.endedAt)} · duration ${duration(stage.startedAt, stage.endedAt)} · agent ${stage.agent ?? 'unknown'}${session}${reopen}${reason}`);
+        runs.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+        const stageView = (run, stage) => ({ ...stageJson(stage), reopen: stage.state === 'done' && stage.session ? `pdd workflow open ${refFor(run)} ${stage.id}` : null });
+        const runView = run => ({ v: 1, runId: run.runId, workflow: run.workflow, repo: run.repo, issue: run.issue, root: run.root,
+          state: stateLabel(run), age: age(run.startedAt), stages: (run.steps ?? []).map(stage => stageView(run, stage)) });
+        if (plan.options['--json']) { line(stdout, JSON.stringify(requested ? runView(runs[0]) : { v: 1, runs: runs.map(runView) })); return 0; }
+        if (!runs.length) line(stdout, 'No saved runs.');
+        for (const run of runs) {
+          line(stdout, `${refFor(run)}${run.issue?.title ? ` ${run.issue.title}` : ''} · ${run.workflow ?? 'unknown'} · ${stateLabel(run)} · age ${age(run.startedAt)} · worktree ${run.root ?? 'unknown'}`);
+          for (const stage of run.steps ?? []) {
+            const view = stageView(run, stage);
+            const session = stage.session ? `${stage.session.agent} session ${stage.session.id}` : 'session unknown';
+            const reopen = view.reopen ? ` · reopen: ${view.reopen}` : '';
+            const reason = !stage.session && stage.sessionReason ? ` · ${stage.sessionReason}` : '';
+            line(stdout, `${stage.id ?? 'unknown'} · ${stage.state ?? 'unknown'} · start ${view.start} · end ${view.end} · duration ${view.duration} · agent ${stage.agent ?? 'unknown'} · ${session}${reopen}${reason}`);
+          }
         }
         return 0;
       } catch { line(stderr, 'Saved workflow runs are unavailable. Retry after checking local records.'); return 1; }

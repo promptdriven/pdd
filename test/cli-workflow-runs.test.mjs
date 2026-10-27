@@ -61,3 +61,27 @@ test('ambiguous issue does not guess or open', async t => {
   assert.equal(await runPdd(['workflow', 'open', '7', 'scope'], f), 1);
   assert.match(f.stderr.text, /More than one saved run/);
 });
+
+test('bare issue stays in common repo from another linked worktree and its subfolder', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const root = await mkdtemp(join(tmpdir(), 'pdd-runs-repos-'));
+  const a = join(root, 'a'), b = join(root, 'b'), linked = join(root, 'a-issue-5');
+  for (const cwd of [a, b]) {
+    await mkdir(cwd); execFileSync('git', ['init', '-q', cwd]);
+    execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'seed']);
+    const runId = cwd === a ? id : '223e4567-e89b-42d3-a456-426614174000';
+    const dir = join(cwd, '.git/pdd/workflows', runId); await mkdir(dir, {recursive:true});
+    await writeFile(join(dir, 'journal.jsonl'), JSON.stringify({seq:1, state:{runId, repo:cwd === a ? 'octo/a' : 'octo/b', issue:{number:7}, root:cwd, name:'small-change', index:1, definitions:[{id:'scope',kind:'agent'}], completed:[{id:'scope'}]}})+'\n');
+  }
+  execFileSync('git',['-C',a,'worktree','add','-q','-b','other-issue',linked]);
+  await mkdir(join(linked,'sub'));
+  for (const cwd of [a, linked, join(linked,'sub'), b]) {
+    const stdout = capture(), stderr = capture();
+    assert.equal(await runPdd(['workflow','runs','7'],{cwd,stdout,stderr}),0,stderr.text);
+    assert.match(stdout.text,cwd === b ? /octo\/b#7/ : /octo\/a#7/);
+    assert.doesNotMatch(stdout.text,cwd === b ? /octo\/a#7/ : /octo\/b#7/);
+  }
+  const stdout=capture(),stderr=capture();
+  assert.equal(await runPdd(['workflow','runs','8'],{cwd:linked,stdout,stderr}),1);
+  assert.match(stderr.text,/Run not found/);
+});
