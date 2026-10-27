@@ -76,3 +76,40 @@ test('CLI composes the mobile lookup adapter with receiver intact and verifies a
  clientAdapter,stdout,stderr:{write(){}},stdin:{isTTY:false},workflowRunner:{async applyWorkflowDecision(i,p){const auth=await p.authorizeDecision({input:i,state});return {...auth,state:auth.ok?'recorded':'refused',exitCode:auth.ok?0:1,message:auth.ok?'Recorded.':auth.message};}}});
  assert.equal(result,0);assert.equal(calls,1);const answer=JSON.parse(stdout.text);assert.equal(answer.approvalRecord.phoneId,phoneId);assert.equal(answer.approvalRecord.kind,'phone');
 });
+
+const chatCases = [
+ ['approve', 'Do not approve this plan.', false],
+ ['approve', 'What does this change do?', false],
+ ['approve', 'What does this change do', false],
+ ['approve', 'I approve this plan.', true],
+ ['approve', 'Please approve this plan!', true],
+ ['approve', 'approved', true],
+ ['approve', '  I APPROVE THIS PLAN!  ', true],
+ ['approve', 'yes', false],
+ ['approve', 'I approve this plan if the tests pass.', false],
+ ['approve', 'I approve this plan. Actually, wait.', false],
+ ['approve', 'I approve this plan?', false],
+ ['approve', '"approve"', false],
+ ['approve', 'Request changes', false],
+ ['approve', 'Skip this step', false],
+ ['changes', 'I approve this plan.', false],
+ ['changes', 'Do not request changes.', false],
+ ['changes', 'Should I request changes?', false],
+ ['changes', 'Request changes', true],
+ ['changes', 'I request changes.', true],
+ ['changes', 'Request changes: Add a regression test.', true],
+ ['changes', 'Request changes: Remove all tests.', false],
+ ['skip', 'I approve this plan.', false],
+ ['skip', 'Do not skip this step.', false],
+ ['skip', 'Skip this step?', false],
+ ['skip', 'Please skip this step.', true],
+ ['skip', 'skip', true],
+];
+for (const [decision, userMessage, accepted] of chatCases) test(`chat intent ${decision}: ${userMessage}`, async () => {
+ const h=harness({env:{PDD_AGENT_SESSION:'run/scope'},readApprovalEvidence:async()=>({ok:true,decision,agent:'codex',sessionId:decisionId,userMessage,userMessageAt:250})});
+ const result=await decideWorkflow({...input,decision,...(decision==='changes'?{text:'Add a regression test.'}:{})},h.ports);
+ assert.equal(h.admitted,accepted?1:0);
+ assert.equal(result.state,accepted?'recorded':'refused');
+ if(accepted) assert.equal(result.approvalRecord.userMessage,userMessage);
+ else {assert.equal(result.code,'person_required');assert.equal(result.approvalRecord,undefined);}
+});
