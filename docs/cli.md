@@ -42,3 +42,26 @@ The PDD controller remains foreground while issue stages use fresh native agents
 `workflow list [--json]` uses the authoritative definition loader. JSON returns `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated entries and source `project` or `bundled`. A complete valid project definition overrides the matching bundled name; an invalid override or unavailable loader refuses, without a legacy Markdown fallback. Listing is local discovery, not native/GitHub work. Bash/Zsh completion consumes this local listing as data, filters safe names and does not evaluate returned text.
 
 Completion prints shell text to stdout; it does not modify shell configuration. Save or source it using your own shell's usual setup. The local native session command loads the full guide and bundled manual workflow context before Stories using the installed agent. The package provides local commands only. Unsupported operations must remain unsupported, with no hosted-service fallback.
+
+## Optional client commands
+
+The public command catalog includes `phone`, `link`, `fleet`, `agents`/`agent`/`open`,
+`accounts`, `setup` and `join`. Their help and shell completion work locally. Without
+an add-on, a valid command such as `pdd link status` prints
+`This command needs the optional client.` to stderr and exits 1. Invalid syntax
+still exits 2. These declarations do not install a service or include client code.
+
+An add-on's entrypoint registers its module explicitly through the existing CLI API:
+
+```js
+import { runPdd } from 'pdd/src/pdd-cli.mjs';
+import * as clientAdapter from './client-adapter.mjs';
+
+process.exitCode = await runPdd(process.argv.slice(2), { clientAdapter });
+```
+
+The standard `pdd` bin supplies no adapter and does not search for one. The module
+methods and argument conventions are specified in the
+[adapter registration contract](../prompts/cli/pdd-cli.prompt.md#optional-client-registration).
+A client method owns its output and returns an integer exit status; failed or
+unconfirmed calls are not retried automatically.

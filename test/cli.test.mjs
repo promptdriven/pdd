@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { launchNativeSession } from '../src/native-session.mjs';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
-import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
+import { PUBLIC_COMMAND_ROUTES, PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { listLocalWorkflows } from '../src/workflow-list.mjs';
 
@@ -16,16 +16,16 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
 const capture = () => ({ text: '', write(value) { this.text += value; } });
 
-// Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
-test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
+// Local routes stay intact; the optional surface is explicit and unknown help still refuses.
+test('ALPHA1: local plans and catalogued optional plans admit no Host disposition', () => {
+  assert.deepEqual(PUBLIC_COMMAND_ROUTES.filter(route => !route.optionalClient).map(route => route.id), ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   for (const argv of [['session','--agent','unknown'], ['session','--agent'], ['session','--agent','codex','--agent','claude'], ['run', 'start', 'issue'], ['verify'], ['try'], ['lint'], ['runtime', 'discover'],
-    ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
+    ['replay'], ['call'], ['tests'], ['doctor'], ['machine'], ['repo'], ['workbench'],
     ['unknown', '--help'], ['session', '--dangerously-skip-permissions'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
     ['completion'], ['--version', 'extra'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
@@ -80,7 +80,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
   for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
     '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-definition-loader.mjs', '.pdd/workflows/feature/workflow.json']) assert.ok(names.includes(required), required);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui)\//.test(name)), false);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui|client|relay|keeper|phone-app|src\/(?:fleet|phone))\//.test(name)), false);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);
@@ -95,8 +95,24 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
     { cwd, env, encoding: 'utf8', timeout: 5000 });
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['session','--help'], ['workflow','run','--help'], ['workflow','resume','--help'], ['workflow','attach','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor|phone)\b/);
+    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor)\b/);
   }
+  // The npm-installed executable refuses plainly without loading any client.
+  const absentClient = run(['link', 'status']);
+  assert.equal(absentClient.status, 1); assert.equal(absentClient.stdout, '');
+  assert.equal(absentClient.stderr, 'This command needs the optional client.\n');
+  // Registration uses the same runPdd dependency as the add-on composition root.
+  const addon = join(consumer, 'fake-addon.mjs'), wrapper = join(consumer, 'pdd-with-client.mjs');
+  writeFileSync(addon, `export async function runLinkCommand(argv, {stdout, cwd}) {
+    stdout.write(JSON.stringify({called:'runLinkCommand', argv, cwd})+'\\n'); return 7;
+  }`);
+  writeFileSync(wrapper, `import {runPdd} from './node_modules/pdd/src/pdd-cli.mjs';
+import * as clientAdapter from './fake-addon.mjs';
+process.exitCode = await runPdd(process.argv.slice(2), {clientAdapter});`);
+  const presentClient = spawnSync(process.execPath, ['--import', guard, wrapper, 'link', 'status'],
+    {cwd:project, env, encoding:'utf8', timeout:5000});
+  assert.equal(presentClient.status, 7, presentClient.stderr); assert.equal(presentClient.stderr, '');
+  assert.deepEqual(JSON.parse(presentClient.stdout), {called:'runLinkCommand', argv:['status'], cwd:project});
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 0, skill.stderr);
   const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8'), skillText = readFileSync(join(packed, 'skills/pdd/SKILL.md'), 'utf8');
@@ -111,7 +127,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|phone|machine)\b/);
+    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint)\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
@@ -129,7 +145,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
     }
   }
-  for (const word of ['run', 'verify', 'try', 'lint', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
+  for (const word of ['run', 'verify', 'try', 'lint', 'runtime', 'replay', 'call', 'tests', 'doctor', 'machine', 'repo', 'workbench', 'unknown']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }

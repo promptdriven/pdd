@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2240af8a65796be493b99c2dd27d24f3c6d8582102f560e384958db6a7af9b62).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,11 @@ import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { formatLocalWorkflows } from './workflow-list.mjs';
 
+const CLIENT_BINDINGS = Object.freeze({
+  phone: 'runPhoneCommand', link: 'runLinkCommand', fleet: 'runFleetCommand',
+  agents: 'runAgentCommand', agent: 'runAgentCommand', open: 'runAgentCommand',
+  accounts: 'runAccountsCommand', setup: 'runSetupCommand', join: 'runJoinCommand',
+});
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
 export function renderHelp(prefix = []) {
@@ -26,7 +31,8 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages,
+  phoneCli, clientAdapter = phoneCli, ports = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -84,6 +90,23 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!Array.isArray(workflows)) throw Error('Invalid definition listing');
         line(stdout,formatLocalWorkflows({workflows,default:null},{json:plan.options['--json']===true}));return 0;
       } catch { line(stderr,'Workflow definitions could not be read or validated. Check the selected project definitions and bundled package.');return 1; }
-    default: line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
+    default: {
+      const family = plan.commandId.split('.')[0];
+      if (!Object.hasOwn(CLIENT_BINDINGS, family)) {
+        line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
+      }
+      try {
+        const method = clientAdapter?.[CLIENT_BINDINGS[family]];
+        if (typeof method !== 'function') {
+          line(stderr, 'This command needs the optional client.');return 1;
+        }
+        const args = ['agents', 'agent', 'open'].includes(family) ? [...argv] : argv.slice(1);
+        const result = await method.call(clientAdapter, args, {...ports, stdout, stderr, cwd, packageRoot});
+        if (!Number.isInteger(result) || result < 0 || result > 255) throw Error('Invalid client exit');
+        return result;
+      } catch {
+        line(stderr, 'Optional client command unconfirmed. Inspect local state before retrying.');return 1;
+      }
+    }
   }
 }
