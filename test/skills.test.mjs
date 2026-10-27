@@ -72,9 +72,9 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    // 7 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
-    // pdd-bug carries the verdict lines and the real-user rules; pdd-feature the many-Story plan (0.1.6).
-    assert.ok(bytes <= 7168, `${name} is ${bytes} bytes`);
+    // 7.5 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
+    // pdd-bug carries the verdict lines and the real-user rules; pdd-feature the many-Story plan and the RUNBOOK §2–§4 line (0.1.6).
+    assert.ok(bytes <= 7680, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -136,7 +136,8 @@ test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd
 // Wrong (0.1.3): the steps repeat RUNBOOK section 17 (two homes for one method), or the runbook copy lacks it.
 const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
-const RUNBOOK_SECTIONS = { 14: 'Bug workflow', 17: 'The code PR (PR 2): test vectors and the formal check' };
+const RUNBOOK_SECTIONS = { 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 10: 'AI calls', 14: 'Bug workflow',
+  17: 'The code PR (PR 2): test vectors and the formal check' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
 // Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
@@ -212,6 +213,9 @@ test('SKILLS14: every RUNBOOK section that a skill names exists with the expecte
   const runbook = RUNBOOK(), named = new Set();
   for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
     for (const [, number] of readFileSync(file, 'utf8').matchAll(/section (\d+) of RUNBOOK\.md/g)) named.add(Number(number));
+  // "RUNBOOK.md §2–§4" and "(§2–§10)": both ends of each range must exist with their titles.
+  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
+    for (const [, first, last] of readFileSync(file, 'utf8').matchAll(/§(\d+)(?:–§(\d+))?/g)) { named.add(Number(first)); if (last) named.add(Number(last)); }
   assert.ok(named.size >= 2, [...named].join(','));
   for (const number of named) {
     assert.ok(RUNBOOK_SECTIONS[number], `section ${number} is named by a skill but has no expected title in this test`);
@@ -292,4 +296,19 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   for (const name of ['pdd-bug', 'pdd-small-change'])
     for (const file of [`${name}/SKILL.md`, ...readdirSync(join(skills, name, 'steps')).map(step => `${name}/steps/${step}`)])
       assert.equal(read(file).includes('PLAN.md'), false, file);
+});
+
+// Wrong (real-user 2048 run, 0.1.6): the agent wrote its own JSON test format and `board.prompt` files with no Runtime
+// interface block, because no step told it the runtime's file format before the check step.
+test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 first', () => {
+  const line = '- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 (in the pdd-prompting skill): prompts are `prompts/<name>.prompt.md` with a Runtime interface block; tests are `tests/<story>.json` in the runtime\'s test format. Copy its example.';
+  for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md', 'pdd-small-change/steps/change.md'])
+    assert.equal(read(file).split('\n').find(text => text.startsWith('- ')), line, file);
+  const prompting = read('pdd-prompting/SKILL.md');
+  assert.ok(prompting.includes('- `RUNBOOK.md`: how to write prompts and tests that the runtime can check (§2–§10), and how to run `pdd check` and `pdd try`.'));
+  assert.ok(prompting.includes('Read RUNBOOK.md §2–§4 before you write a prompt or a test file.'));
+  const setup = read('pdd-setup/SKILL.md').split('\n');
+  const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
+  assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));
+  assert.equal(block.length, 7);
 });
