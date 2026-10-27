@@ -137,7 +137,7 @@ pdd session
 What happens:
 
 1. PDD starts Codex in your project folder, in full-access mode.
-2. The first message is short (about 1.6 KB). It says that prompts are the source. It names the `pdd-prompting` skill and lists its core rules. It names the three workflow skills and the `pdd workflow run` command. If your project has a `RUNBOOK.md` file, it adds one line: read `RUNBOOK.md` before a check.
+2. The first message is short (about 1.6 KB). It says that prompts are the source. It names the `pdd-prompting` skill and lists its core rules. It names the three workflow skills and the `pdd workflow run` command. If the pdd package has a `RUNBOOK.md` file at its root, the intro adds one line: read that `RUNBOOK.md` before a check.
 3. The agent asks what you want to work on.
 
 The agent reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.

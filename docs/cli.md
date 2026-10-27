@@ -11,7 +11,7 @@
 
 Codex is the default agent. Both commands start the agent in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`. PDD does not choose a model and does not change your agent's settings, sign-in or config. Use `--` to end the PDD options before a request that starts with `-`.
 
-The intro is about 1.6 KB. It has the folder, the core rules of the `pdd-prompting` skill, the names of the workflow skills and the full path of this pdd. If the project has a `RUNBOOK.md` file, the intro adds one line: read `RUNBOOK.md` before a check. The agent uses that full path, so another `pdd` on its PATH does not matter.
+The intro is about 1.6 KB. It has the folder, the core rules of the `pdd-prompting` skill, the names of the workflow skills and the full path of this pdd. If the pdd package has a `RUNBOOK.md` file at its root, the intro adds one line: read that `RUNBOOK.md` before a check. The agent uses that full path, so another `pdd` on its PATH does not matter.
 
 ## Runs on a GitHub issue
 
