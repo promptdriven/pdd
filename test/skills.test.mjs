@@ -278,11 +278,12 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   assert.match(understand, /With 1 behavior, write one Story and no plan\./);
   assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own `tests\/<story>\.json`/);
   assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
-  assert.match(check, /run `pdd check` on every Story/);
+  // Real 2048 run: one check per Story, then one Story's overall line pasted as the total. The runner sums the lines itself.
+  assert.ok(check.includes('Run `pdd check` ONCE with no Story name, so all Stories are checked together, and paste its per-Story lines. After fixing, re-check only the failing Stories by name.'));
+  assert.equal(check.includes('overall'), false);
   // The format agreed with runner-builder and runtime-client-builder: pdd check's paste lines, joined with "; ".
-  assert.ok(check.includes('every `Runtime check (<story>): …` line as pdd check prints it, then the overall `Runtime check: …` line, then `Report (<story>): <url>` for each row of its Reports block, joined with "; "'));
+  assert.ok(check.includes('every `Runtime check (<story>): …` line as pdd check prints it, then `Report (<story>): <url>` for each row of its Reports block, joined with "; "'));
   assert.match(check, /After a re-check, keep the lines of the Stories that passed and replace the re-checked ones\./);
-  assert.match(check, /fix only the failing Stories[^\n]*check only those again/);
   const skill = read('pdd-feature/SKILL.md');
   assert.match(skill, /At the story gate, show the plan list/);
   for (const words of ['"make it one Story"', '"split part 5"', '"change Story 5: …"']) assert.ok(skill.includes(words), words);
