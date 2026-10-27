@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 71c05fbac4befff2c0cffefe63735da22c0f5e37e4b954b0025322baa952abf8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: d518d3cf28a6baa20e29c6f63e0b8518e9f2d525bc248a20257b3507d7189931).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -19,7 +19,8 @@ function helpFor(words) {
 }
 const optionValue = (option, value) => option.kind === 'integer'
   ? /^[1-9][0-9]{0,5}$/.test(value ?? '') && Number(value) >= option.min && Number(value) <= option.max
-  : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '') : !!option.choices?.includes(value);
+  : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
+  : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
 function parseRoute(route, words) {
   const options = Object.create(null), operands = []; let literal = false;
   for (let index = 0; index < words.length; index++) {

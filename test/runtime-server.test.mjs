@@ -37,7 +37,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual(Object.keys(lint.request).sort(), ['requestId', 'source_sha256']);
   assert.deepEqual(checks.map(post => post.request.scenario).sort(), ['tests/place-order.json', 'tests/unknown-item.json']);
   for (const post of fake.posts) { assert.equal(post.request.source_sha256, sha(post.tar)); assert.ok(post.tar.equals(lint.tar)); }
-  assert.deepEqual(checks.map(post => post.request.max_calls), [4, 4]);
+  assert.deepEqual(checks.map(post => post.request.max_calls), [6, 6]);
   assert.equal(new Set(fake.posts.map(post => post.request.requestId)).size, 3);
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
   assert.match(result.err, /Lint passed\. Sent 2 checks \(6 files, \d+ KB\) at \d\d:\d\d:\d\d\./);
@@ -340,4 +340,80 @@ test('RUNTIME-SERVER17: --read of a still-running row names no wait time', async
   assert.equal(first.code, 3);
   const read = await check(setup, fake, [], { '--read': true });
   assert.equal(read.code, 3); assert.match(read.out, /^STILL RUNNING: Place a coffee order\. Do not send it again\.$/m);
+});
+
+const NOT_STARTED = { requestId: null, command: 'check', state: 'refused', job_created: false, dispatch: 'not_started', error: { code: 'not-found', message: 'The requested run or session was not found.' } };
+
+// Wrong: under load the POST times out and the job appears minutes later; pdd stops reading too soon or calls the 404 a refusal.
+test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 5 min, and a 404 "refused" body is not a refusal', async t => {
+  const setup = harbor(t);
+  let clock, lostAt = null;
+  const slow = (appearAfter) => async (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'check') { await new Promise(done => setTimeout(done, 600)); return f.normal(entry); }
+    if (entry.method === 'GET') {
+      lostAt ??= clock.now;
+      if (appearAfter === null || clock.now - lostAt < appearAfter) return { status: 404, json: NOT_STARTED };
+      return { status: 200, json: f.check(entry.url.split('/').at(-1)) };
+    }
+    return f.normal(entry);
+  };
+  const run = async (fake, options) => {
+    const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { postMs: 150 });
+    clock = made.clock; lostAt = null;
+    const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
+    return { code, out: made.ports.stdout.text };
+  };
+  const late = await fakeRuntime(t, slow(220_000));
+  const appeared = await run(late, { '--timeout': '1' });
+  assert.equal(appeared.code, 0, appeared.out);
+  assert.equal(late.posts.filter(post => post.command === 'check').length, 1);
+  assert.ok(late.gets.every(get => get.url === `/v1/runs/${late.posts[1].request.requestId}`));
+  const never = await fakeRuntime(t, slow(null));
+  const lost = await run(never, { '--timeout': '1' });
+  assert.equal(lost.code, 3);
+  assert.ok(never.gets.length >= 149, String(never.gets.length));
+  assert.match(lost.out, /^Place a coffee order +tests\/place-order\.json +unknown/m);
+  assert.doesNotMatch(lost.out, /refused/);
+});
+
+// Wrong: an AI provider failure looks like a failed check, or pdd resends it by itself.
+test('RUNTIME-SERVER19: a provider failure gets its own UNKNOWN block, exit 3 and no new POST', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const id = entry.url.split('/').at(-1);
+    return { status: 200, json: { ...f.job(id, 'check', 'unknown', { outcome: 'Inconclusive', exitCode: 3, why: 'The run may have executed. Its result is unknown. Read this request; do not resubmit.',
+      refusals: [{ code: 'graph-provider-failure', message: 'The runtime refused this job. See the reported reason.', engine_message: 'step execution refused', section: 'samples[0].steps[0]' }],
+      report: { samples: [{ sample: 1, refusal: { code: 'graph-provider-failure', failure_cause: { kind: 'transport_unknown', detail: 'internal-retry' } } }] } }, 3) } };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 3);
+  assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the AI provider failed during the run\. It is not a failed check\. Do not send it again yet\.$/m);
+  assert.doesNotMatch(result.out, /FAILED|REFUSED/);
+  assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(json.json.rows[0].reason.code, 'graph-provider-failure');
+});
+
+// Wrong: a mismatch in whitespace looks like no mismatch ("A\n" and "A" print the same).
+test('RUNTIME-SERVER20: expected and got strings print JSON-escaped', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed',
+    [{ criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam\n', actual: 'Sam', passed: false }]) } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 1);
+  assert.match(result.out, /^ {2}AC2 {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
+});
+
+// Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
+test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: 'eae2202a68d00ab7' } } : f.normal(entry));
+  const warned = /runtime engine is eae2202a68d0/;
+  assert.match((await check(setup, fake, ['place-order'])).out, warned);
+  assert.doesNotMatch((await check(setup, fake, ['place-order'])).out, warned);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(json.json.warnings.some(text => warned.test(text)), false);
+  const tomorrow = await check(setup, fake, ['place-order'], {}, { now: () => Date.parse('2026-10-28T16:27:47Z') });
+  assert.match(tomorrow.out, warned);
 });

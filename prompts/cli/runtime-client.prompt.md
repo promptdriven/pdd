@@ -7,7 +7,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
 - The runtime address is one setting: `PDD_RUNTIME_URL`, else the exported constant `DEFAULT_RUNTIME_URL` in this module. No other code, prompt, test or doc names the address; tests use the override or import the constant. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
-- Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`. Read the environment only from `env`.
+- Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`. Read the environment only from `env`.
 
 ## Sign-in
 
@@ -23,7 +23,7 @@ Order:
 1. [Preflight](runtime-preflight.prompt.md), capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in.
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). One new `crypto.randomUUID()` for lint and for each test. Write `batch.json`. Print to stderr: `If pdd stops, read the results with: pdd check --read <batch>`.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256}`, no `paths`; `source` = the tar). Read until terminal, at most 2 min. Judge only the prompts that the tests reach (step `entry_path` and their `calls` targets): a prompt in `result.report.program.refused_prompts`, or with `admission_state` not `approved`, refuses each test that reaches it. A lint answer with no program report is a refusal when the state is `refused` with refusals, else lint is unknown: exit 3, no checks sent.
-4. Checks: for each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or `min(100, max(4, ceil(steps * 2 * 1.2)))`. Start all POSTs at the same time. POST timeout 90 s.
+4. Checks: for each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (4 for each step, 6 to 100). Start all POSTs at the same time. POST timeout 90 s.
 5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the timeout (`--timeout`, default 10 min, from the lint POST) ends. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
 
 | Answer to a POST | Row | Next step |
@@ -36,11 +36,11 @@ Order:
 | 400, 413, 415, 422 JSON | refused | no new attempt; show code and message |
 | timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch |
 
-- GET: 200 gives the state. 404 after a POST: keep reading; at the timeout the row is unknown. 410: unknown, `result expired`. 401: stop reading; open rows stay open (exit 3) and pdd prints `Run gh auth login`. A wrong ID or command: unknown. Server `state: unknown`: show its `why`.
+- GET: 200 gives the state. 404 after a POST: keep reading, also when its body says `state: refused` with `job_created: false`; it is never a refusal. A row whose POST answer was lost (timeout, lost connection) is read by the same ID for at least 5 min after the loss, or until the timeout if that is later; then it is unknown. A lost lint answer is read the same way. 410: unknown, `result expired`. 401: stop reading; open rows stay open (exit 3) and pdd prints `Run gh auth login`. A wrong ID or command: unknown. Server `state: unknown`: show its `why`.
 - At the timeout: open rows stay `queued`/`running` (exit 3); waiting rows are not run (exit 5). `Retry-After` is whole seconds from 1 to 300; no header means 5 s.
 - A row is marked `sending` before its POST. If pdd was killed, `--read` reads every posted row by its ID (a posted row with no answer is unknown, exit 3) and calls a row with no request ID not run.
 - A server refusal `invalid-input` gets the local P9 rule as its hint. A server `interface-unapproved` or `interface-stale` on `steps[N]` gets the P7 hint.
-- Save `engine_sha` from each answer. When it is not 7b03d3ea (the engine that the local rules copy), add a warning; the engine stays the judge.
+- Save `engine_sha` from each answer. When it is not 7b03d3ea (the engine that the local rules copy), add a warning; the engine stays the judge. Show it at most once a day for each engine sha (a stamp in `$PDD_STATE_DIR/engine-warnings.json`).
 - Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3.
 - `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. One GET for each open row, saved JSON for ended rows. It never makes a request ID and never POSTs.
 
@@ -62,7 +62,7 @@ Request IDs appear only in state files and in `--json`.
 - STORY as for `pdd check`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd check`, for this one test.
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state: running` with a valid link, open that link again. `--new`: stop the old Try first, then make a new one. A Try that ended (404, failed, refused, session stopped) is forgotten. Any other answer (still starting, unknown, no answer) is exit 3 with no new Try, unless `--new` stops it first.
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
-- POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, tab}` (tab default `call`; no `app_map`, no `max_calls`). Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check. A Try that is ready but has an invalid link is unknown (exit 3); pdd keeps its record so `pdd try --stop` can end it, and never prints that link.
+- App map: `--app-map PATH` (a Git-visible file, else exit 2), else `app-map.json` at the repo root, else `app/app-map.json`. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = `--tab`, else `screen` with an app map, else `call`; no `max_calls`. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check. A Try that is ready but has an invalid link is unknown (exit 3); pdd keeps its record so `pdd try --stop` can end it, and never prints that link.
 - Open the link with `open` (macOS) or `xdg-open` (Linux) and print `Try link for "<title>" is open in your browser. It ends in 24 hours, or with: pdd try --stop <story>`. `--no-open`, or a failed open, prints the link instead.
 - `--stop`: DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try.
 - 429: no new attempt; `Too many Try links are open. Stop one with pdd try --stop`; exit 5. Exit 0 = link ready or stopped; other exit codes as for `pdd check`.

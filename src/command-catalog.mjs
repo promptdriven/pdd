@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: c93eac4d3fa545a618c362573b8176058b87175232a016b5d006df2a338a4047).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a2156835acacfeae7930c601b97ee99e8eb205afb781094a132c337b010aa826).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -38,8 +38,8 @@ const routes = [
       form('pdd check --files', 'List the files a check would send; no network.')] },
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
-      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }],
-    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--new] [--no-open]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours.'),
+      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }],
+    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,

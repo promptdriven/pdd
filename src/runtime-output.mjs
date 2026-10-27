@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 60554f3c5525bc33b152d0fb24bfbbcc58a2369b63ad810afc9e1ca05a758cb9).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: c214a0355879515347f837fe7943aa967bdbb5637e3a1db70464698336916017).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -51,6 +51,10 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
   const usage = answer?.usage ?? {};
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
+  const cause = Array.isArray(report?.samples) ? report.samples.map(sample => sample?.refusal?.failure_cause).find(isObjectLike) : null;
+  const provider = answer?.state === 'unknown' && (refusals.some(item => item.code === 'graph-provider-failure') || cause?.kind === 'transport_unknown')
+    ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
+      detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
   return {
     state: answer?.state, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
@@ -58,9 +62,11 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
-    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null };
+    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider };
 }
 
+const isObjectLike = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+export const PROVIDER_TEXT = 'the AI provider failed during the run. It is not a failed check. Do not send it again yet.';
 const round = seconds => typeof seconds === 'number' ? Math.round(seconds * 10) / 10 : null;
 const sentRow = row => row.phase === 'server';
 
@@ -69,7 +75,8 @@ export function jsonRow(row) {
     failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null, reason: row.note ?? (row.why ? { code: null, message: row.why } : null) };
+    request_id: row.request_ids?.at(-1) ?? null,
+    reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
@@ -132,8 +139,11 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
     out.push(`STILL RUNNING${reading ? '' : interrupted ? ' when pdd stopped reading' : ` after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
   }
-  for (const row of rows.filter(row => row.state === 'unknown')) {
+  for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
+  }
+  for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
+    out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`);
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,

@@ -14,4 +14,4 @@ workflow.run requires exactly a safe free workflow name and syntactic issue refe
 
 workflow.run accepts exactly safe free NAME (lowercase letter followed by lowercase letters/digits and single hyphen-separated nonempty segments, max64) plus existing ISSUE and agent; do not reject a syntactically valid custom name based on bundled catalog. Definition existence/graph/content belongs solely to loader/main. workflow.attach takes exactly UUIDv4, no options or other operands; route/help admission has no backend effect.
 
-Option kind `integer` takes decimal digits with no sign, within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Which `check` and `try` options go together belongs to the [runtime client](runtime-client.prompt.md).
+Option kind `integer` takes decimal digits with no sign, within the option's `min` and `max`. Option kind `uuid` takes one UUID (8-4-4-4-12 hex digits). Option kind `text` takes any one nonblank value. Which `check` and `try` options go together belongs to the [runtime client](runtime-client.prompt.md).

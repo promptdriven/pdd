@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a93d5a4a3a3d4258434053a917baf9d4c37e19d9224fc45b81121f5200226f20).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2a63bcfbf9662ba402ac2841f4210a4d60adead0bba2e20bd7d16ab8b7c51130).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000, test: 1_
 const TOP_KEYS = new Set(['schema_version', 'story_path', 'criteria', 'initial_world', 'steps', 'entry_paths', 'simulation',
   'check_exemptions', 'context', 'context_byte_budget', 'criteria_scope', 'prompt_mappings']);
 const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
-const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides']);
+const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
 const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OPS]);
 const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const',
@@ -271,7 +271,8 @@ export function numberWarnings(doc) {
 }
 
 const stepCount = doc => Array.isArray(doc?.steps) ? doc.steps.length : 0;
-export const defaultMaxCalls = doc => Math.min(100, Math.max(4, Math.ceil(stepCount(doc) * 2 * 1.2)));
+// Steps with saved data or prompt calls cost 2 to 3 AI calls each (real-projects report): 4 per step, 6 to 100.
+export const defaultMaxCalls = doc => Math.min(100, Math.max(6, stepCount(doc) * 4));
 
 function firstDifference(testTexts, storyTexts) {
   const left = [...storyTexts];
@@ -318,6 +319,9 @@ function checkTest(root, found, test, prompts, storyTests) {
     if (!isObject(step) || Object.keys(step).some(key => !STEP_KEYS.has(key)) || ['step_id', 'entry_path', 'operation', 'input', 'checks'].some(key => !Object.hasOwn(step, key))
       || ['step_id', 'entry_path', 'operation'].some(key => typeof step[key] !== 'string' || !step[key])) {
       return refusal('invalid-step', section, 'A step has step_id, entry_path, operation, input and checks.', at);
+    }
+    if (Object.hasOwn(step, 'model') && (typeof step.model !== 'string' || !step.model.trim())) {
+      return refusal('invalid-step-model', `${section}.model`, 'A step model must be a model name (a string).', at);
     }
     if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path));
     const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);

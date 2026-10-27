@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
@@ -117,4 +117,23 @@ test('RUNTIME-TRY5: a recorded Try that is not ready gives exit 3 and no new Try
   assert.equal(fresh.code, 0, fresh.err);
   assert.equal(fake.deletes.length, 1); assert.equal(fake.posts.filter(post => post.command === 'try').length, 2);
   ready = true;
+});
+
+// Wrong: the Try page gets no app map, so the Screen tab is empty (runtime session, Oct 27).
+test('RUNTIME-TRY6: pdd try sends the app map it finds, opens on the screen tab, and --app-map and --tab win', async t => {
+  const withMap = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), '{"screens": []}\n'); });
+  const fake = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(withMap, fake, ['place-order'], { '--no-open': true })).code, 0);
+  const sent = fake.posts.filter(post => post.command === 'try');
+  assert.equal(sent[0].request.app_map, 'app/app-map.json'); assert.equal(sent[0].request.tab, 'screen');
+  const rooted = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), '{}\n'); writeFileSync(join(repo, 'app-map.json'), '{}\n');
+    writeFileSync(join(repo, 'other-map.json'), '{}\n'); });
+  const second = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(rooted, second, ['place-order'], { '--tab': 'call' })).code, 0);
+  assert.equal(second.posts[1].request.app_map, 'app-map.json'); assert.equal(second.posts[1].request.tab, 'call');
+  const third = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(rooted, third, ['place-order'], { '--app-map': 'other-map.json', '--new': true })).code, 0);
+  assert.equal(third.posts[1].request.app_map, 'other-map.json');
+  const missing = await tryStory(rooted, third, ['place-order'], { '--app-map': 'nope.json', '--new': true });
+  assert.equal(missing.code, 2); assert.match(missing.err, /nope\.json/); assert.equal(third.posts.length, 2);
 });

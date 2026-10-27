@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
+import { captureSource, defaultMaxCalls, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { renderSessionIntro } from '../src/session-intro.mjs';
@@ -228,4 +228,16 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the intro names it, and it
   const commands = [...runbook.matchAll(/`?(pdd (?:check|try)[^`#\n]*?)\s*(?:`|#|\n)/g)].map(match => match[1].trim());
   assert.ok(commands.length >= 6, commands.join(' | '));
   for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
+});
+
+// Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.
+test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may name a model', async t => {
+  const steps = count => ({ steps: Array.from({ length: count }, () => ({})) });
+  assert.deepEqual([1, 2, 3, 30].map(count => defaultMaxCalls(steps(count))), [6, 8, 12, 100]);
+  const { repo, home } = harbor(t), file = join(repo, 'tests/place-order.json'), doc = readJson(file);
+  doc.steps[0].model = 'gpt-6.1-sol'; doc.steps[0].input.items[0].quantity = 0; writeJson(file, doc);
+  const named = await check(repo, home, ['place-order']);
+  assert.equal(named.json.rows[0].refusals[0].code, 'invalid-input');
+  doc.steps[0].model = 7; writeJson(file, doc);
+  assert.equal((await check(repo, home, ['place-order'])).json.rows[0].refusals[0].code, 'invalid-step-model');
 });
