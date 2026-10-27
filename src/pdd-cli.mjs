@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0c37168958ff78e804e758c0e4bc7309aa45cd22e881fd5e8cf5cf7c72a938fd).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 408873608edba81cd3a604208767bec35c444484b52b01caebfe4f8a19829de1).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,7 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -79,7 +79,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'workflow-list':
       try {
         const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
-        const workflows = await areas.listWorkflowAreas({ packageRoot });
+        const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }

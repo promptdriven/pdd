@@ -170,6 +170,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.equal(f.prs.length, 1); assert.equal(f.prs[0].title, 'Use value two'); assert.equal(f.prs[0].baseRefName, 'main');
   assert.match(f.prs[0].body, /Closes #17/); assert.match(f.prs[0].body, /# pass 3/); assert.match(f.prs[0].body, /tests pass/);
   assert.equal(f.git(run.root, 'status', '--porcelain'), '');
+  assert.doesNotMatch(f.prs[0].body, /expire after 7 days/, 'no report link, no expiry note');
   run = f.record();
   assert.deepEqual(run.pr.map(pr => pr.url), ['https://github.com/example/project/pull/23']);
   assert.equal(run.stage.id, 'merge'); assert.deepEqual(run.waitingFor.decisions, []);
@@ -242,6 +243,7 @@ for (const [name, areas] of [['bug', [['solution', ['reproduce', 'prompt-story',
   ['feature', [['solution', ['understand', 'visual']], ['story', ['prompt-story', 'check', 'try']], ['build', ['build', 'verify']]]]]) {
   test(`${name}: every approve gate starts a new area chat and only the last build step opens the PR`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
+    const report = 'https://checks.example.test/r/k3y-123';
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
     assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+solution-start\.md'\)"$/);
@@ -251,7 +253,8 @@ for (const [name, areas] of [['bug', [['solution', ['reproduce', 'prompt-story',
       for (const step of steps) {
         if (area === 'build' && step === 'build') { writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'fix'); }
         f.tick();
-        const out = await stepDone({ step, summary: optional.includes(step) ? 'skipped' : `${step} done`, cwd: run.root }, f.agentPorts());
+        const summary = optional.includes(step) ? 'skipped' : step === 'check' ? `Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}` : `${step} done`;
+        const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts());
         assert.equal(out.exitCode, 0, out.message);
         const next = steps[steps.indexOf(step) + 1];
         if (next && optional.includes(next)) assert.match(out.message, /optional/i);
@@ -263,6 +266,8 @@ for (const [name, areas] of [['bug', [['solution', ['reproduce', 'prompt-story',
       }
     }
     assert.equal(f.prs.length, 1); assert.equal(f.record().stage.id, 'merge');
+    assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in the PR body');
+    assert.match(f.prs[0].body, /Runtime report links expire after 7 days\./);
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
   });
@@ -328,4 +333,18 @@ test('a terminal approve whose input closes without an answer is a no and change
   const answer = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: undefined, stdin, stderr });
   assert.equal(answer.exitCode, 1); assert.match(answer.message, /Not approved/);
   assert.equal(f.record().area, 0); assert.equal(f.record().chats.length, 1);
+});
+
+test('a workflow skill in the project wins the lookup, and the chat is told where that skill is', async t => {
+  const f = await fixture(t, { name: 'docs' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-docs');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [{ name: 'draft', steps: ['outline', 'write'], optional: [], gate: 'approve' }, { name: 'build', steps: ['verify'], optional: [], gate: 'pr' }] }));
+  const started = await f.run();
+  assert.equal(started.exitCode, 0, started.message);
+  const run = f.record();
+  assert.deepEqual(run.areas.map(area => area.name), ['draft', 'build']); assert.equal(run.skillDir, skill);
+  const message = readFileSync(join(run.runDir, 'draft-start.md'), 'utf8');
+  assert.match(message, /Use the pdd-docs skill/); assert.ok(message.includes(join(skill, 'SKILL.md')));
+  assert.match(message, /Steps: outline, write/);
 });

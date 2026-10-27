@@ -14,7 +14,7 @@ For a named workflow plan, use the existing session branch/native launcher with 
 
 The runner routes (run, done, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
-workflow list uses `listWorkflowAreas({packageRoot})` and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
+workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
 ## Help contract
 

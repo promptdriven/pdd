@@ -20,18 +20,19 @@ test('a free safe NAME reaches startRun; the areas module decides whether that w
  for(const name of ['../bad','/bad','Bad','a--b','a-','a'.repeat(65)])assert.throws(()=>parseArgv(['workflow','run',name,'1']));
  const project=temp(t);
  const real=await import('../src/workflow-runner.mjs');
- const answer=await real.startRun({name:'my-team-workflow',issue:'1',agent:'codex',cwd:project,packageRoot:join(import.meta.dirname,'..')},{execFile:()=>assert.fail('No git or gh before the workflow exists')});
+ const answer=await real.startRun({name:'my-team-workflow',issue:'1',agent:'codex',cwd:project,packageRoot:join(import.meta.dirname,'..')},{env:{HOME:project},execFile:()=>assert.fail('No git or gh before the workflow exists')});
  assert.equal(answer.exitCode,1);assert.match(answer.message,/Workflows: bug, feature, small-change/);
 });
 
 test('workflow list reads the bundled areas once and refuses a broken package without fallback',async t=>{
  const stdout=capture(),stderr=capture();
- assert.equal(await runPdd(['workflow','list','--json'],{packageRoot:join(import.meta.dirname,'..'),cwd:'/project',stdout,stderr,workflowRunner:{startRun:()=>assert.fail('No start')}}),0);
+ const home=temp(t);
+ assert.equal(await runPdd(['workflow','list','--json'],{packageRoot:join(import.meta.dirname,'..'),cwd:'/project',env:{HOME:home},stdout,stderr,workflowRunner:{startRun:()=>assert.fail('No start')}}),0);
  const listed=JSON.parse(stdout.text);
  assert.deepEqual(listed.workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(listed.default,null);
  assert.deepEqual(listed.workflows.find(w=>w.name==='small-change').areas.map(a=>[a.name,a.gate]),[['plan','approve'],['build','pr']]);
  const broken=temp(t);mkdirSync(join(broken,'skills/pdd-bug'),{recursive:true});writeFileSync(join(broken,'skills/pdd-bug/workflow.json'),'{"version":1}');
- const errors=capture();assert.equal(await runPdd(['workflow','list'],{packageRoot:broken,stdout:capture(),stderr:errors}),1);assert.ok(errors.text.trim());
+ const errors=capture();assert.equal(await runPdd(['workflow','list'],{packageRoot:broken,env:{HOME:home},stdout:capture(),stderr:errors}),1);assert.ok(errors.text.trim());
 });
 
 test('bash/zsh NAME completion reads local definition listing as data, including custom names without evaluating hostile text',t=>{
