@@ -11,10 +11,11 @@ const read = path => readFileSync(join(skills, path), 'utf8');
 // 0.1.3: every code PR ends with a formal step after verify.
 const AREAS = {
   'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify', 'formal'], [], 'pr']],
-  'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'],
+  // 0.1.4 #13: the person tries it and approves before pdd opens PR 1 ("before":"approve").
+  'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'],
     ['code', ['build', 'verify', 'formal'], [], 'pr']],
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
-    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 const frontmatter = text => {
@@ -58,7 +59,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', () => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then]) => ({ name: area, steps, optional, gate, ...(then ? { then } : {}) })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -66,9 +67,9 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(lines.length <= 15, `${name}/${step} has ${lines.length} lines`);
     }
     const { body } = frontmatter(read(`${name}/SKILL.md`));
-    for (const [area, list, optional, gate] of areas) {
+    for (const [area, list, optional, gate, , before] of areas) {
       const shown = list.map(step => optional.includes(step) ? `${step}?` : step).join(', ');
-      assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
+      assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
     // 6.5 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
@@ -100,7 +101,8 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
   for (const name of ['pdd-bug', 'pdd-feature']) {
     assert.match(read(`${name}/steps/try.md`), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
     const text = read(`${name}/SKILL.md`);
-    assert.match(text, /PR 1 link, the `Runtime check:` line and the Try link/);
+    assert.match(text, /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
+    assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd check`[^\n]*CURRENT prompt/);
