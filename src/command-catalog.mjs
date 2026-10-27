@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: ba5306e0e576eab8288a78489d8af99164dd027b8f19b70ce3efaf2488d8f118).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: e576f1a2d7506c398d39f994dcfbfbc76b2fdbf6915c9dbe53416d923ee96ea6).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -24,8 +24,6 @@ const routes = [
     form('pdd -h', 'Show local alpha commands.'), form('pdd help', 'Show local alpha commands.') ] },
   { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
     forms: [form('pdd --version', 'Show this package version.')] },
-  { id: 'skill', prefix: ['--skill'], local: 'skill', operands: [], options: [],
-    forms: [form('pdd --skill', 'Print the full Prompting guide, then the skill and its references.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],

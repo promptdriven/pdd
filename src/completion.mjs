@@ -7,7 +7,7 @@ function add(map, key, value) {
 }
 
 function candidateMaps() {
-  const first = new Set(['--help', '-h', '--version', '--skill']);
+  const first = new Set(['--help', '-h', '--version']);
   const second = new Map();
   const third = new Map();
   const fourth = new Map();

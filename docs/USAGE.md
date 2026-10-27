@@ -105,10 +105,9 @@ pdd session
 
 What happens:
 
-1. PDD copies its four skills to `~/.agents/skills/` and `~/.claude/skills/` if they are missing or old.
-2. PDD starts Codex in your project folder, in full-access mode.
-3. The first message is short (about 600 tokens): the core rules, the workflow names and the full path of this pdd.
-4. The agent asks what you want to work on. It loads a skill when it needs one. For example, it reads the full Prompting guide before it writes a prompt.
+1. PDD starts Codex in your project folder, in full-access mode.
+2. The first message has the full Prompting guide, the PDD skill and all three workflows (about 21,000 tokens).
+3. The agent summarizes the method and asks what you want to work on.
 
 Then talk to it as usual. For example: plan a change, draft a prompt, a Story and test cases, review them with you, and build when you ask.
 
@@ -294,10 +293,9 @@ Commit the `.pdd/workflows` folder so that your team gets the same workflows. Th
 ## 7. The Prompting guide and the PDD skill
 
 - [The Prompting guide](prompting-guide.md) is the method: say what and why, keep the visible behavior and edge cases, give each rule one owner, and write expected results without looking at the code.
-- [The pdd-prompting skill](../skills/pdd-prompting/SKILL.md) holds the core rules, a copy of the guide (`guide.md`) and how to review (`review.md`).
-- The workflow skills are [pdd-small-change](../skills/pdd-small-change/SKILL.md), [pdd-bug](../skills/pdd-bug/SKILL.md) and [pdd-feature](../skills/pdd-feature/SKILL.md).
-- Each `pdd` command keeps a copy of the four skills in `~/.agents/skills/` and `~/.claude/skills/`. Your agent finds them in any chat, also one that you opened yourself.
-- Workflow run stages still load the full guide and the old PDD skill. To get the same text in a chat, print it:
+- [The PDD skill](../skills/pdd/SKILL.md) tells an agent how to use the guide: load the whole guide first, build only when asked, and report honestly.
+- `pdd session` and every workflow stage load both for you.
+- In a chat that you opened yourself, have the agent read the full output of `pdd --skill` before it writes a Story:
 
 ```sh
 pdd --skill | less
@@ -355,7 +353,7 @@ Uninstall:
 npm uninstall -g pdd
 ```
 
-PDD Alpha copies its skills to `~/.agents/skills/pdd-*` and `~/.claude/skills/pdd-*` (and `$CLAUDE_CONFIG_DIR/skills/pdd-*` if you set that variable). Delete those folders after you uninstall. Other leftovers are only in your clones: `.git/pdd`, the `*.pdd-worktrees` folders, `pdd/...` branches and the `pdd-` Herdr sessions. See [Clean up after a run](#clean-up-after-a-run).
+PDD Alpha 0.1.0 makes no folder in your home directory. Leftovers are only in your clones: `.git/pdd`, the `*.pdd-worktrees` folders, `pdd/...` branches and the `pdd-` Herdr sessions. See [Clean up after a run](#clean-up-after-a-run).
 
 ## 11. Known limits
 
@@ -373,7 +371,7 @@ This is an alpha. These limits are known today:
 - The PR title is the last commit message. The PR body is short and does not link the issue. Edit both on GitHub, and add `Closes #42`, before you merge.
 - PDD refuses to go on when the run's worktree or branch changed after its saved input. Do not edit files there during a run.
 - `small-change` has made real PRs. `bug` has made one real PR. `feature` is tested only with stand-ins, not on real issues. Claude Code inside workflow runs is less tested than Codex.
-- A session starts with about 600 tokens. Every workflow run stage still starts with the full guide (about 21,000 tokens). This uses your agent plan's quota.
+- Every session and every stage starts with the full guide (about 21,000 tokens). This uses your agent plan's quota.
 - Herdr 0.9.1 is the tested version. Other versions may work, but they are not tested.
 
 ## 12. Troubleshooting

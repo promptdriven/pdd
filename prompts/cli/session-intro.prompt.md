@@ -21,12 +21,14 @@ When a request fits a workflow, suggest it.
 
 Use this pdd: {pdd}
 If a skill is missing, read it in {packageRoot}/skills.
+{runbook line, only when the file exists}
 {request, or: Ask what the person wants to work on.}
 ```
 
 - `{cwd}` is the folder where pdd runs.
 - `{core rules}` are the `- ` lines of the `## Core rules` section in `<packageRoot>/skills/pdd-prompting/SKILL.md`, unchanged and in order. The intro and the skill cannot drift apart. If the file cannot be read or the section has no rule, throw an error.
 - `{pdd}` is the absolute Node executable (`process.execPath`) and the absolute `<packageRoot>/bin/pdd.mjs`, joined by a space. Quote a word for a POSIX shell only when it has characters outside `A-Z a-z 0-9 _ @ % + = : , . / -`. A login shell can find another `pdd` on PATH, so the agent must use this command.
+- The runbook line is `Runtime: read {packageRoot}/RUNBOOK.md before you run a check.` with the absolute path. Add it only when that path is a file. Without the file, the message has no runbook line and no empty line in its place. The runtime team ships RUNBOOK.md later; `pdd check` does not exist yet.
 - `{request}` is the person's request text, unchanged. Without a request, the last line is `Ask what the person wants to work on.`
 - With `workflowName`, add one last line: `Use the pdd-{workflowName} skill for this request.` If `<packageRoot>/skills/pdd-{workflowName}/SKILL.md` is not a readable file, throw an error.
 

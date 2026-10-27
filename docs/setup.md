@@ -9,7 +9,7 @@ node bin/pdd.mjs --version
 
 Use these local invocations to avoid replacing an existing global `pdd`. PDD requires no enrollment or hosted-service setup. For the local native session launcher, have `codex` or `claude` installed on PATH and use its normal account/provider access. See official [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview) setup only if needed; an already usable agent needs no new login. The launcher preserves cwd and native login while starting agents in full-access mode without approval prompts. Codex uses --no-daemon, --dangerously-bypass-approvals-and-sandbox and invocation-only trust for the exact cwd; Claude uses --dangerously-skip-permissions. PDD does not copy credentials or write global agent configuration.
 
-Once your installed native agent is ready, use `node bin/pdd.mjs session --agent codex` or `node bin/pdd.mjs session --agent claude` from the package root. The agent gets a short first message. It loads the PDD skills (the Prompting guide and the workflows) when it needs them.
+Once your installed native agent is ready, use `node bin/pdd.mjs session --agent codex` or `node bin/pdd.mjs session --agent claude` from the package root. The full canonical guide, skill and manual workflow content are supplied automatically before Story authoring.
 
 Before PR stages, the project needs a GitHub `origin` and the local `refs/remotes/origin/<default-branch>` commit ref. PDD does not fetch missing refs.
 

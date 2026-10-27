@@ -147,6 +147,19 @@ test('SESSION1: pdd session starts the agent with the short intro after the skil
   assert.deepEqual(readdirSync(project), []);
 });
 
+// Wrong: the intro hides a package runbook, or names a runbook that does not exist.
+test('SESSION4: the intro names RUNBOOK.md only when the package has one', t => {
+  const { pkg, run } = packageCopy(t);
+  const line = `Runtime: read ${join(pkg, 'RUNBOOK.md')} before you run a check.`;
+  const without = JSON.parse(run(['session']).stdout).argv.at(-1);
+  assert.equal(without.includes('Runtime:'), false);
+  writeFileSync(join(pkg, 'RUNBOOK.md'), '# Runbook\n');
+  const lines = JSON.parse(run(['session']).stdout).argv.at(-1).split('\n');
+  assert.equal(lines.filter(text => text.startsWith('Runtime:')).length, 1);
+  assert.equal(lines.at(-2), line);
+  assert.deepEqual(lines.filter(text => text !== line), without.split('\n'));
+});
+
 // Wrong: the manual workflow shortcut still pastes recipe files instead of naming the skill.
 test('SESSION2: pdd workflow NAME uses the same intro and names the pdd-NAME skill', t => {
   const { run } = packageCopy(t);

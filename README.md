@@ -63,16 +63,7 @@ cd your-project
 pdd session
 ```
 
-This opens Codex with a short PDD message (about 600 tokens). The agent asks what you want to work on. You need no issue and no setup. Plan a change, draft prompts, Stories and test cases, or write code.
-
-The method is in four skills. The agent loads a skill only when it needs it:
-
-| Skill | What it holds |
-|---|---|
-| `pdd-prompting` | The Prompting guide, its core rules and how to review |
-| `pdd-small-change`, `pdd-bug`, `pdd-feature` | The workflows: areas, steps and gates |
-
-Each `pdd` command keeps a copy of these skills in `~/.agents/skills/` (Codex) and `~/.claude/skills/` (Claude Code). So they also work in a chat that you open yourself. If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/`, so PDD copies them there too. PDD never copies them into your repo. A folder there that PDD did not make stays as it is.
+This opens Codex with the Prompting guide, the PDD skill and the three workflows loaded. The agent summarizes the method and asks what you want to work on. You need no issue and no setup. Plan a change, draft prompts, Stories and test cases, or write code.
 
 You can also give the first request, or pick Claude Code:
 
@@ -120,14 +111,14 @@ To watch or talk to the agent of the current stage, run `pdd workflow attach RUN
 
 | Command | What it does |
 |---|---|
-| `pdd session [--agent codex\|claude] [request]` | Open your coding agent with a short PDD message |
+| `pdd session [--agent codex\|claude] [request]` | Open your coding agent with PDD loaded |
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Run a workflow on a GitHub issue (number, `owner/repo#N` or URL) |
 | `pdd workflow resume RUN_ID` | Show where a run is. It starts no new work |
 | `pdd workflow resume RUN_ID --decision approve` | Approve the current step and continue the run |
 | `pdd workflow resume RUN_ID --decision skip` | Skip the current optional step and continue |
 | `pdd workflow attach RUN_ID` | Watch and talk to the agent of the current stage |
 | `pdd workflow list [--json]` | List the workflows you can run (not the runs) |
-| `pdd workflow feature\|bug\|small-change [request]` | Open your coding agent with that workflow's skill, in one normal chat (no PR) |
+| `pdd workflow feature\|bug\|small-change [request]` | Follow one workflow in a single normal session (no stages, no PR) |
 | `pdd --skill` | Print the full Prompting guide and the PDD skill |
 | `pdd completion bash\|zsh` | Print shell completion |
 | `pdd --help`, `pdd --version` | Help and version |
@@ -162,7 +153,7 @@ npm uninstall -g pdd                           # remove PDD Alpha
 - The PR step can fail when an agent leaves files that are not committed. The PR title is the last commit message, and the body does not link the issue. Edit them before you merge.
 - Do not edit files in a run's worktree while it runs. PDD refuses to continue when the saved input changed.
 - `small-change` has made real PRs. `bug` has made one real PR. `feature` is not yet tested on real issues. Claude Code inside workflow runs is less tested than Codex.
-- A session starts with about 600 tokens. Each workflow run stage still starts with the full guide (about 21,000 tokens). This uses your agent plan's quota.
+- Each session and each stage starts with the full guide (about 21,000 tokens). This uses your agent plan's quota.
 - PDD does not remove old worktrees or Herdr sessions. See [Clean up](docs/USAGE.md#clean-up-after-a-run).
 
 ## Report a problem
@@ -173,7 +164,7 @@ npm uninstall -g pdd                           # remove PDD Alpha
 
 - [Usage guide](docs/USAGE.md): install, sessions, workflow runs, approvals, limits and fixes
 - [Prompting guide](docs/prompting-guide.md)
-- [PDD skills](skills/): pdd-prompting, pdd-small-change, pdd-bug, pdd-feature
+- [PDD skill](skills/pdd/SKILL.md)
 - [Sessions](docs/prompt-sessions.md)
 - [Workflows in depth](docs/workflows.md)
 - [CLI reference](docs/cli.md)

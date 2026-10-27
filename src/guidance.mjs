@@ -1,4 +1,4 @@
-// Generated from prompts/cli/guidance.prompt.md (sha256: 1ee1e80207cf7c886aeb48ff9ef89d0aadf028f61bf8d467d66494dd71904813).
+// Generated from prompts/cli/guidance.prompt.md (sha256: 6d73465dd021555a2e9c69f04c261047316cfb9bdcd7655f17656afcb8617b46).
 import { readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 

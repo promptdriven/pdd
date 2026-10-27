@@ -18,8 +18,8 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'completion', 'workflow.list']);
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
@@ -28,27 +28,9 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['session', '--dangerously-skip-permissions'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
-    ['completion'], ['--version', 'extra'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
+    ['completion'], ['--version', 'extra'], ['--skill'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
     assert.throws(() => parseArgv(argv), CommandInputError, JSON.stringify(argv));
   }
-});
-
-// Wrong: --skill prints only navigational links, reads the guide after the skill, or reports a missing guide as success.
-test('ALPHA2: full canonical guide precedes skill and nested references; missing guide fails before output', async t => {
-  const packageRoot = temp(t), stdout = capture(), stderr = capture();
-  mkdirSync(join(packageRoot, 'docs')); mkdirSync(join(packageRoot, 'skills/pdd/references/nested'), { recursive: true });
-  const guide = '# Prompting guide\nFull method\nFinal guide paragraph\n';
-  writeFileSync(join(packageRoot, 'docs/prompting-guide.md'), guide);
-  writeFileSync(join(packageRoot, 'skills/pdd/SKILL.md'), '# PDD skill\nBefore Story\n');
-  writeFileSync(join(packageRoot, 'skills/pdd/references/review.md'), '# Review reference\n');
-  writeFileSync(join(packageRoot, 'skills/pdd/references/nested/cases.md'), '# Independent cases\n');
-  assert.equal(await runPdd(['--skill'], { packageRoot, stdout, stderr }), 0);
-  assert.ok(stdout.text.includes(guide));
-  assert.ok(stdout.text.indexOf(guide) < stdout.text.indexOf('# PDD skill'));
-  assert.ok(stdout.text.includes('# Review reference')); assert.ok(stdout.text.includes('# Independent cases'));
-  assert.ok(stdout.text.includes(packageRoot)); assert.equal(stderr.text, '');
-  rmSync(join(packageRoot, 'docs/prompting-guide.md')); stdout.text = '';
-  assert.equal(await runPdd(['--skill'], { packageRoot, stdout, stderr }), 1); assert.equal(stdout.text, '');
 });
 
 // Wrong: local recipe discovery follows outside symlinks, installs defaults or executes an agent.
@@ -100,12 +82,8 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor|phone)\b/);
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
-  const skill = run(['--skill']); assert.equal(skill.status, 0, skill.stderr);
-  const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8'), skillText = readFileSync(join(packed, 'skills/pdd/SKILL.md'), 'utf8');
-  assert.ok(skill.stdout.includes(guide)); assert.ok(skill.stdout.indexOf(guide) < skill.stdout.indexOf(skillText));
-  for (const name of names.filter(name => name.startsWith('skills/pdd/references/') && name.endsWith('.md'))) {
-    assert.ok(skill.stdout.includes(readFileSync(join(packed, name), 'utf8')), name);
-  }
+  const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
+  const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8');
   const empty = run(['workflow', 'list', '--json']); assert.equal(empty.status, 0,empty.stderr);
   assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
   const recipes = run(['workflow', 'list', '--json'], packed); assert.equal(recipes.status, 0);

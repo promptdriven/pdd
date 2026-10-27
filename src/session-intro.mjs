@@ -1,5 +1,5 @@
-// Generated from prompts/cli/session-intro.prompt.md (sha256: 63e14534dfccfc174e4390617459a6f178e686ee3b6ef117c26e7cba2aa2f4ce).
-import { lstatSync, readFileSync } from 'node:fs';
+// Generated from prompts/cli/session-intro.prompt.md (sha256: 9e09cc6f49b5d77f9d15d7e1037f26f7a6c659d8ef0371926e627866b906bf0b).
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const shellWord = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
@@ -18,6 +18,9 @@ export function renderSessionIntro({ packageRoot, cwd, request = '', workflowNam
     throw Error('The selected workflow skill is not a file');
   }
   const pdd = [process.execPath, resolve(packageRoot, 'bin/pdd.mjs')].map(shellWord).join(' ');
+  const runbook = resolve(packageRoot, 'RUNBOOK.md');
+  let hasRunbook = false;
+  try { hasRunbook = statSync(runbook).isFile(); } catch { /* No runbook yet: the intro names none. */ }
   return [
     `This is a PDD session in ${cwd}.`,
     'In PDD, prompts are the source. Write the prompt, Story and test cases first, then the code.',
@@ -33,6 +36,7 @@ export function renderSessionIntro({ packageRoot, cwd, request = '', workflowNam
     '',
     `Use this pdd: ${pdd}`,
     `If a skill is missing, read it in ${resolve(packageRoot, 'skills')}.`,
+    ...(hasRunbook ? [`Runtime: read ${runbook} before you run a check.`] : []),
     request || 'Ask what the person wants to work on.',
     ...(workflowName !== undefined ? [`Use the pdd-${workflowName} skill for this request.`] : []),
   ].join('\n');

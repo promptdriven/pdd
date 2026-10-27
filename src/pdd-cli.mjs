@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8e5349a532faa8fcf0de227c1c86f76551eb7608fdc6acdcc5ab83c6cc72bb23).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ca1be11fa647e674fa8ff28e8b68ed4ab5c383a15a7bfb6bd9de8e002a491735).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,14 +18,9 @@ export function renderHelp(prefix = []) {
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',
     'Keep the PDD controller running while its native stages work in background Herdr. After controller exit, use explicit resume to reconcile the original; no background PDD daemon continues it.',
     'Use workflow attach RUN_ID for the actual active stage; completed archives are not live sessions.'].join('\n');
-}
-function guidanceError(stderr) {
-  line(stderr, 'The complete PDD guidance could not be read. Use a package containing the canonical guide, skill, references and manual recipes.');
-  return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages,
@@ -43,9 +38,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
         line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
-    case 'skill':
-      try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }
-      catch { return guidanceError(stderr); }
     case 'workflow-run':
     case 'workflow-resume':
     case 'workflow-attach': {
