@@ -57,7 +57,8 @@ test('concurrent runs share repository but have separate worktree workspaces',as
  const f=await fixture(t),cwd=join(f.root,'run2');await mkdir(cwd);
  const [a,b]=await Promise.all([f.open(),f.open({runId:randomUUID(),cwd,issueNumber:3})]);
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.notEqual(a.workspaceId,b.workspaceId);
- assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','#2 small-change','#3 small-change']);
+ // Concurrent allocations may acquire the shared layout lock in either order.
+ assert.deepEqual(f.workspaces.map(w=>w.label).sort(),['coffee','#2 small-change','#3 small-change'].sort());
 });
 test('repo-name clash qualifies both owned labels and preserves existing run',async t=>{
  const f=await fixture(t),a=await f.open(),other=join(f.root,'other');await mkdir(other);
