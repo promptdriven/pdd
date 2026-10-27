@@ -29,3 +29,15 @@ test('session-file evidence matches exactly one Codex session and gives a reopen
   assert.deepEqual(found.matches, [{ agent: 'codex', id, source: 'session-file' }]);
   assert.equal(reopenCommand('/tmp/worktree', found.matches[0]), `cd '/tmp/worktree' && codex resume ${id}`);
 });
+
+test('session-file evidence refuses zero and multiple matches with reasons', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'pdd-session-cardinality-')); t.after(async () => execFileSync('rm', ['-rf', home]));
+  const sessions = join(home, '.codex', 'sessions'); await mkdir(sessions, { recursive: true });
+  const base = { type: 'session_meta', cwd: '/tmp/worktree', timestamp: 1500 };
+  const none = await matchStageSessionFiles({ agent: 'codex', root: '/tmp/worktree', startedAt: 1000, endedAt: 2000 }, { home, codexHome: join(home, '.codex') });
+  assert.equal(none.matches.length, 0); assert.match(none.reason, /no session file/);
+  await writeFile(join(sessions, 'rollout-one.jsonl'), JSON.stringify({ ...base, id: '123e4567-e89b-42d3-a456-426614174000' }) + '\n');
+  await writeFile(join(sessions, 'rollout-two.jsonl'), JSON.stringify({ ...base, id: '123e4567-e89b-42d3-a456-426614174001' }) + '\n');
+  const many = await matchStageSessionFiles({ agent: 'codex', root: '/tmp/worktree', startedAt: 1000, endedAt: 2000 }, { home, codexHome: join(home, '.codex') });
+  assert.equal(many.matches.length, 2); assert.match(many.reason, /2 session files/);
+});
