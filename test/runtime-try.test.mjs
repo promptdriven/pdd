@@ -252,7 +252,7 @@ test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try n
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'public')); writeFileSync(join(repo, 'public/index.html'), '<html></html>\n');
     writeFileSync(join(repo, 'public/map.json'), '{"screens": []}\n'); writeFileSync(join(repo, 'app.json'), `${APP_MAP}\n`); });
   const fake = await fakeRuntime(t, trying());
-  for (const [path, said] of [['public/index.html', /--app-map public\/index\.html is not an app map: it is not JSON\./],
+  for (const [path, said] of [['public/index.html', /--app-map public\/index\.html is not an app map: it is not JSON\. .*See RUNBOOK\.md §13\./],
     ['public/map.json', /--app-map public\/map\.json is not an app map: its schema_version is not "prompt-runtime\.app-map\.v1"\./],
     ['nope.json', /--app-map nope\.json is not a Git-visible file in this repository\./]]) {
     const result = await tryStory(setup, fake, ['place-order'], { '--app-map': path, '--no-open': true });
