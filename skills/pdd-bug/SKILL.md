@@ -16,7 +16,9 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - The main chat coordinates and talks with the person. It does not write code.
 - Run each step in a new subagent, never reused, so verify never checks its own code. Brief it with file paths, not the chat history.
 - At a gate, show the result, ask the person, and stop. For changes, revise here and ask again.
+- At the approve gate, show the real check report link and the Try link (when there are any).
 - An optional step is a question in the chat, not a stop.
+- A person decides expected values. Never change a test to make it pass.
 - Never push, open a PR or merge.
 
 ## In a run (see the first message)

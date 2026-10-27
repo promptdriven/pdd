@@ -63,7 +63,7 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    assert.ok(bytes <= 3072, `${name} is ${bytes} bytes`);
+    assert.ok(bytes <= 3584, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -82,4 +82,15 @@ test('SKILLS5: only prompt-writing steps read the guide; check reads the core pa
     }
     assert.equal(/guide\.md/.test(read(`${name}/SKILL.md`)), false, `${name}/SKILL.md must not send every step to the guide`);
   }
+});
+
+// Wrong: runtime steps run without a runbook, or an agent may edit a test until it passes.
+test('SKILLS6: runtime lines depend on RUNBOOK.md and every workflow keeps expected values with the person', () => {
+  for (const name of Object.keys(AREAS)) assert.match(read(`${name}/SKILL.md`), /A person decides expected values\. Never change a test to make it pass\./);
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    assert.match(read(`${name}/steps/try.md`), /If pdd has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
+    assert.match(read(`${name}/SKILL.md`), /At the approve gate, show the real check report link and the Try link/);
+  }
+  assert.match(read('pdd-bug/steps/reproduce.md'), /If pdd has a RUNBOOK\.md[^\n]*`pdd check`[^\n]*CURRENT prompt/);
+  assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
 });
