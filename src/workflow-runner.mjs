@@ -240,9 +240,8 @@ async function handoff(s, stage, r, directory) {
   const h = await readWorkflowHandoff({ handoffPath: s.pending.handoffPath, cwd: r.root, artifactDirectory: join(directory, 'artifacts'),
     expected: { runId: s.runId, stageId: stage.id, issueUrl: s.issue.url, inputRevision: s.pending.input.head },
     requiredRoles: roles });
-  if (stage.protocol === 'work' && !h.files.some(file => file.storage !== 'run')) fail('Work stages require project deliverables.');
   const reportOnly = stage.protocol === 'report';
-  if (!h.files.length && !reportOnly) fail('This work stage requires concrete project artifacts.');
+  if ((!h.files.length && !reportOnly) || (stage.protocol === 'work' && !h.files.some(file => file.storage !== 'run'))) fail('This work stage requires concrete project artifacts.');
   if (stage.protocol === 'proposal' && !h.testCommands?.length) fail('Independent expectations and a native test argv plan are required.');
   return { summary: h.summary, files: h.files, testCommands: h.testCommands ?? [], reportOnly: !h.files.length,
     path: relative(directory, s.pending.handoffPath) };
