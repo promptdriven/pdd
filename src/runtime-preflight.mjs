@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 32644f79879c49b6200a6a88be12b231e1dc6c209a208de36af6b0345925aacb).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4296824de01db65d022b4195e15c7fc9eac175dfc50c98c72d1ef154c8080722).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -407,9 +407,10 @@ export function fillHashes({ root, files = gitFiles(root) }) {
   return result;
 }
 
-const SECRET_NAME = /^(?:\.env.*|auth\.json|credentials\.json|id_rsa|id_ed25519)$/;
-const SECRET_PART = new Set(['secrets', '.ssh', '.codex', '.terraform']);
-export const isSecretPath = path => SECRET_NAME.test(basename(path)) || path.split('/').some(part => SECRET_PART.has(part));
+const SECRET_NAME = /^(?:\.env.*|auth\.json|credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.npmrc|\.netrc|\.git-credentials|\.pypirc|.+\.(?:pem|key|p12|pfx|keystore|tfstate|tfvars))$/;
+const SECRET_PART = new Set(['secrets', '.ssh', '.codex', '.terraform', '.aws']);
+export const isSecretPath = path => SECRET_NAME.test(basename(path)) || path.split('/').some(part => SECRET_PART.has(part))
+  || /(?:^|\/)\.docker\/config\.json$/.test(path);
 
 function octal(header, offset, length, value) { header.write(`${value.toString(8).padStart(length - 1, '0')}\0`, offset, length, 'latin1'); }
 function tarHeader(name, size, type) {

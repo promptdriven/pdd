@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, defaultMaxCalls, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
+import { captureSource, defaultMaxCalls, isSecretPath, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
@@ -261,4 +261,20 @@ test('RUNTIME-RULES4: a story may have two test files; each one must still cover
   const doc = readJson(second); doc.criteria.pop(); doc.steps[0].checks = doc.steps[0].checks.filter(c => c.criterion_id !== 'AC3'); writeJson(second, doc);
   const partial = await check(repo, home, ['tests/place-order-2.json']);
   assert.equal(partial.code, 4); assert.equal(partial.json.rows[0].refusals[0].code, 'story-criterion-mismatch');
+});
+
+// Wrong: a credential file with a common name goes up with the source (review R6).
+test('RUNTIME-CAPTURE3: the secret-name filter covers common credential files', async t => {
+  for (const path of ['.env', 'config/.env.local', 'auth.json', 'credentials.json', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa', '.npmrc', 'app/.netrc',
+    '.git-credentials', 'certs/server.pem', 'tls/server.key', 'store.p12', 'store.pfx', 'release.keystore', '.aws/credentials', 'infra/.aws/config',
+    'infra/main.tfstate', 'infra/prod.tfvars', '.pypirc', '.docker/config.json', 'home/.docker/config.json', 'secrets/a.txt', '.ssh/known_hosts', '.codex/auth.json', '.terraform/x']) {
+    assert.equal(isSecretPath(path), true, path);
+  }
+  for (const path of ['README.md', 'src/keyboard.mjs', 'docs/key-points.md', 'monkey.js', 'prompts/pem_reader.prompt.md', 'docker/config.json', 'aws/notes.md', 'tests/env.json']) {
+    assert.equal(isSecretPath(path), false, path);
+  }
+  const { repo, home } = harbor(t);
+  writeFileSync(join(repo, 'deploy.pem'), 'x');
+  const result = await check(repo, home, ['place-order'], {});
+  assert.equal(result.code, 4); assert.match(result.err, /deploy\.pem: the name looks like a secret/); assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
 });

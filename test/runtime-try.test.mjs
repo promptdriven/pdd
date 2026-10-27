@@ -203,3 +203,28 @@ test('RUNTIME-TRY9: a paused Try is reused like a running one', async t => {
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0, again.err); assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
+
+// Wrong: a Try that the server no longer knows (404) or that expired (410) blocks pdd try until the person edits the state file (review R8).
+test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; the record goes and the next pdd try makes a new one', async t => {
+  for (const status of [404, 410]) {
+    const setup = harbor(t);
+    const gone = new Set(), lastTry = f => f.posts.filter(post => post.command === 'try').at(-1).request.requestId;
+    const fake = await fakeRuntime(t, (entry, f) => {
+      const id = entry.url.split('/').at(-1);
+      if ((entry.method === 'DELETE' || entry.method === 'GET') && gone.has(id)) {
+        return { status, json: { error: { code: status === 404 ? 'not-found' : 'result-expired', message: 'gone' } } };
+      }
+      return trying()(entry, f);
+    });
+    assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+    gone.add(lastTry(fake));
+    const stopped = await tryStory(setup, fake, ['place-order'], { '--stop': true });
+    assert.equal(stopped.code, 0, `${status}: ${stopped.err}`); assert.match(stopped.out, /is stopped/);
+    assert.equal((await tryStory(setup, fake, ['place-order'], { '--stop': true })).code, 2);
+    assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+    gone.add(lastTry(fake));
+    const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+    assert.equal(again.code, 0, `${status}: ${again.err}`);
+    assert.equal(fake.posts.filter(post => post.command === 'try').length, 3, String(status));
+  }
+});

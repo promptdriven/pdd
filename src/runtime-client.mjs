@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 80edf7c2339fd1566c176af6c58851d17ca7a8ddb69e567cad35e9c5d4641145).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4f77e3e77b435273d355334e5cf8470466441a1888c93237db22946634205d58).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -188,7 +188,7 @@ function judgeGet(reply, id, command) {
   if (reply.lost) return { kind: 'again' };
   if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
-  if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.' };
+  if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
   if (reply.status === 401) return { kind: 'auth' };
   if (gateText(reply)) return { kind: 'gate' };
   return { kind: 'again' };
@@ -554,7 +554,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   const capture = captureSource(root);
   const other = otherFiles(capture.files, found);
-  if (other.length) context.warnings.push(`Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`);
+  if (other.length) {
+    const note = `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`;
+    context.warnings.push(note);
+    line(ports.stderr, note);
+  }
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -610,7 +614,10 @@ function tryLink(answer, origin) {
 async function stopTry(context, record) {
   const id = context.ports.randomUUID();
   context.store.posted(context.store.folder('tries'), id);
-  const reply = await context.runtime.stop(record.id, id), verdict = judgePost(reply, id, 'stop', context.secrets);
+  const reply = await context.runtime.stop(record.id, id);
+  // The server no longer knows this Try (404) or it expired (410): it is stopped, and the record can go.
+  if (reply.status === 404 || reply.status === 410) return;
+  const verdict = judgePost(reply, id, 'stop', context.secrets);
   if (verdict.kind === 'stop') throw new Stop(5, verdict.note.message);
   if (verdict.kind === 'not_run') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
   if (verdict.kind === 'refused') throw new Stop(4, `The runtime refused to stop this Try: ${verdict.refusal.message} (${verdict.refusal.code})`);
@@ -643,7 +650,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), identity = signIn(ports.gh, context.store);
+    const capture = captureSource(root), other = otherFiles(capture.files, found);
+    if (other.length) line(ports.stderr, `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`);
+    const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
     context.folder = store.folder('tries');
@@ -654,7 +663,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
-      const ended = read.kind === 'missing' || ['failed', 'refused'].includes(answer?.state)
+      // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
+      const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping'].includes(answer.result?.session?.state));
       if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
       // A Try that may still start or run is never made twice by accident.
@@ -834,7 +844,9 @@ async function watchSavedTests(context, tryId, wait) {
     polls += 1;
     if (polls % 6 === 0) {
       const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
-      if (read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) { wait = false; line(ports.stdout, 'The Try has ended.'); }
+      if ((read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) || read.kind === 'missing' || read.status === 410) {
+        wait = false; line(ports.stdout, 'The Try has ended.');
+      }
     }
   }
 }

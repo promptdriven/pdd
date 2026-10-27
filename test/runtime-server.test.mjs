@@ -41,6 +41,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.equal(new Set(fake.posts.map(post => post.request.requestId)).size, 3);
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
   assert.match(result.err, /Lint passed\. Sent 2 checks \(6 files, \d+ KB\) at \d\d:\d\d:\d\d\./);
+  assert.match(result.err, /^Warning: 1 of the 6 files sent are not prompt, story or test files\. Run pdd check --files to see them\.$/m);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
   assert.equal(result.out.split('\n')[3], 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls');
   assert.match(result.out, /^2 of 2 stories passed\. Model asked for: gpt-6\.1-sol\.$/m);

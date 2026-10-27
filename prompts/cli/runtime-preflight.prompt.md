@@ -47,7 +47,7 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 ## Source capture
 
-- Use the Git files. Refuse (exit 4, with the paths) a symlink, a submodule or another non-regular file, and a secret name: `.env*`, `auth.json`, `credentials.json`, `id_rsa`, `id_ed25519`, or a path part `secrets`, `.ssh`, `.codex`, `.terraform`. Refuse more than 10,485,760 bytes or more than 10,000 files, with the total and the 5 largest files.
+- Use the Git files. Refuse (exit 4, with the paths) a symlink, a submodule or another non-regular file, and a secret name: `.env*`, `auth.json`, `credentials.json`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`, `.npmrc`, `.netrc`, `.git-credentials`, `.pypirc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `*.tfstate`, `*.tfvars`, `.docker/config.json`, or a path part `secrets`, `.ssh`, `.codex`, `.terraform`, `.aws`. Refuse more than 10,485,760 bytes or more than 10,000 files, with the total and the 5 largest files.
 - Write the tar in memory in Node: ustar, Git names with no `./`, mode 0600, mtime 0, uid and gid 0, empty user and group names, a PAX `path` record for a name that is not ASCII or is longer than 100 bytes, and two zero blocks at the end. The same files give the same bytes. `source_sha256` = SHA-256 of the tar bytes.
 - Stat each file before and after (ino, size, mtime in ns). If a file or the file list changes, capture again, at most 3 times; then stop with exit 5.
 
