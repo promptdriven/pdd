@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { exitCodeFor } from '../src/runtime-output.mjs';
@@ -218,4 +218,70 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.match(result.out, /AI calls: 0 \(and 1 unknown\)/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
+});
+
+// Wrong: a 429 with no Retry-After header is retried at once, again and again (it must wait 5 s).
+test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request ID', async t => {
+  const setup = harbor(t), times = [];
+  let clock;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'check') {
+      times.push(clock.now);
+      if (times.length === 1) return { status: 429, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
+    }
+    return f.normal(entry);
+  });
+  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  clock = made.clock;
+  assert.equal(await runCheck({ words: ['place-order'], options: {}, cwd: setup.repo }, made.ports), 0, made.ports.stderr.text);
+  assert.equal(times.length, 2); assert.ok(times[1] - times[0] >= 5000, String(times[1] - times[0]));
+});
+
+// Wrong: a pdd that was killed mid-send leaves rows that --read shows as passed (exit 0) or never reads.
+test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a row never sent is not run', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const first = await check(setup, fake, ['place-order']);
+  assert.equal(first.code, 0);
+  const folder = join(setup.state, 'batches', first.batch), saved = JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8'));
+  const id = saved.rows[0].request_ids[0], gets = fake.gets.length;
+  rmSync(join(folder, `${id}.json`));
+  saved.rows[0].state = 'sending';
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
+  const read = await check(setup, fake, [], { '--read': true });
+  assert.equal(read.code, 0, read.out); assert.equal(fake.gets.length, gets + 1); assert.equal(fake.gets.at(-1).url, `/v1/runs/${id}`);
+  saved.rows[0] = { ...saved.rows[0], state: 'ready', request_ids: [] };
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
+  const never = await check(setup, fake, [], { '--read': true });
+  assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
+  assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
+});
+
+// Wrong: after Ctrl-C pdd still posts the waiting check with a new ID.
+test('RUNTIME-SERVER13: no POST starts after Ctrl-C, even for a check that waits after a 429', async t => {
+  const setup = harbor(t);
+  let interrupt;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.request.scenario === 'tests/place-order.json') {
+      return { status: 429, headers: { 'retry-after': '1' }, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'busy' } } };
+    }
+    if (entry.method === 'GET') { interrupt(); return { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') }; }
+    return f.normal(entry);
+  });
+  const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  interrupt = () => clock.interrupt?.();
+  assert.equal(await runCheck({ words: [], options: {}, cwd: setup.repo }, ports), 3);
+  assert.equal(fake.posts.filter(post => post.command === 'check').length, 2);
+  assert.match(ports.stdout.text, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\)/);
+});
+
+// Wrong: the token reaches --json through an expected or actual value that a server echoed.
+test('RUNTIME-SERVER14: --json output and saved answers never hold the token, even inside check values', async t => {
+  const setup = harbor(t);
+  const echo = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 900, actual: { note: `token ${TOKEN}` }, passed: false }];
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', echo) } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(result.code, 1);
+  assert.equal(result.out.includes(TOKEN), false);
+  assert.deepEqual(result.json.rows[0].failed_checks[0].actual, { note: 'token [secret]' });
+  for (const path of filesUnder(setup.state)) if (statSync(path).isFile()) assert.equal(readFileSync(path, 'utf8').includes(TOKEN), false, path);
 });

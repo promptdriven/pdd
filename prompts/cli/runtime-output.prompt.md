@@ -8,7 +8,7 @@ A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, 
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals`; calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
 - Seconds are rounded to 0.1.
-- Clean all server text: remove control characters, the token and server paths (`/home/…`, `/srv/…`, `/var/…`, `/tmp/…` and similar).
+- Clean all server text: remove control characters, the token and server paths (`/home/…`, `/srv/…`, `/var/…`, `/tmp/…` and similar). Expected and actual values keep their JSON type but lose the token.
 
 ## Exit code
 
@@ -16,7 +16,7 @@ The first match from the top wins:
 
 | Code | When |
 |---|---|
-| 3 | A row is unknown, queued or running, the lint result is unknown, or Ctrl-C |
+| 3 | A row is unknown, queued, running or in any state that is not a known end, the lint result is unknown, or Ctrl-C |
 | 5 | A row was not run (sign-in, gate, server busy at the timeout, no AI room) |
 | 4 | A row was refused (local preflight, lint or engine) |
 | 1 | A row failed |

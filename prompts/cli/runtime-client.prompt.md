@@ -37,7 +37,8 @@ Order:
 | timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch |
 
 - GET: 200 gives the state. 404 after a POST: keep reading; at the timeout the row is unknown. 410: unknown, `result expired`. 401: stop reading; open rows stay open (exit 3) and pdd prints `Run gh auth login`. A wrong ID or command: unknown. Server `state: unknown`: show its `why`.
-- At the timeout: open rows stay `queued`/`running` (exit 3); waiting rows are not run (exit 5).
+- At the timeout: open rows stay `queued`/`running` (exit 3); waiting rows are not run (exit 5). `Retry-After` is whole seconds from 1 to 300; no header means 5 s.
+- A row is marked `sending` before its POST. If pdd was killed, `--read` reads every posted row by its ID (a posted row with no answer is unknown, exit 3) and calls a row with no request ID not run.
 - A server refusal `invalid-input` gets the local P9 rule as its hint. A server `interface-unapproved` or `interface-stale` on `steps[N]` gets the P7 hint.
 - Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3.
 - `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. One GET for each open row, saved JSON for ended rows. It never makes a request ID and never POSTs.
@@ -58,7 +59,8 @@ Request IDs appear only in state files and in `--json`.
 ## `pdd try`
 
 - STORY as for `pdd check`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd check`, for this one test.
-- If `repos/<key>.json` has a Try for this test and GET says `result.session.state: running` with a valid link, open that link again. `--new`: stop the old Try first, then make a new one.
+- If `repos/<key>.json` has a Try for this test and GET says `result.session.state: running` with a valid link, open that link again. `--new`: stop the old Try first, then make a new one. A Try that ended (404, failed, refused, session stopped) is forgotten. Any other answer (still starting, unknown, no answer) is exit 3 with no new Try, unless `--new` stops it first.
+- After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
 - POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, tab}` (tab default `call`; no `app_map`, no `max_calls`). Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check. A Try that is ready but has an invalid link is unknown (exit 3); pdd keeps its record so `pdd try --stop` can end it, and never prints that link.
 - Open the link with `open` (macOS) or `xdg-open` (Linux) and print `Try link for "<title>" is open in your browser. It ends in 24 hours, or with: pdd try --stop <story>`. `--no-open`, or a failed open, prints the link instead.
 - `--stop`: DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try.

@@ -463,7 +463,9 @@ function captureOnce(root) {
     throw new PreflightError(4, [`The repository is too big to send: ${files.length} files, ${formatSize(total)}. The limit is ${LIMITS.files} files and 10 MB.`,
       'The largest files:', ...largest].join('\n'));
   }
-  const entries = files.map(file => ({ path: file.path, bytes: readFileSync(join(root, file.path)) }));
+  let entries;
+  try { entries = files.map(file => ({ path: file.path, bytes: readFileSync(join(root, file.path)) })); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   const tar = tarFiles(entries);
   if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
   const same = isDeepStrictEqual(gitFiles(root), names) && files.every((file, index) => {

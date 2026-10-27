@@ -101,3 +101,20 @@ test('RUNTIME-TRY4: 429 is exit 5 with the stop hint; no STORY with many tests l
   assert.equal(refused.code, 4); assert.equal(quiet.posts.length, 0);
   assert.match(refused.out, /steps\[0\] input \/items\/0\/quantity is 0\. The prompt allows 1 to 20\./);
 });
+
+// Wrong: a Try that is still starting is made a second time, so the first one runs with no way to stop it.
+test('RUNTIME-TRY5: a recorded Try that is not ready gives exit 3 and no new Try; --new stops it first', async t => {
+  const setup = harbor(t);
+  let ready = false;
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && !ready && !f.deletes.length
+    ? { status: 200, json: f.job(entry.url.split('/').at(-1), 'try', 'running') } : trying()(entry, f));
+  const slow = await tryStory(setup, fake, ['place-order'], {}, {});
+  assert.equal(slow.code, 3); assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+  const again = await tryStory(setup, fake, ['place-order']);
+  assert.equal(again.code, 3); assert.match(again.err, /pdd try place-order --new/);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+  const fresh = await tryStory(setup, fake, ['place-order'], { '--new': true });
+  assert.equal(fresh.code, 0, fresh.err);
+  assert.equal(fake.deletes.length, 1); assert.equal(fake.posts.filter(post => post.command === 'try').length, 2);
+  ready = true;
+});

@@ -1,11 +1,12 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: a68400edf66635766552b4dcc6c3c622da92588626c5c069ccc1a62ec7cf39de).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: aa879f52b9ce154b8108b26be28d66474962f932f252e6ae9c24f50c11071553).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
 // The first match from the top wins: 3 > 5 > 4 > 1 > 0.
 export function exitCodeFor(rows, { interrupted = false, lintUnknown = false } = {}) {
   const states = new Set(rows.map(row => row.state));
-  if (interrupted || lintUnknown || states.has('unknown') || states.has('queued') || states.has('running')) return 3;
+  // Any state that is not a known end (also queued, running or a half-written row) may still run: 3.
+  if (interrupted || lintUnknown || [...states].some(state => !['passed', 'failed', 'refused', 'not_run'].includes(state))) return 3;
   if (states.has('not_run')) return 5;
   if (states.has('refused')) return 4;
   if (states.has('failed')) return 1;
@@ -33,13 +34,17 @@ export function validLink(value, origin, kind) {
   } catch { return null; }
 }
 
+const scrub = (value, secrets) => typeof value === 'string' ? secrets.reduce((text, secret) => secret ? text.split(secret).join('[secret]') : text, value)
+  : Array.isArray(value) ? value.map(item => scrub(item, secrets))
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrub(item, secrets)])) : value;
+
 // The parts of a server answer that pdd shows.
 export function projectAnswer(answer, { origin, secrets = [] } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null;
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []).map(check => ({
     criterion_id: cleanField(check?.criterion_id, secrets), target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
-    expected: check?.expected, actual: check?.actual, passed: check?.passed === true }));
+    expected: scrub(check?.expected, secrets), actual: scrub(check?.actual, secrets), passed: check?.passed === true }));
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => ({
     code: cleanText(item?.code, secrets) || 'unknown', section: cleanText(item?.section, secrets) || null,
     message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null }));
