@@ -324,7 +324,7 @@ test('open focuses a live chat, resumes an ended native session in its tab, and 
   pane.agent = null;
   const resumed = await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } });
   assert.equal(resumed.exitCode, 0, resumed.message); assert.match(resumed.message, /resum/i);
-  assert.match(pane.commands[1], new RegExp(`claude --dangerously-skip-permissions --resume ${chat.session.id}$`));
+  assert.match(pane.commands[1], new RegExp(`claude --dangerously-skip-permissions --resume '${chat.session.id}'$`));
   assert.equal(attached.length, 1, 'inside Herdr pdd only focuses the tab');
 });
 
@@ -530,4 +530,55 @@ test('status --all shows PR states, done runs last, and reads the Herdr registry
   f.merged = true;
   const merged = await runStatus({ all: true, cwd: f.source }, f.ports);
   assert.match(merged.message, /^example\/project#17 · small-change · build · done · PR #23 · /);
+});
+
+test('R4: at the code gate a chat reply needs a yes-word; other words are refused', async t => {
+  const { f } = await featureToPr1(t);
+  const reply = text => f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: text, userMessageAt: f.clock - 1 }) });
+  f.tick();
+  for (const text of ['sounds good', 'hmm, let me think']) {
+    const refused = await approveRun({ ref: '17', cwd: f.source }, reply(text));
+    assert.equal(refused.exitCode, 1); assert.equal(refused.message, 'Not sure you approved. Run `pdd workflow approve 17` in your terminal.');
+    assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
+  }
+  const ok = await approveRun({ ref: '17', cwd: f.source }, reply('Yes, build the code.'));
+  assert.equal(ok.exitCode, 0, ok.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+});
+
+test('R5: Try links (/s/<token>/) are removed from PR bodies; report links (/r/) stay', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: 'Try it: https://rt.example.test/s/AbC_123-xyz/ and https://rt.example.test/s/QqQ/?tab=call', cwd: run.root }, f.agentPorts());
+  writeFileSync(join(run.runDir, 'verify.md'), 'Try: https://rt.example.test/s/TTTTTTTT/\nReport: https://rt.example.test/r/360b7197\n');
+  await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts());
+  const body = f.prs[0].body;
+  assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Try link removed)').length - 1, 3);
+  assert.match(body, /https:\/\/rt\.example\.test\/r\/360b7197/);
+});
+
+for (const state of ['unknown', 'closed']) test(`R7: when PR 1 is ${state}, approve makes no code branch and changes nothing`, async t => {
+  const { f, run } = await featureToPr1(t);
+  const before = f.record();
+  f.tick();
+  const refused = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, readPrStatus: async () => ({ state, ci: 'unknown' }) });
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, new RegExp(`PR 1 is ${state}`)); assert.match(refused.message, /pdd workflow approve 17/);
+  const after = f.record();
+  assert.deepEqual([after.area, after.branch, after.gate, after.chats.length, after.decisions.length], [before.area, before.branch, before.gate, before.chats.length, before.decisions.length]);
+  assert.equal(f.git(run.root, 'branch', '--list', `${run.branch}-code`), ''); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
+});
+
+test('R9: a session id that is not a UUID is never stored or put in a shell command', async t => {
+  const f = await fixture(t);
+  await f.run(); const chat = f.record().chats[0], pane = f.herdr.paneOf(chat);
+  pane.agent.agent_session.value = "x'; touch /tmp/pwned; '";
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' } })).exitCode, 0);
+  assert.equal(f.record().chats[0].session.id, chat.session.id);
+  pane.agent = null;
+  const record = JSON.parse(readFileSync(join(f.record().runDir, 'status.json'), 'utf8'));
+  record.chats[0].session = { agent: 'claude', id: '$(touch /tmp/pwned)' }; writeFileSync(join(record.runDir, 'status.json'), JSON.stringify(record));
+  const refused = await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' }, findNativeSessions: async () => [] });
+  assert.equal(refused.exitCode, 1); assert.equal(pane.commands.length, 1, 'no resume command was typed');
 });

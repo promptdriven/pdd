@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f007b6b9e57481f4c777c72a0aae7263bbd5ac81a89413582f3516143d1fb359).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 04fdacef2ec7745eef4dce3e6a0a6378818135abca11ca7a41bc6c83f36f85c7).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -16,6 +16,10 @@ import { interfaceBlocks } from './runtime-preflight.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
+// At the code gate a chat reply must say yes in plain words; at other gates any reply from the person counts.
+const YES_WORDS = /\b(?:yes|approved?|build the code|go ahead|code pr now|continue)\b/i;
+// Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
+const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
 const ordinary = promisify(execFileCallback);
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -181,9 +185,9 @@ function hasReportLink(text, env) {
 function prBody(run, area, env, drafts = []) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
-  const lines = steps.map(step => `- **${step}**: ${oneLine(run.done[step].summary) || 'done'}`);
+  const lines = steps.map(step => `- **${step}**: ${redactTry(oneLine(run.done[step].summary)) || 'done'}`);
   let verify = null;
-  try { verify = readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim(); }
+  try { verify = redactTry(readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim()); }
   catch { if (steps.includes('verify')) verify = '_verify.md was not written in the run folder._'; }
   const label = prLabel(run, area), ask = askArea(run), pr1 = ask && prOf(run, ask.name);
   const head = label === 'PR 1' ? [`Part of #${run.number}`, '', 'PR 1 of this run: the prompt, Story and test cases. The code comes in PR 2 only when the person asks for it.']
@@ -273,6 +277,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
 async function codeBranch(run, area, p) {
   const pr1 = prOf(run, area.name), name = `${pr1.branch}-code`;
   const state = await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts);
+  if (!['open', 'merged'].includes(state.state)) throw Error(`PR 1 is ${state.state}, so pdd cannot tell where the code branch should start.`);
   const fetch = async ref => { try { await p.execFile('git', ['fetch', 'origin', ref], { cwd: run.root }); } catch { /* A stale ref only makes the PR base older. */ } };
   if (state.state === 'merged') {
     await fetch(run.baseBranch);
@@ -323,6 +328,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
       gateAskedAt: run.gate.at, decision: 'approve', ignorePrefixes: [CHANGE_PREFIX] },
     { env: p.env, now: p.now, ...(chat.configDir ? (run.agent === 'claude' ? { claudeConfigDir: chat.configDir } : { codexHome: chat.configDir }) : {}) });
     if (evidence?.ok !== true) return fail(`Only the person can approve. Ask them in this chat and wait for their answer, then run this again. Or the person runs "pdd workflow approve ${run.number}" in a terminal. (${oneLine(evidence?.message) || 'no chat evidence'})`);
+    if (askCode && !YES_WORDS.test(evidence.userMessage ?? '')) return fail(`Not sure you approved. Run \`pdd workflow approve ${run.number}\` in your terminal.`);
     record = { via: 'chat', text: evidence.userMessage, sessionId: evidence.sessionId, at: evidence.userMessageAt };
     if (!chat.session?.id && evidence.sessionId) chat.session = { agent: run.agent, id: evidence.sessionId };
   } else {
@@ -332,7 +338,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   let based = '';
   if (askCode) {
     try { based = await codeBranch(run, area, p); }
-    catch (error) { return fail(`pdd could not make the code branch (${oneLine(error.message)}). Nothing changed; try again.`); }
+    catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
   const now = p.now();
   run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at: now, ...(record.text !== undefined ? { text: record.text } : {}) });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2a58b5050bb93da3469666c2772d41fbf6ab9f704365d971f1825b9d36c90f9e).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: e934b8b503ebe87be246c2529dd2c0b54285f898027ca607e3f6c8c3b52b7e70).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
@@ -11,6 +11,8 @@ import { findNativeSessions } from './approval-evidence.mjs';
 const ordinary = promisify(execFileCallback);
 const quote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const problem = (code, message) => Object.assign(Error(message ?? code), { code });
+// Native session ids (Claude --session-id, Codex rollouts) are UUIDs; anything else never reaches a shell line.
+export const validSessionId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 // Markers that make a native agent think it runs inside another agent session (Claude then stops saving transcripts).
 const AGENT_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH)|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX[A-Z_]*|HERDR_[A-Z_]+|PDD_AGENT_SESSION)$/;
 
@@ -31,6 +33,8 @@ export function herdrCommand(ports = {}) {
 }
 
 export function chatCommand({ agent, cwd, messageFile, sessionId, resumeId, configDir }) {
+  if (resumeId !== undefined && !validSessionId(resumeId)) throw problem('invalid_session_id', 'The saved native session id is not a UUID, so pdd will not resume it.');
+  if (resumeId !== undefined) resumeId = quote(resumeId);
   const env = ['env', 'PDD_AGENT_SESSION=1', ...(configDir ? [`${agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME'}=${quote(configDir)}`] : [])];
   const message = messageFile ? [`"$(cat ${quote(messageFile)})"`] : [];
   if (agent === 'claude') return [...env, 'claude', '--dangerously-skip-permissions', ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), ...message].join(' ');
@@ -85,7 +89,7 @@ export async function chatSession(chat, ports = {}) {
   try {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
-    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: typeof value === 'string' && value ? value : null };
+    return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
   } catch { return { alive: false, status: null, sessionId: null }; }
 }
 
@@ -112,11 +116,11 @@ export async function openChat({ run, chat }, ports = {}) {
   if (live.sessionId) chat.session = { agent: chat.agent ?? run.agent, id: live.sessionId };
   let resumed = false;
   if (!live.alive) {
-    let id = chat.session?.id;
+    let id = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (!id) {
       const found = await (ports.findNativeSessions ?? findNativeSessions)({ agent: run.agent, root: run.root, startedAt: chat.startedAt, endedAt: now() },
         { env, ...(chat.configDir ? (run.agent === 'claude' ? { claudeConfigDir: chat.configDir } : { codexHome: chat.configDir }) : {}) });
-      if (found.length !== 1) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
+      if (found.length !== 1 || !validSessionId(found[0].id)) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
       id = found[0].id; chat.session = { agent: run.agent, id };
     }
     await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir: chat.configDir })]);
