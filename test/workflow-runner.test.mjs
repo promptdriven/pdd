@@ -843,3 +843,20 @@ test('0.1.6: a single overall Runtime check line counts as one Story', async t =
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (DRAFT): ✗ 1 of 2 criteria · 3/5 checks · 1 AI call', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 0 of 1 Stories pass$/m);
 });
+
+test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top and count', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const summary = ['Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call', 'Report: https://rt.example.test/r/one',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (DRAFT): https://rt.example.test/r/two',
+    'Runtime check: ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls', 'Report: https://rt.example.test/r/one'].join('\n');
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
+    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
+    'Runtime check: ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    'Report: https://rt.example.test/r/one (report links expire after 7 days)',
+    'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
+});

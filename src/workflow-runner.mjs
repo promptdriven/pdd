@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 69adc7f286ea2910bfcbb2d8475370700919960fb4b58cffbe8c8c76438a0f6f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b9fdd4dd22e6790509474ea96c177fc6c4fc1aafa04fdde459809fb3e0299b8d).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -196,11 +196,12 @@ function hideLocalPaths(text, run) {
     .replace(/(?:\/private)?\/(?:Users|home|var\/folders|tmp)\/[^\s)`'"<>\]]*/g, '<local path>');
 }
 // Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
-// "Runtime check: …". The chat joins the lines that pdd check prints with "; ".
+// "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
+// at ";", a "Report" line, a link or the next Runtime check.
 function runtimeLines(text) {
-  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*([^;]*)/g)].map(match => {
+  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
     const story = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim()).find(group => group && group.toUpperCase() !== 'DRAFT') ?? null;
-    const result = match[2].split(/\s+Report:|\s+https?:\/\//)[0].trim().replace(/[.,]$/, '');
+    const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
     return { story, line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
 }
