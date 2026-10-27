@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: d3e38dec007c3361713f85f96216ed556f87bfe683eebd92629485034a98030e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 7e193db372acedc4b52150f03d6760bf1eb5833516c1a04137acd13e9429f9ba).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -19,8 +19,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },
   { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [],
-    forms: [form('pdd workflow status [ISSUE]', 'Show runs, or one run with its area, gate, chat and PR with CI state.')] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
