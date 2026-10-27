@@ -65,3 +65,22 @@ methods and argument conventions are specified in the
 [adapter registration contract](../prompts/cli/pdd-cli.prompt.md#optional-client-registration).
 A client method owns its output and returns an integer exit status; failed or
 unconfirmed calls are not retried automatically.
+
+Public status, doctor and update owners can discover their optional bindings
+without invoking them:
+
+```js
+import { getOptionalClientHooks } from 'pdd/src/client-hooks.mjs';
+
+const hooks = getOptionalClientHooks({ clientAdapter, updateModule });
+// When present, hooks.runStatusCommand(argv, ports) returns an exit code.
+// hooks.doctorChecks({mode}) returns {checks, report?} for the doctor owner.
+// hooks.runUpdateCommand(input, ports) returns {state, code, message}.
+```
+
+`updateModule` is registered separately from `clientAdapter`, matching the
+release-selector composition. Missing or nonfunction hooks are absent; owners
+must feature-detect them and retain their own fallback, validation, redaction
+and error handling. Discovery performs no diagnostic or release check, and this
+seam adds no status, doctor or update command. The exact signatures and receiver
+rules are in the [optional hooks contract](../prompts/cli/client-hooks.prompt.md).
