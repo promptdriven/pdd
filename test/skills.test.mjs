@@ -7,12 +7,15 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const skills = join(root, 'skills');
 const read = path => readFileSync(join(skills, path), 'utf8');
+// G2: bug and feature stop at PR 1 (prompt PR) and ask before the code area.
 const AREAS = {
   'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify'], [], 'pr']],
-  'pdd-bug': [['solution', ['reproduce', 'prompt-story', 'check', 'try'], ['try'], 'approve'], ['build', ['build', 'verify'], [], 'pr']],
-  'pdd-feature': [['solution', ['understand', 'visual'], ['visual'], 'approve'],
-    ['story', ['prompt-story', 'check', 'try'], ['try'], 'approve'], ['build', ['build', 'verify'], [], 'pr']],
+  'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'],
+    ['code', ['build', 'verify'], [], 'pr']],
+  'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'], ['code', ['build', 'verify'], [], 'pr']],
 };
+const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
@@ -24,17 +27,21 @@ const filesUnder = dir => readdirSync(dir, { withFileTypes: true })
 
 // Wrong: a skill folder that Codex or Claude cannot load (no name/description, or a name that differs from its folder).
 test('SKILLS1: each new skill has standard frontmatter that names its own folder', () => {
-  for (const name of ['pdd-prompting', ...Object.keys(AREAS)]) {
+  assert.deepEqual(readdirSync(skills).sort(), [...ALL_SKILLS].sort());
+  for (const name of ALL_SKILLS) {
     const { fields } = frontmatter(read(`${name}/SKILL.md`));
     assert.equal(fields.name, name);
     assert.ok(fields.description && fields.description.length <= 1024, name);
+    // Agents pick a skill on their own only from its description.
+    assert.match(fields.description, /Use (it )?when /, name);
   }
 });
 
 // Wrong: the skill copy of the guide drifts from docs/prompting-guide.md.
-test('SKILLS2: pdd-prompting guide.md equals the canonical guide byte for byte', () => {
+test('SKILLS2: pdd-prompting guide.md and RUNBOOK.md equal the canonical files byte for byte', () => {
   assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/guide.md')), readFileSync(join(root, 'docs/prompting-guide.md')));
-  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['SKILL.md', 'guide.md', 'review.md']);
+  assert.deepEqual(readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md')), readFileSync(join(root, 'RUNBOOK.md')));
+  assert.deepEqual(readdirSync(join(skills, 'pdd-prompting')).sort(), ['RUNBOOK.md', 'SKILL.md', 'guide.md', 'review.md']);
 });
 
 // Wrong: the core page grows past one page or loses the core rules that pdd session inlines.
@@ -50,7 +57,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', () => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate]) => ({ name: area, steps, optional, gate })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then]) => ({ name: area, steps, optional, gate, ...(then ? { then } : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -63,7 +70,7 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    assert.ok(bytes <= 3584, `${name} is ${bytes} bytes`);
+    assert.ok(bytes <= 4096, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -78,19 +85,34 @@ test('SKILLS5: only prompt-writing steps read the guide; check reads the core pa
       else if (name === 'pdd-small-change' && step === 'change') assert.match(text, /prompt[\s\S]*guide\.md in full/);
       else assert.equal(readsGuide, false, `${name}/${step} must not read the guide`);
       if (step === 'check') { assert.match(text, /pdd-prompting/); assert.match(text, /SKILL\.md/); assert.match(text, /review\.md/);
-        assert.match(text, /RUNBOOK\.md/); assert.match(text, /pdd check/); assert.match(text, /`done` summary/); }
+        assert.match(text, /If the pdd-prompting skill has a RUNBOOK\.md/); assert.match(text, /pdd check/); assert.match(text, /`done` summary/); }
     }
     assert.equal(/guide\.md/.test(read(`${name}/SKILL.md`)), false, `${name}/SKILL.md must not send every step to the guide`);
   }
 });
 
-// Wrong: runtime steps run without a runbook, or an agent may edit a test until it passes.
-test('SKILLS6: runtime lines depend on RUNBOOK.md and every workflow keeps expected values with the person', () => {
+// Wrong: runtime steps run without a runbook, an agent may edit a test until it passes, or the code PR starts without the person.
+test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the person, and PR 1 asks before code', () => {
   for (const name of Object.keys(AREAS)) assert.match(read(`${name}/SKILL.md`), /A person decides expected values\. Never change a test to make it pass\./);
   for (const name of ['pdd-bug', 'pdd-feature']) {
-    assert.match(read(`${name}/steps/try.md`), /If pdd has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
-    assert.match(read(`${name}/SKILL.md`), /At the approve gate, show the real check report link and the Try link/);
+    assert.match(read(`${name}/steps/try.md`), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
+    const text = read(`${name}/SKILL.md`);
+    assert.match(text, /PR 1 link, the `Runtime check:` line and the Try link/);
+    assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
-  assert.match(read('pdd-bug/steps/reproduce.md'), /If pdd has a RUNBOOK\.md[^\n]*`pdd check`[^\n]*CURRENT prompt/);
+  assert.match(read('pdd-bug/steps/reproduce.md'), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd check`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
+  for (const file of ['pdd-bug', 'pdd-feature', 'pdd-small-change'].flatMap(name => [`${name}/SKILL.md`, ...readdirSync(join(skills, name, 'steps')).map(step => `${name}/steps/${step}`)]))
+    assert.equal(/session intro/.test(read(file)), false, file);
+});
+
+// Wrong: the setup skill and pdd setup write different blocks, or the block grows into a pasted guide.
+test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names every PDD skill', () => {
+  const text = read('pdd-setup/SKILL.md'), lines = text.split('\n');
+  const block = lines.slice(lines.indexOf('<!-- pdd:start -->'), lines.indexOf('<!-- pdd:end -->') + 1);
+  assert.ok(block.length >= 3 && block.length <= 10, `${block.length} lines`);
+  for (const word of ['/pdd-prompting', '/pdd-feature', '/pdd-bug', '/pdd-small-change', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
+    assert.ok(block.join('\n').includes(word), word);
+  assert.equal(lines.filter(line => line === '<!-- pdd:start -->').length, 1);
+  assert.ok(Buffer.byteLength(text) <= 3584);
 });

@@ -1,3 +1,4 @@
 {"version":2,"areas":[
-{"name":"solution","steps":["reproduce","prompt-story","check","try"],"optional":["try"],"gate":"approve"},
-{"name":"build","steps":["build","verify"],"optional":[],"gate":"pr"}]}
+{"name":"story","steps":["reproduce","prompt-story"],"optional":[],"gate":"approve"},
+{"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","then":"ask-code"},
+{"name":"code","steps":["build","verify"],"optional":[],"gate":"pr"}]}

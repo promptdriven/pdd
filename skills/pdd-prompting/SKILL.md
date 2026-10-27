@@ -1,6 +1,6 @@
 ---
 name: pdd-prompting
-description: The PDD Prompting guide. Use it before you write, change or review a module prompt, a Story or test cases. In PDD, prompts are the source and code follows them.
+description: The PDD Prompting guide. Use when you write, change or review a module prompt (*.prompt.md), a Story or test cases, or when the person asks how to write prompts in PDD. In PDD, prompts are the source and code follows them.
 ---
 
 # PDD prompting
@@ -22,6 +22,7 @@ In PDD, prompts are the source. Each code module has one `.prompt.md` file. The 
 
 - `guide.md`: the full Prompting guide. It owns the rules for prompts.
 - `review.md`: how to review a prompt, a Story and test cases, and how to report results.
+- `RUNBOOK.md`: how to run a runtime check with `pdd check` and `pdd try`.
 
 ## How to write
 

@@ -16,7 +16,7 @@ test('launch help is local and keeps the PR warning for root and every runner ro
  for(const command of ['run','done','approve','changes','cancel','status','open'])forms.push(['workflow',command,'--help'],['workflow',command,'-h'],['help','workflow',command]);
  for(const words of forms){
   const stdout=capture(),stderr=capture();
-  const exit=await runPdd(words,{stdout,stderr,cwd:'/missing/project',packageRoot:'/missing/package',nativeSession:forbidden,
+  const exit=await runPdd(words,{stdout,stderr,cwd:'/missing/project',packageRoot:'/missing/package',
    workflowRunner:new Proxy({},{get:forbidden}),workflowAreas:{listWorkflowAreas:forbidden,formatWorkflowList:forbidden}});
   assert.equal(exit,0,words.join(' '));assert.equal(stderr.text,'');
   assert.doesNotMatch(stdout.text,/PREVIEW|real workflow PR is not yet proven/i);
@@ -26,8 +26,7 @@ test('launch help is local and keeps the PR warning for root and every runner ro
   }
   assert.match(stdout.text,/opens a real PR/);assert.match(stdout.text,/never merges/);
  }
- const stdout=capture();assert.equal(await runPdd(['session','--help'],{stdout,stderr:capture(),nativeSession:forbidden}),0);
- assert.doesNotMatch(stdout.text,/workflow runner PREVIEW/i);
+ for(const words of [['session','--help'],['workflow','bug','--help']])assert.equal(await runPdd(words,{stdout:capture(),stderr:capture(),workflowRunner:new Proxy({},{get:forbidden})}),2,words.join(' '));
 });
 
 test('actual public bin launch help works offline in empty consumer folder; unrelated invalid input remains finite',t=>{

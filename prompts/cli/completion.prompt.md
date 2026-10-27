@@ -6,10 +6,8 @@ Own `src/completion.mjs`; export `renderCompletion(shell)`. Derive suggestions o
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
-Offer feature, bug and small-change alongside workflow list. Complete --agent choices codex/claude after both session and named workflow prefixes; keep shell behavior for existing routes.
-
 Offer workflow run/resume, three named workflow operands for run, --agent choices codex/claude and --decision approve/skip. Complete choices immediately after each option at any argument position, including after NAME and ISSUE. No status command.
 
-Offer workflow attach as well as run/resume. For NAME after workflow run, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the former no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke run/attach/native/network. Invalid/unavailable listing yields no names. Preserve static bundled one-conversation shortcuts and agent/decision choices.
+Offer workflow attach as well as run/resume. For NAME after workflow run, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the former no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke run/attach/native/network. Invalid/unavailable listing yields no names. Keep the --agent choices.
 
 Offer `check` and `try` with their options and the `--tab` choices. Never offer an option marked `hidden` (`--request`).
