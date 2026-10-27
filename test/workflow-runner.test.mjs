@@ -886,11 +886,11 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
 
 test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one Story; pdd drops it and adds up all Stories itself', async t => {
   const { f, run } = await featureAtTryGate(t);
-  // The check summary exactly as the chat stored it in the real run (the last line copied swipe-play's run).
-  const summary = 'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d '
-    + 'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls Report: https://34.72.131.98/r/ddab0595-645e-47e5-9bff-74c47614d9a1 '
-    + 'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls Report: https://34.72.131.98/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 '
-    + 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d';
+  // The check summary as the chat stored it in the real run (the last line copied swipe-play's run); only the runtime host is a stand-in.
+  const summary = 'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d '
+    + 'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 '
+    + 'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 '
+    + 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
@@ -900,9 +900,9 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
     'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
     'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
     'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
-    'Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
-    'Report: https://34.72.131.98/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
-    'Report: https://34.72.131.98/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
+    'Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
+    'Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
+    'Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
 });
 
 test('0.1.6: a summary with no overall line works; a Story checked again takes its latest line', async t => {
