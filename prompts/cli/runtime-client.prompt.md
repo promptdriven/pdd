@@ -40,6 +40,7 @@ Order:
 - At the timeout: open rows stay `queued`/`running` (exit 3); waiting rows are not run (exit 5). `Retry-After` is whole seconds from 1 to 300; no header means 5 s.
 - A row is marked `sending` before its POST. If pdd was killed, `--read` reads every posted row by its ID (a posted row with no answer is unknown, exit 3) and calls a row with no request ID not run.
 - A server refusal `invalid-input` gets the local P9 rule as its hint. A server `interface-unapproved` or `interface-stale` on `steps[N]` gets the P7 hint.
+- Save `engine_sha` from each answer. When it is not 7b03d3ea (the engine that the local rules copy), add a warning; the engine stays the judge.
 - Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3.
 - `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. One GET for each open row, saved JSON for ended rows. It never makes a request ID and never POSTs.
 

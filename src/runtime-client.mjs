@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 74ef0940ad609682a2108ee5ff027ad17e4ca32dbb32394fd5c594623fe9d278).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 8315cfb30ce7bb8af7f9c9396e2661a830289259c8f861f7d2152029370d3c3e).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -13,6 +13,8 @@ const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
+// pdd's local rules copy this engine build (spec OPEN 9: warn when the runtime runs another one).
+const ENGINE_SHA = '7b03d3ea8cc047ed0c58905075321e59e62b02f1';
 const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8;
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
@@ -284,7 +286,8 @@ function batchRecord(context) {
     created_at: new Date(context.startedAt).toISOString(), lint, warnings,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
-      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps })) };
+      sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps,
+      engine_sha: row.engine_sha ?? null })) };
 }
 
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
@@ -402,7 +405,8 @@ async function checkBatch(context, rows) {
 
 function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
-  const warnings = context.warnings ?? [];
+  const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && sha !== ENGINE_SHA))];
+  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 8)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode,
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);

@@ -285,3 +285,14 @@ test('RUNTIME-SERVER14: --json output and saved answers never hold the token, ev
   assert.deepEqual(result.json.rows[0].failed_checks[0].actual, { note: 'token [secret]' });
   for (const path of filesUnder(setup.state)) if (statSync(path).isFile()) assert.equal(readFileSync(path, 'utf8').includes(TOKEN), false, path);
 });
+
+// Wrong: the runtime runs a newer engine and nobody notices that pdd's local rules may now differ (OPEN 9).
+test('RUNTIME-SERVER15: an answer from another engine build gives a warning', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: 'eae2202a0123456789' } } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 0);
+  assert.match(result.out, /Warning: the runtime engine is eae2202a0123, but pdd's local checks copy engine 7b03d3ea\. The engine stays the judge\./);
+  const same = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order']);
+  assert.doesNotMatch(same.out, /runtime engine is/);
+});
