@@ -224,3 +224,38 @@ Report: https://…/r/617480ac-…
 - Some refusals give no reason ("See the reported reason"). Use the refusal table in section 9.
 - In a Try, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
 - A Try pauses after 15 minutes idle.
+
+## 14. The code PR (PR 2): test vectors and the formal check
+
+The runtime proves the prompt. PR 2 must prove that the **code** does the same.
+
+**Test vectors: the PR 1 cases, run on the real code.**
+- Use `tests/<story>.json` from PR 1 as it is. Never edit it in PR 2. If an expected value looks wrong, stop and ask
+  the person: that is a PR 1 change.
+- In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
+  It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
+  (function, command or route). Steps run in order and share state, as on the runtime.
+- Map each check target: `result` → the returned value at the path; `error` → the error code; `world` → the app's
+  store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
+  "Not replayed", with the reason. It is never a pass.
+- In `verify`, run the replay test. Then run it again on a throwaway copy with ONE planted mistake (in a bug run:
+  the old code). At least one case must fail there. A crash does not count.
+- Write the table into `verify.md`: case, criterion, input, expected, prompt (PR 1 check), code (got), result.
+  Also show that `tests/<story>.json` is unchanged since PR 1.
+- A ✗ case goes back to `build` (at most 2 rounds). If it still fails, PR 2 opens with "✗ N vectors fail" as its
+  first line.
+
+**The formal check (the new `formal` step, done by an agent that did not write the code).**
+- Every PR 2 has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
+  **Failed + counterexample**, **Not run + reason** or **Not applicable + reason**.
+- It is worth it for a precise rule with a clear forbidden result: money and rounding, limits, who may do what,
+  order of states, parsers. It is not applicable for looks, wording or plain wiring.
+- Take the rule from the Story's `## Rules to check` section, which the person approved in PR 1. Never take it
+  from the code.
+- Default method: a **bounded check**. Loop over EVERY input in a small, stated range, call the real code, and
+  compare with an oracle written from the Story. State the bounds in the PR.
+- Use a solver (Z3, or CrossHair for Python) only when the range is too big to loop. Replay each counterexample
+  and 2 witnesses on the real code.
+- Control: the planted mistake must fail the formal check too. If it does not, write "Not run: the check cannot
+  see the mistake".
+- Commit the replay test and the formal test as normal tests. Do not commit raw logs.

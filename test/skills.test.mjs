@@ -71,8 +71,8 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    // 6.5 KB: the formal step (about 1.2 KB) and the test-vector lines (0.1.3) carry real method content.
-    assert.ok(bytes <= 6656, `${name} is ${bytes} bytes`);
+    // 5.5 KB: the PR 2 method lives in RUNBOOK section 14; the steps only point to it.
+    assert.ok(bytes <= 5632, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -102,7 +102,7 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     assert.match(text, /PR 1 link, the `Runtime check:` line and the Try link/);
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
-  assert.match(read('pdd-bug/steps/reproduce.md'), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd check`[^\n]*CURRENT prompt/);
+  assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 11[^\n]*`pdd check`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
   for (const file of ['pdd-bug', 'pdd-feature', 'pdd-small-change'].flatMap(name => [`${name}/SKILL.md`, ...readdirSync(join(skills, name, 'steps')).map(step => `${name}/steps/${step}`)]))
     assert.equal(/session intro/.test(read(file)), false, file);
@@ -126,35 +126,52 @@ test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd
   assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
 });
 
-// Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, a mapping gap counts as a pass, or a failing case is hidden.
-test('SKILLS9: build replays tests/<story>.json, verify runs it with a planted mistake and writes the table, and a failure loops back to build twice', () => {
+// Wrong (0.1.3): the steps repeat RUNBOOK section 14 (two homes for one method), or the runbook copy lacks it.
+const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
+const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf('## 14. The code PR (PR 2): test vectors and the formal check'));
+
+// Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
+test('SKILLS9: build and verify point to RUNBOOK section 14 for the replay test, and a failure loops back to build twice', () => {
+  for (const word of ['tests/<story>.json', 'Never edit it in PR 2', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since PR 1', '✗ N vectors fail'])
+    assert.ok(section14().includes(word), `RUNBOOK section 14: ${word}`);
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);
-    assert.match(build, /replay test[^\n]*reads `tests\/<story>\.json` at run time/, name);
+    assert.match(build, /replay test[^\n]*section 14 of RUNBOOK\.md/, name);
     assert.match(build, /Never edit `tests\/<story>\.json`/, name);
+    assert.match(verify, /section 14 of RUNBOOK\.md/, name);
     assert.match(verify, /planted mistake/, name);
-    assert.match(verify, /A crash[^\n]*does not count/, name);
-    assert.match(verify, /\| Case \| Criterion \| Input \| Expected \| Prompt \(PR 1\) \| Code \(PR 2\) \| Result \|/, name);
-    assert.match(verify, /Not replayed[^\n]*never a pass/, name);
-    assert.match(verify, /git diff[^\n]*tests\/<story>\.json/, name);
+    assert.match(verify, /table/, name);
+    assert.equal(verify.includes('| Case | Criterion |'), false, `${name}: the table format lives in the RUNBOOK`);
     assert.match(skill, /back to build in a new subagent, at most 2 times/, name);
     assert.ok(skill.includes('"✗ N vectors fail"'), name);
     assert.match(read(`${name}/steps/prompt-story.md`), /## Rules to check/, name);
   }
 });
 
-// Wrong (0.1.3 formal): no formal line in PR 2, a solver by default, a check that cannot see a planted mistake counts, or raw logs get committed.
-test('SKILLS10: every workflow has a formal step with honest result words, a bounded check first and a planted-mistake control', () => {
+// Wrong (0.1.3 formal): the formal step repeats the method, or the runbook loses the honest result words.
+test('SKILLS10: every workflow has a short formal step that points to RUNBOOK section 14', () => {
+  for (const word of ['Proved (bounded)', 'Proved (solver)', 'Failed + counterexample', 'Not run + reason', 'Not applicable + reason', 'Rules to check',
+    'EVERY input', 'Z3', 'CrossHair', 'planted mistake must fail the formal check', 'Do not commit raw logs'])
+    assert.ok(section14().includes(word), `RUNBOOK section 14: ${word}`);
   for (const name of Object.keys(AREAS)) {
     const text = read(`${name}/steps/formal.md`);
-    for (const word of ['Proved (bounded)', 'Proved (solver)', 'Failed', 'Not run', 'Not applicable', '## Formal check', 'Rules to check'])
-      assert.ok(text.includes(word), `${name}: ${word}`);
-    assert.match(text, /every input/);
-    assert.match(text, /Z3|CrossHair/);
-    assert.match(text, /planted mistake/);
-    assert.match(text, /raw logs/);
-    assert.ok(text.trimEnd().split('\n').length <= 15);
+    assert.match(text, /section 14 of RUNBOOK\.md/);
+    assert.match(text, /## Formal check/);
+    assert.ok(text.trimEnd().split('\n').length <= 8, `${name}/formal.md is short`);
   }
   assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-feature/steps/formal.md'));
   assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-small-change/steps/formal.md'));
+});
+
+// Wrong (real-user ISSUES 1 and 3): reproduce skips the prompt check in silence, or PR 1 adds repo tests that turn main red.
+test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds only the prompt, the Story and tests/*.json', () => {
+  assert.ok(read('pdd-bug/steps/reproduce.md').includes('"No prompt exists yet for this behavior, so the bug can only be in the code."'));
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    for (const file of [`${name}/SKILL.md`, `${name}/steps/prompt-story.md`]) {
+      const text = read(file);
+      assert.match(text, /PR 1 holds only the prompt, the Story and `tests\/\*\.json`/, file);
+      assert.match(text, /fail on today's code[^\n]*PR 2/, file);
+    }
+    assert.match(read(`${name}/SKILL.md`), /Merging PR 1 must never turn main red\./);
+  }
 });

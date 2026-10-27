@@ -21,6 +21,7 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - An optional step is a question in the chat, not a stop.
 - If verify or formal finds a failing case, go back to build in a new subagent, at most 2 times. If it still fails, PR 2 opens anyway with "✗ N vectors fail" on top. Say so at the gate.
 - A person decides expected values. Never change a test to make it pass.
+- PR 1 holds only the prompt, the Story and `tests/*.json`. Repo tests that fail on today's code go to PR 2. Merging PR 1 must never turn main red.
 - Never push, open a PR or merge.
 
 ## In a run (see the first message)
