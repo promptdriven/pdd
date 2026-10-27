@@ -10,7 +10,7 @@ import { DRAFT_SERVER_TEXT, PreflightError, captureSource, checkInput, fillHashe
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
-export const DEFAULT_RUNTIME_URL = 'https://runtime.34-72-131-98.sslip.io';
+export const DEFAULT_RUNTIME_URL = 'https://34.72.131.98';
 const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 'unknown']);
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
