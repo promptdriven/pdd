@@ -325,8 +325,12 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
 test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIME_URL overrides it', async () => {
   const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime-client.mjs');
   const host = new URL(DEFAULT_RUNTIME_URL).host;
-  const hits = spawnSync('git', ['grep', '-n', '-F', host], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
+  // This test names the hosts on purpose; every other tracked file must not.
+  const others = ['--', '.', ':!test/runtime-server.test.mjs'];
+  const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
   assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
+  assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://runtime.example' }), 'https://runtime.example');
   for (const bad of ['http://runtime.example', 'https://u:p@runtime.example', 'https://runtime.example/v1', 'ftp://x']) assert.throws(() => runtimeOrigin({ PDD_RUNTIME_URL: bad }), bad);
