@@ -35,10 +35,25 @@ For local GitHub issue execution, use `pdd workflow run NAME ISSUE [--agent code
 
 `pdd workflow resume RUN_ID [--decision approve|skip]` uses the saved UUIDv4 identity and its workflow snapshot, agent and issue worktree. Without a decision it inspects/reconciles or observes merge state and does not launch the next native stage or PR. Approval advances eligible work or applies to current human/optional work; skip is only for optional work. Merge waits inspect the actual saved PR and never merge. Exit 0 is completed, 2 waiting and 1 failed/recovery_required. Unknown native/PR outcomes never authorize blind relaunch/resend.
 
-`pdd workflow attach RUN_ID` asks the runner to resolve the actual current active backend from the common-repository index. It attaches that live native terminal, not a new conversation. Attachment and stage acceptance/cleanup are mutually exclusive; new interaction invalidates earlier candidates. Archived stages produce finite information rather than a promise of a live pane. There is no agent override or arbitrary native flag passthrough.
+`pdd workflow attach ISSUE` asks the runner to resolve the actual current active backend from the common-repository index. It attaches that live native terminal, not a new conversation. Attachment and stage acceptance/cleanup are mutually exclusive; new interaction invalidates earlier candidates. Archived stages produce finite information rather than a promise of a live pane. There is no agent override or arbitrary native flag passthrough.
 
 The PDD controller remains foreground while issue stages use fresh native agents in owned background Herdr workspaces. Ready-before-submit, one durable prompt intent and the same agent's working-to-ready observation provide a candidate only. The runner validates the exact handoff, artifacts, revision and actual tests before acceptance and cleanup. Active/blocked backing panes still consume resources; completed accepted stages do not need permanent panes. There is no automatic progression after the controller exits. Explicit resume reconciles the saved original. See [workflow execution and recovery](workflows.md).
 
 `workflow list [--json]` uses the authoritative definition loader. JSON returns `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated entries and source `project` or `bundled`. A complete valid project definition overrides the matching bundled name; an invalid override or unavailable loader refuses, without a legacy Markdown fallback. Listing is local discovery, not native/GitHub work. Bash/Zsh completion consumes this local listing as data, filters safe names and does not evaluate returned text.
 
 Completion prints shell text to stdout; it does not modify shell configuration. Save or source it using your own shell's usual setup. The local native session command loads the full guide and bundled manual workflow context before Stories using the installed agent. The package provides local commands only. Unsupported operations must remain unsupported, with no hosted-service fallback.
+
+`pdd workflow runs [ISSUE] [--json]` shows saved runs and their stages with local
+start/end times, durations, results and native session IDs. Bare issue numbers
+are scoped to the current repository, including any linked worktree or subfolder.
+`#7`, `app#7`, `owner/app#7`, GitHub issue URLs, unique eight-character ID prefixes
+and full run UUIDs also work. Ambiguous references refuse instead of guessing.
+Session discovery requires the exact worktree and stage time window, with exactly
+one native session match; otherwise it shows unknown.
+
+`pdd workflow open 7 scope` reopens a finished stage's native conversation for
+read-only inspection. It asks y/N in a terminal and warns that typing could change
+files after the stage was accepted. Codex uses its read-only sandbox; Claude has
+tools disabled. No new prompt or workflow transition is sent. Live stages use
+`pdd workflow attach 7`. This does not change the full-access behavior of new
+sessions or workflow stages.

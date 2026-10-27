@@ -18,7 +18,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.runs', 'workflow.open', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);

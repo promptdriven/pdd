@@ -8,11 +8,18 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 Catalog one local native route for each bundled workflow name. Each has the same optional --agent choices/default and request operands as session, and carries its exact workflow name in the local plan. No arbitrary path or workflow creation route.
 
-Catalog workflow.run (`workflow run`) with required safe free workflow NAME and ISSUE number|owner/repo#positive-number|https://github.com/owner/repo/issues/positive-number; optional --agent codex|claude defaults codex. Catalog workflow.resume (`workflow resume`) with one UUIDv4 RUN_ID and optional --decision approve|skip. Resume has no agent override. No extra request text/native flags/status command.
+Catalog workflow.run (`workflow run`) with required safe free workflow NAME and ISSUE number|owner/repo#positive-number|https://github.com/owner/repo/issues/positive-number; optional --agent codex|claude defaults codex. Catalog workflow.resume (`workflow resume`) with one UUIDv4 RUN_ID and optional --decision approve|skip. Resume has no agent override. Catalog workflow.runs (`workflow runs`) with an optional run reference ISSUE and --json. It is read-only: list saved runs or show one run's local stage times, durations, finished native session ids and reopen commands. Never expose epoch milliseconds. No extra request text/native flags/status command.
 
-For editable workflow execution, workflow.run NAME is a safe free workflow-name operand, not a three-name enum. The dedicated definition loader alone decides available definitions/semantic validity. Preserve the three bundled direct conversation shortcuts as separate foreground routes. Add workflow.attach: `pdd workflow attach RUN_ID`, one UUIDv4, no agent/decision/native/path flags; main resolves actual active saved identity or finite archived information. List describes validated project/bundled definitions; no private route.
+For editable workflow execution, workflow.run NAME is a safe free workflow-name operand, not a three-name enum. The dedicated definition loader alone decides available definitions/semantic validity. Preserve the three bundled direct conversation shortcuts as separate foreground routes. Add workflow.attach: `pdd workflow attach ISSUE`, one run reference ISSUE, no agent/decision/native/path flags; main resolves actual active saved identity or finite archived information. List describes validated project/bundled definitions; no private route.
 
 
 ## Workflow runner help
 
 Describe workflow.run, workflow.resume and workflow.attach without preview labels. Keep their route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts.
+
+Catalog workflow.open: `pdd workflow open ISSUE STAGE`, required run reference
+and safe stage name, no bypass/yes/native flags. Runs and attach use the same
+run-reference input: positive issue number, #N, repo#N, owner/repo#N, GitHub issue
+URL, unique hexadecimal prefix of at least eight characters or full UUIDv4.
+Resolution belongs to workflow-shortcuts, not the catalog. Open warns y/N before
+read-only finished-session inspection; live stages use attach.
