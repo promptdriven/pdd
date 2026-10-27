@@ -135,3 +135,7 @@ both ordinary and decide advancement by writing runStatusFromState phase exit
 through writeRunStatus under the same run lock; a newly saved decision gate must
 project waiting, not running. An admitted but uncertain advancement projects
 recovery_required. Projection failures never change authoritative journal results.
+
+A failed journal append prevents further records from that in-memory state and
+prevents final status projection from advertising its uncommitted sequence.
+Preserve the last complete status for inspection; never fill a journal gap.

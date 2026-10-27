@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 53ab55dc146fb7a7ee9cf020a347cace32536879d977a1f54ac2da816807266a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 060629dbc5779fdb8ef5071a4a6703026bd1cbb9a7b8c35c2cb0b96a2746de01).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -135,9 +135,12 @@ function readSaved(directory) {
     || saved.name !== saved.definition.name || saved.assignment.runId !== saved.runId) fail('Saved workflow identity or definitions changed.');
   return saved;
 }
+const failedJournalStates = new WeakSet();
 async function record(s, directory, event) {
+  if(failedJournalStates.has(s))throw Error('The workflow journal could not be persisted; inspect the original.');
   s.seq = (s.seq ?? 0) + 1;
-  durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s });
+  try { durable(join(directory, 'journal.jsonl'), { seq: s.seq, event, state: s }); }
+  catch(error) { failedJournalStates.add(s); throw error; }
 }
 function lock(root) {
   ensureDirectory(dirname(root)); ensureDirectory(root);
@@ -726,6 +729,7 @@ async function finishDecisionGate(s,directory,outcome,p) {
   return outcome;
 }
 async function writeDecisionOutcome(s,directory,outcome,p) {
+  if(failedJournalStates.has(s))return;
   try {
     const records=await import('./workflow-run-records.mjs');
     await records.writeRunStatus(directory,records.runStatusFromState(s,{phase:'exit',outcome,now:(p.now??Date.now)()}));
