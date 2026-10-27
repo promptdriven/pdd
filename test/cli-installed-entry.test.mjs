@@ -31,6 +31,6 @@ test('native session intro and runner stage context pin real absolute executable
  const status=await launchNativeSession({agent:'codex',cwd:tmp,message:intro}, {spawn:(agent,args,opts)=>{
   captured={agent,args,opts};const child=new (class {once(name,fn){if(name==='close')queueMicrotask(()=>fn(0));return this;}kill(){}})();return child;
  }});
- assert.equal(status,0);assert.equal(captured.args.at(-1),intro);assert.equal(captured.opts.cwd,tmp);assert.equal('env' in captured.opts,false);
+ assert.equal(status,0);assert.equal(captured.args.at(-1),intro);assert.equal(captured.opts.cwd,tmp);assert.deepEqual(captured.opts.env,{...process.env,PDD_AGENT_SESSION:'1'});
  assert.ok(context.includes('Read the ENTIRE Prompting guide'));assert.ok(context.includes('--- '+join(pkg,'docs/prompting-guide.md')));
 });

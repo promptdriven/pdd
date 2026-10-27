@@ -174,7 +174,7 @@ test('ALPHA5: native argv and process lifetime preserve settings exits and direc
     assert.equal(calls.length,1);assert.equal(calls[0][0],agent);assert.equal(calls[0][1].length,agent==='codex'?5:2);
     assert.deepEqual(calls[0][1].slice(0,-1),agent==='codex'?['--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c','projects={"/project with spaces"={trust_level="trusted"}}']:['--dangerously-skip-permissions']);
     assert.equal(calls[0][1].at(-1),message);
-    assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false});
+    assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false,env:{...process.env,PDD_AGENT_SESSION:'1'}});
     signals.emit('SIGINT');signals.emit('SIGTERM');signals.emit('SIGHUP');assert.deepEqual(kills,['SIGINT','SIGTERM','SIGHUP']);
     let resolved=false;promise.then(()=>{resolved=true;});
     // Native process exit alone can precede stdio close; neither a turn nor a handoff is a completion signal.

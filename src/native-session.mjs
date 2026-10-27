@@ -1,4 +1,4 @@
-// Generated from prompts/cli/native-session.prompt.md (sha256: 717766685bf882e42f08b723ea445292629c5c3cff01fc81a746a62072e6a520).
+// Generated from prompts/cli/native-session.prompt.md (sha256: 9319c24c4ccd995e49592eb0b2b4ceb158a6407f2f4cc99cb588ac9a74773b1a).
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
@@ -22,7 +22,7 @@ export function launchNativeSession({ agent, cwd, message, stderr = process.stde
     };
     try { child = spawn(agent, agent === 'codex'
       ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(resolvePath(cwd))}={trust_level="trusted"}}`, message]
-      : ['--dangerously-skip-permissions', message], { cwd, stdio: 'inherit', shell: false }); }
+      : ['--dangerously-skip-permissions', message], { cwd, stdio: 'inherit', shell: false, env: { ...process.env, PDD_AGENT_SESSION: '1' } }); }
     catch (error) { failed(error); finish(error.code === 'ENOENT' ? 127 : 1); return; }
     for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
       const fn = () => {

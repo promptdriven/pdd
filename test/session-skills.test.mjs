@@ -23,7 +23,7 @@ function packageCopy(t) {
   for (const dir of [home, project, native]) mkdirSync(dir);
   writeFileSync(join(native, 'agent.mjs'), `import fs from 'node:fs';
 const home=process.env.HOME;
-console.log(JSON.stringify({agent:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),
+console.log(JSON.stringify({agent:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),agentSession:process.env.PDD_AGENT_SESSION,
   installed:['.agents/skills','.claude/skills'].every(r=>fs.existsSync(home+'/'+r+'/pdd-prompting/SKILL.md'))}));
 process.exit(Number(process.env.FIXTURE_EXIT||0));
 `);
@@ -126,7 +126,7 @@ test('SESSION1: pdd session starts the agent with the short intro after the skil
       const result = run(['session', '--agent', agent, ...request]);
       assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
       const seen = JSON.parse(result.stdout), message = seen.argv.at(-1), lines = message.split('\n');
-      assert.equal(seen.cwd, project); assert.equal(seen.installed, true);
+      assert.equal(seen.cwd, project); assert.equal(seen.installed, true); assert.equal(seen.agentSession, '1');
       assert.equal(seen.argv.length, agent === 'codex' ? 5 : 2);
       assert.equal(lines[0], `This is a PDD session in ${project}.`);
       assert.equal(lines[1], 'In PDD, prompts are the source. Write the prompt, Story and test cases first, then the code.');
