@@ -78,7 +78,7 @@ test('SKILLS5: only prompt-writing steps read the guide; check reads the core pa
       else if (name === 'pdd-small-change' && step === 'change') assert.match(text, /prompt[\s\S]*guide\.md in full/);
       else assert.equal(readsGuide, false, `${name}/${step} must not read the guide`);
       if (step === 'check') { assert.match(text, /pdd-prompting/); assert.match(text, /SKILL\.md/); assert.match(text, /review\.md/);
-        assert.match(text, /RUNBOOK\.md/); assert.match(text, /pdd check/); assert.match(text, /<pdd> --runbook/); }
+        assert.match(text, /RUNBOOK\.md/); assert.match(text, /pdd check/); assert.match(text, /`done` summary/); }
     }
     assert.equal(/guide\.md/.test(read(`${name}/SKILL.md`)), false, `${name}/SKILL.md must not send every step to the guide`);
   }

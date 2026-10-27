@@ -1,6 +1,6 @@
 # Local authoring-kit CLI
 
-Own `src/pdd-cli.mjs`; export `renderHelp(prefix)` and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. There is no `--skill` command; pdd prints no guide. Parse before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
+Own `src/pdd-cli.mjs`; export `renderHelp(prefix)` and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide; the agent loads the pdd-prompting skill. Parse before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
 
 Use the package-root metadata version. For `--version`, print only that version followed by one newline, without the package name or any prefix. `workflow list` inspects the caller's project only; it does not execute or install recipes. Preserve stdout for successful values and stderr for errors. Explicit session renders the short [session intro](session-intro.prompt.md) from packageRoot, cwd and the request words joined by one space, then invokes the public native-session launcher with that message; native inherits the existing environment and terminal. If the intro cannot be rendered, write `The PDD skills could not be read. Use a complete PDD package.` to stderr and return 1 before any launch. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
 
