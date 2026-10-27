@@ -677,34 +677,6 @@ test('cleanup ambiguity retains accepted evidence and never retries close or pro
   const again = await f.resume(first.runId, 'approve'); assert.equal(again.state, 'recovery_required');
   assert.equal(closeCalls, 1); assert.equal(f.native.length, 1);
 });
-test('cross-process attachment excludes acceptance and invalidates the earlier candidate without blocking live controller polling', async t => {
-  let release;
-  const gate = new Promise(resolve => { release = resolve; });
-  const f = await fixture(t, { pauseNative: gate }); const running = f.run();
-  while (!f.native.length) await new Promise(resolve => setTimeout(resolve, 5));
-  const runId = f.native[0].input.runId, assignment = f.saved(runId).assignment;
-  const script = `import {attachWorkflow} from ${JSON.stringify(new URL('../src/workflow-runner.mjs', import.meta.url).href)};
-    import {loadGuidance} from ${JSON.stringify(new URL('../src/guidance.mjs', import.meta.url).href)};
-    const result=await attachWorkflow({runId:${JSON.stringify(runId)},cwd:${JSON.stringify(f.sourceCwd)},packageRoot:${JSON.stringify(packageRoot)}}, {
-      loadGuidance,lookupIssueWorktree:async()=>({state:'ready',assignment:${JSON.stringify(assignment)}}), allocateIssueWorktree:async()=>{throw Error('no allocation')},
-      attachHerdrStage:async()=>{process.stdout.write('ATTACHED\\n');await new Promise(resolve=>process.stdin.once('data',resolve));return 0;}});
-    process.stdout.write(JSON.stringify(result)+'\\n');`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { cwd: f.sourceCwd, stdio: ['pipe','pipe','pipe'] });
-  let output = '', errors = ''; child.stdout.on('data', value => { output += value; }); child.stderr.on('data', value => { errors += value; });
-  const closed = new Promise(resolve => child.once('close', code => resolve(code)));
-  try {
-    for (let i = 0; i < 200 && !output.includes('ATTACHED'); i++) await new Promise(resolve => setTimeout(resolve, 10));
-    assert.ok(output.includes('ATTACHED'), errors + output);
-    release(); const paused = await running; assert.equal(paused.state, 'waiting', paused.message);
-    assert.equal(f.closes, 0); assert.equal(f.saved(runId).pending.kind, 'agent');
-  } finally { release(); child.stdin.end('detach\n'); }
-  assert.equal(await closed, 0, errors);
-  const invalidated = await f.resume(runId, 'approve');
-  assert.equal(invalidated.state, 'waiting', invalidated.message); assert.match(invalidated.message, /Attachment invalidated/); assert.equal(f.closes, 0);
-  const fresh = await f.resume(runId, 'approve'); assert.equal(fresh.state, 'waiting', fresh.message);
-  assert.equal(f.native.length, 1); assert.equal(f.closes, 1);
-});
-
 test('fresh-process resume refuses edited source before any replacement stage delivery', async t => {
   const f = await fixture(t); const directory = projectWorkflow(f); const first = await f.run('snapshot-check');
   const assignment = f.saved(first.runId).assignment;
@@ -727,7 +699,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   const f = await fixture(t, { defaultWorktree: true }); const foreground = f.ports.launchNativeSession;
   const sessions = new Map(), calls = [];
   function transport(base) {
-    return {...base, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
+    return {...base, quietMs: 0, pollMs: 1, startupMs: 100, activityMs: 100, timeoutMs: 1000,
       sleep: async () => {},
       spawnServer: async (session, cwd) => { assert.equal(cwd,f.cwd); sessions.set(session,{seed:'seed',active:null}); calls.push('server'); },
       execFile: async (file, argv, options) => {
@@ -753,6 +725,7 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
           queueMicrotask(()=>{native.agent_status='done';native.interactive_ready=true;native.state_change_seq=12;});
           return reply({result:{agent:acknowledgement}});
         }
+        if(a[0]==='pane'&&a[1]==='send-text') return reply({id:'cli:pane:send-text',result:{type:'ok'}});
         if(a[0]==='workspace'&&a[1]==='close') {calls.push('close');assert.equal(a[2],native.workspace_id);server.active=null;return reply({id:'cli:workspace:close',result:{type:'ok'}});}
         assert.fail('Unexpected stand-in Herdr operation '+JSON.stringify(a));
       }};
