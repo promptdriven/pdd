@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-decide.prompt.md (sha256: 89de39b081744877c0fc703cb3e1664e73cd0ad1a3edec1997e862663656a10e).
+// Generated from prompts/cli/workflow-decide.prompt.md (sha256: f239262f051dfae8e78545cb377c54369ac5d5030459abe83dcea25345cc4e8b).
 import {verifyPhoneApproval} from './phone-approval.mjs';
 import {createInterface} from 'node:readline/promises';
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -16,6 +16,16 @@ async function terminalQuestion(question,stdin,stderr) {
   try{return /^(?:y|yes)$/i.test((await rl.question(question)).trim());}finally{rl.close();}
 }
 const clean=value=>String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,' ');
+function matchesChatIntent(input, userMessage) {
+  if(typeof userMessage!=='string')return false;
+  const reply=userMessage.trim();
+  if(input.decision==='approve')return /^(?:I )?approve(?: (?:this|the) (?:plan|proposal|step))?[.!]?$/i.test(reply);
+  if(input.decision==='changes') {
+    const changes=/^(?:request )?changes:\s*([\s\S]+)$/i.exec(reply);
+    return !!changes && changes[1].trim()===input.text.trim();
+  }
+  return false;
+}
 async function authorize(input,state,ports) {
   const refused=(code,message)=>({ok:false,code,message});
   const now=(ports.now??Date.now)();
@@ -43,6 +53,8 @@ async function authorize(input,state,ports) {
   if(typeof read!=='function')return refused('approval_evidence_unavailable','A terminal confirmation, authenticated phone tap or verified user chat message is required; chat evidence verification is unavailable.');
   const evidence=await read({stage:state.waitingDecision?.evidenceStage??{agent:state.agent,root:state.root,startedAt:undefined,endedAt:undefined},gateAskedAt:state.waitingDecision?.at,decision:input.decision},ports);
   if(evidence?.ok!==true)return refused('person_required',clean(evidence?.message||'No user message after the gate could be verified.'));
+  if(!matchesChatIntent(input,evidence.userMessage))return refused('person_required',
+    'The latest user message does not explicitly authorize this decision. Reply "approve" to approve, or "changes: <exact requested text>" to request changes.');
   return {ok:true,approvalRecord:{kind:'chat',agent:evidence.agent,sessionId:evidence.sessionId,userMessage:evidence.userMessage,userMessageAt:evidence.userMessageAt,at:now}};
 }
 export async function decideWorkflow(input,ports={}) {

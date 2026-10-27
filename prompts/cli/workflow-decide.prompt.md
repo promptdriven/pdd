@@ -41,8 +41,21 @@ endedAt},gateAskedAt,decision}, ports)`. Values come from the saved run and gate
 root is the assigned worktree; start/end select the saved native stage interval
 (or the area main session's startup interval, excluding its subagents),
 and gateAskedAt is its durable gate time. Require exactly one native session and
-a USER message strictly after the gate. Persist its returned userMessage,
-userMessageAt, sessionId and agent as approvalRecord. Missing verifier refuses
+a USER message strictly after the gate. That proves a person spoke, not that
+they authorized the requested decision. This module owns explicit intent:
+after trimming outer whitespace, accept an entire case-insensitive approval
+reply of `approve` or `I approve`, optionally followed by `this plan`, `the plan`,
+`this proposal`, `the proposal`, `this step` or `the step`, and one optional final
+period or exclamation mark. For changes, require `changes:` or `request changes:`
+followed by the exact requested text (trim outer whitespace on both texts).
+Do not extract approving words from longer prose: questions, negations,
+conditions, quoted examples, conflicting decisions and ambiguous replies refuse
+with person_required and guidance for an explicit reply. A changes reply cannot
+approve, nor can approval authorize changes or agent-invented change text.
+Preserve the gate and journal on refusal. Keep the evidence reader's supported
+decision types; terminal and phone authorization are unchanged.
+Persist the original returned userMessage, userMessageAt, sessionId and agent
+as approvalRecord only after intent matches. Missing verifier refuses
 approval_evidence_unavailable; verifier refusal is person_required with its plain
 message. A caller cannot supply the claimed message in place of file evidence.
 W11 owns accepted session formats and decision types; unsupported types refuse.

@@ -35,6 +35,33 @@ test('agent marker requires actual W11 evidence, persists exact text and identit
 test('missing, old and ambiguous chat evidence cannot admit a decision',async()=>{
  for(const code of ['user_message_missing','session_ambiguous','session_not_found']){const h=harness({env:{PDD_AGENT_SESSION:'run/scope'},readApprovalEvidence:async()=>({ok:false,code,message:'No current person evidence.'})});assert.equal((await decideWorkflow(input,h.ports)).code,'person_required');assert.equal(h.admitted,0);}
 });
+
+test('chat intent must explicitly match the requested decision, including changes text',async()=>{
+ const cases=[
+  ['approve',undefined,'Do not approve this plan. Please explain the tests first.',false],
+  ['approve',undefined,'Should I approve this plan?',false],
+  ['approve',undefined,'I approve this plan?',false],
+  ['approve',undefined,'I approve this plan if the tests pass.',false],
+  ['approve',undefined,'I approve this plan. Actually, wait.',false],
+  ['approve',undefined,'The example says "approve".',false],
+  ['approve',undefined,'Looks interesting.',false],
+  ['approve',undefined,'changes: Add a boundary case.',false],
+  ['approve',undefined,' approve ',true],
+  ['approve',undefined,'I approve this plan.',true],
+  ['changes','Add a boundary case.','I approve this plan.',false],
+  ['changes','Add a boundary case.','changes: Delete the tests.',false],
+  ['changes','Add a boundary case.','Should I request changes: Add a boundary case.?',false],
+  ['changes','Add a boundary case.','changes: Add a boundary case.',true],
+ ];
+ for(const [decision,text,userMessage,accepted] of cases) {
+  const h=harness({env:{PDD_AGENT_SESSION:'run/scope'},readApprovalEvidence:async()=>({ok:true,decision,agent:'codex',sessionId:decisionId,userMessage,userMessageAt:250})});
+  const result=await decideWorkflow({...input,decision,...(text===undefined?{}:{text})},h.ports);
+  assert.equal(result.state,accepted?'recorded':'refused',userMessage);
+  assert.equal(h.admitted,accepted?1:0,userMessage);
+  if(accepted)assert.equal(result.approvalRecord.userMessage,userMessage);
+  else assert.equal(result.code,'person_required');
+ }
+});
 test('decide CLI requires canonical complete bindings and changes text',()=>{
  const base=['workflow','decide',runId,'--decision','approve','--id',decisionId,'--expect-stage','change','--expect-seq','7'];assert.equal(parseArgv(base).local,'workflow-decide');
  for(const args of [base.slice(0,-2),[...base,'--text','unexpected'],[...base,'--id',decisionId],[...base.slice(0,-1),'07'],[...base.slice(0,-1),'9007199254740992']])assert.throws(()=>parseArgv(args));

@@ -148,7 +148,16 @@ a second incompatible phone format. Status write failures are visible.
 `pdd step done STAGE RUN_ID ATTEMPT` is the area-report alias and emitted form; both forms bind the same saved run/stage/attempt and return the same JSON.
 
 Plain chat resume inspects the active original without another prompt. Accepted
-report cleanup continues from durable acceptance. If transport proves the exact
+report cleanup continues from durable acceptance. After a durable
+`agent.completed` with no pending operation, continue an accepted work or verify
+stage's successor under the saved proposal approval: return verify instructions
+in the same main chat after change, or publish the verified PR after verify.
+Require completion of the immediately preceding definition stage and retain
+currentness, artifact, ancestry and publication checks. Do not rerun completed
+stages or checks, manufacture another decision gate, or repeat a pending effect.
+Proposal completion still waits for the person's decision; human/optional gates
+and default-mode inspection-only resume retain their existing rules.
+If transport proves the exact
 owned pane/terminal still exists but its native agent is stopped, explicit
 resume archives that interrupted attempt and opens a new main chat for the
 current stage, retaining accepted stages and partial project work. Recheck

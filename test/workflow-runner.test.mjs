@@ -1053,7 +1053,7 @@ async function areaFixture(t, options = {}) {
     assert.equal(input.startOnly, true, 'area startup must return after delivery');
     const backend = { version: 1, runId: input.runId, stageId: input.stageId, attemptId: input.attemptId,
       agent: input.agent, cwd: input.cwd, phase: 'submitted', session: 'pdd',
-      terminalId: `terminal-${input.attemptId}`, nativeSession: {kind:'id',value:`native-${input.attemptId}`},
+      terminalId: `terminal-${input.attemptId}`, nativeSession: {kind:'id',value:input.attemptId},
       promptDigest: sha(`${input.context}\n\n# Current workflow stage\n${input.instructions}`), evidence: {readySeq:1} };
     await input.checkpoint(backend);
     f.chats.push(input);
@@ -1275,4 +1275,91 @@ test('CHAT: an old plan report retry cannot receive the new build chat packet',a
   const repeated=await areaRunner.reportWorkflowStage({runId:first.runId,stageId:'scope',attemptId:attempt,cwd:f.cwd,packageRoot},f.ports);
   assert.equal(repeated.state,'running');assert.equal(repeated.nextStageInstructions,undefined);assert.equal(repeated.reportCommand,undefined);
   assert.equal(f.chats.length,2);assert.equal(f.saved(first.runId).seq,before);
+});
+
+test('R2: verified chat rejection or question cannot approve the waiting plan', async t => {
+  const f=await areaFixture(t), first=await f.runChat();await f.report(first.runId);
+  const saved=f.saved(first.runId), active=saved.areaChats.active;
+  const home=mkdtempSync(join(tmpdir(),'pdd-chat-intent-'));
+  t.after(()=>rmSync(home,{recursive:true,force:true}));mkdirSync(join(home,'sessions'));
+  const path=join(f.gitDir,'pdd/workflows',first.runId,'journal.jsonl');
+  const before=readFileSync(path,'utf8'), at=saved.waitingDecision.at+1;
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs');
+  const input={runId:first.runId,decision:'approve',decisionId:randomUUID(),expectStage:'change',expectSeq:saved.seq,cwd:f.cwd,packageRoot};
+  const ports={...f.ports,workflowRunner:areaRunner,env:{PDD_AGENT_SESSION:'review'},stdin:{isTTY:false},codexHome:home,now:()=>at+10};
+  const transcript=text=>writeFileSync(join(home,'sessions','rollout-review.jsonl'),[
+    {type:'session_meta',payload:{id:active.backend.nativeSession.value,cwd:f.cwd,timestamp:active.startedAt}},
+    {type:'response_item',timestamp:at,payload:{type:'message',role:'user',content:[{type:'input_text',text}]}}
+  ].map(JSON.stringify).join('\n')+'\n');
+  for(const text of ['Do not approve this plan. Please explain the tests first.','Should I approve this plan?']) {
+    transcript(text);
+    const refused=await decideWorkflow(input,ports);
+    assert.equal(refused.state,'refused',text);assert.equal(refused.code,'person_required');
+    assert.equal(readFileSync(path,'utf8'),before);assert.equal(f.chats.length,1);assert.equal(f.pr,null);
+    assert.equal((await areaRunner.readWorkflowDecision({runId:first.runId,cwd:f.cwd},f.ports)).state,'ready');
+  }
+  transcript('I approve this plan.');
+  const approved=await decideWorkflow(input,ports);
+  assert.equal(approved.state,'started',approved.message);assert.equal(f.chats.length,2);
+  assert.equal(f.saved(first.runId).approvalRecord.userMessage,'I approve this plan.');
+});
+
+function retainCompletedStage(f,runId,stage) {
+  const path=join(f.gitDir,'pdd/workflows',runId,'journal.jsonl');
+  const rows=readFileSync(path,'utf8').trimEnd().split('\n').map(JSON.parse);
+  const boundary=rows.findLastIndex(row=>row.event==='agent.completed'&&row.state.completed.at(-1)?.id===stage);
+  assert.ok(boundary>=0,`durable completion for ${stage}`);
+  writeFileSync(path,rows.slice(0,boundary+1).map(JSON.stringify).join('\n')+'\n');
+  assert.equal(f.saved(runId).pending,null);
+}
+
+test('R2: resume after durable change completion returns verify in the same chat once', async t => {
+  const f=await areaFixture(t), first=await f.runChat();await f.report(first.runId);
+  await chatDecision(f,first.runId);await f.report(first.runId);
+  retainCompletedStage(f,first.runId,'change');
+  const resumed=await f.resume(first.runId);
+  assert.equal(resumed.state,'running',resumed.message);assert.equal(resumed.stage,'verify');
+  assert.match(resumed.nextStageInstructions,/verify/);assert.ok(resumed.reportCommand);
+  const saved=f.saved(first.runId), attempt=saved.pending.attemptId;
+  assert.equal(saved.pending.backend.terminalId,saved.completed.at(-1).backend.terminalId);
+  assert.equal(saved.completed.filter(s=>s.id==='change').length,1);
+  assert.equal((await f.resume(first.runId)).state,'running');
+  assert.equal(f.saved(first.runId).pending.attemptId,attempt);
+  assert.equal(f.chats.length,2);assert.equal(f.pr,null);
+  assert.equal((await areaRunner.readWorkflowDecision({runId:first.runId,cwd:f.cwd},f.ports)).code,'run_not_waiting');
+});
+
+test('R2: resume after durable verify completion publishes once without rerunning checks', async t => {
+  const f=await areaFixture(t), first=await f.runChat();await f.report(first.runId);
+  await chatDecision(f,first.runId);await f.report(first.runId);
+  const execute=f.ports.execFile;
+  let interrupted=false;
+  f.ports.execFile=async(file,args,opts)=>{
+    const saved=f.saved(first.runId);
+    if(!interrupted&&saved.pending===null&&saved.completed.at(-1)?.id==='verify') {
+      interrupted=true;throw Error('interruption after durable verify completion');
+    }
+    return execute(file,args,opts);
+  };
+  assert.equal((await f.report(first.runId)).state,'failed');assert.equal(interrupted,true);
+  assert.equal(f.pr,null);retainCompletedStage(f,first.runId,'verify');
+  f.ports.execFile=execute;
+  const checksBefore=f.calls.filter(c=>c.file===process.execPath&&c.args[0]==='check.mjs').length;
+  assert.equal(checksBefore,1);
+  const resumed=await f.resume(first.runId);
+  assert.equal(resumed.state,'waiting',resumed.message);assert.equal(resumed.stage,'wait-merge');
+  assert.equal((await f.resume(first.runId)).stage,'wait-merge');
+  assert.equal(f.calls.filter(c=>c.file===process.execPath&&c.args[0]==='check.mjs').length,checksBefore);
+  assert.equal(f.calls.filter(c=>c.file==='gh'&&c.args[1]==='create').length,1);
+  assert.equal(f.calls.filter(c=>c.file==='git'&&c.args[0]==='push').length,1);
+  assert.equal(f.saved(first.runId).completed.filter(s=>s.id==='verify').length,1);assert.equal(f.chats.length,2);
+});
+
+test('R2: resume after durable proposal completion still requires the person', async t => {
+  const f=await areaFixture(t), first=await f.runChat();await f.report(first.runId);
+  retainCompletedStage(f,first.runId,'scope');
+  const resumed=await f.resume(first.runId);
+  assert.equal(resumed.state,'waiting');assert.equal(resumed.stage,'change');
+  assert.equal(f.saved(first.runId).pending,null);assert.equal(f.chats.length,1);assert.equal(f.pr,null);
+  assert.equal((await areaRunner.readWorkflowDecision({runId:first.runId,cwd:f.cwd},f.ports)).state,'ready');
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0581a789f64eb8592ea305d3ed67f82c5976c1f9d22e207b5e354606561a2630).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 684f5208e625e339a67f2a94e1ce0d2a68929bbe7f1887bd9ff6ea0c8bb05db2).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -388,7 +388,10 @@ async function resumeChat(s,r,directory,options,p) {
     return stopped??advance(s,r,directory,options,p,undefined,true);
   }
   if(s.chatDecision && !s.pending) return applyAreaChatDecision(s,r,directory,options,p);
-  return advance(s,r,directory,options,p,undefined,false);
+  const completed=s.completed.at(-1), previous=s.definitions[s.index-1];
+  const continueCompleted=!s.pending && !!s.accepted && completed?.id===previous?.id
+    && !!completed?.acceptance && ['work','verify'].includes(previous?.protocol) && gateDecisions(s).length===0;
+  return advance(s,r,directory,options,p,undefined,continueCompleted);
 }
 async function runChatStage(s,stage,r,directory,options,p) {
   const area=areaChatForStage(s.name,stage.id);
