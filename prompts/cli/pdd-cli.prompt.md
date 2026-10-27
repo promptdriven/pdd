@@ -14,7 +14,7 @@ workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HO
 
 ## Help contract
 
-The first help line is exactly `PDD: prompt-driven development for your coding agent.` Help lists the catalog forms, then says: open Codex or Claude as usual and call a PDD skill (/pdd-feature, /pdd-bug, /pdd-small-change or /pdd-prompting); `workflow run` starts the first area chat in Herdr session pdd and exits; the person approves each area, and pdd pushes the branch and opens a real PR after the last step; pdd never merges. Help is exit 0 and local, with no runner, network or auth effects.
+The first help line is exactly `PDD: prompt-driven development for your coding agent.` Help lists the catalog forms, then says: `Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).` (Codex calls a skill with `$name`, Claude Code with `/name`); `workflow run` starts the first area chat in Herdr session pdd and exits; the person approves each area, and pdd pushes the branch and opens a real PR after the last step; pdd never merges. Help is exit 0 and local, with no runner, network or auth effects.
 
 ## Runtime commands
 
