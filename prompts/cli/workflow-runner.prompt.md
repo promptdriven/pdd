@@ -9,7 +9,7 @@ Export `WORKFLOW_STAGES` from the definitions module. Export async module functi
 - `runWorkflow({name,issue,agent,cwd,packageRoot}, ports)` begins any validated editable workflow with codex or claude. A still-active same-repo/name/issue run is reported rather than duplicated.
 - `resumeWorkflow({runId,cwd,packageRoot,decision}, ports)` loads a UUIDv4 run, retaining its saved workflow, provider, repository and issue. `decision` is absent, `approve` or `skip`; it is never a new provider or arbitrary input.
 
-Return `{exitCode,state,runId,stage,message}`. `state` is completed, waiting, failed or recovery_required. Exit zero for completed, two for an ordinary wait, and one for failure or uncertain effect. The CLI prints the single message including actual run/stage identity. Missing/malformed inputs fail before effects. Do not export a second integer/callback API or add a status command.
+Return `{exitCode,state,runId,stage,message}`. `state` is completed, waiting, failed or recovery_required. Exit zero for completed, two for an ordinary wait, and one for failure or uncertain effect. The CLI prints the single message including actual run/stage identity. Missing/malformed inputs fail before effects. Do not export a second integer/callback API or add a status command. Progress facts include the canonical repository name. Persist run start and stage start/end timestamps and agent metadata so read-only run status can resolve native session files when Herdr did not persist a session. Append a derived run entry to the machine index after `run.started`; the journal remains authoritative.
 
 Background agent stages use the [Herdr stage port](workflow-stage-herdr.prompt.md); ordinary pdd session remains unchanged.
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a56fdf2fa376fa38ac4558dc08a7abb053bda43d2533cfb6712a56b8df62a36a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fee9f382e6f001bc83c96d95293ba9a77642a3875f859c4b5fa64e1520981b75).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -10,6 +10,7 @@ import { WORKFLOW_STAGES } from './workflow-definitions.mjs';
 import { loadWorkflowDefinition } from './workflow-definition-loader.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from './workflow-github.mjs';
 import { readWorkflowHandoff, assertWorkflowArtifacts, runWorkflowTestCommands } from './workflow-artifacts.mjs';
+import { appendRunIndex } from './workflow-run-records.mjs';
 export { WORKFLOW_STAGES } from './workflow-definitions.mjs';
 
 const ordinaryExec = promisify(execFileCallback);
@@ -144,7 +145,7 @@ function progress(s, event, state) {
   const handoff = s.completed?.findLast(step => step.handoff)?.handoff;
   const proposal = s.proposal ? s.completed?.findLast(step => s.definitions?.find(def => def.id === step.id)?.protocol === 'proposal')?.handoff : null;
   const backend = s.pending?.backend;
-  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, issue: s.issue?.number, title: s.issue?.title, agent: s.agent,
+  try { observe(structuredClone({ event, state, runId: s.runId, name: s.name, repo: s.repo, issue: s.issue?.number, title: s.issue?.title, agent: s.agent,
     stage: stage ? { id: stage.id, kind: stage.kind, optional: !!stage.optional } : null,
     ordinal: s.index + 1, total: s.definitions?.length, root: s.root, branch: s.assignment?.branch,
     journal: directory ? join(directory, 'journal.jsonl') : null, pending: s.pending?.kind,
@@ -295,7 +296,7 @@ async function runAgent(s, stage, r, directory, options, p) {
   const handoffPath = join(directory, 'artifacts', `${stage.id}-${randomUUID()}.json`);
   const attemptId = randomUUID();
   const instructions = agentInstructions(s, stage, directory, attemptId, handoffPath, s.expected);
-  s.pending = { kind: 'agent', stage: stage.id, attemptId, input: s.expected, handoffPath, backend: null, instructions,
+  s.pending = { kind: 'agent', stage: stage.id, agent: s.agent, startedAt: Date.now(), attemptId, input: s.expected, handoffPath, backend: null, instructions,
     promptDigest: digest(`${context}\n\n# Current workflow stage\n${instructions}`), transport: null };
   const guard = stageGuard(s), portOptions = nativePorts(s, directory, r, options, p);
   await guard({ runId: s.runId, cwd: s.root }, async () => { s.pending.attachmentEpoch = attachmentEpoch(s); });
@@ -388,7 +389,7 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
       if (closed.state !== 'closed' || closed.backend?.phase !== 'closed') return result(s, 'recovery_required', closed.reason || 'Owned cleanup is uncertain; no stage was resent.');
       if (!isDeepStrictEqual(closed.backend, s.pending.backend)) fail('Owned closure was not checkpointed with its exact actual identity.');
     }
-    s.completed.push({ id: stage.id, kind: stage.kind, handoff: s.pending.handoff,
+    s.completed.push({ id: stage.id, kind: stage.kind, agent: s.pending.agent ?? s.agent, startedAt: s.pending.startedAt ?? null, endedAt: Date.now(), handoff: s.pending.handoff,
       revision: s.expected.head, backend: s.pending.backend, acceptance: s.pending.acceptance, verification: s.pending.verification });
     s.pending = null; s.index++; record(s, directory, 'agent.completed');
     return null;
@@ -396,7 +397,7 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
 }
 
 async function completePr(s, stage, intent, pr, directory) {
-  s.completed.push({ id: stage.id, kind: stage.kind, pr, intent });
+  s.completed.push({ id: stage.id, kind: stage.kind, startedAt: s.pending?.startedAt ?? Date.now(), endedAt: Date.now(), pr, intent });
   s.pending = null; s.index++; record(s, directory, 'pr.completed');
 }
 async function makePr(s, stage, r, directory, p) {
@@ -415,7 +416,7 @@ async function makePr(s, stage, r, directory, p) {
   const intent = await prepareWorkflowPr({ cwd: r.root, runId: s.runId, stageId: stage.id,
     repository: s.repo, baseBranch: s.base, bodyFile: join(directory, `pr-${stage.id}.md`) }, p.commandPorts);
   await current(s, r, p);
-  s.pending = { kind: 'pr', stage: stage.id, intent }; record(s, directory, 'pr.intent');
+  s.pending = { kind: 'pr', stage: stage.id, startedAt: Date.now(), intent }; record(s, directory, 'pr.intent');
   let outcome;
   try { outcome = await publishWorkflowPr({ cwd: r.root, intent }, p.commandPorts); }
   catch { return result(s, 'recovery_required', 'PR effect is uncertain; no blind resend.'); }
@@ -712,11 +713,13 @@ async function execute(options, ports, resume) {
     if (existsSync(directory)) fail('Run journal already exists; do not overwrite it.');
     ensureDirectory(directory); ensureDirectory(join(directory, 'artifacts')); syncDirectory(directory);
     const context = stageContext(input, r.root);
-    s = { version: 2, seq: 0, runId, name: options.name, agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
+    s = { version: 2, seq: 0, runId, name: options.name, startedAt: Date.now(), agent: options.agent ?? 'codex', root: r.root, gitDir: r.gitDir,
       repo: r.repo, base: r.base, issue: binding.issue, assignment, definition, definitions: definition.stages,
       inputDigest: snapshotDigest(input), context, contextDigest: digest(context), index: 0, completed: [],
       expected: await fingerprint(r, p), pending: null };
     record(s, directory, 'run.started');
+    await appendRunIndex({ v: 1, runId, workflow: s.name, repo: s.repo, issue: s.issue, agent: s.agent,
+      root: s.root, runDir: directory, startedAt: s.startedAt }, { home: process.env.HOME });
     await validateInput(s, options, p);
     return await advance(s, r, directory, options, p, undefined, true);
   } catch (error) { return result(s, error.code === 'WORKFLOW_STAGE_BUSY' ? 'waiting' : 'failed', error.message || 'Workflow failed; inspect saved state before another effect.'); }

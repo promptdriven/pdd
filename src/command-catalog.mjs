@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5e5d9ec77b120c7c35ae2a1eb82a29c8bd69cb2e6195c28b4f44c59dd0fba12c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 8f469c3563e7bf60e3b79cb306e065554c19b8f55b682a1c6b06663525435468).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -7,11 +7,26 @@ const routes = [
     options:[{name:'--agent',kind:'value',choices:['codex','claude']}],
     forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude]', 'Run a validated project or bundled workflow for a GitHub issue; may push branches and create real PRs.')] },
   { id: 'workflow.resume', prefix: ['workflow', 'resume'], local: 'workflow-resume',
-    operands:[{name:'run-id',type:'uuid'}],options:[{name:'--decision',kind:'value',choices:['approve','skip']}],
-    forms:[form('pdd workflow resume RUN_ID [--decision approve|skip]', 'Inspect or continue a saved workflow; omitted decision only reads/reconciles.')] },
+    operands:[{name:'run-ref',type:'run-ref',optional:true}],options:[{name:'--decision',kind:'value',choices:['approve','skip']}],
+    forms:[form('pdd workflow resume [ISSUE|RUN_ID] [--decision approve|skip]', 'Inspect or continue a saved workflow; issue numbers and short IDs are accepted.')] },
   { id: 'workflow.attach', prefix: ['workflow', 'attach'], local: 'workflow-attach',
-    operands:[{name:'run-id',type:'uuid'}],options:[],
-    forms:[form('pdd workflow attach RUN_ID','Attach to the saved active background stage; archived stages return information.')] },
+    operands:[{name:'run-ref',type:'run-ref'}],options:[],
+    forms:[form('pdd workflow attach ISSUE|RUN_ID','Attach to the saved active background stage; issue numbers and short IDs are accepted.')] },
+  { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
+    operands:[{name:'run-ref',type:'run-ref',optional:true}],options:[{name:'--yes',kind:'flag'}],
+    forms:[form('pdd workflow approve [ISSUE|RUN_ID] [--yes]','Approve one saved run after a real-terminal confirmation.')] },
+  { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
+    operands:[{name:'run-ref',type:'run-ref'},{name:'request',type:'text',optional:true,repeat:true}],options:[],
+    forms:[form('pdd workflow changes ISSUE|RUN_ID [text]','Request changes; this release reports that changes arrive in the next release.')] },
+  { id: 'workflow.skip', prefix: ['workflow', 'skip'], local: 'workflow-skip',
+    operands:[{name:'run-ref',type:'run-ref'}],options:[],
+    forms:[form('pdd workflow skip ISSUE|RUN_ID','Skip the current optional stage after confirmation.')] },
+  { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
+    operands:[],options:[{name:'--all',kind:'flag'}],
+    forms:[form('pdd workflow status [--all]','Show runs in this repository, or every waiting/running run on this machine.')] },
+  { id: 'workflow.watch', prefix: ['workflow', 'watch'], local: 'workflow-watch',
+    operands:[{name:'run-ref',type:'run-ref',optional:true}],options:[],
+    forms:[form('pdd workflow watch [ISSUE|RUN_ID]','Show the current saved run using its issue form.')] },
   ...BUNDLED_WORKFLOW_NAMES.map(name => ({ id: `workflow.${name}`, prefix: ['workflow', name], local: 'session', workflowName: name,
     operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 08c4985eac708efcd7569dd061e10951fa020027cbf8b58f03544c59f58ca005).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 0d9cf0f8f240e494eb34dfc8bba92b1aa147be9f019bb7d449bd9426cbb6c605).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -39,7 +39,8 @@ function parseRoute(route, words) {
     const type = route.operands[Math.min(index, route.operands.length - 1)].type;
     const word = operands[index];
     const valid = type === 'text' || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || type === 'issue'
-      && /^(?:[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      && /^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
+      || type === 'run-ref' && (/^(?:#?[1-9][0-9]*|[A-Za-z0-9_.-]+#[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word) || /^[a-f0-9]{8,}$/i.test(word) || /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word))
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();

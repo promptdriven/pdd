@@ -22,7 +22,7 @@ test('progress deduplicates polling, shows actual location, review artifacts, fu
  assert.match(stdout.text,/Read: \/git\/run\/scope.json/);
  assert.match(stdout.text,/Read: \/project worktree\/cases.md/);
  assert.match(stdout.text,/Summary: Recommend feature/);assert.doesNotMatch(stdout.text,/\x1b/);
- assert.ok(stdout.text.includes(`Approve: pdd workflow resume ${id} --decision approve`));
+ assert.ok(stdout.text.includes('Approve: pdd workflow approve #17'));
  const before=stdout.text.length;
  progress.observe({...view,event:'result',state:'waiting',stage:{id:'wait-merge',kind:'merge'},prs:['https://github.com/example/repo/pull/2']});
  assert.match(stdout.text.slice(before),/PR: https:\/\/github.com\/example\/repo\/pull\/2/);
@@ -49,7 +49,7 @@ test('SIGINT reports same saved run and exits 130; early interruption invents no
   const workflowRunner={async runWorkflow(input,ports){if(prepared)ports.onProgress({...view,event:'run.started'});signalSource.emit('SIGINT');return {state:'waiting',exitCode:2,message:'stopped'};}};
   await runPdd(['workflow','run','small-change','17'],{stdout,stderr:capture(),signalSource,exit:code=>{exitCode=code;},workflowRunner,workflowStages:stages});
   assert.equal(exitCode,130);assert.equal(signalSource.listenerCount('SIGINT'),0);
-  if(prepared)assert.ok(stdout.text.includes(`pdd workflow resume ${id} --decision approve`));
+ if(prepared)assert.ok(stdout.text.includes('pdd workflow approve #17'));
   else {assert.match(stdout.text,/before a run identity was confirmed/);assert.doesNotMatch(stdout.text,/pdd workflow resume/);}
  }
 });
@@ -58,7 +58,7 @@ test('interrupted resume retains its explicit UUID before saved state lookup',as
  const stdout=capture(),signalSource=new EventEmitter();let status;
  await runPdd(['workflow','resume',id],{stdout,stderr:capture(),signalSource,exit:code=>{status=code;},workflowStages:stages,
   workflowRunner:{async resumeWorkflow(){signalSource.emit('SIGINT');return {state:'waiting',exitCode:2,message:'lookup interrupted'};}}});
- assert.equal(status,130);assert.ok(stdout.text.includes(`Inspect: pdd workflow resume ${id}`));
+ assert.equal(status,130);assert.doesNotMatch(stdout.text,/pdd workflow resume [0-9a-f]{8}-/);
  assert.doesNotMatch(stdout.text,/before a run identity was confirmed/);
 });
 

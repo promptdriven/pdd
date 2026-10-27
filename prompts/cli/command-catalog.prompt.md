@@ -12,6 +12,8 @@ Catalog workflow.run (`workflow run`) with required safe free workflow NAME and 
 
 For editable workflow execution, workflow.run NAME is a safe free workflow-name operand, not a three-name enum. The dedicated definition loader alone decides available definitions/semantic validity. Preserve the three bundled direct conversation shortcuts as separate foreground routes. Add workflow.attach: `pdd workflow attach RUN_ID`, one UUIDv4, no agent/decision/native/path flags; main resolves actual active saved identity or finite archived information. List describes validated project/bundled definitions; no private route.
 
+Catalog the human short commands `workflow approve`, `workflow changes`, `workflow skip`, `workflow status`, and `workflow watch`. Their saved-run operand is an issue reference, unique eight-character run-ID prefix or full UUID; approve alone may omit it when exactly one run is waiting in the current repository. Status accepts only `--all`. Approve accepts only `--yes`; changes accepts optional request text. Resume and attach use the same reference grammar. Help uses issue/reference forms and never promises a UUID is required.
+
 
 ## Workflow runner help
 

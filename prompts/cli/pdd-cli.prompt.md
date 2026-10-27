@@ -22,6 +22,8 @@ Bind the four workflow-stage-herdr exports into workflow run/resume/attach ports
 
 workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoot}), producing {workflows:[{name,source}],default:null}; no native/runner start. Use dynamic loader import (injectable in tests), no duplicate schema or silent fallback to legacy Markdown-only files. Invalid/missing loader returns finite1. Local help/version/skill/completion rendering do not import or call loader/backend unnecessarily.
 
+Short decision commands resolve saved runs through the local repository's run records, including linked worktrees. Outside a repository they use the machine runs index; `--all` shows every waiting or running run. A bare issue number is scoped to the current repository. If multiple repositories share the number, refuse and list each `<repo>#N "<title>"` with its exact issue-form command. Approve, changes and skip require a real TTY for a person and refuse no-TTY terminal calls; `--yes` is accepted only with a TTY. When `PDD_AGENT_SESSION` is set, an agent relay may proceed only after the shared evidence seam verifies a USER message after the current gate. The confirmation question includes repository, issue and title. `workflow changes` in 0.1.0 prints `Request changes comes in the next release` and performs no runner action. Every printed next-step command uses an issue reference rather than a UUID. All three decisions call one small decision seam.
+
 
 ## Help contract
 
