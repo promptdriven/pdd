@@ -30,13 +30,16 @@ const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCen
 
 // A fake PDD runtime on 127.0.0.1. `answer(entry, fake)` returns {status, json | text, headers} or {destroy: true}.
 export async function fakeRuntime(t, answer) {
-  const fake = { posts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
+  const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks), entry = { method: req.method, url: req.url, headers: req.headers };
     fake.authorization.add(req.headers.authorization);
-    if (req.method === 'POST') {
+    if (req.method === 'POST' && String(req.headers['content-type']).startsWith('application/json')) {
+      entry.json = JSON.parse(body.toString('utf8'));
+      fake.jsonPosts.push(entry);
+    } else if (req.method === 'POST') {
       const form = await new Request('http://fake/', { method: 'POST', headers: { 'content-type': req.headers['content-type'] }, body }).formData();
       entry.request = JSON.parse(await form.get('request').text());
       entry.tar = Buffer.from(await form.get('source').arrayBuffer());

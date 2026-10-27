@@ -111,13 +111,50 @@ export function approvePromptText(text) {
   } catch { return null; }
 }
 
-function readAnswer(stdin) {
-  return new Promise(done => {
-    const reader = createInterface({ input: stdin });
-    let answered = false;
-    reader.once('line', text => { answered = true; reader.close(); done(text); });
-    reader.once('close', () => { if (!answered) done(''); });
-  });
+// One reader for the whole command, so answers typed for several questions are all kept.
+export function lineReader(stdin) {
+  const reader = createInterface({ input: stdin }), lines = [], waiting = [];
+  let closed = false;
+  reader.on('line', text => { const next = waiting.shift(); if (next) next(text); else lines.push(text); });
+  reader.on('close', () => { closed = true; for (const next of waiting.splice(0)) next(''); });
+  return { ask: () => lines.length ? Promise.resolve(lines.shift()) : closed ? Promise.resolve('') : new Promise(done => waiting.push(done)), close: () => reader.close() };
+}
+
+// Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
+// Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
+export async function askApproval({ root, path, stdout, answers, expectedHash }) {
+  const text = readFileSync(join(root, path), 'utf8'), blocks = interfaceBlocks(text);
+  if (blocks.length !== 1) return { state: 'declined', exitCode: 4, message: `${path} has ${blocks.length ? 'more than one' : 'no'} Runtime interface block.` };
+  let iface;
+  try { iface = JSON.parse(blocks[0][1]); } catch { iface = null; }
+  if (!isObject(iface)) return { state: 'declined', exitCode: 4, message: `The Runtime interface of ${path} is not a JSON object.` };
+  const hash = proseSha256(text), current = iface.prose_sha256 === hash;
+  if (expectedHash !== undefined && expectedHash !== hash) {
+    return { state: 'declined', exitCode: 4, message: `${path}: the prompt changed since you clicked Approve. Not approved; look at the new text, then click Approve again.` };
+  }
+  if (iface.status === 'approved' && current) return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
+  const problems = interfaceSchemaProblems(iface);
+  if (problems.length) {
+    for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
+    return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
+  }
+  for (const row of describeInterface(path, iface)) line(stdout, row);
+  if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
+  stdout.write(`Approve ${path}? y/n `);
+  const answer = await answers.ask();
+  if (!/^(?:y|yes)$/i.test(answer.trim())) { line(stdout, ''); return { state: 'declined', exitCode: 1, message: `Not approved: ${path}. Nothing changed.` }; }
+  const next = approvePromptText(text);
+  if (!next) return { state: 'declined', exitCode: 4, message: `pdd could not set approved in ${path}. Add "prose_sha256": "" to the Runtime interface, then approve again.` };
+  writeFileSync(join(root, path), next);
+  return { state: 'done', exitCode: 0, message: `Approved ${path}.` };
+}
+
+// A path that pdd approve may touch: a Git-visible regular *.prompt.md file inside the repo, or null.
+export function promptPath(root, cwd, word) {
+  const path = relative(root, resolve(realpathSync(cwd), word)).split(sep).join('/');
+  let regular = false;
+  try { regular = lstatSync(join(root, path)).isFile() && realpathSync(join(root, path)) === join(root, path); } catch { regular = false; }
+  return path.endsWith('.prompt.md') && !path.startsWith('..') && regular && gitFiles(root).includes(path) ? path : null;
 }
 
 // pdd approve PROMPT. Returns the exit code.
@@ -128,34 +165,17 @@ export async function runApprove({ words = [], cwd = process.cwd() } = {}, ports
     if (words.length !== 1) throw new Stop(2, 'Name one prompt: pdd approve prompts/<name>.prompt.md');
     const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
     if (top.status !== 0) throw new Stop(2, 'pdd approve works in a Git repository.');
-    const root = realpathSync(top.stdout.trim()), path = relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/');
-    let regular = false;
-    try { regular = lstatSync(join(root, path)).isFile(); } catch { regular = false; }
-    if (!path.endsWith('.prompt.md') || !regular || !gitFiles(root).includes(path)) throw new Stop(2, `${path} is not a Git-visible *.prompt.md file in this repository.`);
+    const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
+    if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
     if (!interactive) throw new Stop(2, `pdd approve is for a person at a terminal. Ask the person to run: pdd approve ${path}`);
-    const text = readFileSync(join(root, path), 'utf8'), blocks = interfaceBlocks(text);
-    if (blocks.length !== 1) throw new Stop(4, `${path} has ${blocks.length ? 'more than one' : 'no'} Runtime interface block.`);
-    let iface;
-    try { iface = JSON.parse(blocks[0][1]); } catch { throw new Stop(4, `The Runtime interface of ${path} is not valid JSON.`); }
-    if (!isObject(iface)) throw new Stop(4, `The Runtime interface of ${path} is not a JSON object.`);
-    const current = iface.prose_sha256 === proseSha256(text);
-    if (iface.status === 'approved' && current) { line(stdout, `${path} is already approved and current.`); return 0; }
-    const problems = interfaceSchemaProblems(iface);
-    if (problems.length) {
-      for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
-      line(stdout, 'Fix these before you approve.');
-      return 4;
-    }
-    for (const row of describeInterface(path, iface)) line(stdout, row);
-    if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
-    stdout.write(`Approve ${path}? y/n `);
-    const answer = await readAnswer(stdin);
-    if (!/^(?:y|yes)$/i.test(answer.trim())) { line(stdout, ''); line(stdout, 'Not approved. Nothing changed.'); return 1; }
-    const next = approvePromptText(text);
-    if (!next) throw new Stop(4, `pdd could not set approved in ${path}. Add "prose_sha256": "" to the Runtime interface, then run pdd approve again.`);
-    writeFileSync(join(root, path), next);
-    line(stdout, `Approved ${path}.`);
-    return 0;
+    const answers = lineReader(stdin);
+    try {
+      const result = await askApproval({ root, path, stdout, answers });
+      if (result.exitCode === 1) line(stdout, 'Not approved. Nothing changed.');
+      else if (result.exitCode === 4 && result.message.startsWith('Fix these')) line(stdout, 'Fix these before you approve.');
+      else line(result.exitCode === 4 ? stderr : stdout, result.message);
+      return result.exitCode;
+    } finally { answers.close(); }
   } catch (error) {
     if (error instanceof Stop) { line(stderr, error.message); return error.exitCode; }
     throw error;

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 04d7c563d5ad6ae52ffa116f7f1b5c5ad7a4958a385ee1a6759b76ea90c2065a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 64819a051b7c3014875a94a145f220d0ae3407ac2bd12c7b0fc4b6ac8187d6b7).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
@@ -33,7 +34,7 @@ function withDefaults(ports) {
     env, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => spawnSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
-    interactive: ports.interactive ?? !!process.stdout.isTTY, watchMs: ports.watchMs ?? 5000,
+    interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
       const timer = setTimeout(done, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); done(); }, { once: true });
@@ -778,7 +779,7 @@ async function showTry(context, test, link, options, tryId) {
     line(ports.stdout, `Try link for "${test.title}": ${link}`);
     line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
   }
-  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive);
+  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story);
   return 0;
 }
 
@@ -889,36 +890,76 @@ function addSavedCaseSafely(root, saved) {
   return `added to ${target.path} as step ${ids.join(', ')}`;
 }
 
-// Read the saved cases once; with `wait`, keep reading until Ctrl-C or the Try ends.
-async function watchSavedTests(context, tryId, wait) {
+// Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
+async function collectSavedTests(context, tryId) {
   const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
-  let polls = 0, told = false;
-  for (;;) {
-    const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
-    if (reply.status === 200 && Array.isArray(reply.json?.tests)) {
-      const done = store.read(path) ?? {};
-      for (const saved of reply.json.tests) {
-        const key = typeof saved?.id === 'string' ? saved.id : null;
-        if (!key || done[key]) continue;
-        const said = addSavedCase(root, saved);
-        done[key] = { at: new Date(ports.now()).toISOString(), result: said };
-        store.write(path, done);
-        line(ports.stdout, said);
+  const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
+  if ([401, 410].includes(reply.status)) return 'ended';
+  if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
+  const done = store.read(path) ?? {};
+  for (const saved of reply.json.tests) {
+    const key = typeof saved?.id === 'string' ? saved.id : null;
+    if (!key || done[key]) continue;
+    const said = addSavedCase(root, saved);
+    done[key] = { at: new Date(ports.now()).toISOString(), result: said };
+    store.write(path, done);
+    line(ports.stdout, said);
+  }
+  return 'ok';
+}
+
+// Approval requests from the Try page (#9): only a person's y in this terminal approves; the page gets done or declined.
+async function collectApprovals(context, tryId, story, answers) {
+  const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.approvals.json`);
+  const reply = await context.runtime.send(`/v1/try/${tryId}/approvals`, { method: 'GET' }, GET_MS);
+  if ([401, 410].includes(reply.status)) return 'ended';
+  if (reply.status !== 200 || !Array.isArray(reply.json?.approvals)) return reply.lost ? 'ok' : 'missing';
+  const handled = store.read(path) ?? {};
+  for (const request of reply.json.approvals) {
+    const id = typeof request?.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(request.id) ? request.id : null;
+    if (!id || request.state !== 'pending' || handled[id]?.posted) continue;
+    const asked = cleanText(request.prompt_path);
+    if (!handled[id]?.state) {
+      if (!answers) {
+        if (!handled[id]?.noticed) line(ports.stdout, `The Try page asks to approve ${asked}. A person answers it in a terminal: pdd try ${story}`);
+        handled[id] = { noticed: true }; store.write(path, handled);
+        continue;
       }
-    } else if (reply.status === 404 || reply.status === 405 || (reply.status === 200 && !Array.isArray(reply.json?.tests))) {
-      if (wait) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
-      return;
-    } else if ([401, 410].includes(reply.status)) return;
-    if (!wait || context.interrupted) return;
-    if (!told) { line(ports.stdout, 'Waiting for tests saved on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
-    await ports.sleep(ports.watchMs, context.signal);
-    if (context.interrupted) { line(ports.stdout, 'Stopped waiting. The Try link stays open. Run pdd try again to add tests saved later.'); return; }
-    polls += 1;
-    if (polls % 6 === 0) {
-      const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
-      if ((read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) || read.kind === 'missing' || read.status === 410) {
-        wait = false; line(ports.stdout, 'The Try has ended.');
+      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' ? promptPath(real, real, request.prompt_path) : null;
+      const result = prompt ? await askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
+        : { state: 'declined', message: `not approved: ${asked} is not a Git-visible *.prompt.md file in this repository.` };
+      line(ports.stdout, result.message);
+      handled[id] = { state: result.state, at: new Date(ports.now()).toISOString() };
+      store.write(path, handled);
+    }
+    const answer = await context.runtime.send(`/v1/try/${tryId}/approvals/${id}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: handled[id].state }) }, GET_MS);
+    if (answer.status >= 200 && answer.status < 300) { handled[id].posted = true; store.write(path, handled); }
+  }
+  return 'ok';
+}
+
+// Read saved cases and approval requests once; with `wait` (a person's terminal), keep reading until Ctrl-C or the Try ends.
+async function watchSavedTests(context, tryId, wait, story) {
+  const { ports } = context, answers = wait ? lineReader(ports.stdin) : null;
+  let polls = 0, told = false, tests = 'ok', approvals = 'ok';
+  try {
+    for (;;) {
+      if (tests !== 'missing') tests = await collectSavedTests(context, tryId);
+      if (tests === 'missing' && wait && !told) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
+      if (approvals !== 'missing') approvals = await collectApprovals(context, tryId, story, answers);
+      if (tests === 'ended' || approvals === 'ended' || !wait || context.interrupted) return;
+      if (tests === 'missing' && approvals === 'missing') return;
+      if (!told) { line(ports.stdout, 'Waiting for tests saved and approvals asked on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
+      await ports.sleep(ports.watchMs, context.signal);
+      if (context.interrupted) { line(ports.stdout, 'Stopped waiting. The Try link stays open. Run pdd try again to add tests saved later.'); return; }
+      polls += 1;
+      if (polls % 6 === 0) {
+        const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
+        if ((read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) || read.kind === 'missing' || read.status === 410) {
+          wait = false; line(ports.stdout, 'The Try has ended.');
+        }
       }
     }
-  }
+  } finally { answers?.close(); }
 }
