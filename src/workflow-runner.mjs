@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 504e3f56c4c02c8355785df0d04146755a6ea19d82e432d128dc9f4b2cb15274).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f8626e4204a4cc773923ef57c28a566d84968a0cf291590fbd4247524d66cc6d).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -255,6 +255,12 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
     if (before.length) lines.push(`warning: ${before.join(', ')} ${before.length > 1 ? 'are' : 'is'} not done yet. pdd recorded ${step} anyway.`);
+  }
+  // A step that runs again (for example build after failed vectors) makes the later steps of its area stale.
+  const later = area.steps.includes(step) && run.done[step] ? area.steps.slice(area.steps.indexOf(step) + 1).filter(item => run.done[item]) : [];
+  if (later.length) {
+    for (const item of later) delete run.done[item];
+    lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length > 1 ? 'those steps' : 'that step'}; run ${later.length > 1 ? 'them' : 'it'} again.`);
   }
   run.done[step] = { at: p.now(), summary: oneLine(summary), area: area.name };
   const next = area.steps.find(item => !run.done[item]);

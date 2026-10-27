@@ -584,3 +584,33 @@ test('R9: a session id that is not a UUID is never stored or put in a shell comm
   const refused = await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' }, findNativeSessions: async () => [] });
   assert.equal(refused.exitCode, 1); assert.equal(pane.commands.length, 1, 'no resume command was typed');
 });
+
+test('code area build → verify → formal: a loop back to build only warns, asks for verify again, and PR 2 opens after the last step', async t => {
+  const f = await fixture(t, { name: 'bug', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-bug');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['reproduce', 'prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build', 'verify', 'formal'], optional: [], gate: 'pr' }] }));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('reproduce', 'seen'); writeFileSync(join(run.root, 'story.md'), 'Story\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'story');
+  await done('prompt-story', 'Story and cases'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 1 of 1'); await done('try', 'skipped'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n'); f.git(run.root, 'commit', '-qam', 'first try');
+  assert.match((await done('build', 'first build')).message, /Next step: verify/);
+  assert.match((await done('verify', '✗ 2 vectors fail')).message, /Next step: formal/);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'second try');
+  const again = await done('build', 'second build');
+  assert.match(again.message, /warning: build ran again after verify/); assert.match(again.message, /Next step: verify/);
+  assert.equal(f.prs.length, 1, 'no PR 2 before the last step');
+  assert.equal(f.record().done.verify, undefined, 'the old verify result no longer counts');
+  writeFileSync(join(run.runDir, 'verify.md'), '| case | expected | code | result |\n|---|---|---|---|\n| 1 | 2 | 2 | same |\n\n## Formal check\nProved (bounded): 0..999, planted mistake caught.\n');
+  assert.match((await done('verify', '✓ 2 vectors same')).message, /Next step: formal/);
+  assert.equal(f.prs.length, 1);
+  const pr2 = await done('formal', 'Proved (bounded)');
+  assert.match(pr2.message, /pdd opens PR 2 now/); assert.equal(f.prs.length, 2);
+  assert.match(f.prs[1].body, /\| 1 \| 2 \| 2 \| same \|/); assert.match(f.prs[1].body, /Proved \(bounded\): 0\.\.999/);
+  assert.match(f.prs[1].body, /\*\*formal\*\*: Proved \(bounded\)/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
+});
