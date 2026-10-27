@@ -217,3 +217,16 @@ test('SKILLS15: every verify step keeps verify.md to commands and results, with 
   for (const name of Object.keys(AREAS))
     assert.ok(read(`${name}/steps/verify.md`).includes('- verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.'), name);
 });
+
+// Wrong (runner real run, 0.1.3): the check step wrote its evidence into verify.md and PR 2 grew to 881 lines;
+// or the agent asks the person mid-step and pdd still reports "the agent works".
+test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs pdd workflow ask before a mid-step question', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const check = read(`${name}/steps/check.md`);
+    assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
+    assert.match(check, /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
+  }
+  assert.match(read('pdd-small-change/steps/change.md'), /`pdd check`[^\n]*Keep its notes out of verify\.md\./);
+  for (const name of Object.keys(AREAS))
+    assert.ok(read(`${name}/SKILL.md`).includes('- When you need the person\'s answer in the middle of a step, run `<pdd> workflow ask "<question>"` first, then ask in the chat.'), name);
+});
