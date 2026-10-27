@@ -175,3 +175,14 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
     assert.match(read(`${name}/SKILL.md`), /Merging PR 1 must never turn main red\./);
   }
 });
+
+// Wrong (real-user web FLOW B6-B7): a one-line bug in a repo with no prompts got two full module prompts and 709 lines in PR 1.
+test('SKILLS12: with no prompt yet, prompt-story writes the smallest prompt for the issue only and keeps PR 1 small', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const step = read(`${name}/steps/prompt-story.md`);
+    assert.match(step, /SMALLEST prompt that owns only the issue's behavior \(one function or one endpoint\), not the whole module/, name);
+    assert.match(step, /cases only for the issue's criteria/, name);
+    assert.match(step, /PR 1 under about 200 lines/, name);
+    assert.ok(read(`${name}/SKILL.md`).includes('"adopt PDD for this module"'), name);
+  }
+});

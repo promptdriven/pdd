@@ -17,7 +17,8 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - The main chat coordinates and talks with the person. It does not write code.
 - Run each step in a new subagent, never reused, so verify never checks its own code. Brief it with file paths, not the chat history.
 - At a gate, show the result, ask the person, and stop. For changes, revise here and ask again.
-- At the PR 1 gate, show the PR 1 link, the `Runtime check:` line and the Try link (when there are any). Ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Then stop. The code area starts only when the person asks.
+- At the story gate, say when a new prompt covers only this issue: a bigger "adopt PDD for this module" step can come later.
+- At the PR 1 gate, show the PR 1 link, the `Runtime check:` line and the Try link (when there are any). Ask: "Do you want the code PR now, or stop here and merge PR 1 first?" The code area starts only when the person asks.
 - An optional step is a question in the chat, not a stop.
 - If verify or formal finds a failing case, go back to build in a new subagent, at most 2 times. If it still fails, PR 2 opens anyway with "✗ N vectors fail" on top. Say so at the gate.
 - A person decides expected values. Never change a test to make it pass.
