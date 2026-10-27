@@ -285,7 +285,7 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   assert.ok(check.includes('every `Runtime check (<story>): …` line as pdd check prints it, then `Report (<story>): <url>` for each row of its Reports block, joined with "; "'));
   assert.match(check, /After a re-check, keep the lines of the Stories that passed and replace the re-checked ones\./);
   const skill = read('pdd-feature/SKILL.md');
-  assert.match(skill, /At the story gate, show the plan list/);
+  assert.match(skill, /At the story gate, give the full paths of the Story files and the plan, show the plan list/);
   for (const words of ['"make it one Story"', '"split part 5"', '"change Story 5: …"']) assert.ok(skill.includes(words), words);
   assert.match(skill, /A change request names a Story: redo only that Story and its test file/);
   assert.match(skill, /one `Runtime check` line per Story/);
@@ -312,4 +312,16 @@ test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 
   const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));
   assert.equal(block.length, 7);
+});
+
+// Wrong (Serhan's 2048 session, 0.1.6): the brief's `board.prompt` and node tests beat PDD's formats (about 40 min lost),
+// and the person had to ask where the Story was and what to type to approve.
+test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and the story gate names paths and the approve sentence', () => {
+  assert.ok(read('pdd-feature/steps/understand.md').includes("If the person's brief names other file names or test formats than PDD's (for example `*.prompt` or the repo's own test format), say so in one line and use PDD's, unless the person says otherwise."));
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    assert.ok(read(`${name}/steps/prompt-story.md`).includes("PDD tests are runtime test files (RUNBOOK §2–§4). They are not the repo's unit tests; the code area adds those."), name);
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
+    assert.ok(skill.includes(`"Reply 'I approve' to go on, or tell me what to change."`), name);
+  }
 });
