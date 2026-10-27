@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,8 +17,8 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'completion', 'workflow.list']);
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
@@ -27,27 +27,9 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['session', '--dangerously-skip-permissions'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
-    ['completion'], ['--version', 'extra'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
+    ['completion'], ['--version', 'extra'], ['--skill'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
     assert.throws(() => parseArgv(argv), CommandInputError, JSON.stringify(argv));
   }
-});
-
-// Wrong: --skill prints only navigational links, reads the guide after the skill, or reports a missing guide as success.
-test('ALPHA2: full canonical guide precedes skill and nested references; missing guide fails before output', async t => {
-  const packageRoot = temp(t), stdout = capture(), stderr = capture();
-  mkdirSync(join(packageRoot, 'docs')); mkdirSync(join(packageRoot, 'skills/pdd/references/nested'), { recursive: true });
-  const guide = '# Prompting guide\nFull method\nFinal guide paragraph\n';
-  writeFileSync(join(packageRoot, 'docs/prompting-guide.md'), guide);
-  writeFileSync(join(packageRoot, 'skills/pdd/SKILL.md'), '# PDD skill\nBefore Story\n');
-  writeFileSync(join(packageRoot, 'skills/pdd/references/review.md'), '# Review reference\n');
-  writeFileSync(join(packageRoot, 'skills/pdd/references/nested/cases.md'), '# Independent cases\n');
-  assert.equal(await runPdd(['--skill'], { packageRoot, stdout, stderr }), 0);
-  assert.ok(stdout.text.includes(guide));
-  assert.ok(stdout.text.indexOf(guide) < stdout.text.indexOf('# PDD skill'));
-  assert.ok(stdout.text.includes('# Review reference')); assert.ok(stdout.text.includes('# Independent cases'));
-  assert.ok(stdout.text.includes(packageRoot)); assert.equal(stderr.text, '');
-  rmSync(join(packageRoot, 'docs/prompting-guide.md')); stdout.text = '';
-  assert.equal(await runPdd(['--skill'], { packageRoot, stdout, stderr }), 1); assert.equal(stdout.text, '');
 });
 
 // Wrong: source-only smoke passes while packed dependencies, bin mappings or bundled guidance fail in a clean consumer.
@@ -64,6 +46,8 @@ test('ALPHA4: actual packed package runs every advertised local command without 
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
   for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
     '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
+  for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
+    if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
   assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui)\//.test(name)), false);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
@@ -82,12 +66,8 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor|phone)\b/);
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
-  const skill = run(['--skill']); assert.equal(skill.status, 0, skill.stderr);
-  const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8'), skillText = readFileSync(join(packed, 'skills/pdd/SKILL.md'), 'utf8');
-  assert.ok(skill.stdout.includes(guide)); assert.ok(skill.stdout.indexOf(guide) < skill.stdout.indexOf(skillText));
-  for (const name of names.filter(name => name.startsWith('skills/pdd/references/') && name.endsWith('.md'))) {
-    assert.ok(skill.stdout.includes(readFileSync(join(packed, name), 'utf8')), name);
-  }
+  const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
+  const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8');
   const empty = run(['workflow', 'list', '--json']); assert.equal(empty.status, 0,empty.stderr);
   assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
   const recipes = run(['workflow', 'list', '--json'], packed); assert.equal(recipes.status, 0);
@@ -128,11 +108,8 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
     const launched = spawnSync(process.execPath,[bin,'session','--agent',agent,request],
       {cwd:project,env:nativeEnv,input:'native stdin is inherited\n',encoding:'utf8',timeout:5000});
     assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout);
-    assert.equal(observed.executable,join(fakeBin,agent));assert.equal(observed.argv.length,agent==='codex'?5:2); assert.ok(observed.argv.at(-1).includes(request));
-    assert.ok(observed.argv.at(-1).includes(guide));assert.ok(observed.argv.at(-1).indexOf(guide)<observed.argv.at(-1).indexOf(skillText));
-    for(const name of names.filter(name=>name.startsWith('.pdd/workflows/')&&name.endsWith('.md')))
-      assert.ok(observed.argv.at(-1).includes(readFileSync(join(packed,name),'utf8')),name);
-    assert.ok(observed.argv.at(-1).includes(readFileSync(join(packed,'docs/workflows.md'),'utf8')));
+    assert.equal(observed.executable,join(fakeBin,agent));assert.equal(observed.argv.length,agent==='codex'?5:2); assert.ok(observed.argv.at(-1).endsWith('\n'+request));
+    assert.ok(observed.argv.at(-1).startsWith('This is a PDD session in '));assert.equal(observed.argv.at(-1).includes(guide.slice(0,200)),false);
     assert.equal(observed.cwd,project);assert.equal(observed.input,'native stdin is inherited\n');assert.equal(observed.setting,'unchanged');
   }
   for (const name of ['feature','bug','small-change']) {
@@ -140,14 +117,9 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
       const args=[bin,'workflow',name,...(agent?['--agent',agent]:[]),'--',request+' --help'];
       const launched=spawnSync(process.execPath,args,{cwd:project,env:nativeEnv,input:'selected recipe input',encoding:'utf8',timeout:5000});
       assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout),payload=observed.argv.at(-1);
-      assert.equal(observed.executable,join(fakeBin,agent??'codex'));assert.equal(observed.argv.length,(agent??'codex')==='codex'?5:2);assert.ok(payload.includes(guide));assert.ok(payload.includes(request+' --help'));
+      assert.equal(observed.executable,join(fakeBin,agent??'codex'));assert.equal(observed.argv.length,(agent??'codex')==='codex'?5:2);
+      assert.ok(payload.endsWith(`\n${request} --help\nUse the pdd-${name} skill for this request.`));assert.equal(payload.includes(guide.slice(0,200)),false);
       assert.equal(observed.cwd,project);assert.equal(observed.input,'selected recipe input');assert.equal(observed.setting,'unchanged');
-      const entry=`.pdd/workflows/${name}/WORKFLOW.md`,entryText=readFileSync(join(packed,entry),'utf8');
-      assert.ok(payload.includes(entryText));assert.ok(payload.indexOf(guide)<payload.indexOf(entryText));
-      for(const file of names.filter(file=>file.startsWith(`.pdd/workflows/${name}/`)&&file.endsWith('.md')))
-        assert.ok(payload.includes(readFileSync(join(packed,file),'utf8')),file);
-      for(const other of ['feature','bug','small-change'].filter(other=>other!==name))
-        assert.equal(payload.includes(`--- ${join(packed,'.pdd/workflows',other,'WORKFLOW.md')} ---`),false);
     }
   }
   for(const args of [['workflow','unknown'],['workflow','../feature'],['workflow','/feature'],['workflow','unknown','--help'],['workflow','feature','--agent','other']]){
@@ -157,17 +129,17 @@ process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
     const helped=run(args);assert.equal(helped.status,0);assert.equal(helped.stderr,'');
   }
   const selectedExit=spawnSync(process.execPath,[bin,'workflow','bug'],{cwd:project,env:{...nativeEnv,NATIVE_FIXTURE_EXIT:'9'},input:'',encoding:'utf8',timeout:5000});assert.equal(selectedExit.status,9);
-  const missingEntry=join(packed,'.pdd/workflows/feature/WORKFLOW.md');rmSync(missingEntry);
+  const missingEntry=join(packed,'skills/pdd-feature/SKILL.md');rmSync(missingEntry);
   const selectedMissing=spawnSync(process.execPath,[bin,'workflow','feature'],{cwd:project,env:nativeEnv,input:'',encoding:'utf8',timeout:5000});assert.equal(selectedMissing.status,1);assert.equal(selectedMissing.stdout,'');
   const exited=spawnSync(process.execPath,[bin,'session'],{cwd:project,env:{...nativeEnv,NATIVE_FIXTURE_EXIT:'7'},input:'',encoding:'utf8',timeout:5000});
   assert.equal(exited.status,7);assert.equal(JSON.parse(exited.stdout).argv.length,5);
   const missing=spawnSync(process.execPath,[bin,'session','--agent','claude'],{cwd:project,env:{...env,PATH:home},input:'',encoding:'utf8',timeout:5000});
   assert.equal(missing.status,127);assert.equal(missing.stdout,'');assert.ok(missing.stderr.includes('claude'));
-  rmSync(join(packed,'docs/prompting-guide.md'));
+  rmSync(join(packed,'skills/pdd-prompting/SKILL.md'));
   const missingGuide=spawnSync(process.execPath,[bin,'session'],{cwd:project,env:nativeEnv,input:'',encoding:'utf8',timeout:5000});
   assert.equal(missingGuide.status,1);assert.equal(missingGuide.stdout,'');
   assert.equal(existsSync(join(project,'must-not-exist')),false);
-  assert.deepEqual(readdirSync(home), []); assert.deepEqual(readdirSync(project), []);
+  assert.deepEqual(readdirSync(home).sort(), ['.agents', '.claude']); assert.deepEqual(readdirSync(project), []);
   assert.ok(PUBLIC_COMMAND_MANIFEST.length > 0);
 });
 
@@ -176,13 +148,13 @@ test('ALPHA5: native argv and process lifetime preserve settings exits and direc
   for (const agent of ['codex','claude']) {
     const child=new EventEmitter(), signals=new EventEmitter(),calls=[],kills=[];
     child.kill=name=>kills.push(name);
-    const context='# Full guide\nquoted "value"\nFull manual recipes';
-    const promise=launchNativeSession({agent,cwd:'/project with spaces',context,request:'x; $(command)',stderr:capture()},
+    const message='This is a PDD session\nquoted "value"\nx; $(command)';
+    const promise=launchNativeSession({agent,cwd:'/project with spaces',message,stderr:capture()},
       {spawn:(...args)=>{calls.push(args);return child;},signals,stdinIsTTY:false});
     assert.equal(calls.length,1);assert.equal(calls[0][0],agent);assert.equal(calls[0][1].length,agent==='codex'?5:2);
     assert.deepEqual(calls[0][1].slice(0,-1),agent==='codex'?['--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c','projects={"/project with spaces"={trust_level="trusted"}}']:['--dangerously-skip-permissions']);
-    assert.ok(calls[0][1].at(-1).includes(context));assert.ok(calls[0][1].at(-1).includes('x; $(command)'));
-    assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false});
+    assert.equal(calls[0][1].at(-1),message);
+    assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false,env:{...process.env,PDD_AGENT_SESSION:'1'}});
     signals.emit('SIGINT');signals.emit('SIGTERM');signals.emit('SIGHUP');assert.deepEqual(kills,['SIGINT','SIGTERM','SIGHUP']);
     let resolved=false;promise.then(()=>{resolved=true;});
     // Native process exit alone can precede stdio close; neither a turn nor a handoff is a completion signal.
@@ -191,21 +163,21 @@ test('ALPHA5: native argv and process lifetime preserve settings exits and direc
     for(const name of ['SIGINT','SIGTERM','SIGHUP'])assert.equal(signals.listenerCount(name),0);
   }
   const child=new EventEmitter(),signals=new EventEmitter();child.kill=()=>assert.fail('Terminal already delivered SIGINT');
-  const done=launchNativeSession({agent:'codex',cwd:'/project',context:'Full guide',stderr:capture()},
+  const done=launchNativeSession({agent:'codex',cwd:'/project',message:'Short intro',stderr:capture()},
     {spawn:()=>child,signals,stdinIsTTY:true});signals.emit('SIGINT');child.emit('close',null,'SIGINT');assert.equal(await done,130);
   assert.equal(signals.listenerCount('SIGINT'),0);
 });
 
-// Wrong: workflow names remain unavailable, load all recipes, or are treated as untrusted paths/native arguments.
-test('ALPHA6: direct workflow selects exactly one bundled recipe before one unchanged native launch',async t=>{
+// Wrong: workflow names remain unavailable, paste recipes, or are treated as untrusted paths/native arguments.
+test('ALPHA6: direct workflow names exactly one workflow skill in one unchanged native launch',async t=>{
   for(const name of ['feature','bug','small-change']){
     const stdout=capture(),stderr=capture(),calls=[];
     const code=await runPdd(['workflow',name,'--agent','claude','--','--dangerously-not-a-flag'],
       {packageRoot:root,cwd:'/chosen project',stdout,stderr,nativeSession:async input=>{calls.push(input);return 17;}});
     assert.equal(code,17);assert.equal(calls.length,1);const input=calls[0];
-    assert.equal(input.agent,'claude');assert.equal(input.cwd,'/chosen project');assert.equal(input.request,'--dangerously-not-a-flag');
-    assert.ok(input.context.includes(`Selected bundled workflow: ${name}.`));
-    assert.ok(input.context.includes(readFileSync(join(root,'.pdd/workflows',name,'WORKFLOW.md'),'utf8')));
+    assert.equal(input.agent,'claude');assert.equal(input.cwd,'/chosen project');
+    assert.ok(input.message.startsWith('This is a PDD session in /chosen project.\n'));
+    assert.ok(input.message.endsWith(`\n--dangerously-not-a-flag\nUse the pdd-${name} skill for this request.`));
     const plan=parseArgv(['workflow',name]);assert.equal(plan.workflowName,name);assert.equal(plan.local,'session');
   }
   for(const words of [['workflow','unknown'],['workflow','../bug'],['workflow','feature/../../bug'],['workflow','unknown','--help']]){

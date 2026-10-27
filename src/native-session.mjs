@@ -1,12 +1,11 @@
-// Generated from prompts/cli/native-session.prompt.md (sha256: 153c4b7ed5509736753afcf6f1cbc537f19fc35c95fc31bcfec94038a47f89a8).
+// Generated from prompts/cli/native-session.prompt.md (sha256: 9319c24c4ccd995e49592eb0b2b4ceb158a6407f2f4cc99cb588ac9a74773b1a).
 import { spawn as spawnChild } from 'node:child_process';
 import { constants } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 
-export function launchNativeSession({ agent, cwd, context, request = '', stderr = process.stderr },
+export function launchNativeSession({ agent, cwd, message, stderr = process.stderr },
   { spawn = spawnChild, signals = process, stdinIsTTY = Boolean(process.stdin.isTTY) } = {}) {
   if (!['codex', 'claude'].includes(agent)) return Promise.resolve(2);
-  const prompt = `${context}\n\n# Person request\n${request || 'Summarize the relevant Prompting guide method and available manual workflows, then ask what I want to work on. Do not draft a Story before that summary.'}`;
   return new Promise(resolve => {
     let child, settled = false, launchError;
     const listeners = [];
@@ -19,11 +18,11 @@ export function launchNativeSession({ agent, cwd, context, request = '', stderr 
       launchError = error;
       stderr.write(error?.code === 'ENOENT'
         ? `The native ${agent} CLI is not on PATH. Install and sign in with that native tool, then run pdd session again.\n`
-        : `The native ${agent} session could not be launched. Check that tool and the size of the bundled instructions.\n`);
+        : `The native ${agent} session could not be launched. Check that tool.\n`);
     };
     try { child = spawn(agent, agent === 'codex'
-      ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(resolvePath(cwd))}={trust_level="trusted"}}`, prompt]
-      : ['--dangerously-skip-permissions', prompt], { cwd, stdio: 'inherit', shell: false }); }
+      ? ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(resolvePath(cwd))}={trust_level="trusted"}}`, message]
+      : ['--dangerously-skip-permissions', message], { cwd, stdio: 'inherit', shell: false, env: { ...process.env, PDD_AGENT_SESSION: '1' } }); }
     catch (error) { failed(error); finish(error.code === 'ENOENT' ? 127 : 1); return; }
     for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
       const fn = () => {

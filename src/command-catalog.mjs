@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 14dec7fe274e156a8e17cd452e9ed896b190f69c0311dffb19e6c01194e2d9e0).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 310fcd1767f1a259ea53fd3c11ea15b3210daaa22ecdc0c1b4ea372b4c56857b).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -27,17 +27,15 @@ const routes = [
   ...BUNDLED_WORKFLOW_NAMES.map(name => ({ id: `workflow.${name}`, prefix: ['workflow', name], local: 'session', workflowName: name,
     operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],
-    forms: [form(`pdd workflow ${name} [--agent codex|claude] [request text]`, `Open a native conversation following the bundled ${name} recipe; default codex.`)] })),
+    forms: [form(`pdd workflow ${name} [--agent codex|claude] [request text]`, `Open your coding agent with the short PDD intro and the pdd-${name} skill; default codex.`)] })),
   { id: 'session', prefix: ['session'], local: 'session', operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],
-    forms: [form('pdd session [--agent codex|claude] [request text]', 'Open an installed native agent with the full guide and manual recipes; default codex.')] },
+    forms: [form('pdd session [--agent codex|claude] [request text]', 'Open your coding agent with the short PDD intro; it loads the PDD skills when needed. Default codex.')] },
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
     form('pdd', 'Show local alpha commands.'), form('pdd --help', 'Show local alpha commands.'),
     form('pdd -h', 'Show local alpha commands.'), form('pdd help', 'Show local alpha commands.') ] },
   { id: 'version', prefix: ['--version'], local: 'version', operands: [], options: [],
     forms: [form('pdd --version', 'Show this package version.')] },
-  { id: 'skill', prefix: ['--skill'], local: 'skill', operands: [], options: [],
-    forms: [form('pdd --skill', 'Print the full Prompting guide, then the skill and its references.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],

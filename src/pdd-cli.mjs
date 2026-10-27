@@ -1,9 +1,9 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0c37168958ff78e804e758c0e4bc7309aa45cd22e881fd5e8cf5cf7c72a938fd).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 68f7530c03dcf1c8e461612c25af9ff9965a2dfeba99b6b0d911d138b94f451c).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadGuidance } from './guidance.mjs';
 import { launchNativeSession } from './native-session.mjs';
+import { renderSessionIntro } from './session-intro.mjs';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
@@ -25,14 +25,9 @@ export function renderHelp(prefix = []) {
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    'Read the entire Prompting guide with pdd --skill before drafting any Story.',
     'session and the named workflows open a chat in this terminal.',
     'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
     'pdd never merges.'].join('\n');
-}
-function guidanceError(stderr) {
-  line(stderr, 'The complete PDD guidance could not be read. Use a package containing the canonical guide, skill, references and manual recipes.');
-  return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
@@ -49,9 +44,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
         line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
-    case 'skill':
-      try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }
-      catch { return guidanceError(stderr); }
     case 'workflow-run': case 'workflow-done': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': {
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
@@ -69,11 +61,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       }
     }
     case 'session': {
-      let context;
-      try { context = loadGuidance({ packageRoot, cwd, workflows: true, workflowName: plan.workflowName }); }
-      catch { return guidanceError(stderr); }
-      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, context,
-        request: plan.operands.join(' '), stderr });
+      let message;
+      try { message = renderSessionIntro({ packageRoot, cwd, request: plan.operands.join(' '), workflowName: plan.workflowName }); }
+      catch { line(stderr, 'The PDD skills could not be read. Use a complete PDD package.');return 1; }
+      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, message, stderr });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
