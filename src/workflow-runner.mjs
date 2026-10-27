@@ -712,6 +712,7 @@ function gateDecisions(s) {
   return [];
 }
 async function finishDecisionGate(s,directory,outcome,p) {
+  if(failedJournalStates.has(s))return outcome;
   const decisions=['waiting','recovery_required'].includes(outcome.state)?gateDecisions(s):[];
   if(decisions.length) {
     const stage=s.definitions[s.index].id;
