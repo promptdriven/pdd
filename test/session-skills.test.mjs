@@ -46,7 +46,7 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
   const first = run(['setup']);
   assert.equal(first.status, 0, first.stderr);
   for (const skillRoot of ROOTS) {
-    assert.ok(first.stdout.includes(`Installed 5 PDD skills to ${join(home, skillRoot)}\n`), first.stdout);
+    assert.ok(first.stdout.includes(`Installed 5 PDD skills to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
     assert.deepEqual(readdirSync(join(home, skillRoot)).sort(), [...PDD_SKILL_NAMES].sort());
     for (const name of PDD_SKILL_NAMES) {
       const installed = join(home, skillRoot, name), source = join(pkg, 'skills', name);
@@ -119,7 +119,7 @@ test('INSTALL5: with CLAUDE_CONFIG_DIR set, setup installs Claude skills in <dir
   const config = join(sandbox, 'claude config');
   const result = run(['setup'], { CLAUDE_CONFIG_DIR: config });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes(`Installed 5 PDD skills to ${join(config, 'skills')}\n`), result.stdout);
+  assert.ok(result.stdout.includes(`Installed 5 PDD skills to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);
   assert.deepEqual(readdirSync(join(config, 'skills')).sort(), [...PDD_SKILL_NAMES].sort());
   assert.deepEqual(readdirSync(home), ['.agents']);
 });
@@ -133,4 +133,16 @@ test('INSTALL6: an install failure is reported, the other agent and the block st
   assert.match(result.stderr, /pdd setup: the PDD skills could not be installed in .*\.agents\/skills/);
   assert.ok(existsSync(join(home, '.claude/skills/pdd-prompting/SKILL.md')));
   assert.ok(existsSync(join(project, 'AGENTS.md')));
+});
+
+// Wrong (0.1.4): setup says how many skills it changed but not which ones.
+test('INSTALL7: pdd setup names each skill that it updated', t => {
+  const { home, run } = packageCopy(t);
+  assert.equal(run(['setup']).status, 0);
+  const marker = join(home, '.agents/skills/pdd-bug', MARKER);
+  writeFileSync(marker, JSON.stringify({ ...JSON.parse(readFileSync(marker, 'utf8')), version: '0.0.1' }));
+  const result = run(['setup']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd-bug\n`), result.stdout);
+  assert.ok(result.stdout.includes(`PDD skills found in ${join(home, '.agents/skills')}\n`), result.stdout);
 });
