@@ -70,6 +70,7 @@ test('#13: "before":"approve" is allowed only on a pr gate', t => {
     { name: 'prompt-pr', steps: ['check'], optional: [], gate: 'pr', then: 'ask-code', ...middle.pr }, { name: 'code', steps: ['build'], optional: [], gate: 'pr', ...last }] });
   put(skills, 'feature', shape({ pr: { before: 'approve' } }, { before: 'approve' }));
   assert.deepEqual(readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }).areas.map(area => area.before ?? null), [null, 'approve', 'approve']);
+  assert.match(formatWorkflowList(listWorkflowAreas({ packageRoot: pkg, home: base })), /prompt-pr \[check\] → approve → pr → code \[build\] → approve → pr/);
   for (const bad of [shape({ story: { before: 'approve' } }), shape({ pr: { before: 'yes' } })]) {
     put(skills, 'feature', bad);
     assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }), error => error.code === 'workflow_invalid');

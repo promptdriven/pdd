@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 4b518c084dd9c06f1068075e9e79d72fb118102880250ef7e62828d0a214fb82).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 3883b0c345cd5238f1b1ee1e894fec01571232ae4f8dcc8366ad976789e1a668).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -72,7 +72,7 @@ export function listWorkflowAreas({ packageRoot, cwd, home }) {
 export function formatWorkflowList(list, { json = false } = {}) {
   if (json) return JSON.stringify({ workflows: list.map(({ name, skill, source, dir, areas }) => ({ name, skill, source, dir, areas })), default: null });
   const lines = list.length ? list.map(({ name, areas, source }) => `${name}  ${areas.map(area =>
-    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.gate}`).join(' → ')}  (${source ?? 'package'})`)
+    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.before ? 'approve → ' : ''}${area.gate}`).join(' → ')}  (${source ?? 'package'})`)
     : ['No workflows found.'];
   lines.push('Listing starts no work. Use pdd workflow run NAME ISSUE.');
   return lines.join('\n');
