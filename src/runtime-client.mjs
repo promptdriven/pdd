@@ -78,15 +78,18 @@ function stateFor(env, root) {
 }
 
 class StateStore {
-  constructor(dir) { this.dir = dir; }
+  constructor(dir) { this.dir = dir; this.secrets = []; }
   folder(...parts) {
     let path = this.dir;
     for (const part of ['', ...parts]) { path = part ? join(path, part) : path; mkdirSync(path, { recursive: true, mode: 0o700 }); chmodSync(path, 0o700); }
     return path;
   }
+  // The token never reaches a file, even when a server answer echoes it.
   write(path, value) {
     const temporary = `${path}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    let text = `${JSON.stringify(value, null, 2)}\n`;
+    for (const secret of this.secrets) text = text.split(secret).join('[secret]');
+    writeFileSync(temporary, text, { mode: 0o600 });
     chmodSync(temporary, 0o600); renameSync(temporary, path);
   }
   read(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } }
@@ -100,11 +103,12 @@ class StateStore {
   saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
 }
 
-function signIn(gh) {
+function signIn(gh, store) {
   const token = gh(['auth', 'token']);
   if (token.error?.code === 'ENOENT') throw new Stop(5, 'Install the GitHub CLI, then run gh auth login');
   const value = token.status === 0 ? String(token.stdout ?? '').trim() : '';
   if (!value) throw new Stop(5, 'Run gh auth login');
+  if (store) store.secrets = [value];
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
   const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
   if (!login || !/^\d+$/.test(id ?? '')) throw new Stop(5, 'pdd could not read your GitHub login (gh api user). Run gh auth status.');
@@ -433,7 +437,7 @@ async function runRead(context, batchWord) {
   context.folder = join(store.dir, 'batches', name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
-  const identity = signIn(ports.gh);
+  const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? 10,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
@@ -462,7 +466,7 @@ async function runRead(context, batchWord) {
 
 async function runRequest(context, id) {
   if (!UUID.test(id)) throw new Stop(2, 'The request ID must be a UUID.');
-  const { ports } = context, identity = signIn(ports.gh), origin = runtimeOrigin(ports.env);
+  const { ports } = context, identity = signIn(ports.gh, context.store), origin = runtimeOrigin(ports.env);
   Object.assign(context, { origin, secrets: [identity.token] });
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
@@ -510,7 +514,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const capture = captureSource(root);
   const other = otherFiles(capture.files, found);
   if (other.length) context.warnings.push(`Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`);
-  const identity = signIn(ports.gh);
+  const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: startedAt + context.timeoutMin * 60_000, rows,
@@ -577,7 +581,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     Object.assign(context, { root, store, origin, visible: found.visible });
     if (options['--stop']) {
       if (!record) throw new Stop(2, `No open Try for "${test.title}".`);
-      const identity = signIn(ports.gh);
+      const identity = signIn(ports.gh, context.store);
       context.secrets = [identity.token];
       context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
       await stopTry(context, record);
@@ -588,7 +592,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), identity = signIn(ports.gh);
+    const capture = captureSource(root), identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
     context.folder = store.folder('tries');

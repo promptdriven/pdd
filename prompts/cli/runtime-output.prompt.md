@@ -39,7 +39,7 @@ The first match from the top wins:
 
 ## JSON (stdout, `--json`)
 
-One object: `{batch, repo, exit_code, rows: [{story, title, test, state, checks, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id}], warnings}`. Nothing else goes to stdout.
+One object: `{batch, repo, exit_code, rows: [{story, title, test, state, checks, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id, reason}], warnings}`. `reason` is `{code, message}` for a row that was not run or is unknown, else null. Nothing else goes to stdout.
 
 ## Dependencies
 

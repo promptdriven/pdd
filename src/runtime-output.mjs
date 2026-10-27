@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 13b751ce92d12e062e472f4f403bee59b2a27abc2793d189749c5749903b56d9).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 5d75a7b3cfd795d008d7cb1e55a4681caed255d7a5e634421157b3e04a5d66a6).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -62,7 +62,7 @@ export function jsonRow(row) {
     failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null };
+    request_id: row.request_ids?.at(-1) ?? null, reason: row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, rows, warnings = [], exitCode }) {
