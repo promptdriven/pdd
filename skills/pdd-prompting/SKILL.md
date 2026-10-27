@@ -20,19 +20,19 @@ In PDD, prompts are the source. Each code module has one `.prompt.md` file. The 
 
 ## Files
 
-- `guide.md`: the full Prompting guide. It owns the rules for prompts.
+- `guide.md`: the full Prompting guide.
 - `review.md`: how to review drafts and report results.
 - `RUNBOOK.md`: how to use `pdd check` and `pdd try`.
 
 ## How to write
 
 1. Read `guide.md` in full. Tell the person which rules apply.
-2. Find the prompt that owns the behavior. Use the paths that the repo already has.
-3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names: the useful result and the criteria that a person can see.
+2. Find the prompt that owns the behavior. Use the repo's paths.
+3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names. A Story is one behavior that a person can check in about a minute: one "I can…" sentence.
 4. Write test cases for normal input, limits and errors. Take each expected result from the prompt and the Story.
 5. Show the drafts. Mark open questions. Ask only about a choice that changes the result.
 6. After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check:` line and the report link. Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.
 
 For existing code without prompts, use the code, callers and tests as evidence. Change no code until the person asks.
 
-The PDD workflows are the skills pdd-small-change, pdd-bug and pdd-feature.
+Workflows: the skills pdd-small-change, pdd-bug and pdd-feature.
