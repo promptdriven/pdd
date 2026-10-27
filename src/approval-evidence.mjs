@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: bdf15ed38d3f777b73470b7511c09119e0426aa65a6bbed54cf6b08f774afed4).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: cfc0bb7d35ad854c6d99375d3fc77a87c701ed10f88c32505c34e0d442efca3c).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -110,6 +110,8 @@ async function sessionCandidates(stage, ports) {
   await walk(root);
   const matches = [];
   for (const path of files) {
+    // A file last written before the stage started cannot hold this session; skip it without reading.
+    if ((await fs.stat(path)).mtimeMs < stage.startedAt) continue;
     const parsed = parseRows(await fs.readFile(path, 'utf8'));
     const identities = parsed.rows.map(row => identity(row, stage.agent)).filter(Boolean);
     const meta = identities[0];

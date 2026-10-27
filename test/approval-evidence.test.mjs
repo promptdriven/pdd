@@ -187,3 +187,14 @@ test('a resumed Codex session written to a second file with the same id is still
   const result = await f.read();
   assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve after resume');
 });
+
+// Seen on a real Mac: the Codex sessions folder held 14 GB; reading every file took a minute.
+test('files last written before the stage started are not read at all', async t => {
+  const f = await fixture(t);
+  await f.write([meta(), user('I approve')]);
+  const old = join(f.directory, 'rollout-old.jsonl');
+  await fs.writeFile(old, 'not json and no identity\n');
+  await fs.utimes(old, new Date(start - 86400000), new Date(start - 86400000));
+  const result = await f.read();
+  assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve');
+});
