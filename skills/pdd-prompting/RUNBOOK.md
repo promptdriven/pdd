@@ -305,11 +305,15 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
    The expected value comes from the issue and the person.
 2. Run `pdd check <story>` on the CURRENT prompt. Do not change the prompt first.
-3. ✗ failed: the prompt is wrong. Fix the prompt first (set draft, fill the hash), and check again until ✓.
-4. ✓ passed: the prompt is right. The bug is only in the code. The repo's own tests prove the code fix.
+3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Fix the
+   prompt first (set draft, fill the hash), and check again until ✓.
+4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
+   the code fix.
 5. The check report shows before ✗ → after ✓. `pdd try <story>` opens with the issue's input ready.
-- If no prompt owns the behavior, tell the person: "No prompt yet, so the bug is not in a prompt." Write the prompt
-  from the issue, and write "before: no prompt" in PR 1.
+- If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
+  in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
+  prompt from the issue, and write "before: no prompt" in PR 1.
+- Put the verdict line first in the gate message, before any details.
 - Keep the change small: change one prompt when you can, and test only the criteria of the bug.
 - PR 1 must not make the repo's own tests fail. Put a new failing code test in PR 2, or mark it `todo` in PR 1.
   Never offer to merge PR 1 while the repo's tests fail on its branch.
