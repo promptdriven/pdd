@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: c1a15906d43ed6f57c65823488bbe0fe38dd260b2d5c91c09fbd8af764d8f09f).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: f353722d35310f263a48f1fa38456f88614ed463cd661c6b96e4883a61d9314b).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
