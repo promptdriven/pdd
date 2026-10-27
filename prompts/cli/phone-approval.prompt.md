@@ -16,17 +16,24 @@ are intact. There is no HMAC or same-machine private-key fallback.
 A successful call returns `{ok:true,approvalRecord:{kind:'phone',phoneId,nonce,
 at:time}}`. Refusal returns `{ok:false,code,message}` with a finite, credential-free
 message. The function never throws. `lookupPhone(phoneId)` is a trusted host port
-returning `{phoneId,removed:false,publicKeyJwk}` for the current active phone.
-Missing lookup or failed lookup is `phone_ledger_unavailable`; absent, mismatched,
-removed or unproved active identity is `phone_not_active`. The default clock is
+returning `{phoneId,removed:false,publicKeyJwk,state?,fleetId?,publicKeySpki?}`
+for the current active phone after verifying the signed fleet ledger chain.
+The host adapter owns chain verification; no unverified ledger response is
+authority. Additional ledger metadata is not read as signing material.
+Missing lookup or failed lookup is `phone_ledger_unavailable`; absent, mismatched
+or unproved active identity is likewise unavailable. An explicitly removed phone
+is `phone_not_active`. A supplied state must be active; removed refuses and any
+other state is unavailable. Missing public-key data is unavailable. The default clock is
 Date.now; `now()` returns epoch milliseconds.
 
 <details>
 <summary>Exact wire bytes, binding and refusal rules</summary>
 
 The token is canonical unpadded base64url of UTF-8 JSON:
-`{v:1,alg:'ES256',payload,signature}`. The envelope has exactly these fields;
-unknown fields refuse. Its maximum encoded length is 40,000 ASCII characters.
+`{v:1,alg:'ES256',payload,signature}`. These four envelope fields are required.
+Additional envelope metadata, including any token-supplied public key, is ignored
+and never grants authority. Only the trusted ledger supplies a verification key.
+Its maximum encoded length is 40,000 ASCII characters.
 `signature` is canonical unpadded base64url of the 64-byte raw IEEE-P1363 ECDSA
 signature returned by WebCrypto ECDSA with SHA-256 on P-256.
 
@@ -37,7 +44,7 @@ For changes only, append `text` as the final key. There is no whitespace outside
 JSON strings. The incoming payload must have exactly these keys, but its JSON
 key order need not match: verification reconstructs the canonical signed object.
 The phone uses this same canonical order before signing. The envelope version
-and algorithm are fixed; no algorithm negotiation or unsigned extension exists.
+and algorithm are fixed; unsigned envelope metadata cannot extend signed policy.
 
 Run and nonce are lowercase UUIDv4. Stage is 1–64 lowercase letters/digits,
 letter first, with single hyphen separators. Decision is approve, changes or
@@ -54,7 +61,7 @@ signature requires a ledger JWK with kty EC, crv P-256, no private d field and
 valid x/y coordinates. Import/verification failure is `phone_invalid_signature`.
 Never obtain the verification key from the token or command-line arguments.
 
-Refuse `phone_token_expired` if `time < now-300000` or `time > now+30000`;
+Refuse `phone_token_expired` if `time < now-300000` or `time > now+300000`;
 the endpoints are allowed. An invalid clock refuses `phone_invalid_token`.
 `usedNonces` is the complete run's durable phone-nonce list, as strings or
 `{phoneId,nonce}` records; a matching nonce string, or a matching record for the

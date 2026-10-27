@@ -80,3 +80,12 @@ nonces already saved for this phone in the journal. No HMAC fallback exists.
 The CLI adds `--via phone --phone PHONE_ID --approval TOKEN`; missing companions
 are bad_args. Successful signed proof is persisted as approvalRecord before
 advancement. Signature refusal never falls back to another person path.
+
+The final phone contract accepts signed time in the inclusive interval now−5min
+through now+5min. Complete durable per-run decisions retain each phone nonce,
+without pruning: this covers the entire ten-minute acceptance interval and
+survives process restart. A reused nonce for a new decision is refused even at
+the far end of that interval; exact bound decision-id retries remain inspect-only.
+The ledger port may be supplied as lookupPhone or as clientAdapter.lookupPhone
+from mobile's createPhoneLookupAdapter; preserve receiver and prefer an explicit
+port. Unknown/unreadable/unverifiable ledger authority is phone_ledger_unavailable.

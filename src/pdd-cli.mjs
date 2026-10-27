@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 02d9ded45b122a13dbfb5f706e7499d8302d9563f30b7a46fa6682fffe7be059).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3ae1e4e9c9580fd7ffad8653e7395e3660e51435bd5192be8236de3b5fff9bac).
 import {randomUUID} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -32,7 +32,7 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, workflowDecider, stdin = process.stdin, env = process.env, confirm, lookupPhone } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, workflowDecider, stdin = process.stdin, env = process.env, confirm, lookupPhone, clientAdapter } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -57,7 +57,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result=await decider.decideWorkflow({runId:plan.operands[0],decision:plan.options['--decision'],
           decisionId:plan.options['--id'],expectStage:plan.options['--expect-stage'],expectSeq:Number(plan.options['--expect-seq']),
           ...(plan.options['--text']!==undefined?{text:plan.options['--text']}:{}),yes:plan.options['--yes']===true,via:plan.options['--via'],phoneId:plan.options['--phone'],approval:plan.options['--approval'],cwd,packageRoot},
-          {...stages,loadGuidance,workflowRunner,stdin,env,confirm,lookupPhone,stdout:json?stderr:stdout,stderr});
+          {...stages,loadGuidance,workflowRunner,stdin,env,confirm,lookupPhone,clientAdapter,stdout:json?stderr:stdout,stderr});
         if(!validDecisionResult(result))throw Error('Invalid decision reply');
         const {exitCode,...body}=result;
         line(stdout,json?JSON.stringify({v:1,...body}):body.message);return exitCode;

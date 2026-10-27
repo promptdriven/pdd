@@ -23,7 +23,7 @@ async function authorize(input,state,ports) {
     return verifyPhoneApproval({token:input.approval,phoneId:input.phoneId,runId:input.runId,stage:input.expectStage,
       decision:input.decision,expectSeq:input.expectSeq,...(input.text!==undefined?{text:input.text}:{}),
       usedNonces:(state.decisions??[]).filter(d=>d.approvalRecord?.phoneId===input.phoneId).map(d=>d.approvalRecord.nonce)},
-      {lookupPhone:ports.lookupPhone,now:ports.now});
+      {lookupPhone:ports.lookupPhone===undefined&&typeof ports.clientAdapter?.lookupPhone==='function'?ports.clientAdapter.lookupPhone.bind(ports.clientAdapter):ports.lookupPhone,now:ports.now});
   }
   if(ports.authorizeDecision) {
     const evidence=await ports.authorizeDecision({input,state});

@@ -62,3 +62,17 @@ test('malformed decide replies fail finitely and cannot produce success JSON',as
   assert.equal(await runPdd(argv,{stdout,stderr,workflowDecider:{decideWorkflow:async()=>reply}}),1);assert.equal(stdout.text,'');
  }
 });
+
+test('CLI composes the mobile lookup adapter with receiver intact and verifies a real signature',async()=>{
+ const {webcrypto,randomUUID}=await import('node:crypto'),{runPdd}=await import('../src/pdd-cli.mjs');
+ const key=await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+ const phoneId='mobile-adapter-test',payload={runId,stage:'change',decision:'approve',expectSeq:7,phoneId,time:Date.now(),nonce:randomUUID()};
+ const signature=Buffer.from(await webcrypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key.privateKey,new TextEncoder().encode(JSON.stringify(payload)))).toString('base64url');
+ const token=Buffer.from(JSON.stringify({v:1,alg:'ES256',payload,signature})).toString('base64url');
+ const publicKeyJwk=await webcrypto.subtle.exportKey('jwk',key.publicKey);let calls=0;
+ const clientAdapter={async lookupPhone(id){calls++;assert.equal(this,clientAdapter);assert.equal(id,phoneId);return {phoneId,removed:false,state:'active',publicKeyJwk};}};
+ const stdout={text:'',write(x){this.text+=x;}};
+ const result=await runPdd(['workflow','decide',runId,'--decision','approve','--id',decisionId,'--expect-stage','change','--expect-seq','7','--via','phone','--phone',phoneId,'--approval',token,'--json'],{
+ clientAdapter,stdout,stderr:{write(){}},stdin:{isTTY:false},workflowRunner:{async applyWorkflowDecision(i,p){const auth=await p.authorizeDecision({input:i,state});return {...auth,state:auth.ok?'recorded':'refused',exitCode:auth.ok?0:1,message:auth.ok?'Recorded.':auth.message};}}});
+ assert.equal(result,0);assert.equal(calls,1);const answer=JSON.parse(stdout.text);assert.equal(answer.approvalRecord.phoneId,phoneId);assert.equal(answer.approvalRecord.kind,'phone');
+});

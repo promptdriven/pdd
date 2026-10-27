@@ -13,7 +13,7 @@ const messages={
   phone_token_expired:'The phone approval token is too old or its time is in the future.',
   phone_token_replayed:'This phone approval token has already been used.',
   phone_ledger_unavailable:'The phone approval could not be checked against the fleet ledger.',
-  phone_not_active:'The phone is missing, removed or not proved active in the fleet ledger.',
+  phone_not_active:'The phone has been removed from the fleet ledger.',
   phone_invalid_signature:'The phone approval signature could not be verified.',
 };
 const refuse=code=>({ok:false,code,message:messages[code]});
@@ -45,7 +45,7 @@ export async function verifyPhoneApproval(input,ports={}) {
     try {
       // A fatal decoder prevents alternate malformed UTF-8 from supplying signed text.
       envelope=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(decode(input.token)));
-      if(!exactKeys(envelope,['v','alg','payload','signature'])||envelope.v!==1||envelope.alg!=='ES256')return refuse('phone_invalid_token');
+      if(!object(envelope)||!['v','alg','payload','signature'].every(key=>Object.hasOwn(envelope,key))||envelope.v!==1||envelope.alg!=='ES256')return refuse('phone_invalid_token');
       const payload=envelope.payload;
       const keys=['runId','stage','decision','expectSeq','phoneId','time','nonce',...(payload?.decision==='changes'?['text']:[])];
       if(!exactKeys(payload,keys)||!validBinding(payload)||!Number.isSafeInteger(payload.time)||payload.time<0||!UUID.test(payload.nonce??''))return refuse('phone_invalid_token');
@@ -55,12 +55,14 @@ export async function verifyPhoneApproval(input,ports={}) {
     if(['runId','stage','decision','expectSeq','phoneId','text'].some(key=>input[key]!==payload[key]))return refuse('phone_binding_mismatch');
     const now=(ports.now??Date.now)();
     if(!Number.isSafeInteger(now)||now<0)return refuse('phone_invalid_token');
-    if(payload.time<now-300000||payload.time>now+30000)return refuse('phone_token_expired');
+    if(payload.time<now-300000||payload.time>now+300000)return refuse('phone_token_expired');
     if((input.usedNonces??[]).some(used=>used===payload.nonce||object(used)&&used.phoneId===payload.phoneId&&used.nonce===payload.nonce))return refuse('phone_token_replayed');
     if(typeof ports.lookupPhone!=='function')return refuse('phone_ledger_unavailable');
     let phone;
     try{phone=await ports.lookupPhone(payload.phoneId);}catch{return refuse('phone_ledger_unavailable');}
-    if(!object(phone)||phone.phoneId!==payload.phoneId||phone.removed!==false)return refuse('phone_not_active');
+    if(!object(phone)||phone.phoneId!==payload.phoneId)return refuse('phone_ledger_unavailable');
+    if(phone.removed===true||phone.state==='removed')return refuse('phone_not_active');
+    if(phone.removed!==false||phone.state!==undefined&&phone.state!=='active'||!object(phone.publicKeyJwk))return refuse('phone_ledger_unavailable');
     try {
       const jwk=phone.publicKeyJwk;
       if(!object(jwk)||jwk.kty!=='EC'||jwk.crv!=='P-256'||Object.hasOwn(jwk,'d'))return refuse('phone_invalid_signature');

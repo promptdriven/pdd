@@ -39,3 +39,10 @@ so a non-TTY/agent caller cannot bypass person evidence via the older spelling.
 Plain resume keeps its previous inspect/reconcile behavior. Phone decision input
 is forwarded as via,phoneId,approval; lookupPhone is trusted host composition,
 never a key or secret supplied through CLI argv.
+
+The private installed entrypoint can pass
+`clientAdapter:createPhoneLookupAdapter({home,linkDir,signal})` from mobile's
+signed-ledger adapter. Preserve its lookupPhone receiver when routing phone
+verification. An explicit lookupPhone port takes precedence; neither argv nor
+token chooses adapter paths, home or keys. The public package imports no private
+client; its uncomposed bin continues to refuse unavailable ledger authority.

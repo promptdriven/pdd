@@ -36,8 +36,8 @@ test('same signature with changed binding or changes text never admits',async()=
 });
 test('old or future token refuses, exact time boundaries accept',async()=>{
  const f=await fixture();
- for(const time of [now-300001,now+30001])assert.equal((await verifyPhoneApproval(f.input(await f.sign({...base,time})),f.ports)).code,'phone_token_expired');
- for(const time of [now-300000,now+30000])assert.equal((await verifyPhoneApproval(f.input(await f.sign({...base,time})),f.ports)).ok,true);
+ for(const time of [now-300001,now+300001])assert.equal((await verifyPhoneApproval(f.input(await f.sign({...base,time})),f.ports)).code,'phone_token_expired');
+ for(const time of [now-300000,now+300000])assert.equal((await verifyPhoneApproval(f.input(await f.sign({...base,time})),f.ports)).ok,true);
 });
 test('saved nonce refuses replay without ledger call',async()=>{
  const f=await fixture(),token=await f.sign();
@@ -49,7 +49,9 @@ test('ledger unavailable, missing, mismatched and removed phone all refuse',asyn
  const f=await fixture(),input=f.input(await f.sign());
  assert.equal((await verifyPhoneApproval(input,{now:()=>now})).code,'phone_ledger_unavailable');
  assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>{throw Error('private endpoint');}})).code,'phone_ledger_unavailable');
- for(const entry of [null,{phoneId,publicKeyJwk:f.publicKeyJwk},{phoneId,removed:true,publicKeyJwk:f.publicKeyJwk},{phoneId:'different',removed:false,publicKeyJwk:f.publicKeyJwk}])assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>entry})).code,'phone_not_active');
+ for(const entry of [null,undefined,{phoneId,publicKeyJwk:f.publicKeyJwk},{phoneId:'different',removed:false,publicKeyJwk:f.publicKeyJwk},{phoneId,removed:false,publicKeyJwk:f.publicKeyJwk,state:'unverified'},{phoneId,removed:false}])assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>entry})).code,'phone_ledger_unavailable');
+ for(const entry of [{phoneId,removed:true,publicKeyJwk:f.publicKeyJwk},{phoneId,removed:false,publicKeyJwk:f.publicKeyJwk,state:'removed'}])assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>entry})).code,'phone_not_active');
+ assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>({phoneId,removed:false,publicKeyJwk:f.publicKeyJwk,state:'active',fleetId:'fleet-fixture',publicKeySpki:'adapter-owned'})})).ok,true);
 });
 test('different real signing key and edited signed bytes are rejected',async()=>{
  const f=await fixture(),other=await fixture();
@@ -61,9 +63,9 @@ test('public-only P-256 ledger key is required',async()=>{
  const f=await fixture(),input=f.input(await f.sign());
  for(const publicKeyJwk of [{...f.publicKeyJwk,d:'untrusted'},{...f.publicKeyJwk,crv:'P-384'},{...f.publicKeyJwk,x:'broken'}])assert.equal((await verifyPhoneApproval(input,{...f.ports,lookupPhone:async()=>({phoneId,removed:false,publicKeyJwk})})).code,'phone_invalid_signature');
 });
-test('malformed envelope, signature and unknown fields refuse without lookup',async()=>{
+test('malformed envelope, signature and unknown payload fields refuse without lookup',async()=>{
  const f=await fixture(),good=JSON.parse(Buffer.from(await f.sign(),'base64url'));
- const bad=[null,'', '%%%', 'a'.repeat(40001),encode({...good,v:2}),encode({...good,alg:'HS256'}),encode({...good,extra:true}),encode({...good,payload:{...good.payload,extra:true}}),encode({...good,signature:'abc'}),encode({...good,payload:{...good.payload,expectSeq:0}}),encode({...good,payload:{...good.payload,nonce:'not-a-nonce'}})];
+ const bad=[null,'', '%%%', 'a'.repeat(40001),encode({...good,v:2}),encode({...good,alg:'HS256'}),encode({...good,payload:{...good.payload,extra:true}}),encode({...good,signature:'abc'}),encode({...good,payload:{...good.payload,expectSeq:0}}),encode({...good,payload:{...good.payload,nonce:'not-a-nonce'}})];
  for(const token of bad)assert.equal((await verifyPhoneApproval(f.input(token),f.ports)).code,'phone_invalid_token');
  assert.equal(f.lookups,0);
 });
@@ -75,4 +77,16 @@ test('wire property order does not change canonical signed payload',async()=>{
 test('missing changes text, control characters and unexpected nonchanges text refuse',async()=>{
  const f=await fixture();
  for(const payload of [{...base,text:'extra'},{...base,decision:'changes'},{...base,decision:'changes',text:'\u0000'},{...base,decision:'changes',text:'x'.repeat(4001)}])assert.equal((await verifyPhoneApproval({...f.input(await f.sign(payload)),decision:payload.decision,text:payload.text},f.ports)).code,'phone_invalid_token');
+});
+
+test('a public key placed in the token never replaces the signed ledger key',async()=>{
+ const trusted=await fixture(),attacker=await fixture();
+ const forged=JSON.parse(Buffer.from(await attacker.sign(),'base64url'));
+ forged.publicKeyJwk=attacker.publicKeyJwk;
+ assert.equal((await verifyPhoneApproval(trusted.input(encode(forged)),trusted.ports)).code,'phone_invalid_signature');
+ delete forged.publicKeyJwk;
+ assert.equal((await verifyPhoneApproval(trusted.input(encode(forged)),trusted.ports)).code,'phone_invalid_signature');
+ const legitimate=JSON.parse(Buffer.from(await trusted.sign(),'base64url'));
+ legitimate.publicKeyJwk=attacker.publicKeyJwk; legitimate.ignoredMetadata={source:'attacker-controlled'};
+ assert.equal((await verifyPhoneApproval(trusted.input(encode(legitimate)),trusted.ports)).ok,true);
 });
