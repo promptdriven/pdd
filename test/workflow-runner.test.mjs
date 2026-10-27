@@ -179,7 +179,8 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const buildMessage = readFileSync(join(run.runDir, 'build-start.md'), 'utf8');
   for (const part of ['Use the pdd-small-change skill', 'build', 'change', 'verify', 'Change value.mjs to 2.', 'verify.md']) assert.ok(buildMessage.includes(part), part);
   // Skills may not be installed (pdd setup installs them only when missing), so every area chat learns where the package skills are.
-  for (const text of [message, buildMessage]) assert.ok(text.includes(`All PDD skills are in ${join(packageRoot, 'skills')} (use them if a skill is not installed).`), text);
+  // Installed copies (for example from npx skills add) can be older than this pdd, so the chat reads the package's copies.
+  for (const text of [message, buildMessage]) assert.ok(text.includes(`Read the PDD skills (pdd-prompting too) from ${join(packageRoot, 'skills')}: an installed copy with the same name may be older.`), text);
 
   f.tick();
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'Use value two');

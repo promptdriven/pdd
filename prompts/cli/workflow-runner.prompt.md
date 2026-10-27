@@ -29,7 +29,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 - No timeouts, no polling loop, no foreground controller, no test runs, no hashes or snapshots.
 - Light checks warn and never break the run. Errors that stop a command say what to do next.
 - Never merge. Never push to the default branch. Never touch the person's default Herdr session.
-- Messages to the agent are short. The first message of an area chat is about 10 lines: "Use the pdd-NAME skill: <the SKILL.md path that the lookup chose>" (an installed copy with the same name may be older), the issue number, title and URL, the worktree, the run folder, the area and its steps, the `done` rule, the gate rule, and "All PDD skills are in <absolute package>/skills (use them if a skill is not installed)." (skills are installed only by `pdd setup`). Never paste the guide or the workflow text.
+- Messages to the agent are short. The first message of an area chat is about 10 lines: "Use the pdd-NAME skill: <the SKILL.md path that the lookup chose>" (an installed copy with the same name may be older), the issue number, title and URL, the worktree, the run folder, the area and its steps, the `done` rule, the gate rule, and "Read the PDD skills (pdd-prompting too) from <absolute package>/skills: an installed copy with the same name may be older." (an `npx skills add` or `pdd setup` copy is not updated with pdd). Never paste the guide or the workflow text.
 - Commands that pdd prints for the agent use this package's absolute node and `bin/pdd.mjs` paths, shell-quoted. Export them as `pddCommand(packageRoot)`, so a bare `pdd` on an older PATH is never used.
 
 ## Dependencies
