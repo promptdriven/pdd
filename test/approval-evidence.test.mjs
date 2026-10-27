@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readApprovalEvidence } from '../src/approval-evidence.mjs';
+import { readApprovalEvidence, findNativeSessions } from '../src/approval-evidence.mjs';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const otherId = '22222222-2222-4222-8222-222222222222';
@@ -166,4 +166,35 @@ test('missing or invalid stage/gate/decision refuses before discovery', async ()
     { stage, gateAskedAt: gate, decision: 'skip' }]) {
     assert.equal((await readApprovalEvidence(request, { now: () => now })).code, 'invalid_request');
   }
+});
+
+// Seen in a real Codex run: each step subagent writes its own rollout with the same worktree cwd.
+test('Codex subagent rollouts in the same worktree do not make the main chat ambiguous', async t => {
+  const f = await fixture(t);
+  const sub = { type: 'session_meta', payload: { id: otherId, cwd, timestamp: iso(start + 10), thread_source: 'subagent',
+    parent_thread_id: id, source: { subagent: { thread_spawn: { parent_thread_id: id } } } } };
+  await f.write([sub, user('a subagent brief', gate + 2)], join(f.directory, 'rollout-two.jsonl'));
+  await f.write([meta({ thread_source: 'user', source: 'cli' }), user('I approve')]);
+  const result = await f.read();
+  assert.equal(result.ok, true, result.message); assert.equal(result.sessionId, id); assert.equal(result.userMessage, 'I approve');
+  assert.deepEqual((await findNativeSessions(f.request.stage, f.ports)).map(match => match.id), [id]);
+});
+
+test('a resumed Codex session written to a second file with the same id is still one session', async t => {
+  const f = await fixture(t);
+  await f.write([meta(), user('first turn', start + 5)]);
+  await f.write([meta(), user('I approve after resume')], join(f.directory, 'rollout-resumed.jsonl'));
+  const result = await f.read();
+  assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve after resume');
+});
+
+// Seen on a real Mac: the Codex sessions folder held 14 GB; reading every file took a minute.
+test('files last written before the stage started are not read at all', async t => {
+  const f = await fixture(t);
+  await f.write([meta(), user('I approve')]);
+  const old = join(f.directory, 'rollout-old.jsonl');
+  await fs.writeFile(old, 'not json and no identity\n');
+  await fs.utimes(old, new Date(start - 86400000), new Date(start - 86400000));
+  const result = await f.read();
+  assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve');
 });

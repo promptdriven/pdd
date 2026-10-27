@@ -45,7 +45,7 @@ write files, launch an agent, or grant a decision itself.
 
 </details>
 
-Exactly one native file must match the exact worktree and stage start window.
+Do not read a file whose last write is older than the stage start; a person's Codex folder can hold many gigabytes. Exactly one native session must match the exact worktree and stage start window. Files with the same session ID (a resumed session) count as one session. A Codex subagent rollout (`thread_source:subagent`, a `parent_thread_id`, or a `source.subagent` object) is never a candidate: step subagents share the worktree cwd but are not the person's chat.
 Zero matches refuses; multiple files refuse even if only one has a user reply.
 Incomplete discovery must refuse rather than silently discard unreadable files
 and manufacture uniqueness. Missing discovery directories mean no matches.
