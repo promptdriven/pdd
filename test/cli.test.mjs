@@ -112,6 +112,8 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
     [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
     [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],
     [['workflow','status'], 'runStatus', { ref: undefined }],
+    [['workflow','status','--all','--json'], 'runStatus', { ref: undefined, all: true, json: true }],
+    [['workflow','status','7','--cancelled'], 'runStatus', { ref: '7', cancelled: true }],
     [['workflow','open','7'], 'openRun', { ref: '7' }]];
   for (const [argv, name, input] of cases) {
     const calls = [], stdout = capture(), stderr = capture();
@@ -130,7 +132,7 @@ test('ALPHA8: runner argument failures and invalid replies are finite without a 
   const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
     ['workflow','run','feature','42','--agent','other'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
     ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
-    ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--json']];
+    ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--brief'],['workflow','status','--all','--all']];
   for (const args of invalid) assert.equal(await runPdd(args, { stdout: capture(), stderr: capture(), workflowRunner: new Proxy({}, { get: () => assert.fail('No runner') }) }), 2, args.join(' '));
   for (const answer of [undefined, { exitCode: NaN, message: 'no' }, { exitCode: 0, message: '' }]) {
     let calls = 0;

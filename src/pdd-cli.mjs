@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7aa8dee485d34c5766a2f02100d878d1ce7d8aca2e5a2b2815b2868858fc5925).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9369642ae71768de8f0645409f74cc84d957ae5ba29d5326474c56d3debc24cd).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ const RUNNER_ROUTES = {
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
-  'workflow-status': plan => ['runStatus', { ref: plan.operands[0] }],
+  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
 };
 export function renderHelp(prefix = []) {

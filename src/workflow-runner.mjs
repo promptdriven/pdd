@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8a4fc5dadefe7a3c249d25b22a8f2537382d36e518abdcfa45ddf8a607cc1b85).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f007b6b9e57481f4c777c72a0aae7263bbd5ac81a89413582f3516143d1fb359).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats } from './workflow-chat.mjs';
 import { interfaceBlocks } from './runtime-preflight.mjs';
 
@@ -382,13 +382,14 @@ export async function cancelRun({ ref, cwd }, ports) {
 
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
-  const cwd = existsSync(run.root) ? run.root : run.sourceRoot;
+  const cwd = existsSync(run.root) ? run.root : run.sourceRoot, before = JSON.stringify([run.state, run.pr]);
   for (const pr of run.pr) Object.assign(pr, await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd, url: pr.url }, p.commandPorts));
   const last = run.pr.at(-1), area = run.areas.find(item => item.name === last.stage);
   run.prState = { state: last.state, ci: last.ci, checkedAt: p.now() };
   if (last.state === 'merged' && area === run.areas.at(-1)) run.state = 'completed';
   if (last.state === 'merged' && area?.then === 'ask-code' && run.gate?.kind === 'ask-code') { run.state = 'completed'; run.doneAt = 'PR 1'; }
-  writeRun(run, p);
+  // Only a real change is written, so the run's last-change time stays true.
+  if (JSON.stringify([run.state, run.pr]) !== before) writeRun(run, p);
 }
 
 function detail(run, drafts = []) {
@@ -407,18 +408,47 @@ function detail(run, drafts = []) {
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
-export async function runStatus({ ref, cwd }, ports) {
+// One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
+const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
+function summary(run, timeZone) {
+  const area = run.areas[run.area], ask = askArea(run);
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : run.gate ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+  const step = area?.steps.find(item => !run.done[item]);
+  const words = group === 'cancelled' ? 'cancelled'
+    : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
+    : run.gate ? `waiting for you: approve the ${run.gate.area}`
+    : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
+    : step ? `agent working on ${step}` : 'agent working';
+  const ref = `${run.repo}#${run.number}`;
+  const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
+  const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' }));
+  return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs,
+    updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir,
+    line: [ref, run.workflow, area?.name ?? '?', words, ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
+}
+
+async function listStatus(runs, { json, cancelled, scope }, p) {
+  for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
+  const all = runs.map(run => summary(run, p.timeZone)), hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
+  const shown = all.filter(item => cancelled || item.group !== 'cancelled')
+    .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
+  if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
+  return done([...shown.map(item => item.line),
+    ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
+    `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
+}
+
+export async function runStatus({ ref, cwd, all = false, json = false, cancelled = false }, ports) {
   const p = deps(ports);
-  if (ref === undefined && !(await runForWorktree(cwd, p))) {
-    const runs = await listRuns({ cwd }, p);
-    if (!runs.length) return done('No pdd runs here. Start one with: pdd workflow run NAME ISSUE');
-    for (const run of runs) await refreshPr(run, p);
-    return done(runs.map(run => `${run.repo}#${run.number} "${oneLine(run.issue.title).slice(0, 60)}" · ${run.workflow} · ${describe(run)}${run.pr?.length ? ` · ${run.pr.map(pr => pr.url).join(' ')}` : ''}`).join('\n'));
-  }
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine' }, p);
+  if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository' }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   await refreshPr(found.run, p);
   const run = found.run, drafts = run.gate?.kind === 'ask-code' ? await pr1Drafts(run, p) : [];
+  if (json) { const { line, ...item } = summary(run, p.timeZone); return done(JSON.stringify({ runs: [item] }, null, 2)); }
   return done(detail(run, drafts));
 }
 

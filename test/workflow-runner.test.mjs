@@ -479,3 +479,55 @@ test('draft prompts in PR 1 are named in its body and status, and block the code
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
 });
+
+test('status --all lists every run on this machine across repositories, person-waiting first, and hides cancelled runs', async t => {
+  const a = await fixture(t), b = await fixture(t, { name: 'bug' });
+  b.ports.stateDir = a.state;
+  for (const f of [a, b]) f.ports.timeZone = 'UTC';
+  // Repository A: run 17 waits for approval. Repository B: run 17 works on reproduce.
+  await a.run(); a.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: a.record().root }, a.agentPorts());
+  b.clock += 60000; await b.run();
+  // A third run that is cancelled, and a repository that is gone, are not errors.
+  const index = JSON.parse(readFileSync(join(a.state, 'runs.json'), 'utf8'));
+  index.runs.push({ repo: 'gone/repo', number: 5, runDir: join(a.base, 'gone', '.git', 'pdd', 'runs', '5') });
+  writeFileSync(join(a.state, 'runs.json'), JSON.stringify(index));
+  const outside = join(a.base, 'home');
+  for (const input of [{ all: true, cwd: a.source }, { cwd: outside }]) {
+    const out = await runStatus(input, a.ports);
+    assert.equal(out.exitCode, 0, out.message);
+    const lines = out.message.split('\n');
+    assert.equal(lines.length, 3, out.message);
+    assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:00$/);
+    assert.match(lines[1], /^example\/project#17 · bug · story · agent working on reproduce · Oct 27, 17:01$/);
+    assert.equal(lines[2], 'Open one: pdd workflow open example/project#17');
+  }
+  await cancelRun({ ref: '17', cwd: b.source }, b.ports);
+  const hidden = await runStatus({ all: true, cwd: outside }, a.ports);
+  assert.match(hidden.message, /1 cancelled run hidden; add --cancelled to see it/); assert.doesNotMatch(hidden.message, /· bug ·/);
+  const shown = await runStatus({ all: true, cancelled: true, cwd: outside }, a.ports);
+  assert.match(shown.message.split('\n')[1], /^example\/project#17 · bug · story · cancelled · /);
+  const json = JSON.parse((await runStatus({ all: true, json: true, cancelled: true, cwd: outside }, a.ports)).message);
+  assert.deepEqual(json.runs.map(run => [run.workflow, run.group, run.words]), [['small-change', 'waiting', 'waiting for you: approve the plan'], ['bug', 'cancelled', 'cancelled']]);
+  assert.equal(json.runs[0].ref, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.ok(json.runs[0].runDir);
+  // Inside a repository, plain status stays that repository's runs.
+  assert.doesNotMatch((await runStatus({ cwd: a.source }, a.ports)).message, /· bug ·/);
+});
+
+test('status --all shows PR states, done runs last, and reads the Herdr registry for repositories missing from the index', async t => {
+  const f = await fixture(t);
+  f.ports.timeZone = 'UTC';
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts()); await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts());
+  rmSync(join(f.state, 'runs.json'));
+  const open = await runStatus({ all: true, cwd: f.source }, f.ports);
+  assert.match(open.message, /^example\/project#17 · small-change · build · PR open · PR #23 · /);
+  const seq = f.record().journalSeq; f.tick(3600000);
+  await runStatus({ all: true, cwd: f.source }, f.ports);
+  assert.equal(f.record().journalSeq, seq, 'reading an unchanged PR does not touch the run');
+  f.merged = true;
+  const merged = await runStatus({ all: true, cwd: f.source }, f.ports);
+  assert.match(merged.message, /^example\/project#17 · small-change · build · done · PR #23 · /);
+});

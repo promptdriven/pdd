@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 8484ba0289fc4cd973d887c7e1d30f61432e328233dffa7d8e3573d5e30565ff).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 0566c719be14cf6d599c5e77cb2f4f055e3238ccc961a0a9150f9f558b2e0547).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -31,11 +31,24 @@ export function readRun(runDir) {
   } catch { return null; }
 }
 
-function runsIn(commonDir) {
+function runsIn(commonDir, { cancelled = false } = {}) {
   let names;
   try { names = readdirSync(join(commonDir, 'pdd', 'runs')); } catch { return []; }
-  return names.filter(name => /^[1-9][0-9]*$/.test(name)).map(name => readRun(runDirFor(commonDir, name))).filter(Boolean)
+  const folder = cancelled ? /^[1-9][0-9]*(?:-cancelled-[0-9a-f]+)?$/ : /^[1-9][0-9]*$/;
+  return names.filter(name => folder.test(name)).map(name => readRun(runDirFor(commonDir, name))).filter(Boolean)
     .sort((a, b) => a.number - b.number);
+}
+
+// Every run on this machine: repositories come from the run index and the Herdr layout registry.
+export function allRuns({ cancelled = false } = {}, ports = {}) {
+  const commonDirs = new Set(readIndex(ports).map(entry => typeof entry.runDir === 'string' ? join(entry.runDir, '..', '..', '..') : null).filter(Boolean));
+  try {
+    const registry = JSON.parse(readFileSync(join(ports.layoutDirectory ?? join(stateDirFor(ports), 'herdr-layout'), 'registry.json'), 'utf8'));
+    for (const repository of Array.isArray(registry?.repositories) ? registry.repositories : []) if (typeof repository?.commonDir === 'string') commonDirs.add(repository.commonDir);
+  } catch { /* No registry yet. */ }
+  const seen = new Set();
+  return [...commonDirs].flatMap(commonDir => runsIn(commonDir, { cancelled }))
+    .filter(run => !seen.has(run.runDir) && seen.add(run.runDir));
 }
 
 function readIndex(ports) {
@@ -103,9 +116,9 @@ export async function runForWorktree(cwd, ports = {}) {
   return context ? runsIn(context.commonDir).find(run => run.root === context.toplevel) ?? null : null;
 }
 
-export async function listRuns({ cwd }, ports = {}) {
+export async function listRuns({ cwd, cancelled = false }, ports = {}) {
   const context = await gitContext(cwd, ports);
-  if (context) return runsIn(context.commonDir);
+  if (context) return runsIn(context.commonDir, { cancelled });
   return readIndex(ports).map(entry => readRun(entry.runDir)).filter(Boolean);
 }
 
