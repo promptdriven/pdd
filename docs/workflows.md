@@ -6,9 +6,9 @@ A PDD workflow is a skill: a folder of plain Markdown and one JSON file. Your ag
 
 | Workflow | Use it for |
 |---|---|
-| `/pdd-feature` | New behavior. |
-| `/pdd-bug` | The code breaks an accepted expectation. |
-| `/pdd-small-change` | A small change with a clear effect that is easy to undo. If the impact grows, the agent suggests `bug` or `feature`. |
+| `pdd-feature` | New behavior. |
+| `pdd-bug` | The code breaks an accepted expectation. |
+| `pdd-small-change` | A small change with a clear effect that is easy to undo. If the impact grows, the agent suggests `bug` or `feature`. |
 
 Each workflow has areas. Each area has steps and ends at a gate. `?` marks an optional step.
 
@@ -41,7 +41,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 
 | | In your chat | As a run on an issue |
 |---|---|---|
-| Start | Call `/pdd-feature`, `/pdd-bug` or `/pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
+| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
@@ -179,7 +179,7 @@ pdd workflow list            # pdd-mybug is in the list
 pdd workflow run mybug 42    # a run on issue 42
 ```
 
-In a chat, call `/pdd-mybug`. Commit the folder so that your team gets the same workflow.
+In a chat, call `$pdd-mybug` in Codex or `/pdd-mybug` in Claude Code. Commit the folder so that your team gets the same workflow.
 
 `cp -RL` copies the files, also when the installed skill is a symlink. Then your edits do not change the PDD skill.
 

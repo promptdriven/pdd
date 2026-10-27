@@ -2,7 +2,7 @@
 
 `pdd --help` shows all commands. `help` and `-h` also work.
 
-You need the pdd command only for runs with PRs and for `pdd check` and `pdd try`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with `/pdd-setup` in your agent. Then call a PDD skill in Codex or Claude Code: `/pdd-feature`, `/pdd-bug`, `/pdd-small-change` or `/pdd-prompting`. There is no `pdd session` command. See [Install](USAGE.md#2-install).
+You need the pdd command only for runs with PRs and for `pdd check` and `pdd try`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). There is no `pdd session` command. See [Install](USAGE.md#2-install).
 
 ## Set up a repo
 
@@ -10,7 +10,7 @@ You need the pdd command only for runs with PRs and for `pdd check` and `pdd try
 |---|---|
 | `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. A second run changes nothing |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The skill `/pdd-setup` writes the same block in a chat. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The `pdd-setup` skill writes the same block in a chat. Run it in the top folder of the repo.
 
 ## Runs on a GitHub issue
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 34af20a86d3ededfbb25fea7edcc8a8152f152938bd6aa16b600c0520981ac70).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9b2ee0fffec5fd12008fc7ad24e333daf331e02a2c3e14d89dcdb2312a389622).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -29,7 +29,7 @@ export function renderHelp(prefix = []) {
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    'Open Codex or Claude as usual and call a PDD skill: /pdd-feature, /pdd-bug, /pdd-small-change or /pdd-prompting.',
+    'Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).',
     'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
     'pdd never merges.'].join('\n');
 }

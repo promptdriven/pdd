@@ -16,7 +16,7 @@ Add one short PDD block to the file that this repo's agents read. This skill onl
 <!-- pdd:start -->
 ## PDD
 This project uses PDD: prompts are the source. Write the prompt, Story and test cases first, then the code.
-Skills: /pdd-prompting (the Prompting guide), /pdd-feature, /pdd-bug, /pdd-small-change.
+Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
 Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug or small-change).
 Before a runtime check (`pdd check`, `pdd try`), read RUNBOOK.md in the pdd-prompting skill.
 <!-- pdd:end -->
