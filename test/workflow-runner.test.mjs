@@ -317,3 +317,15 @@ test('selection: no ref inside a run worktree finds that run; outside any reposi
   const picked = await runStatus({ ref: 'example/project#17', cwd: outside }, f.ports);
   assert.equal(picked.exitCode, 0, picked.message); assert.match(picked.message, /Use value two/);
 });
+
+test('a terminal approve whose input closes without an answer is a no and changes nothing', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  const { PassThrough } = await import('node:stream');
+  const stdin = new PassThrough(), stderr = new PassThrough();
+  setImmediate(() => stdin.end());
+  const answer = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: undefined, stdin, stderr });
+  assert.equal(answer.exitCode, 1); assert.match(answer.message, /Not approved/);
+  assert.equal(f.record().area, 0); assert.equal(f.record().chats.length, 1);
+});

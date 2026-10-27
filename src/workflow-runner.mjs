@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 545bf5d613b0782b04ea7cf98b8710150fffa11a98c87cd280845f9f85615f25).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f7e0a94958703e7ad6c64b800cac920aa2108bc9a8d076192777ac576c05a881).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -35,7 +35,9 @@ async function git(p, cwd, ...args) { return String((await p.execFile('git', arg
 async function confirm(p, question) {
   if (p.confirm) return p.confirm(question);
   const rl = createInterface({ input: p.stdin ?? process.stdin, output: p.stderr ?? process.stderr });
-  try { return /^(?:y|yes)$/i.test((await rl.question(question)).trim()); } finally { rl.close(); }
+  const closed = new Promise(resolve => rl.once('close', () => resolve('')));
+  try { return /^(?:y|yes)$/i.test(String(await Promise.race([rl.question(question).catch(() => ''), closed])).trim()); }
+  finally { rl.close(); }
 }
 
 function claudeTrusts(folder, env) {
@@ -55,7 +57,7 @@ async function changedFiles(run, p) {
 
 async function areaMessage(run, index, p, packageRoot) {
   const area = run.areas[index], pdd = p.pdd, earlier = run.areas.slice(0, index).flatMap(item => item.steps);
-  const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary) || 'done'}`);
+  const summaries = earlier.filter(step => run.done[step]).map(step => `${step}: ${oneLine(run.done[step].summary).replace(/[.\s]+$/, '') || 'done'}`);
   const files = index ? await changedFiles(run, p) : [];
   return [
     `Use the ${run.skill} skill. This is a pdd workflow run.${index ? ' The person approved the earlier areas.' : ''}`,
