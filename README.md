@@ -14,14 +14,21 @@ Add the PDD skills to your agent:
 npx skills add promptdriven/pdd
 ```
 
-Then open Codex or Claude Code in your project, as usual. Run `/pdd-setup` once, then call a skill:
+Then open Codex or Claude Code in your project, as usual. Run the setup skill once, then call a skill.
 
+In **Codex**, call a skill with `$`:
+```
+$pdd-setup
+$pdd-feature Add a CSV export button to the orders page.
+```
+
+In **Claude Code**, call it with `/`:
 ```
 /pdd-setup
 /pdd-feature Add a CSV export button to the orders page.
 ```
 
-`/pdd-setup` adds a short PDD note to your `CLAUDE.md` or `AGENTS.md`, so every chat in the repo knows the project uses PDD. Run it once in each repo.
+You can also just ask: "use the pdd-feature skill to …". `pdd-setup` adds a short PDD note to your `CLAUDE.md` or `AGENTS.md`, so every chat in the repo knows the project uses PDD. Run it once in each repo.
 
 For runs that open pull requests, and for `pdd check`, also install the `pdd` command:
 
@@ -33,13 +40,13 @@ npm install -g github:promptdriven/pdd#alpha
 
 | Skill | Use it to |
 |---|---|
-| `/pdd-feature` | add new behavior |
-| `/pdd-bug` | fix something that is broken |
-| `/pdd-small-change` | make a small edit that is easy to undo |
-| `/pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
-| `/pdd-setup` | set up a repo for PDD |
+| `pdd-feature` | add new behavior |
+| `pdd-bug` | fix something that is broken |
+| `pdd-small-change` | make a small edit that is easy to undo |
+| `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
+| `pdd-setup` | set up a repo for PDD |
 
-The skills work in any chat. Only the skill you call is loaded, so your chat stays small. Add `-g` to `npx skills add` to install them for all your projects.
+Call them with `$name` in Codex or `/name` in Claude Code. The skills work in any chat. Only the skill you call is loaded, so your chat stays small. Add `-g` to `npx skills add` to install them for all your projects.
 
 ## From a GitHub issue to pull requests
 
