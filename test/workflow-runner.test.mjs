@@ -441,6 +441,7 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(f.prs[1].body, /^Closes #17/); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
   assert.doesNotMatch(f.prs[1].body, /Story and cases written/, 'PR 2 lists only the code area');
   record = f.record(); assert.equal(record.stage.id, 'merge'); assert.deepEqual(record.pr.map(pr => pr.number), [23, 24]);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Next: Review and merge PR 1, then PR 2, on GitHub/);
   f.mergedNumbers.push(24); await runStatus({ ref: '17', cwd: f.source }, f.ports); assert.equal(f.record().state, 'completed');
 });
 
