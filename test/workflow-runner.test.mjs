@@ -147,7 +147,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
   assert.equal(f.herdr.tabs.find(tab => tab.tab_id === first.tabId).label, 'plan');
-  assert.equal(f.herdr.workspaces.find(w => w.workspace_id === first.workspaceId).label, '#17 small-change');
+  assert.equal(f.herdr.workspaces.find(w => w.workspace_id === first.workspaceId).label, 'project#17 small-change');
 
   f.tick();
   const gate = await stepDone({ step: 'scope', summary: 'Change value.mjs to 2.', cwd: run.root }, f.agentPorts());
@@ -322,6 +322,7 @@ test('cancel closes the run tabs, keeps the worktree and branch, and done then t
   assert.equal(f.record().state, 'cancelled'); assert.equal(f.record().cancelled.state, 'cancelled');
   assert.equal(f.herdr.tabs.some(tab => tab.tab_id === run.chats[0].tabId), false);
   assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.chats[0].workspaceId), false);
+  assert.deepEqual(f.herdr.workspaces, [], 'the repository workspace closes too once no run uses it');
   assert.ok(existsSync(run.root)); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
   const late = await stepDone({ step: 'scope', cwd: run.root }, f.agentPorts());
   assert.match(late.message, /cancelled/); assert.match(late.message, /Stop/);
@@ -768,4 +769,22 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
   assert.doesNotMatch(body, /## Verify/, 'PR 1 has no verify step, so no verify.md');
   assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
+});
+
+test('cancel keeps the repository workspace while another run of that repository is open, and a later run gets a new one', async t => {
+  const f = await fixture(t);
+  await f.run(); const first = f.record();
+  // A second issue in the same repository.
+  const execFile = f.ports.execFile;
+  f.ports.execFile = async (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/18'
+    ? { stdout: JSON.stringify({ number: 18, html_url: 'https://github.com/example/project/issues/18', title: 'Other', body: '' }) } : execFile(file, args, opts);
+  assert.equal((await startRun({ name: 'small-change', issue: '18', agent: 'claude', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change', 'project#18 small-change']);
+  await cancelRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#18 small-change']);
+  await cancelRun({ ref: '18', cwd: f.source }, f.ports);
+  assert.deepEqual(f.herdr.workspaces, []);
+  assert.equal((await f.run()).exitCode, 0, 'a run after the repository workspace closed opens a new one');
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change']);
+  assert.notEqual(f.record().chats[0].repoWorkspaceId, first.chats[0].repoWorkspaceId);
 });

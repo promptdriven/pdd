@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 55bc4e3841987408121a7b39dbded4b82b392bd0d78c15399dc8f0bdcca2bdb0).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 18b8302978b99e5c19b3a5b77049495a276734803d318c561861fdcd80e6e925).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -108,14 +108,17 @@ export async function openHerdrRunLayout(input, ports) {
     if(created.id!=='cli:workspace:create'||!id(repo.workspaceId))throw problem('invalid_workspace_reply');
     repo.phase='ready';await persist(directory,registry);
   }
+  // The repository name keeps "#2 bug" runs of two repositories apart.
+  const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
   let run=registry.runs.find(r=>r.runId===input.runId);
   if(run) {
     if(run.phase!=='ready')throw problem('layout_allocation_uncertain');
-    if(run.repoWorkspaceId!==repo.workspaceId||run.cwd!==cwd||run.label!==`#${input.issueNumber} ${input.workflowName}`)throw problem('herdr_run_binding_changed');
+    // Runs from 0.1.3 and older carry the label without the repository name.
+    if(run.repoWorkspaceId!==repo.workspaceId||run.cwd!==cwd||![runLabel,`#${input.issueNumber} ${input.workflowName}`].includes(run.label))throw problem('herdr_run_binding_changed');
     ownedWorkspace(rows,run,cwd);
     await assertRunRoot(command,run);
   } else {
-    run={runId:input.runId,repoWorkspaceId:repo.workspaceId,commonDir,cwd,label:`#${input.issueNumber} ${input.workflowName}`,phase:'intent'};
+    run={runId:input.runId,repoWorkspaceId:repo.workspaceId,commonDir,cwd,label:runLabel,phase:'intent'};
     registry.runs.push(run);await checkpoint();await persist(directory,registry);
     const opened=await command(['worktree','open','--workspace',repo.workspaceId,'--path',cwd,'--label',run.label,'--no-focus']);
     run.workspaceId=opened.result?.workspace?.workspace_id;
@@ -143,4 +146,24 @@ export async function closeHerdrRunLayout({runId,cwd,layout}, ports) {
   const closed=await command(['workspace','close',run.workspaceId]);
   if(closed.id!=='cli:workspace:close'||closed.result?.type!=='ok'||(await inventory(command)).some(w=>w.workspace_id===run.workspaceId))throw problem('workspace_close_unconfirmed');
   run.phase='closed';await persist(directory,registry);
+}
+
+// After the last open run of a repository is closed, close the repository's own workspace too (it only holds a shell).
+// Returns true when it closed or was already gone; a workspace still in use (more tabs or panes, or open runs) stays.
+export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) {
+  const directory=directoryFor(ports),registry=await readRegistry(directory),{command,checkpoint}=ports;
+  const repo=registry.repositories.find(r=>r.key===String(repository).toLowerCase());
+  if(!repo||repo.phase!=='ready'||repo.commonDir!==commonDir)return false;
+  if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
+  const rows=await inventory(command);
+  if(rows.some(w=>w.workspace_id===repo.workspaceId)) {
+    ownedWorkspace(rows,repo,repo.sourceRoot);
+    const tabs=(await command(['tab','list','--workspace',repo.workspaceId])).result?.tabs,panes=(await command(['pane','list','--workspace',repo.workspaceId])).result?.panes;
+    if(!Array.isArray(tabs)||tabs.length!==1||!Array.isArray(panes)||panes.length!==1)return false;
+    await checkpoint?.();repo.phase='close_intent';await persist(directory,registry);
+    const closed=await command(['workspace','close',repo.workspaceId]);
+    if(closed.id!=='cli:workspace:close'||closed.result?.type!=='ok'||(await inventory(command)).some(w=>w.workspace_id===repo.workspaceId))throw problem('workspace_close_unconfirmed');
+  }
+  registry.repositories=registry.repositories.filter(r=>r!==repo);await persist(directory,registry);
+  return true;
 }

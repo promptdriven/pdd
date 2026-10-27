@@ -38,8 +38,8 @@ async function fixture(t){
 test('repository reuse, one worktree per run, issue/workflow label and stage tabs',async t=>{
  const f=await fixture(t),a=await f.open(),b=await f.open({stageId:'change'});
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.equal(a.workspaceId,b.workspaceId);assert.notEqual(a.tabId,b.tabId);
- assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','#2 small-change']);
- assert.deepEqual(f.calls.find(a=>a[0]==='worktree'),['worktree','open','--workspace',a.repoWorkspaceId,'--path',f.input.cwd,'--label','#2 small-change','--no-focus']);
+ assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change']);
+ assert.deepEqual(f.calls.find(a=>a[0]==='worktree'),['worktree','open','--workspace',a.repoWorkspaceId,'--path',f.input.cwd,'--label','coffee#2 small-change','--no-focus']);
  assert.equal(f.calls.filter(a=>a[0]==='worktree').length,1);
  assert(f.calls.filter(c=>c[0]==='tab').every(c=>c[c.indexOf('--workspace')+1]===a.workspaceId));
 });
@@ -52,12 +52,12 @@ test('a busy layout lock fails at once instead of waiting; a later run shares th
  release();const a=await first;f.ports.command=command;
  const b=await f.open({runId:randomUUID(),cwd,issueNumber:3});
  assert.equal(a.repoWorkspaceId,b.repoWorkspaceId);assert.notEqual(a.workspaceId,b.workspaceId);
- assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','#2 small-change','#3 small-change']);
+ assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change','coffee#3 small-change']);
 });
 test('repo-name clash qualifies both owned labels and preserves existing run',async t=>{
  const f=await fixture(t),a=await f.open(),other=join(f.root,'other');await mkdir(other);
  await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot:other,commonDir:join(other,'.git'),cwd:other});
- assert.deepEqual(f.workspaces.map(w=>w.label),['alice/coffee','#2 small-change','bob/coffee','#2 small-change']);assert.equal(f.workspaces[1].workspace_id,a.workspaceId);
+ assert.deepEqual(f.workspaces.map(w=>w.label),['alice/coffee','coffee#2 small-change','bob/coffee','coffee#2 small-change']);assert.equal(f.workspaces[1].workspace_id,a.workspaceId);
 });
 test('run cleanup closes only run workspace, retaining repository and git checkout',async t=>{
  const f=await fixture(t),layout=await f.open();
@@ -137,4 +137,15 @@ test('HD2: an occupied owner/repo label refuses without adopting or renaming ano
  await assert.rejects(f.open(),/repository_label_unavailable/);
  assert.deepEqual(f.workspaces,before);
  assert(f.calls.every(args=>args[0]==='workspace'&&args[1]==='list'));
+});
+test('the repository workspace closes only when no run of it is open and it holds just its one shell',async t=>{
+ const f=await fixture(t),layout=await f.open(),idle=()=>f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),f.ports);
+ assert.equal(await idle(),false,'a run is still open');
+ await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports);
+ const command=f.ports.command;
+ f.ports.command=async args=>{const reply=await command(args);if(args[0]==='tab'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.tabs.push({tab_id:'person-tab'});return reply;};
+ assert.equal(await idle(),false,'the person opened another tab there');assert.deepEqual(f.workspaces.map(w=>w.label),['coffee']);
+ f.ports.command=command;
+ assert.equal(await idle(),true);assert.deepEqual(f.workspaces,[]);
+ assert.equal(await idle(),false,'nothing left to close');
 });
