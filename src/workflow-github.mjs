@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: c6b061533414187d4c391aeac11c411184e20191e2a3b446339a4ce123ec8424).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 9fbdb8baee9577560fed125b2d5da144490de2b3134d102462f222b9dbfa183a).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
@@ -146,8 +146,13 @@ async function localTopic(cwd, baseBranch, bodyFile, deps) {
     if (tracked.code !== 1) fail('workflow_github_body_must_be_untracked');
   }
   const status = await deps.command(cwd, 'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  if (status.split('\0').filter(Boolean).some(row => !(inside && row === '?? ' + bodyRelative)))
-    fail('workflow_github_worktree_dirty');
+  const rows = status.split('\0').filter(Boolean), dirty = [];
+  for (let index = 0; index < rows.length; index++) {
+    const row = rows[index];
+    if (!(inside && row === '?? ' + bodyRelative)) dirty.push(row.slice(3));
+    if (/[RC]/.test(row.slice(0, 2)) && rows[index + 1]) dirty.push(rows[++index]);
+  }
+  if (dirty.length) fail('workflow_github_worktree_dirty: Commit or move these unfinished files before opening a PR: ' + dirty.map(path => JSON.stringify(path)).join(', '));
   const headBranch = (await deps.command(cwd, 'git', ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
   await deps.command(cwd, 'git', ['check-ref-format', '--branch', headBranch]);
   if (!text(headBranch) || headBranch === baseBranch) fail('workflow_github_topic_required');

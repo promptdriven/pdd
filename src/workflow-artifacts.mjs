@@ -29,11 +29,13 @@ function fileList(files) {
   if (!Array.isArray(files)) fail('Workflow artifacts must be an array.');
   const paths = new Set();
   for (const file of files) {
-    closed(file, ['path', 'sha256', 'role']);
+    closed(file, ['path', 'sha256', 'role'], ['storage']);
+    if (Object.hasOwn(file, 'storage') && (file.storage !== 'run' || !['cases', 'notes', 'evidence'].includes(file.role))) fail('Invalid run artifact storage or role.');
+    const identity = `${file.storage ?? 'project'}:${file.path}`;
     artifactPath(file.path);
     if (typeof file.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(file.sha256)
-        || !ROLES.has(file.role) || paths.has(file.path)) fail('Invalid or duplicate workflow artifact.');
-    paths.add(file.path);
+        || !ROLES.has(file.role) || paths.has(identity)) fail('Invalid or duplicate workflow artifact.');
+    paths.add(identity);
   }
 }
 
@@ -107,20 +109,32 @@ async function gitDirectory(root, io) {
   return directory(resolve(root, match[1]), io);
 }
 
-export async function assertWorkflowArtifacts({ cwd, files } = {}, ports = {}) {
+export async function assertWorkflowArtifacts({ cwd, files, artifactDirectory } = {}, ports = {}) {
   fileList(files);
   if (!nonempty(cwd)) fail('A project directory is required.');
   const io = ports.fs ?? fs;
   const root = await directory(cwd, io);
+  let runRoot;
+  if (files.some(file => file.storage === 'run')) {
+    const metadata = await gitDirectory(root, io);
+    if (!nonempty(artifactDirectory)) fail('Run artifact directory is required.');
+    const rel = inside(metadata, resolve(artifactDirectory)).split(sep);
+    if (rel.length !== 4 || rel[0] !== 'pdd' || rel[1] !== 'workflows' || rel[3] !== 'artifacts'
+        || !/^[a-zA-Z0-9_-]+$/.test(rel[2])) fail('Invalid run artifact directory.');
+    let current = metadata;
+    for (const part of rel) current = await directory(join(current, part), io);
+    runRoot = current;
+  }
   for (const file of files) {
-    const bytes = await readRegular(root, resolve(root, file.path), io);
+    const selected = file.storage === 'run' ? runRoot : root;
+    const bytes = await readRegular(selected, resolve(selected, file.path), io);
     if (createHash('sha256').update(bytes).digest('hex') !== file.sha256.toLowerCase()) {
       fail('Workflow artifact hash does not match actual bytes: ' + file.path);
     }
   }
 }
 
-export async function readWorkflowHandoff({ handoffPath, cwd, expected, requiredRoles = [] } = {}, ports = {}) {
+export async function readWorkflowHandoff({ handoffPath, cwd, artifactDirectory, expected, requiredRoles = [] } = {}, ports = {}) {
   closed(expected, IDENTITIES);
   if (IDENTITIES.some(key => !nonempty(expected[key]))) fail('Expected workflow identities are required.');
   if (!Array.isArray(requiredRoles) || requiredRoles.some(role => !ROLES.has(role))
@@ -137,7 +151,10 @@ export async function readWorkflowHandoff({ handoffPath, cwd, expected, required
   fileList(data.files);
   if (requiredRoles.some(role => !data.files.some(file => file.role === role))) fail('A required workflow artifact role is missing.');
   if (Object.hasOwn(data, 'testCommands')) commandList(data.testCommands);
-  await assertWorkflowArtifacts({ cwd: root, files: data.files }, ports);
+  if (data.files.some(file => file.storage === 'run')
+      && artifactDirectory !== join(metadata, 'pdd', 'workflows', expected.runId, 'artifacts'))
+    fail('Run artifact directory does not match the expected run.');
+  await assertWorkflowArtifacts({ cwd: root, files: data.files, artifactDirectory }, ports);
   return data;
 }
 

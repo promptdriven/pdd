@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fffbdd730f3bfb302682b78830109aae4b19a4cddc99e271766f4506d76abf30).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8bead74fac4b4aac205d351a60e08c2b6a1a2f1e1cd75d3d0aa6dfbd9f9bfb0b).
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify, isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -150,7 +150,7 @@ function progress(s, event, state) {
     journal: directory ? join(directory, 'journal.jsonl') : null, pending: s.pending?.kind,
     ended: last?.id, backend: backend ? { session: backend.session, workspaceId: backend.workspaceId } : null,
     summary: handoff?.summary, files: directory ? [...new Set([handoff, proposal].filter(Boolean).flatMap(item => [join(directory, item.path),
-      ...item.files.map(file => resolve(s.root, file.path))]))] : [],
+      ...item.files.map(file => resolve(file.storage === 'run' ? join(directory, 'artifacts') : s.root, file.path))]))] : [],
     prs: (s.completed ?? []).filter(step => step.pr).map(step => step.pr.url)
   })); } catch { /* Observation cannot change workflow authority or progress. */ }
 }
@@ -225,7 +225,7 @@ function attachmentEpoch(s, increment = false) {
   if (increment) { epoch++; durable(path, { runId: s.runId, epoch }); }
   return epoch;
 }
-async function sourceValid(s, r) { await assertWorkflowArtifacts({ cwd: r.root, files: s.accepted?.files ?? [] }); }
+async function sourceValid(s, r) { await assertWorkflowArtifacts({ cwd: r.root, artifactDirectory: join(s.gitDir, 'pdd', 'workflows', s.runId, 'artifacts'), files: s.accepted?.files ?? [] }); }
 function authority(s, r) {
   if (s.root !== r.root || s.gitDir !== r.gitDir || s.repo !== r.repo || s.base !== r.base) fail('The saved run belongs to a different project or repository.');
 }
@@ -237,9 +237,10 @@ async function current(s, r, p) {
 }
 async function handoff(s, stage, r, directory) {
   const roles = stage.requiredRoles ?? [];
-  const h = await readWorkflowHandoff({ handoffPath: s.pending.handoffPath, cwd: r.root,
+  const h = await readWorkflowHandoff({ handoffPath: s.pending.handoffPath, cwd: r.root, artifactDirectory: join(directory, 'artifacts'),
     expected: { runId: s.runId, stageId: stage.id, issueUrl: s.issue.url, inputRevision: s.pending.input.head },
     requiredRoles: roles });
+  if (stage.protocol === 'work' && !h.files.some(file => file.storage !== 'run')) fail('Work stages require project deliverables.');
   const reportOnly = stage.protocol === 'report';
   if (!h.files.length && !reportOnly) fail('This work stage requires concrete project artifacts.');
   if (stage.protocol === 'proposal' && !h.testCommands?.length) fail('Independent expectations and a native test argv plan are required.');
@@ -288,10 +289,10 @@ function candidateIdentity(s, stage, outcome) {
 function agentInstructions(s, stage, directory, attemptId, handoffPath, inputRevision) {
   const input = { runId: s.runId, stageId: stage.id, attemptId, protocol: stage.protocol, requiredRoles: stage.requiredRoles,
     issue: s.issue, inputRevision: inputRevision.head,
-    inputFingerprint: inputRevision.hash, handoffPath, priorArtifacts: s.completed.flatMap(step => step.handoff?.files ?? []),
+    inputFingerprint: inputRevision.hash, handoffPath, artifactDirectory: join(directory, 'artifacts'), priorArtifacts: s.completed.flatMap(step => step.handoff?.files ?? []),
     priorReports: s.completed.filter(step => step.handoff).map(step => ({ stageId: step.id, summary: step.handoff.summary, handoffPath: join(directory, step.handoff.path), revision: step.revision })),
     accepted: s.accepted ?? null };
-  return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated work.\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Project files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
+  return `Execute ONLY the current ${stage.id} stage of ${s.name}, then stop. Never perform a future stage, push, create/merge a PR or change native login, permissions or global configuration. Read the ENTIRE supplied Prompting guide FIRST and summarize its relevant method before any Story. Existing project instructions/permissions apply. Work in the assigned issue topic branch and commit requested work when appropriate; do not switch to a different branch; never force checkout, reset, stash or overwrite unrelated work.\nPDD_STAGE_INPUT_JSON\n${JSON.stringify(input)}\nPDD_STAGE_INPUT_END\nUse the .pdd/workflows/${s.name}/${stage.file} Markdown supplied in the saved context for this stage; do not replace it by reloading a mutable recipe file. Agent protocol ${stage.protocol}; required roles ${JSON.stringify(stage.requiredRoles)}. Write your handoff at handoffPath as JSON with exactly version:1,runId,stageId,issueUrl,inputRevision,summary,files:[{path,sha256,role,storage?}], optional testCommands:[[executable,...args]]. Use the exact supplied identities. Omit storage for project-relative deliverables. For plan-only cases, notes and evidence, write under the supplied artifactDirectory and use storage:"run" with a path relative to that directory. Never leave plan-only files untracked in the project worktree. Keep accepted artifacts unchanged. The work stage must commit all agreed project deliverables, including earlier scope project files, before verify; never commit unrelated person files. Files must exist, be ordinary contained files and match sha256. Roles: prompt,story,cases,implementation,tests,evidence,notes. A report protocol may use a substantive summary without project files; proposal/work/verify need real files. A proposal requires its declared roles and independent native project testCommands. A verify protocol must preserve the accepted expectations and use the accepted argv plan; the runner executes those tests itself. Do not claim PASS from native exit or prose. Complete the real files required for this stage, write the closed handoff, and report the stage result. PDD observes this owned background conversation and independently validates the exact handoff, current files and required tests. Report the stage result and stop; no manual native exit is required. A model turn, idle state or handoff write alone does not advance the workflow. Do not launch the next stage or terminate PDD/the parent process. Current and prior artifacts remain inspectable. Canonical issue URL: ${s.issue.url}.`;
 }
 function herdrLayoutInput(s) {
   return {repository:s.assignment.repository,sourceRoot:s.assignment.sourceRoot,commonDir:s.assignment.commonDir,
@@ -373,7 +374,7 @@ async function acceptAgent(s, stage, r, directory, options, p, outcome) {
   if (!isDeepStrictEqual(originalHandoff, await handoff(s, stage, r, directory))) fail('The exact workflow handoff changed during validation or native checks.');
   await git(p, r.root, 'merge-base', '--is-ancestor', s.pending.input.head, 'HEAD');
   await sourceValid(s, r);
-  await assertWorkflowArtifacts({ cwd: r.root, files: h.files });
+  await assertWorkflowArtifacts({ cwd: r.root, artifactDirectory: join(s.gitDir, 'pdd', 'workflows', s.runId, 'artifacts'), files: h.files });
   await assignedRepository(s.assignment, p);
   s.expected = await fingerprint(r, p);
   if (stage.protocol === 'proposal') s.proposal = { approval: stage.approval, files: h.files.filter(f => stage.requiredRoles.includes(f.role)), testCommands: h.testCommands };
@@ -400,7 +401,7 @@ async function cleanupAgent(s, stage, r, directory, options, p, advance) {
   const portOptions = nativePorts(s, directory, r, options, p);
   return portOptions.withStageGuard(s.pending.backend, async () => {
     await current(s, r, p);
-    await assertWorkflowArtifacts({ cwd: r.root, files: s.pending.handoff.files });
+    await assertWorkflowArtifacts({ cwd: r.root, artifactDirectory: join(s.gitDir, 'pdd', 'workflows', s.runId, 'artifacts'), files: s.pending.handoff.files });
     if (digest(JSON.stringify(s.pending.evidenceRecord)) !== s.pending.acceptance.evidenceDigest
       || digest(readFileSync(s.pending.handoffPath)) !== s.pending.evidenceRecord.handoffSha256)
       fail('The accepted stage evidence or closed handoff changed before cleanup.');
@@ -540,7 +541,7 @@ async function advance(s, r, directory, options, p, decision, initial) {
     if (stage.kind === 'human') {
       if (choice !== 'approve') return result(s, 'waiting', 'Review the exact current proposal artifacts, independent expectations and test plan. Resume with --decision approve to accept this input.');
       if (!s.proposal?.files.length || !s.proposal.testCommands.length) fail('A complete independent proposal and test plan is required before approval.');
-      await assertWorkflowArtifacts({ cwd: r.root, files: s.proposal.files });
+      await assertWorkflowArtifacts({ cwd: r.root, artifactDirectory: join(s.gitDir, 'pdd', 'workflows', s.runId, 'artifacts'), files: s.proposal.files });
       s.accepted = { ...s.proposal, input: s.expected };
       s.completed.push({ id: stage.id, kind: stage.kind, input: s.expected }); s.index++;
       record(s, directory, 'human.approved'); choice = undefined; continue;

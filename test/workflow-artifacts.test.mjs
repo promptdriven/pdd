@@ -213,3 +213,23 @@ test('default execFile records genuine local stdout/stderr and a nonzero process
   assert.equal(report.results[1].stderr, 'failed');
   assert.equal((await runWorkflowTestCommands({ cwd: f.cwd, testCommands: commands.slice(0, 1) })).passed, true);
 });
+
+test('private run artifacts bind the run, reject redirects and retain hash checks', async t => {
+  const f = await fixture(t);
+  const artifactDirectory = join(f.cwd, '.git/pdd/workflows/run-1/artifacts');
+  await fs.mkdir(artifactDirectory, {recursive:true});
+  await fs.writeFile(join(artifactDirectory, 'cases.json'), 'Independent cases.');
+  const file = {path:'cases.json',role:'cases',storage:'run',sha256:hash('Independent cases.')};
+  await f.save({...f.data, files:[file]});
+  const request = {...f.request, artifactDirectory, requiredRoles:['cases']};
+  assert.deepEqual((await readWorkflowHandoff(request)).files, [file]);
+  await assert.rejects(readWorkflowHandoff({...request,artifactDirectory:artifactDirectory.replace('run-1','run-2')}), /expected run/);
+  for (const entry of [{...file,path:'../cases.json'}, {...file,path:'/tmp/cases.json'}, {...file,role:'implementation'}, {...file,storage:'project'}]) {
+    await assert.rejects(assertWorkflowArtifacts({cwd:f.cwd,artifactDirectory,files:[entry]}));
+  }
+  await fs.writeFile(join(artifactDirectory, 'cases.json'), 'Changed expectations.');
+  await assert.rejects(readWorkflowHandoff(request), /hash/);
+  await fs.rename(artifactDirectory, artifactDirectory+'-saved');
+  await fs.symlink(artifactDirectory+'-saved', artifactDirectory);
+  await assert.rejects(readWorkflowHandoff(request), /symlink/);
+});

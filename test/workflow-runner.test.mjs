@@ -1075,3 +1075,15 @@ test('real runner refuses person dirty file by name without publishing or removi
   assert.equal(f.pr, null);
   assert.equal(readFileSync(join(f.cwd, 'my personal notes.txt'), 'utf8'), 'Keep my unfinished work.\n');
 });
+
+test('real runner rejects private scope expectation changes before approval', async t => {
+  const f = await fixture(t, {runCases:true});
+  const first = await f.run();
+  assert.equal(first.state, 'waiting', first.message);
+  writeFileSync(join(f.native[0].input.artifactDirectory, 'scope.cases.json'), '[{"expected":3}]\n');
+  const outcome = await f.resume(first.runId, 'approve');
+  assert.equal(outcome.state, 'failed');
+  assert.match(outcome.message, /hash/);
+  assert.equal(f.native.length, 1);
+  assert.equal(f.pr, null);
+});
