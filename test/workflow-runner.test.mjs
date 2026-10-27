@@ -103,6 +103,7 @@ async function fixture(t, options = {}) {
       if (input.protocol === 'verify') {
         let contents = null;
         if (options.mutatingTest) contents = "import {writeFileSync} from 'node:fs'; writeFileSync('value.mjs', 'export const value = 3;\\n');\n";
+        if (options.mutatingPrivateCase) contents = `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(join(input.artifactDirectory, 'scope.cases.json'))}, 'changed expectations');\n`;
         if (options.mutatingHandoff) contents = `import {readFileSync,writeFileSync} from 'node:fs'; const path=${JSON.stringify(input.handoffPath)}; const h=JSON.parse(readFileSync(path)); h.summary='changed during checks'; writeFileSync(path,JSON.stringify(h));\n`;
         add('check.mjs', contents, 'tests');
       }
@@ -1085,5 +1086,16 @@ test('real runner rejects private scope expectation changes before approval', as
   assert.equal(outcome.state, 'failed');
   assert.match(outcome.message, /hash/);
   assert.equal(f.native.length, 1);
+  assert.equal(f.pr, null);
+});
+
+
+test('real runner rejects a passing test that rewrites private scope expectations', async t => {
+  const f = await fixture(t, {runCases:true, mutatingPrivateCase:true});
+  const first = await f.run();
+  assert.equal(first.state, 'waiting', first.message);
+  const outcome = await f.resume(first.runId, 'approve');
+  assert.equal(outcome.state, 'failed');
+  assert.match(outcome.message, /hash/);
   assert.equal(f.pr, null);
 });

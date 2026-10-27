@@ -12,7 +12,7 @@ const text = value => typeof value === 'string' && value.length > 0 && !/[\u0000
 const repositoryName = value => text(value) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
-const fail = code => { throw Object.assign(new Error(code), { code }); };
+const fail = (code, message = code) => { throw Object.assign(new Error(message), { code }); };
 const parseJson = value => { try { return JSON.parse(value); } catch { fail('workflow_github_json_invalid'); } };
 const outcome = (state, message, pr = null) => ({ state, pr, message });
 
@@ -152,7 +152,7 @@ async function localTopic(cwd, baseBranch, bodyFile, deps) {
     if (!(inside && row === '?? ' + bodyRelative)) dirty.push(row.slice(3));
     if (/[RC]/.test(row.slice(0, 2)) && rows[index + 1]) dirty.push(rows[++index]);
   }
-  if (dirty.length) fail('workflow_github_worktree_dirty: Commit or move these unfinished files before opening a PR: ' + dirty.map(path => JSON.stringify(path)).join(', '));
+  if (dirty.length) fail('workflow_github_worktree_dirty', 'workflow_github_worktree_dirty: Commit or move these unfinished files before opening a PR: ' + dirty.map(path => JSON.stringify(path)).join(', '));
   const headBranch = (await deps.command(cwd, 'git', ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
   await deps.command(cwd, 'git', ['check-ref-format', '--branch', headBranch]);
   if (!text(headBranch) || headBranch === baseBranch) fail('workflow_github_topic_required');
