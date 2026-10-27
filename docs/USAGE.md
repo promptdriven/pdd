@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.5 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.6 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -57,7 +57,7 @@ Do these steps in this order:
 |---|---|---|
 | 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
 | 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
-| 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check` and `pdd try` |
+| 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check`, `pdd try` and `pdd approve` |
 
 ### 2.1 Install the skills
 
@@ -71,11 +71,11 @@ This is the standard skills installer. It needs only Node.js. [Section 4](#4-the
 
 ### 2.2 Install the pdd command
 
-You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd check` and `pdd try` ([section 7](#7-check-prompts-on-the-pdd-runtime)).
+You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd check`, `pdd try` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-runtime)).
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.5
+pdd --version   # prints 0.1.6
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -96,10 +96,10 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.5
+pdd --version   # PDD Alpha prints 0.1.6
 ```
 
-Remove the old one with the tool you used to install it:
+Remove the old one with the tool that installed it:
 
 ```sh
 uv tool uninstall pdd-cli     # if you used uv
@@ -215,7 +215,7 @@ The command returns at once. It prints where the run is and the commands to open
 ### 6.3 What happens
 
 1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`.
-2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each repo has a workspace. Each run has a tab, for example `#42 small-change`. pdd does not touch your default Herdr session.
+2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each repo has a workspace with the repo's name. Each run has a tab with the repo name, the issue and the workflow, for example `my-app#42 small-change`. If two repos have the same name, pdd uses `owner/repo`. pdd does not touch your default Herdr session.
 3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets a short brief and file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
@@ -229,11 +229,19 @@ The areas of the three workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
-| `small-change` | plan (scope), **approve**, build (change, verify) opens one PR, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
+| `small-change` | plan (scope), **approve**, build (change, verify, formal) opens one PR, **merge** |
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
+
+**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can answer, for example:
+
+- "Make it one Story."
+- "Split part 5."
+- "Change Story 5: also refuse an empty order." The chat redoes only that Story and its test file.
+
+Before PR 1, the check shows one `Runtime check` line for each Story. `pdd workflow status` then shows, for example, `Stories: 4 of 5 pass (✗ refunds)`.
 
 ### 6.4 See the chat
 
@@ -276,20 +284,24 @@ Rules:
 | PR 1 | The prompt, the Story and the test cases | After the prompt PR area. Its body says `Part of #42` |
 | PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason |
 
-At the PR 1 gate, the chat shows the PR 1 link, the `Runtime check:` line and the Try link, when there are any. Then it asks: "Do you want the code PR now, or stop here and merge PR 1 first?"
+**Try before PR 1.** After the prompt PR area, the chat shows one `Runtime check` line for each Story, with its report link, and the Try links. Try it. Then approve, or ask for changes. pdd opens PR 1 only after you approve.
+
+Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve 42`."
+
+The PR 1 body is short. At the top is one `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. A `Report (<story>)` link follows for each Story. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Try links.
 
 - **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
 - **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
-- If the prompts in PR 1 are still `draft`, approve them before the code PR. The agent sets them to `approved` only after your OK.
+- If PR 1 says "Draft prompts: …", approve each one with `pdd approve prompts/NAME.prompt.md` before you merge ([section 7.1](#71-approve-a-prompt)). An agent never sets `approved`.
 - If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
 
-**When the chat asks you something in the middle of a step,** `pdd workflow status` shows "waiting for you: <the question>". Answer in the chat, or from any terminal with `pdd workflow changes 42 "your answer"`.
+**When the chat asks you something in the middle of a step,** the agent first runs `pdd workflow ask` (only agents use it). Then `pdd workflow status` shows "waiting for you: <the question>". Answer in the chat, or from any terminal with `pdd workflow changes 42 "your answer"`.
 
 For all workflows:
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has the step summaries and `verify.md`. When a runtime check ran, it also has a `Runtime check:` line and a report link. Runtime report links expire after 7 days.
+- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 - pdd never merges. You review and merge on GitHub.
 
@@ -303,7 +315,7 @@ pdd workflow status --cancelled   # also show the cancelled runs
 pdd workflow status --all --json  # the same list as data
 ```
 
-`status` shows the area, the step, what the run waits for, and the PRs with their CI state. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
+`status` shows the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, it also shows how many pass, for example `Stories: 4 of 5 pass`. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
 
 `--all` lists every run on this machine, in all repos. Plain `status` outside a Git repo does the same. The list shows the runs that wait for you first, then the runs that work, then the runs with an open PR, then the runs that are done. Cancelled runs are hidden. `--cancelled` shows them. `--json` gives the same list as data.
 
@@ -326,6 +338,7 @@ Both commands sign in with your GitHub login (`gh auth status`). They send every
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing
 pdd check --files         # list the files a check would send; sends nothing
+pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story
 pdd check --read          # show the last results again; sends nothing new
@@ -335,18 +348,57 @@ pdd try --stop place-order
 
 After the table, `pdd check` prints one `Runtime check:` line that you can paste into a PR, for example `Runtime check: ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`.
 
-A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. The agent sets a prompt to `approved` only after your OK.
+With many Stories, `pdd check` prints one `Runtime check` line for each Story, then the overall line.
+
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls.
+
+A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
 | Exit | Result | What to do |
 |---|---|---|
 | 0 | passed | Nothing. |
 | 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
 | 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
-| 5 | not run | Sign-in, a busy server or no AI room. Check `gh auth status`, or wait and run again. |
+| 5 | not run | Sign-in, a busy server, no AI room, a login that is not invited, or an old pdd. Read the one line that pdd prints. |
 | 3 | unknown | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
 
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
+
+The runtime address is set in one place in pdd. You do not need to set it.
+
+### 7.1 Approve a prompt
+
+Only a person approves a prompt. An agent never sets `"status": "approved"`.
+
+```sh
+pdd approve prompts/place_order.prompt.md
+```
+
+pdd shows the prompt's runtime interface in plain words: each input, result and error. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd sets the prompt to `approved` and fills its hash. Any other answer changes nothing.
+
+- `pdd approve` works only for a person at a terminal. When an agent runs it, pdd tells the agent to ask you to run it.
+- If the prompt has schema problems, pdd lists them and does not approve.
+- If an approved prompt changes, `pdd check` refuses it as stale. The agent sets it back to `draft`, and you approve it again.
+
+### 7.2 Try a Story
+
+`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`.
+
+In your terminal, `pdd try` keeps waiting while the page is open:
+
+- When you save a case on the Try page, pdd adds it as a new step to the Story's test file.
+- When you click **Approve** on the Try page, pdd asks `Approve PROMPT? y/n` in this terminal. Only your `y` there approves the prompt. If the prompt changed after you clicked, pdd does not approve it.
+
+Use `--no-open` to get the link without opening a browser. Use `--no-wait` to return at once. When an agent runs `pdd try`, it reads the saved cases once and returns. Anyone with a Try link can use it, so the link never goes into a file, a PR or an issue.
+
+### 7.3 When a check does not run
+
+| pdd prints | What to do |
+|---|---|
+| `No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".` | pdd also says why for each near miss: a `tests/*.json` file without that `schema_version`, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
+| `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
+| `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
 
@@ -449,7 +501,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.5` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.6` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -462,6 +514,11 @@ This is an alpha. These limits are known today:
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
 | The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
+| `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
+| `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
+| `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd#alpha`, then `pdd setup`. |
+| `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
+| PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem
