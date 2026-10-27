@@ -179,7 +179,8 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const buildMessage = readFileSync(join(run.runDir, 'build-start.md'), 'utf8');
   for (const part of ['Use the pdd-small-change skill', 'build', 'change', 'verify', 'Change value.mjs to 2.', 'verify.md']) assert.ok(buildMessage.includes(part), part);
   // Skills may not be installed (pdd setup installs them only when missing), so every area chat learns where the package skills are.
-  for (const text of [message, buildMessage]) assert.ok(text.includes(`All PDD skills are in ${join(packageRoot, 'skills')} (use them if a skill is not installed).`), text);
+  // Installed copies (for example from npx skills add) can be older than this pdd, so the chat reads the package's copies.
+  for (const text of [message, buildMessage]) assert.ok(text.includes(`Read the PDD skills (pdd-prompting too) from ${join(packageRoot, 'skills')}: an installed copy with the same name may be older.`), text);
 
   f.tick();
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'Use value two');
@@ -808,4 +809,55 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
   assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
+});
+
+// 0.1.6 items 6 and 7: many Stories in one run.
+const storyLines = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
+  + 'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call; Runtime check: ✗ 7 of 8 criteria · 24/26 checks · 4 AI calls; Report: https://rt.example.test/r/batch-1';
+test('0.1.6: PR 1 starts with one Runtime check line per Story, then the overall line and the report; status counts the Stories that pass', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  f.ports.timeZone = 'UTC';
+  f.tick(); await stepDone({ step: 'check', summary: storyLines, cwd: run.root }, f.agentPorts());
+  let shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(shown.message, /^Stories: 2 of 3 Stories pass \(✗ merge-tiles\)$/m);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· 2 of 3 Stories pass ·/);
+  assert.deepEqual(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories, { pass: 2, total: 3, failing: ['merge-tiles'] });
+  // The chat re-checks only merge-tiles and sends all current lines again; pdd counts only the latest summary.
+  f.tick(); await stepDone({ step: 'check', summary: storyLines.replace('(DRAFT): ✗ 2 of 3 criteria · 8/10 checks', '(DRAFT): ✓ 3 of 3 criteria · 10/10 checks').replace('Runtime check: ✗ 7 of 8', 'Runtime check: ✓ 8 of 8'), cwd: run.root }, f.agentPorts());
+  const gate = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  assert.match(gate.message, /Runtime check line of each Story/);
+  shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
+  assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  const top = f.prs[0].body.split('\n');
+  assert.deepEqual(top.slice(0, 6), [
+    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
+    'Runtime check: ✓ 8 of 8 criteria · 24/26 checks · 4 AI calls',
+    'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
+});
+
+test('0.1.6: a single overall Runtime check line counts as one Story', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
+  f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (DRAFT): ✗ 1 of 2 criteria · 3/5 checks · 1 AI call', cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 0 of 1 Stories pass$/m);
+});
+
+test('0.1.6: the skills format (one line each, with a Report line per Story) gives the same PR 1 top and count', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const summary = ['Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call', 'Report: https://rt.example.test/r/one',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (DRAFT): https://rt.example.test/r/two',
+    'Runtime check: ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls', 'Report: https://rt.example.test/r/one'].join('\n');
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
+    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
+    'Runtime check: ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    'Report: https://rt.example.test/r/one (report links expire after 7 days)',
+    'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
 });
