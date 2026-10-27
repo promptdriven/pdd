@@ -116,3 +116,10 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
   assert.equal(lines.filter(line => line === '<!-- pdd:start -->').length, 1);
   assert.ok(Buffer.byteLength(text) <= 3584);
 });
+
+// Wrong (plan D4): in a normal chat the agent writes a prompt and tests but never runs the runtime check unless asked.
+test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd try, and small-change checks before verify', () => {
+  const prompting = read('pdd-prompting/SKILL.md');
+  assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check:` line and the report link. Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
+  assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
+});
