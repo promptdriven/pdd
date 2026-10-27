@@ -51,19 +51,35 @@ Codex is the default agent. PDD Alpha is tested on macOS and Linux. Windows is n
 
 ## 2. Install
 
+Do these steps in this order:
+
+| Step | Command | When |
+|---|---|---|
+| 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
+| 2. Set up the repo | `/pdd-setup` in Codex or Claude Code | Once for each repo |
+| 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check` and `pdd try` |
+
+### 2.1 Install the skills
+
+```sh
+cd your-project
+npx skills add promptdriven/pdd       # for this project
+npx skills add promptdriven/pdd -g    # for all your projects
+```
+
+This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skills go. Then do [step 2](#5-set-up-a-repo-and-use-the-skills).
+
+### 2.2 Install the pdd command
+
+You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd check` and `pdd try` ([section 7](#7-check-prompts-on-the-pdd-runtime)).
+
 ```sh
 npm install -g github:promptdriven/pdd#alpha
 pdd --version   # prints 0.1.2
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step. The pdd command also copies the PDD skills into your agent's skills folders (see [section 4](#4-the-pdd-skills)).
-
-To install only the skills, without the pdd command, use the standard skills installer:
-
-```sh
-npx skills add "promptdriven/pdd#alpha"
-```
+npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
 
 Important:
 
@@ -113,43 +129,33 @@ PDD is five skills. A skill is a folder of plain Markdown that your agent reads 
 | `/pdd-small-change` | A workflow for a small change that is easy to undo |
 | `/pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
 
-There are two ways to install the skills:
+Where the skills go:
 
-| Way | Command | Where the skills go |
+| You run | Codex gets them in | Claude Code gets them in |
 |---|---|---|
-| The standard skills installer | `npx skills add "promptdriven/pdd#alpha"` | Your project's `.agents/skills/` (Codex) and `.claude/skills/` (Claude Code). Add `-g` for `~/.agents/skills/` and `~/.claude/skills/`. Add `--skill NAME` to pick skills |
-| The pdd command | Any pdd command, for example `pdd --version` | Your user folders, see below |
+| `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project |
+| `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/` |
+| `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 
-The pdd command checks the skills first and copies them into the skills folders of your agents:
+`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. pdd never copies the skills into your repo.
 
-- `~/.agents/skills/` for Codex
-- `~/.claude/skills/` for Claude Code
-- `$CLAUDE_CONFIG_DIR/skills/` too, when you set that variable
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-pdd never copies them into your repo. Each copied folder has a marker file, `.pdd-skill.json`. It shows that pdd owns the folder.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have.
 
-| The installed skill folder | What pdd does |
-|---|---|
-| Is missing | Copies the skill |
-| Is older than your pdd | Replaces it |
-| Has the same version, but its files changed | Replaces it |
-| Is newer than your pdd | Keeps it |
-| Is a symlink, or has no `.pdd-skill.json` file | Keeps it. It belongs to you |
-
-So do not edit the installed folders: pdd replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
+Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
 The skills work in any Codex or Claude Code chat.
 
 ## 5. Set up a repo and use the skills
 
-Set up each repo once. Run this in the top folder of the repo:
+Set up each repo once. Open Codex or Claude Code in the top folder of the repo and call:
 
-```sh
-cd your-project
-pdd setup
+```
+/pdd-setup
 ```
 
-Or, in Codex or Claude Code, call `/pdd-setup`. Both do the same:
+If you installed the pdd command, `pdd setup` in the top folder of the repo does the same. It also installs the skills when they are missing. Both do this:
 
 1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
 2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
@@ -333,8 +339,8 @@ A workflow is a skill folder. Copy one of the PDD workflows as `pdd-NAME`, and e
 
 ```sh
 mkdir -p .agents/skills
-cp -R ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug
-rm .agents/skills/pdd-mybug/.pdd-skill.json
+cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
+rm -f .agents/skills/pdd-mybug/.pdd-skill.json
 pdd workflow list            # pdd-mybug is in the list
 pdd workflow run mybug 42
 ```
@@ -377,24 +383,37 @@ Do not run `herdr server stop` without a session name. That stops your default H
 
 ## 11. Update and uninstall
 
-Update to the newest alpha:
+Update the skills:
+
+```sh
+npx skills update        # add -g for the skills of all your projects, -p for this project only
+```
+
+Update the pdd command, then let it check the skills:
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
 pdd --version
+pdd setup
 ```
 
-The next pdd command replaces the installed PDD skills with the new ones. It does not touch a symlink or a skill folder that has no `.pdd-skill.json` file. Such a folder belongs to you.
+Uninstall the skills that `npx skills` installed:
 
-Uninstall:
+```sh
+npx skills remove pdd-prompting pdd-setup pdd-feature pdd-bug pdd-small-change      # add -g for the global ones
+```
+
+Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 
 ```sh
 npm uninstall -g pdd
-rm -rf ~/.agents/skills/pdd-prompting ~/.agents/skills/pdd-small-change ~/.agents/skills/pdd-bug ~/.agents/skills/pdd-feature
-rm -rf ~/.claude/skills/pdd-prompting ~/.claude/skills/pdd-small-change ~/.claude/skills/pdd-bug ~/.claude/skills/pdd-feature
-# If you set CLAUDE_CONFIG_DIR, also remove the four pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change}
+rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change}
+# If you set CLAUDE_CONFIG_DIR, also remove the five pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 ```
+
+Look before you run `rm -rf`: if `npx skills -g` installed these folders, use `npx skills remove -g` instead.
 
 Leftovers can stay in your clones: `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
 
@@ -426,7 +445,8 @@ This is an alpha. These limits are known today:
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
-| The agent uses an old PDD skill | Run any pdd command, for example `pdd --version`. It updates the skills. |
+| The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
+| The agent does not know `/pdd-feature` | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem

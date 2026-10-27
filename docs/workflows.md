@@ -146,7 +146,7 @@ If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` f
 
 The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
-The pdd command installs its five skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a symlink or a folder without that file. `npx skills add` installs at the project level, or at the "for you" level with `-g`.
+`npx skills add promptdriven/pdd` installs the five PDD skills at the project level, or at the "for you" level with `-g`. `pdd setup` copies them to the "for you" level only when they are missing: `~/.agents/skills/` for Codex, and `~/.claude/skills/` (or `$CLAUDE_CONFIG_DIR/skills/`) for Claude Code. After an update of the pdd command, `pdd setup` replaces an older copy that has its `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. Do not edit these installed folders: an update replaces them.
 
 Give your workflow a new name. A project copy with the same name as a PDD skill (for example `pdd-bug`) works only in Codex:
 
@@ -161,8 +161,8 @@ This example makes the workflow `mybug` for one repo. Run it in your repo:
 
 ```sh
 mkdir -p .agents/skills
-cp -R ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug
-rm .agents/skills/pdd-mybug/.pdd-skill.json
+cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
+rm -f .agents/skills/pdd-mybug/.pdd-skill.json
 ```
 
 Then edit the copy:
@@ -181,7 +181,7 @@ pdd workflow run mybug 42    # a run on issue 42
 
 In a chat, call `/pdd-mybug`. Commit the folder so that your team gets the same workflow.
 
-To change a PDD workflow for all your projects, you can also edit its installed folder and delete its `.pdd-skill.json` file. pdd then keeps your folder and does not update it.
+`cp -RL` copies the files, also when the installed skill is a symlink. Then your edits do not change the PDD skill.
 
 ### The files
 
