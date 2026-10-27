@@ -268,7 +268,7 @@ After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current
 
 ### 6.10 Many issues at once
 
-Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one open run: a second `run` on the same issue is refused. To start again, cancel the open run first. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
+Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one active run: a second `run` on the same issue is refused. After `pdd workflow cancel N`, you can run it again, and the new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
 
 ## 7. Make your own workflow
 
@@ -350,7 +350,7 @@ This is an alpha. These limits are known today:
 - A busy or rate-limited model (HTTP 429, capacity or quota) can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
 - If your agent is not signed in, the chat stops at a sign-in screen. Check `codex login status` before you start.
 - With Claude Code, the first chat of a run can ask once to trust the new worktree. Answer it in the chat.
-- An issue can have only one open run. Cancel it to start again.
+- An issue can have only one active run. After `pdd workflow cancel N`, you can run it again.
 - Each step is a fresh subagent. A run uses a lot of agent quota.
 - Codex is the default agent. Claude Code works too.
 

@@ -146,7 +146,7 @@ The uninstall keeps the skills. To remove them, see [Update and uninstall](docs/
 - A busy or rate-limited model can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
 - If your agent is not signed in, the chat stops at a sign-in screen. Check this before you start.
 - Claude Code can ask once to trust a new worktree. `run` prints a hint. Answer it in the chat.
-- An issue can have only one open run. Cancel it to start again.
+- An issue can have only one active run. After `pdd workflow cancel N`, you can run it again.
 - Each step is a fresh subagent. A run uses a lot of agent quota. Many runs at once also use a lot of memory.
 
 ## Report a problem

@@ -59,7 +59,7 @@ chat 3  build: build, verify
 you     review and merge the PR on GitHub
 ```
 
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an open run. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It does not write code itself.
 4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets a short brief and file paths, not the chat history.
@@ -121,7 +121,15 @@ node --test examples/ticket-status/test/status.test.mjs
 
 If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-`pdd workflow run NAME` finds the skill folder `pdd-NAME` with a `workflow.json` in any of these folders. Put your copy where your agent reads it, or in both folders of a level.
+`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
+
+1. `.agents/skills/` in the project
+2. `.claude/skills/` in the project
+3. `~/.agents/skills/`
+4. `~/.claude/skills/`
+5. `skills/` in the pdd package
+
+The project is the top folder of the Git repo of your current folder. Put your copy where your agent reads it too, or in both folders of a level.
 
 pdd installs its four skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a symlink or a folder without that file.
 

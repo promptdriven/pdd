@@ -26,7 +26,7 @@ The intro is about 1.6 KB. It has the folder, the core rules of the `pdd-prompti
 | `pdd workflow cancel N` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
 
 - NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
-- ISSUE is the issue number in the repo of your clone. An issue can have only one open run. `run` refuses a second one.
+- ISSUE is the issue number in the repo of your clone. An issue can have only one active run. `run` refuses a second one. After `cancel`, a new `run` on the issue starts fresh.
 - The run folder is `.git/pdd/runs/N/` in your clone. See [workflows.md](workflows.md#the-run-folder).
 - With Claude Code, the first chat can ask once to trust the new worktree. `run` prints a hint when your clone's folder is not trusted yet.
 - N is the issue number of a run in the current repo, worktrees included. If several repos match, use `owner/repo#N`.
