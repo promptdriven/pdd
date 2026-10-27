@@ -19,14 +19,16 @@ The intro is about 1.6 KB. It has the folder, the core rules of the `pdd-prompti
 |---|---|
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once |
 | `pdd workflow list` | List the workflow skills that pdd finds: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
-| `pdd workflow status [N]` | Show the area, the step, what the run waits for, and the PR with its CI state. Without N, show all runs in this repo |
+| `pdd workflow status [N]` | Show the area, the step, what the run waits for, and the PR with its CI state. Without N, show all runs in this repo. In a run's worktree, show that run |
 | `pdd workflow open N` | Show the current chat of the run. If the chat ended, resume it in its tab |
-| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat, or pdd opens the PR. Without N, approve the run that waits, when exactly one run in this repo waits |
+| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat, or pdd opens the PR. Without N, approve the run of the current worktree, or else the one run in this repo that waits for a person |
 | `pdd workflow changes N "text"` | Send the text to the same chat. The chat revises. The gate stays open |
-| `pdd workflow cancel N` | Mark the run cancelled and close its tabs. Keep the worktree and the branch |
+| `pdd workflow cancel N` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
 
 - NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
-- ISSUE is the issue number in the repo of your clone.
+- ISSUE is the issue number in the repo of your clone. An issue can have only one open run. `run` refuses a second one.
+- The run folder is `.git/pdd/runs/N/` in your clone. See [workflows.md](workflows.md#the-run-folder).
+- With Claude Code, the first chat can ask once to trust the new worktree. `run` prints a hint when your clone's folder is not trusted yet.
 - N is the issue number of a run in the current repo, worktrees included. If several repos match, use `owner/repo#N`.
 - In a terminal, `approve` asks y/N and shows the repo, the issue and its title. From an agent chat, `approve` works only when the person's own message after the gate is in that chat.
 - No command has a time limit. You can close the terminal at any time.

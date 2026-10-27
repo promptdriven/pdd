@@ -190,7 +190,7 @@ The command returns at once. It prints where the run is and the commands to open
 
 ### 6.3 What happens
 
-1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone.
+1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`.
 2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each repo has a workspace. Each run has a tab, for example `#42 small-change`. pdd does not touch your default Herdr session.
 3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets a short brief and file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
@@ -198,6 +198,8 @@ The command returns at once. It prints where the run is and the commands to open
 6. When you approve, pdd starts a new chat for the next area. That chat gets the results of the area that you approved.
 7. After the last step of the build area, pdd pushes the branch and opens the PR.
 8. You review and merge the PR on GitHub. When `pdd workflow status` sees the merge, the run is completed.
+
+With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `run` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
 
 The areas of the three workflows (you act at the **bold** ones):
 
@@ -219,7 +221,7 @@ This shows the current chat of the run. You can read it and type to it. If the c
 
 ### 6.5 Answer a gate
 
-At a gate, read what the chat shows. The step notes are in the run folder, and the files are in the run's worktree. Then choose:
+At a gate, read what the chat shows. The step notes are in the run folder (`.git/pdd/runs/42/` in your clone), and the files are in the run's worktree. Then choose:
 
 | You want to | In the chat | In a terminal |
 |---|---|---|
@@ -231,9 +233,9 @@ Rules:
 
 - Only you can approve. An agent never approves for you. When you approve in the chat, the agent runs `pdd workflow approve`. pdd then checks that your own message is in the chat after the gate.
 - In a terminal, `approve` asks y/N. The question shows the repo, the issue and its title.
-- `approve` without N works when exactly one run in this repo waits for you.
+- `approve` without N: in a run's worktree, it approves that run. Elsewhere in the repo, it approves the one run that waits for you. If more than one run waits, it lists them.
 - Changes stay in the same chat. The chat revises and asks you again.
-- `cancel` marks the run cancelled and closes its tabs. pdd keeps the worktree and the branch.
+- `cancel` closes the chat tabs of the run. pdd keeps the worktree and the branch. A new `pdd workflow run` on the same issue then starts fresh.
 
 ### 6.6 Optional steps
 
@@ -245,7 +247,7 @@ A run always makes one PR. The prompts, the Story, the tests and the code are al
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has the run summary and `verify.md`.
+- The PR body has `Closes #42`, the step summaries and `verify.md`. When a runtime check ran, it also has a `Runtime check:` line and a report link. Runtime report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 - pdd never merges. You review and merge on GitHub.
 
@@ -256,7 +258,7 @@ pdd workflow status 42
 pdd workflow status        # all runs in this repo
 ```
 
-`status` shows the area, the step, what the run waits for, and the PR with its CI state. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
+`status` shows the area, the step, what the run waits for, and the PR with its CI state. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
 
 ### 6.9 Close the terminal or restart
 
@@ -266,7 +268,7 @@ After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current
 
 ### 6.10 Many issues at once
 
-Each issue gets its own branch, worktree and Herdr tab. You can start several runs. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
+Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue can have only one open run: a second `run` on the same issue is refused. To start again, cancel the open run first. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
 
 ## 7. Make your own workflow
 
@@ -303,7 +305,7 @@ git worktree remove ../your-clone.pdd-worktrees/FOLDER
 git branch -D pdd/small-change-42-1a2b3c4d          # the run's local branch
 ```
 
-Removing a worktree also removes that run's records. Do not remove a worktree while its run goes on.
+Do not remove a worktree while its run goes on. The run folder stays in `.git/pdd/runs/N` in your clone.
 
 All runs share the Herdr session `pdd`. `cancel` closes the tabs of a run. To remove the whole session when no run uses it:
 
@@ -347,6 +349,8 @@ This is an alpha. These limits are known today:
 - pdd does not remove old worktrees or branches. See [Clean up after a run](#clean-up-after-a-run).
 - A busy or rate-limited model (HTTP 429, capacity or quota) can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
 - If your agent is not signed in, the chat stops at a sign-in screen. Check `codex login status` before you start.
+- With Claude Code, the first chat of a run can ask once to trust the new worktree. Answer it in the chat.
+- An issue can have only one open run. Cancel it to start again.
 - Each step is a fresh subagent. A run uses a lot of agent quota.
 - Codex is the default agent. Claude Code works too.
 
@@ -360,6 +364,8 @@ This is an alpha. These limits are known today:
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
 | A GitHub error when the run starts | Check `git remote -v` (a GitHub `origin`), `gh auth status`, and that the issue exists in this repository. |
 | `approve` says that more than one run matches | Give the issue number, or `owner/repo#N`. |
+| `run` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
+| `run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |

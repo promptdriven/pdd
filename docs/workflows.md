@@ -59,7 +59,7 @@ chat 3  build: build, verify
 you     review and merge the PR on GitHub
 ```
 
-1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an open run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It does not write code itself.
 4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets a short brief and file paths, not the chat history.
@@ -79,13 +79,15 @@ Only a person approves a gate. The agent never approves for you.
 
 ### The run folder
 
-Each run has a run folder. The first message of each chat names it.
+Each run has a run folder: `.git/pdd/runs/N/` in your clone, where N is the issue number. It is in the Git folder of your clone, not in the run's worktree. The first message of each chat names it.
 
 | File | What it holds |
 |---|---|
+| `status.json` | The area, the step, what the run waits for and the PR |
+| `AREA-start.md` (one for each area) | The start message of that area's chat |
 | `STEP.md` (one for each step) | The notes of that step |
 | `verify.md` | The exact test commands and their real output |
-| `status.json` | The area, the step, what the run waits for and the PR |
+| `pr-body.md` | The PR body that pdd writes |
 
 The code that the steps write is committed on the run's branch, in the run's worktree.
 
@@ -96,7 +98,7 @@ pdd does not run tests. The agents do.
 - The verify step runs in a fresh subagent that did not write the code.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
-- The PR body includes `verify.md`.
+- The PR body has `Closes #N`, the step summaries and `verify.md`. When a runtime check ran, it also has a `Runtime check:` line and a report link. Runtime report links expire after 7 days.
 
 Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
 
