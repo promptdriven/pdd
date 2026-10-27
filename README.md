@@ -40,7 +40,7 @@ The other tools work with the versions you have. Codex is the default agent. PDD
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.2.0
+pdd --version   # prints 0.1.2
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -56,7 +56,7 @@ Always install and update pdd with that full `github:` line. Do not run `npm ins
 
 ### If you have the old Python pdd
 
-The Python `pdd-cli` (from the `main` branch and PyPI) also installs a `pdd` command. If `pdd --version` does not print `0.2.0`, the old one comes first on your PATH. Remove it with the tool you used to install it:
+The Python `pdd-cli` (from the `main` branch and PyPI) also installs a `pdd` command. If `pdd --version` does not print `0.1.2`, the old one comes first on your PATH. Remove it with the tool you used to install it:
 
 ```sh
 uv tool uninstall pdd-cli    # or: pipx uninstall pdd-cli   or: pip uninstall pdd-cli
