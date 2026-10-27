@@ -5,8 +5,6 @@ description: PDD feature workflow. Use when the person asks for a new feature or
 
 # PDD feature
 
-Use this for new behavior.
-
 Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 1. story: understand, visual?, prompt-story → gate: approve
 2. prompt-pr: check, try? → approve, then gate: pr (PR 1: prompt, Story, tests), then ask
@@ -17,8 +15,8 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - The main chat coordinates and talks with the person. It does not write code.
 - Run each step in a new subagent, never reused, so verify never checks its own code. Brief it with file paths, not the chat history.
 - At a gate, show the result, ask the person, and stop. For changes, revise here and ask again.
-- At the story gate, say when a new prompt covers only this issue: a bigger "adopt PDD for this module" step can come later.
-- Before PR 1, show the `Runtime check:` line with its report link and the Try link (when there are any). Ask the person to try it and approve, or ask for changes. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`." The code area starts only when the person asks.
+- At the story gate, show the plan list (if there is one) and ask for approval. The person can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. Say when a new prompt covers only this issue: a bigger "adopt PDD for this module" step can come later.
+- Before PR 1, show one `Runtime check` line per Story with its report link, and the Try links (when there are any). Ask the person to try it and approve, or ask for changes. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`." The code area starts only when the person asks.
 - An optional step is a question in the chat, not a stop.
 - If verify or formal finds a failing case, go back to build in a new subagent, at most 2 times. If it still fails, PR 2 opens anyway with "✗ N vectors fail" on top. Say so at the gate.
 - A person decides expected values. Never change a test to make it pass.
