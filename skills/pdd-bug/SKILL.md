@@ -1,11 +1,11 @@
 ---
 name: pdd-bug
-description: PDD bug workflow. Reproduce the bug, fix the prompt and test cases, then the code.
+description: PDD bug workflow: reproduce, fix the prompt and test cases, then the code.
 ---
 
 # PDD bug
 
-Use this when the code breaks an accepted expectation.
+Use this when code breaks an accepted expectation.
 
 Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 1. solution: reproduce, prompt-story, check, try? → gate: approve
