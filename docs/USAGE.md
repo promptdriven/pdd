@@ -11,7 +11,7 @@ Contents:
 2. [Install](#2-install)
 3. [If you have the old Python pdd](#3-if-you-have-the-old-python-pdd)
 4. [The PDD skills](#4-the-pdd-skills)
-5. [Your first session](#5-your-first-session)
+5. [Set up a repo and use the skills](#5-set-up-a-repo-and-use-the-skills)
 6. [Run a workflow on a GitHub issue](#6-run-a-workflow-on-a-github-issue)
 7. [Check prompts on the PDD runtime](#7-check-prompts-on-the-pdd-runtime)
 8. [Make your own workflow](#8-make-your-own-workflow)
@@ -57,7 +57,13 @@ pdd --version   # prints 0.2.0
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step.
+npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step. The pdd command also copies the PDD skills into your agent's skills folders (see [section 4](#4-the-pdd-skills)).
+
+To install only the skills, without the pdd command, use the standard skills installer:
+
+```sh
+npx skills add "promptdriven/pdd#alpha"
+```
 
 Important:
 
@@ -97,16 +103,24 @@ The agents that PDD starts always get the full path of PDD Alpha. They are not a
 
 ## 4. The PDD skills
 
-PDD is four skills. A skill is a folder of plain Markdown that your agent reads when it needs it.
+PDD is five skills. A skill is a folder of plain Markdown that your agent reads when it needs it. You call a skill by its name, as a slash command.
 
 | Skill | What it is |
 |---|---|
-| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules and how to review a prompt |
-| `pdd-small-change` | A workflow for a small change that is easy to undo |
-| `pdd-bug` | A workflow for something that is broken |
-| `pdd-feature` | A workflow for new behavior |
+| [`/pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for runtime checks |
+| `/pdd-feature` | A workflow for new behavior |
+| `/pdd-bug` | A workflow for something that is broken |
+| `/pdd-small-change` | A workflow for a small change that is easy to undo |
+| `/pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
 
-Each pdd command checks the skills first and copies them into the skills folders of your agents:
+There are two ways to install the skills:
+
+| Way | Command | Where the skills go |
+|---|---|---|
+| The standard skills installer | `npx skills add "promptdriven/pdd#alpha"` | Your project's `.agents/skills/` (Codex) and `.claude/skills/` (Claude Code). Add `-g` for `~/.agents/skills/` and `~/.claude/skills/`. Add `--skill NAME` to pick skills |
+| The pdd command | Any pdd command, for example `pdd --version` | Your user folders, see below |
+
+The pdd command checks the skills first and copies them into the skills folders of your agents:
 
 - `~/.agents/skills/` for Codex
 - `~/.claude/skills/` for Claude Code
@@ -124,48 +138,39 @@ pdd never copies them into your repo. Each copied folder has a marker file, `.pd
 
 So do not edit the installed folders: pdd replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
-The skills work in any Codex or Claude Code chat, also one that you open yourself. Ask the agent, for example: "Use the pdd-bug skill for this."
+The skills work in any Codex or Claude Code chat.
 
-## 5. Your first session
+## 5. Set up a repo and use the skills
 
-A session starts your normal agent with a short PDD intro. It needs no issue, no Herdr and no setup.
+Set up each repo once. Run this in the top folder of the repo:
 
 ```sh
 cd your-project
-pdd session
+pdd setup
 ```
 
-What happens:
+Or, in Codex or Claude Code, call `/pdd-setup`. Both do the same:
 
-1. PDD starts Codex in your project folder, in full-access mode.
-2. The first message is short (about 1.6 KB). It says that prompts are the source. It names the `pdd-prompting` skill and lists its core rules. It names the three workflow skills and the `pdd workflow run` command. If the pdd package has a `RUNBOOK.md` file at its root, the intro adds one line: read that `RUNBOOK.md` before a check.
-3. The agent asks what you want to work on.
+1. They pick `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, they make `AGENTS.md`.
+2. They add one short block (7 lines) between `<!-- pdd:start -->` and `<!-- pdd:end -->`. The block says that this project uses PDD and that prompts are the source. It names the skills and `pdd workflow run`. It tells the agent to read `RUNBOOK.md` before a runtime check.
+3. They keep all other text. A second run changes nothing. They never paste the guide.
 
-The agent reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.
+Then open Codex or Claude Code as usual, in your project, and call a skill:
 
-Give the first request on the command line, or use Claude Code:
-
-```sh
-pdd session "Help me write a prompt, a Story and test cases for a CSV export button."
-pdd session --agent claude
-pdd session --agent claude "Review my prompts against the Prompting guide."
+```
+/pdd-feature Add a CSV export button to the orders page.
+/pdd-bug The export button does nothing on Safari.
+/pdd-small-change Fix the typo in the footer.
+/pdd-prompting Review my prompts against the Prompting guide.
 ```
 
-When a request fits a workflow, the agent suggests it. It can do the workflow in this chat. Or, when you ask, it can start a run on a GitHub issue for you.
+The agent can also pick a skill by itself when your request fits it. It reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.
 
-To start a chat on one workflow (no issue, no worktree, no PR):
-
-```sh
-pdd workflow small-change "Fix the typo in the footer."
-pdd workflow bug --agent claude "The export button does nothing on Safari."
-pdd workflow feature "Add a dark mode switch."
-```
-
-Leave the session the normal way for your agent (for example `/exit`). PDD does not change your agent's settings, sign-in or config.
+In a chat, the work stays in your folder: no worktree and no automatic PR. To turn a GitHub issue into PRs, start a run (next section). The agent can start it for you when you ask.
 
 ## 6. Run a workflow on a GitHub issue
 
-`pdd workflow run` takes one GitHub issue to one real PR. The work happens in a few chats in Herdr. You approve at each gate. pdd opens the PR. It never merges.
+`pdd workflow run` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. You approve at each gate. pdd opens the PRs. It never merges.
 
 ### 6.1 Prepare the repository
 
@@ -197,8 +202,8 @@ The command returns at once. It prints where the run is and the commands to open
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
 6. When you approve, pdd starts a new chat for the next area. That chat gets the results of the area that you approved.
-7. After the last step of the build area, pdd pushes the branch and opens the PR.
-8. You review and merge the PR on GitHub. When `pdd workflow status` sees the merge, the run is completed.
+7. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR.
+8. You review and merge the PRs on GitHub. When `pdd workflow status` sees the merge, the run is completed.
 
 With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `run` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
 
@@ -206,11 +211,11 @@ The areas of the three workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `small-change` | plan (scope), **approve**, build (change, verify), PR, **merge** |
-| `bug` | solution (reproduce, prompt-story, check, try?), **approve**, build (build, verify), PR, **merge** |
-| `feature` | solution (understand, visual?), **approve**, story (prompt-story, check, try?), **approve**, build (build, verify), PR, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify) opens PR 2, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify) opens PR 2, **merge** |
+| `small-change` | plan (scope), **approve**, build (change, verify) opens one PR, **merge** |
 
-`?` marks an optional step. Each area is one chat. [workflows.md](workflows.md) tells what each step does.
+`?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
 
 ### 6.4 See the chat
 
@@ -242,13 +247,28 @@ Rules:
 
 `visual` and `try` are optional. The chat asks you about them. They are questions, not stops. Answer in the chat.
 
-### 6.7 The PR and the merge
+### 6.7 The PRs and the merge
 
-A run always makes one PR. The prompts, the Story, the tests and the code are all in it.
+`small-change` makes one PR with the change and its tests. Its body says `Closes #42`.
+
+`feature` and `bug` make up to two PRs:
+
+| PR | What it holds | When |
+|---|---|---|
+| PR 1 | The prompt, the Story and the test cases | After the prompt PR area. Its body says `Part of #42` |
+| PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1 |
+
+At the PR 1 gate, the chat shows the PR 1 link, the `Runtime check:` line and the Try link, when there are any. Then it asks: "Do you want the code PR now, or stop here and merge PR 1 first?"
+
+- **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
+- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
+- If the prompts in PR 1 are still `draft`, approve them before the code PR. The agent sets them to `approved` only after your OK.
+
+For all workflows:
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has `Closes #42`, the step summaries and `verify.md`. When a runtime check ran, it also has a `Runtime check:` line and a report link. Runtime report links expire after 7 days.
+- The PR body has the step summaries and `verify.md`. When a runtime check ran, it also has a `Runtime check:` line and a report link. Runtime report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 - pdd never merges. You review and merge on GitHub.
 
@@ -288,6 +308,8 @@ pdd try --stop place-order
 ```
 
 After the table, `pdd check` prints one `Runtime check:` line that you can paste into a PR, for example `Runtime check: ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`.
+
+A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. Until the next server update, a draft check may be refused with a plain message, for example `pdd: PATH is "draft". The person must approve it first.` The agent sets a prompt to `approved` only after your OK.
 
 | Exit | Result | What to do |
 |---|---|---|
