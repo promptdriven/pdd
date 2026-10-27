@@ -61,7 +61,8 @@ chat 3  code       only if you ask                                → pdd opens 
 
 | Command | What it does |
 |---|---|
-| `pdd workflow status [42]` | where the run is, and what it waits for |
+| `pdd workflow status --all` | every run on this machine, the ones waiting for you first |
+| `pdd workflow status 42` | where one run is, and what it waits for |
 | `pdd workflow open 42` | open the run's chat |
 | `pdd workflow approve 42` | approve the gate, or make the code PR |
 | `pdd workflow changes 42 "…"` | ask for changes |
