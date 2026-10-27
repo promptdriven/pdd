@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 19fb33093150212af182c10e08a39d992ea4a73d851ada3b00a2e166ca96ab86).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 8f2ef8b76e8b7edff106f3b053632034acde0dca03e502b6117da4cd0e795d1c).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -10,7 +10,12 @@ const STAGE = /^[a-z][a-z0-9-]{0,63}$/;
 const READY = new Set(['idle', 'done']);
 const clone = value => structuredClone(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
-const sessionFor = runId => `pdd-${hash(runId.toLowerCase()).slice(0, 20)}`;
+// Keep Herdr session and workspace naming in one helper so fleet layout
+// changes can replace it without changing stage lifecycle behavior.
+function herdrLayout(runId, stageId) {
+  return { session: `pdd-${hash(runId.toLowerCase()).slice(0, 20)}`, workspaceLabel: `PDD ${stageId}` };
+}
+const sessionFor = runId => herdrLayout(runId, 'stage').session;
 const canonical = value => JSON.stringify(value, function(key, item) {
   return item && !Array.isArray(item) && typeof item === 'object'
     ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item;
@@ -29,6 +34,8 @@ function runtime(ports = {}) {
     pollMs: ports.pollMs ?? 100,
     startupMs: ports.startupMs ?? 30000,
     activityMs: ports.activityMs ?? 5000,
+    quietMs: ports.quietMs ?? 10000,
+    onPersonSteppedIn: ports.onPersonSteppedIn,
     timeoutMs: ports.timeoutMs ?? 1800000,
     spawnServer: ports.spawnServer ?? ((session, cwd) => new Promise((resolve, reject) => {
       const child = start('herdr', ['--session', session, 'server'],
@@ -70,6 +77,23 @@ async function command(rt, session, args, cwd, timeout = 10000) {
     throw commandError(result, args, 'invalid_herdr_reply');
   }
   return result;
+}
+async function firstPrompt(rt, b, prompt) {
+  const { session, agentName, cwd } = b;
+  const deadline = rt.now() + rt.startupMs;
+  for (;;) {
+    try { return await command(rt, session, ['agent', 'prompt', agentName, prompt], cwd); }
+    catch (error) {
+      // Herdr may acknowledge an agent before Codex has drawn its prompt.
+      // This explicit pre-delivery refusal is safe to retry against the same
+      // durable intent; other prompt failures remain one-send uncertainty.
+      if (error.code !== 'agent_not_ready' || rt.now() >= deadline) throw error;
+      await rt.sleep(rt.pollMs);
+      sameServer(compatible(await status(rt, session, cwd), session), b.server);
+      const current = await checkAgent(rt, b);
+      if (!isReady(current) || current.state_change_seq !== b.evidence.readySeq) throw issue('fresh_agent_changed_before_prompt');
+    }
+  }
 }
 function preNative(b) {
   const allowed = new Set(['version','runId','stageId','attemptId','agent','cwd','session','agentName',
@@ -145,6 +169,13 @@ async function observe(rt, b, checkpoint) {
   return await rt.guard(b, async () => {
   const a = await checkAgent(rt, b);
   recordAgent(b, a);
+  if (b.phase === 'candidate' && a.agent_status === 'working' && a.state_change_seq > b.evidence.settledSeq) {
+    b.phase = 'submitted'; b.evidence.personSteppedInSeq = a.state_change_seq;
+    delete b.evidence.settledSeq; delete b.evidence.candidateSince;
+    if (checkpoint) await save(b, checkpoint);
+    await rt.onPersonSteppedIn?.(clone(b));
+    return { state: 'active', backend: clone(b), evidence: clone(b.evidence), reason: 'person_stepped_in' };
+  }
   if (b.phase === 'candidate' && a.state_change_seq !== b.evidence.settledSeq) return fail(b, 'candidate_sequence_changed');
   if (a.agent_status === 'blocked') {
     if (checkpoint) await save(b, checkpoint);
@@ -152,15 +183,26 @@ async function observe(rt, b, checkpoint) {
   }
   if (a.agent_status === 'working') {
     if (b.phase !== 'prompt_intent' && b.phase !== 'submitted') return fail(b, 'unexpected_native_activity');
-    b.evidence.workingSeq ??= a.state_change_seq;
+    const steppedIn = b.evidence.workingSeq && a.state_change_seq > b.evidence.workingSeq;
+    b.evidence.workingSeq = a.state_change_seq;
     if (b.evidence.workingSeq <= b.evidence.readySeq) return fail(b, 'missing_new_prompt_activity');
     if (checkpoint) await save(b, checkpoint);
+    if (steppedIn && !b.evidence.personSteppedInSeq) {
+      b.evidence.personSteppedInSeq = a.state_change_seq;
+      await rt.onPersonSteppedIn?.(clone(b));
+    }
     return { state: 'active', backend: clone(b), evidence: clone(b.evidence) };
   }
   if (isReady(a) && b.evidence.workingSeq && a.state_change_seq > b.evidence.workingSeq) {
-    b.evidence.settledSeq = a.state_change_seq;
-    b.phase = 'candidate';
-    if (checkpoint) await save(b, checkpoint);
+    if (!b.evidence.settledSeq) {
+      b.evidence.settledSeq = a.state_change_seq;
+      b.evidence.candidateSince = rt.now();
+      b.phase = 'candidate';
+      if (checkpoint) await save(b, checkpoint);
+    }
+    if (rt.now() - b.evidence.candidateSince < rt.quietMs) {
+      return { state: 'active', backend: clone(b), evidence: clone(b.evidence), reason: 'stage_quiet_window' };
+    }
     return { state: 'settled', backend: clone(b), evidence: clone(b.evidence) };
   }
   return fail(b, isReady(a) ? 'no_observed_prompt_activity' : 'native_state_unknown');
@@ -201,7 +243,7 @@ export async function runHerdrStage(input, ports = {}) {
       }
     }
     if (!continuingStartup) b = { version: 1, runId: input.runId, stageId: input.stageId, attemptId: input.attemptId,
-      agent: input.agent, cwd, session: recoveringBootstrap ? b.session : priorServer?.session ?? sessionFor(input.runId),
+      agent: input.agent, cwd, session: recoveringBootstrap ? b.session : priorServer?.session ?? herdrLayout(input.runId, input.stageId).session,
       agentName: `pdd-${hash(input.attemptId).slice(0, 24)}`, promptDigest,
       nativeSession: null, phase: 'server_intent', evidence: {}, ...(priorServer ? {server: priorServer} : {}) };
     await save(b, input.checkpoint);
@@ -241,7 +283,7 @@ export async function runHerdrStage(input, ports = {}) {
     b.phase = 'workspace_intent';
     await save(b, input.checkpoint);
     const created = await command(rt, b.session, ['workspace', 'create', '--cwd', cwd,
-      '--label', `PDD ${input.stageId}`, '--no-focus'], cwd);
+      '--label', herdrLayout(input.runId, input.stageId).workspaceLabel, '--no-focus'], cwd);
     const { workspace, tab, root_pane: pane } = created.result ?? {};
     b.workspaceId = workspace?.workspace_id;
     b.tabId = tab?.tab_id;
@@ -284,7 +326,7 @@ export async function runHerdrStage(input, ports = {}) {
       recordAgent(b, current);
       b.phase = 'prompt_intent';
       await save(b, input.checkpoint);
-      const delivered = await command(rt, b.session, ['agent', 'prompt', b.agentName, prompt], cwd);
+      const delivered = await firstPrompt(rt, b, prompt);
       const acknowledgement = await checkAgent(rt, b, agentFrom(delivered));
       recordAgent(b, acknowledgement);
       if (acknowledgement.agent_status === 'working' && acknowledgement.state_change_seq > b.evidence.readySeq) {
@@ -296,7 +338,9 @@ export async function runHerdrStage(input, ports = {}) {
     });
     if (startupResult) return startupResult;
     const startedAt = rt.now(), deadline = startedAt + rt.timeoutMs;
-    let activityDeadline = startedAt + rt.activityMs;
+    // Real Codex can spend the startup window loading the guide before it
+    // reports working; do not call that normal startup a stalled prompt.
+    let activityDeadline = startedAt + Math.max(rt.activityMs, rt.startupMs, 120000);
     while (rt.now() < deadline) {
       const seen = await observe(rt, b, input.checkpoint);
       b = seen.backend;
@@ -336,11 +380,9 @@ export async function attachHerdrStage({ backend }, ports = {}) {
   try {
     assertBackend(b);
     if (b.phase === 'closed') return 2;
-    return await rt.guard(b, async () => {
-      sameServer(compatible(await status(rt, b.session, b.cwd), b.session), b.server);
-      await checkAgent(rt, b);
-      return rt.spawnAttach(b.session, b.agentName, b.cwd);
-    });
+    sameServer(compatible(await status(rt, b.session, b.cwd), b.session), b.server);
+    await checkAgent(rt, b);
+    return await rt.spawnAttach(b.session, b.agentName, b.cwd);
   } catch { return 1; }
 }
 

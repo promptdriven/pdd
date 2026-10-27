@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 458738e626c1ef103f1835cfe8224f32ef94666b7e8b934738c84c758f63e165).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { formatLocalWorkflows } from './workflow-list.mjs';
+import { createWorkflowProgress } from './workflow-progress.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -26,7 +27,8 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages,
+  signalSource = process, exit = code => process.exit(code) } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -46,12 +48,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'workflow-run':
     case 'workflow-resume':
     case 'workflow-attach': {
+      const progress = plan.local === 'workflow-attach' ? null : createWorkflowProgress({ stdout });
+      const interrupted = () => { progress.interrupt(); exit(130); };
+      if (progress) {
+        if (plan.local === 'workflow-resume') progress.observe({ event: 'resume.requested', runId: plan.operands[0] });
+        line(stdout, plan.local === 'workflow-run'
+          ? `Starting ${plan.operands[0]} for issue ${/^\d+$/.test(plan.operands[1]) ? '#' : ''}${plan.operands[1]}. This terminal stays busy until the run stops at a gate.`
+          : `Inspecting run ${plan.operands[0]}. With a decision, this terminal stays busy until the next gate.`);
+        signalSource.once('SIGINT', interrupted);
+      }
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         const stages = workflowStages ?? await import('./workflow-stage-herdr.mjs');
         const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage} = stages;
         if (![runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage].every(fn=>typeof fn==='function')) throw Error('Missing stage transport');
-        const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,stdout,stderr};
+        const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,stdout,stderr, ...(progress ? { onProgress: progress.observe } : {})};
         const result = plan.local === 'workflow-run'
           ? await runner.runWorkflow({name:plan.operands[0],issue:plan.operands[1],
             agent:plan.options['--agent']??'codex',cwd,packageRoot},ports)
@@ -67,7 +78,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch {
         line(stderr,'The local workflow runner could not confirm this operation. Inspect its saved state before repeating a mutation; no automatic retry was sent.');
         return 1;
-      }
+      } finally { if (progress) signalSource.off('SIGINT', interrupted); }
     }
     case 'session': {
       let context;

@@ -1,9 +1,10 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 5b7a57fa779d31954698591f5b9a92320012d925123d21a069b3c8c8f45ec9d8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 08c4985eac708efcd7569dd061e10951fa020027cbf8b58f03544c59f58ca005).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
 }
+const HELP_WORDS = ['--help', '-h', '-help'];
 const fail = () => { throw new CommandInputError('Unsupported command or options in PDD Alpha. Run pdd --help for local authoring tools.'); };
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
@@ -48,15 +49,19 @@ function parseRoute(route, words) {
 }
 export function parseArgv(argv) {
   if (!Array.isArray(argv) || argv.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
-  if (!argv.length || argv.length === 1 && ['--help', '-h'].includes(argv[0])) return help([]);
+  if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return helpFor(argv.slice(1));
-  if (['--help', '-h'].includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
+  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
     parseRoute(route, words.slice(route.prefix.length));
     return help(route.prefix);
   }
   const route = findRoute(argv);
+  if (!route && !argv[0].startsWith('-') && !routes.some(candidate => candidate.prefix[0] === argv[0])) {
+    const word = argv[0].replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 64);
+    throw new CommandInputError(`Unknown command "${word}". Run pdd --help to see the commands.`);
+  }
   if (!route) fail();
   return parseRoute(route, argv.slice(route.prefix.length));
 }

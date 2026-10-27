@@ -23,7 +23,7 @@ function harness(cwd, options = {}) {
   const encode = x => ({ stdout: JSON.stringify(x), stderr: '' });
   const ports = {
     withStageGuard: async (backend, action) => { calls.push(['GUARD',backend.runId,backend.cwd]);return action(); },
-    now: () => clock, sleep: async ms => { clock += ms; }, pollMs: 1, startupMs: 4000, activityMs: 3, timeoutMs: 10,
+    quietMs: 0, now: () => clock, sleep: async ms => { clock += ms; }, pollMs: 1, startupMs: 4000, activityMs: 3, timeoutMs: 10,
     spawnServer: async (actual, actualCwd) => { calls.push(['SERVER',actual,actualCwd]);running = true; },
     spawnAttach: async (...args) => { calls.push(['ATTACH',...args]);return 17; },
     execFile: async (bin, argv, cfg) => {
@@ -50,7 +50,9 @@ function harness(cwd, options = {}) {
       if (a[0] === 'agent' && a[1] === 'prompt') {
         assert.equal(checkpoints.at(-1).phase,'prompt_intent');assert.ok(checkpoints.at(-1).promptDigest);
         assert.ok(a[3].startsWith('# Entire guide\n'));assert.ok(a[3].includes('Actual selected recipe'));assert.ok(a[3].includes('literal $(not shell)'));
-        assert.equal(a.length,4);assert.equal(prompted,false);prompted=true;
+        assert.equal(a.length,4);assert.equal(prompted,false);
+        if (options.promptNotReady && !options.promptRetried) { options.promptRetried=true; throw Object.assign(Error('agent still starting'),{code:'agent_not_ready'}); }
+        prompted=true;
         if (options.lostReply) throw Object.assign(Error('reply lost'),{code:'ETIMEDOUT'});
         return encode({result:{agent:agent()}});
       }
@@ -61,6 +63,7 @@ function harness(cwd, options = {}) {
         else if (options.stalled) value=agent('idle',10);
         else if (options.blocked) value=agent('blocked',11);
         else if (options.unknown) value=agent('unknown',11);
+        else if(options.personStepsIn) value=[agent('working',11),agent('done',12),agent('working',13),agent('done',14)][Math.min(poll++,3)];
         else value=poll++===0 ? agent('working',11) : agent('done',12);
         if (options.replace && prompted) value.terminal_id='different';
         if (options.lostNative && prompted) value.agent_session=null;
@@ -71,6 +74,7 @@ function harness(cwd, options = {}) {
       if (a[0] === 'workspace' && a[1] === 'close') {
         assert.equal(checkpoints.at(-1).phase,'close_intent');assert.equal(a[2],ws);closed=true;return encode(Object.hasOwn(options,'closeReply') ? options.closeReply : {id:'cli:workspace:close',result:{type:'ok'}});
       }
+      if (a[0] === 'pane' && a[1] === 'send-text') return {stdout:'',stderr:''};
       assert.fail('Unexpected effect '+JSON.stringify(a));
     }
   };
@@ -84,12 +88,17 @@ const acceptance = b => ({runId:b.runId,stageId:b.stageId,attemptId:b.attemptId,
 
 test('fresh owned stage checkpoints actual IDs before one full prompt, observes work then ready; accepted cleanup only',async t=>{
   const h=harness(await temp(t));const result=await runHerdrStage(h.input,h.ports);
-  assert.equal(result.state,'settled');assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12});
+  assert.equal(result.state,'settled');assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12,candidateSince:1});
   assert.equal(result.backend.nativeSession.value,'native-real');assert.equal(h.promptCount(),1);assert.equal(h.closed(),false);
   const denied=await closeHerdrStage({backend:result.backend,acceptance:{},}, {...h.ports,checkpoint:h.input.checkpoint});
   assert.equal(denied.state,'recovery_required');assert.equal(h.closed(),false);
   const released=await closeHerdrStage({backend:result.backend,acceptance:acceptance(result.backend),}, {...h.ports,checkpoint:h.input.checkpoint});
   assert.equal(released.state,'closed');assert.equal(h.closed(),true);assert.equal(released.backend.nativeSession.value,'native-real');
+});
+
+test('pre-delivery agent_not_ready retries the same prompt intent once native startup is ready',async t=>{
+  const h=harness(await temp(t),{promptNotReady:true});const result=await runHerdrStage(h.input,h.ports);
+  assert.equal(result.state,'settled',result.reason);assert.equal(h.promptCount(),2);
 });
 
 test('reply loss retains original prompt intent; same attempt/repeated inspection never resends',async t=>{
@@ -136,11 +145,11 @@ test('cleanup refuses replacement, activity, or later sequence; no close of unce
 });
 
 
-test('missing guard refuses before provision; attach holds actual injected exclusion until detach',async t=>{
+test('missing guard refuses before provision; attach does not hold the stage guard while watching',async t=>{
   const h=harness(await temp(t));const missing={...h.ports};delete missing.withStageGuard;
   assert.equal((await runHerdrStage(h.input,missing)).state,'recovery_required');assert.equal(h.calls.length,0);
   const r=await runHerdrStage(h.input,h.ports);
-  assert.equal(await attachHerdrStage({backend:r.backend},missing),1);
+  assert.equal(await attachHerdrStage({backend:r.backend},missing),17);
   assert.equal((await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)},missing)).state,'recovery_required');
   const scope=new AsyncLocalStorage();let busy=false,detach,attachStarted;
   const attached=new Promise(resolve=>{attachStarted=resolve;});
@@ -152,14 +161,30 @@ test('missing guard refuses before provision; attach holds actual injected exclu
   const operation=attachHerdrStage({backend:r.backend},guarded);await attached;
   const count=h.calls.length;
   const inspected=await inspectHerdrStage({backend:r.backend,cwd:h.input.cwd},guarded);
-  assert.equal(inspected.state,'recovery_required');assert.equal(inspected.reason,'native_stage_active');
-  assert.equal(h.calls.slice(count).some(c=>c[0]==='herdr'&&c[1][3]==='get'),false);
-  const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint});
-  assert.equal(closed.state,'recovery_required');assert.equal(h.closed(),false);
+  assert.notEqual(inspected.reason,'stage_temporarily_guarded');
+  assert.ok(h.calls.slice(count).some(c=>c[0]==='herdr'&&c[1][3]==='get'));
   detach(0);assert.equal(await operation,0);assert.equal(busy,false);
-  // Main may already hold the same guard over validation; nested close/inspect must reuse it.
-  const accepted=await guarded.withStageGuard(r.backend,()=>closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint}));
+  const accepted=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...guarded,checkpoint:h.input.checkpoint});
   assert.equal(accepted.state,'closed');
+});
+
+test('quiet window delays acceptance until the configured idle period',async t=>{
+  const h=harness(await temp(t)); h.ports.quietMs=10; h.ports.timeoutMs=20;
+  const r=await runHerdrStage(h.input,h.ports);
+  assert.equal(r.state,'settled'); assert.equal(h.ports.now()-r.evidence.candidateSince,10);
+  const defaultWindow=harness(await temp(t)); delete defaultWindow.ports.quietMs;
+  defaultWindow.ports.pollMs=1000; defaultWindow.ports.timeoutMs=20000;
+  const defaultResult=await runHerdrStage(defaultWindow.input,defaultWindow.ports);
+  assert.equal(defaultResult.state,'settled');
+  assert.equal(defaultWindow.ports.now()-defaultResult.evidence.candidateSince,10000);
+});
+
+test('a prompt sent after the stage candidate reopens observation and is accepted after idle',async t=>{
+  const h=harness(await temp(t),{personStepsIn:true}); h.ports.quietMs=5; h.ports.timeoutMs=30; const stepped=[]; h.ports.onPersonSteppedIn=b=>{stepped.push(b.evidence.personSteppedInSeq);};
+  const r=await runHerdrStage(h.input,h.ports);
+  assert.equal(r.state,'settled'); assert.deepEqual(stepped,[13]); assert.equal(r.evidence.settledSeq,14); assert.equal(h.ports.now()-r.evidence.candidateSince,5);
+  const closed=await closeHerdrStage({backend:r.backend,acceptance:acceptance(r.backend)}, {...h.ports,checkpoint:h.input.checkpoint});
+  assert.equal(closed.state,'closed'); assert.equal(h.calls.some(x=>x[0]==='herdr'&&x[1][2]==='pane'&&x[1][3]==='send-text'),false);
 });
 
 test('two concurrent issue assignments keep actual cwd/backend and native kind separate',async t=>{
@@ -347,7 +372,7 @@ test('ordinary viewer guard contention waits beyond activity watchdog then obser
  const result=await runHerdrStage(h.input,h.ports);
  assert.equal(result.state,'settled');assert.equal(blockedReads,6);assert.equal(h.promptCount(),1);
  assert.equal(h.calls.filter(c=>c[0]==='herdr'&&c[1][3]==='start').length,1);assert.equal(h.closed(),false);
- assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12});
+ assert.deepEqual(result.evidence,{readySeq:10,workingSeq:11,settledSeq:12,candidateSince:7});
 });
 
 test('persistent viewer contention remains bounded with original intent and no repeated prompt or cleanup',async t=>{
@@ -360,4 +385,32 @@ test('persistent viewer contention remains bounded with original intent and no r
  assert.equal(result.state,'recovery_required');assert.equal(result.reason,'stage_wait_timeout');
  assert.equal(h.promptCount(),1);assert.equal(h.closed(),false);assert.equal(result.backend.phase,'submitted');
  assert.deepEqual(result.evidence,{readySeq:10});
+});
+
+ test('retry after pre-delivery refusal rechecks native identity before sending',async t=>{
+ for(const change of ['terminal_id','agent_session','state_change_seq','interactive_ready']){
+  const h=harness(await temp(t),{promptNotReady:true});
+  h.options.after=a=>h.options.promptRetried ? {...a,[change]:change==='terminal_id'?'replacement':change==='agent_session'?{...a.agent_session,value:'replacement'}:change==='state_change_seq'?11:false}:a;
+  const result=await runHerdrStage(h.input,h.ports);
+  assert.equal(result.state,'recovery_required');assert.equal(h.promptCount(),1,'no delivery after native identity or readiness changes');
+ }
+});
+
+for (const failNotice of [false, true]) test(`accepted cleanup never sends terminal input, including notice EIO=${failNotice}`, async t => {
+  const h = harness(await temp(t));
+  const settled = await runHerdrStage(h.input, h.ports);
+  const exec = h.ports.execFile;
+  const terminalInput = [];
+  h.ports.execFile = async (bin, argv, cfg) => {
+    if (argv[2] === 'pane' && argv[3] === 'send-text') {
+      terminalInput.push(argv);
+      if (failNotice) throw Object.assign(Error('notice unavailable'), {code:'EIO'});
+    }
+    return exec(bin, argv, cfg);
+  };
+  const closed = await closeHerdrStage({backend:settled.backend, acceptance:acceptance(settled.backend)}, {...h.ports, checkpoint:h.input.checkpoint});
+  assert.equal(closed.state, 'closed');
+  assert.equal(h.closed(), true);
+  assert.deepEqual(terminalInput, [], 'acceptance must not alter or submit an unsent viewer draft');
+  assert.equal((await inspectHerdrStage({backend:closed.backend}, h.ports)).reason, 'stage_archived');
 });
