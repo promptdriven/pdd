@@ -140,7 +140,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   run = f.record(); assert.equal(run.changes.length, 1); assert.equal(run.changes[0].text, 'Also explain why.'); assert.equal(run.gate.at, f.clock);
 
   f.tick();
-  const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  const approved = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { HOME: f.ports.env.HOME } });
   assert.equal(approved.exitCode, 0, approved.message);
   assert.equal(f.prompts.length, 1); assert.match(f.prompts[0], /plan/); assert.match(f.prompts[0], /example\/project#17 "Use value two"/); assert.match(f.prompts[0], /\(y\/N\)/);
   run = f.record();
@@ -148,6 +148,8 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.equal(run.decisions.at(-1).decision, 'approve'); assert.equal(run.decisions.at(-1).via, 'terminal');
   const second = run.chats[1];
   assert.notEqual(second.tabId, first.tabId); assert.notEqual(second.session.id, first.session.id);
+  assert.equal(second.configDir, first.configDir, 'the next chat keeps the account of the run, not of the approving terminal');
+  assert.ok(f.herdr.paneOf(second).commands[0].includes(`CLAUDE_CONFIG_DIR='${first.configDir}'`));
   assert.equal(pane.agent.prompts.length, 1, 'approval never writes into the old chat');
   const buildMessage = readFileSync(join(run.runDir, 'build-start.md'), 'utf8');
   for (const part of ['Use the pdd-small-change skill', 'build', 'change', 'verify', 'Change value.mjs to 2.', 'verify.md']) assert.ok(buildMessage.includes(part), part);

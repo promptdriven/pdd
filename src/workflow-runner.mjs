@@ -107,6 +107,7 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, repo: binding.repository,
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch: binding.defaultBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
+    configDir: (agent === 'claude' ? p.env.CLAUDE_CONFIG_DIR : p.env.CODEX_HOME) || null,
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0 };
   mkdirSync(runDir, { recursive: true });
