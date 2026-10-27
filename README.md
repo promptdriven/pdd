@@ -99,7 +99,7 @@ Each chat gives each step to a fresh subagent. `?` marks an optional step: the c
 | `bug` | Something is broken | solution, **approve**, build, PR, **merge** |
 | `feature` | New behavior | solution, **approve**, story, **approve**, build, PR, **merge** |
 
-A run always makes one PR. The agents run the tests. A fresh subagent that did not write the code does the verify step. The PR body shows the real test commands and their output. pdd never merges.
+A run always makes one PR. The agents run the tests. A fresh subagent that did not write the code does the verify step. The PR body has `Closes #N`, the step summaries and the real test commands with their output. pdd never merges.
 
 ## Commands
 
@@ -111,9 +111,9 @@ A run always makes one PR. The agents run the tests. A fresh subagent that did n
 | `pdd workflow list` | List the workflow skills that pdd finds |
 | `pdd workflow status [N]` | Show the area, the step, what it waits for and the PR. Without N: all runs in this repo |
 | `pdd workflow open N` | Show the chat of the run. It resumes an ended chat |
-| `pdd workflow approve [N]` | Approve the gate. The next area starts in a new chat. Without N: the one run that waits |
+| `pdd workflow approve [N]` | Approve the gate. The next area starts in a new chat. Without N: this worktree's run, or the one run that waits |
 | `pdd workflow changes N "text"` | Ask for changes. The same chat revises |
-| `pdd workflow cancel N` | Stop the run. pdd keeps the worktree and the branch |
+| `pdd workflow cancel N` | Stop the run and close its tabs. pdd keeps the worktree and the branch |
 
 N is the issue number in the current repo. If several repos match, use `owner/repo#N`. Only the agent uses `pdd workflow done STEP`.
 
@@ -145,6 +145,8 @@ The uninstall keeps the skills. To remove them, see [Update and uninstall](docs/
 - pdd does not remove old worktrees or branches. See [Clean up](docs/USAGE.md#clean-up-after-a-run).
 - A busy or rate-limited model can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
 - If your agent is not signed in, the chat stops at a sign-in screen. Check this before you start.
+- Claude Code can ask once to trust a new worktree. `run` prints a hint. Answer it in the chat.
+- An issue can have only one active run. After `pdd workflow cancel N`, you can run it again.
 - Each step is a fresh subagent. A run uses a lot of agent quota. Many runs at once also use a lot of memory.
 
 ## Report a problem
