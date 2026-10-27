@@ -1,8 +1,8 @@
 # CLI reference
 
-`pdd --help` shows all commands. `help` and `-h` also work.
+This page lists every command of pdd 0.1.6, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
-You need the pdd command only for runs with PRs and for `pdd check` and `pdd try`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). There is no `pdd session` command. See [Install](USAGE.md#2-install).
+You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
 ## Set up a repo
 
@@ -18,50 +18,59 @@ You need the pdd command only for runs with PRs and for `pdd check` and `pdd try
 |---|---|
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
-| `pdd workflow status [N] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. Without N, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data |
-| `pdd workflow open N` | Show the current chat of the run. If the chat ended, resume it in its tab |
-| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat. At the PR 1 gate of `feature` and `bug`, this makes the code PR. Without N, approve the run of the current worktree, or else the one run in this repo that waits for a person |
-| `pdd workflow changes N "text"` | Send the text to the same chat. The chat revises. The gate stays open |
-| `pdd workflow cancel N` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
+| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data |
+| `pdd workflow open ISSUE` | Show the current chat of the run. If the chat ended, resume it in its tab |
+| `pdd workflow approve [ISSUE]` | Approve the open gate. The next area starts in a new chat. Before PR 1, this approves what you tried, and pdd opens PR 1. At the code question of `feature` and `bug`, this makes the code PR, also later. Without ISSUE, approve the run of the current worktree, or else the one run in this repo that waits for a person |
+| `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked |
+| `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
 
 - NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
-- ISSUE is the issue number in the repo of your clone. An issue can have only one active run. `run` refuses a second one. After `cancel`, a new `run` on the issue starts fresh.
+- ISSUE is the issue number in the current repo, worktrees included. If several repos match, use `owner/repo#N`. An issue can have only one active run. `run` refuses a second one.
 - The run folder is `.git/pdd/runs/N/` in your clone. See [workflows.md](workflows.md#the-run-folder).
+- In Herdr, the session is `pdd`. Each repo has a workspace with its name. Each run has a tab such as `my-app#42 feature`.
 - With Claude Code, the first chat can ask once to trust the new worktree. `run` prints a hint when your clone's folder is not trusted yet.
-- N is the issue number of a run in the current repo, worktrees included. If several repos match, use `owner/repo#N`.
 - In a terminal, `approve` asks y/N and shows the repo, the issue and its title. From an agent chat, `approve` works only when the person's own message after the gate is in that chat.
 - Codex is the default agent. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`. PDD does not choose a model and does not change your agent's settings, sign-in or config.
 - The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
 - No command has a time limit. You can close the terminal at any time.
 - pdd never merges.
 
-## Runtime checks
+## Runtime checks and prompt approval
 
 | Command | What it does |
 |---|---|
-| `pdd check [STORY...]` | Check stories on the PDD runtime with your gh login. Print one table, a `Runtime check:` line and a report link for each story |
-| `pdd check --read [BATCH]` | Show saved check results again. Sends no check |
-| `pdd check --fill-hash` | Fill the hash of draft interfaces. No network |
+| `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files, then print one table with a report link for each test, one `Runtime check` line for each Story and the overall line |
+| `pdd check --read [BATCH] [--json]` | Show saved check results again. Sends no check |
+| `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files` | List the files a check would send. No network |
-| `pdd try [STORY]` | Make a Try link and open it in your browser. It ends in 24 hours |
-| `pdd try --stop [STORY]` | Stop the open Try link of a story |
+| `pdd check --lint [STORY...]` | The server checks the format of the prompts, Stories and tests only, with 0 AI calls, and shows every problem at once. Use it before a real check |
+| `pdd approve PROMPT` | Show the prompt's runtime interface in plain words and ask y/n. On `y`, set it to `approved` and fill its hash. For a person at a terminal only |
+| `pdd try [STORY] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait]` | Make a Try link and open it in your browser. It ends in 24 hours. In a terminal, it waits: it adds each case saved on the Try page to the Story's test file, and asks y/n when you click Approve on the page |
+| `pdd try --stop [STORY]` | Stop the open Try link of a Story |
 
-A `draft` prompt can be checked, and its result is marked DRAFT. See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, and `pdd check --help` for all options.
+- A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
+- With no test file, `pdd check` says `No tests found` and lists why, for example a `tests/*.json` file without the PDD `schema_version`, or a prompt with no Runtime interface block.
+- A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` A pdd that is too old gets `Please update pdd: …`. Both exit with code 5.
+- The runtime address is set in one place in pdd. You do not need to set it.
+
+See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, `pdd check --help` and `pdd try --help` for the options, and `RUNBOOK.md` for the file formats.
 
 ## Used by the agent
 
 | Command | What it does |
 |---|---|
 | `pdd workflow done STEP [--summary TEXT]` | Record a finished step. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR |
+| `pdd workflow ask QUESTION` | Show the person that the chat waits for an answer in the middle of a step. `status` then says "waiting for you" with the question |
 
-The agent runs `done` from the run's worktree. pdd finds the run from that folder. You do not run `done` yourself.
+The agent runs these from the run's worktree. pdd finds the run from that folder. You do not run them yourself.
 
 ## Other commands
 
 | Command | What it does |
 |---|---|
+| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
+| `pdd --version` | Print the version, `0.1.6` |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
-| `pdd --help`, `pdd --version` | Help and version |
 
 ## Run from a source checkout
 
