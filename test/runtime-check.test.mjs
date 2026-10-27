@@ -393,3 +393,27 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.out.split('is named by 2 prompts').length, 2);
 });
+
+// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found" (Serhan's real test, 0.1.6).
+test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+  const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
+  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
+  writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
+  writeFileSync(join(repo, 'tests/unit/board.json'), '{"name": "board"}\n');
+  writeFileSync(join(repo, 'package.json'), '{"name": "game"}\n');
+  writeFileSync(join(repo, 'prompts/board.prompt'), '# Board\n');
+  writeFileSync(join(repo, 'prompts/engine.prompt.md'), '# Engine\n\nNo interface here.\n');
+  git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  const result = await check(repo, home, [], {});
+  assert.equal(result.code, 2); assert.equal(result.out, '');
+  assert.deepEqual(result.err.trimEnd().split('\n'), [
+    'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
+    'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
+    'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
+  for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
+  const many = await check(repo, home, [], {});
+  const lines = many.err.trimEnd().split('\n');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
+});
