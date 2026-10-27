@@ -8,19 +8,26 @@ In PDD, prompts are the source of your software. Your agent writes the prompt, t
 
 ## Quick start
 
+Add the PDD skills to your agent:
+
 ```sh
-npm install -g github:promptdriven/pdd#alpha
-cd your-project
-pdd setup
+npx skills add promptdriven/pdd
 ```
 
-Then open Codex or Claude Code as usual and call a skill:
+Then open Codex or Claude Code in your project, as usual, and run these once:
 
 ```
+/pdd-setup
 /pdd-feature Add a CSV export button to the orders page.
 ```
 
-`pdd setup` adds a short PDD note to your `CLAUDE.md` or `AGENTS.md`. Run it once in each repo.
+`/pdd-setup` adds a short PDD note to your `CLAUDE.md` or `AGENTS.md`, so every chat in the repo knows the project uses PDD. Run it once in each repo.
+
+For runs that open pull requests, and for `pdd check`, also install the `pdd` command:
+
+```sh
+npm install -g github:promptdriven/pdd#alpha
+```
 
 ## Skills
 
@@ -32,11 +39,7 @@ Then open Codex or Claude Code as usual and call a skill:
 | `/pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
 | `/pdd-setup` | set up a repo for PDD |
 
-The skills work in any chat. Only the skill you call is loaded, so your chat stays small. You can also install only the skills, without the `pdd` command:
-
-```sh
-npx skills add "promptdriven/pdd#alpha"
-```
+The skills work in any chat. Only the skill you call is loaded, so your chat stays small. Add `-g` to `npx skills add` to install them for all your projects.
 
 ## From a GitHub issue to pull requests
 
@@ -79,10 +82,9 @@ pdd try            # get a link to use the prompt by hand
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) 22 or newer, and [Git](https://git-scm.com)
-- [GitHub CLI](https://cli.github.com), signed in (`gh auth login`)
 - [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview), signed in
-- [Herdr](https://herdr.dev), for workflow runs
+- [Node.js](https://nodejs.org) 22 or newer, for `npx` and the `pdd` command
+- For the `pdd` command: [Git](https://git-scm.com), the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`), and [Herdr](https://herdr.dev) for workflow runs
 
 PDD works with the versions of these tools that you have. It is tested on macOS and Linux.
 
@@ -91,7 +93,7 @@ PDD works with the versions of these tools that you have. It is tested on macOS 
 > [!WARNING]
 > **Agents run with full access.** In a workflow run, Codex and Claude Code do not stop to ask for approval. They can change files and run commands as your user. Use PDD only where you accept this.
 
-- **Update:** run the install line again. Do not run `npm install -g pdd`, because that is a different package.
+- **Update:** run the `npx skills add` and `npm install` lines again. Do not run `npm install -g pdd`, because that is a different package.
 - **Old Python pdd:** if `pdd --version` does not print `0.1.2`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
 - **Your own workflow:** copy a skill folder as `pdd-NAME` into `.agents/skills` or `.claude/skills`, then edit it. See [Workflows](docs/workflows.md#make-your-own-workflow).
 - **This is an alpha.** Read the [known limits](docs/USAGE.md), and [report problems](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
