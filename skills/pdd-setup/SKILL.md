@@ -5,7 +5,7 @@ description: Set up a repo for PDD. Use when the person asks to set up PDD, add 
 
 # PDD setup
 
-Add one short PDD block to the file that this repo's agents read. The `pdd setup` command does the same thing without an agent.
+Add one short PDD block to the file that this repo's agents read. This skill only writes the block: if you can read it, the PDD skills are already installed. The `pdd setup` command writes the same block and also installs the skills when they are missing.
 
 1. Pick the file: `CLAUDE.md` if it exists, else `AGENTS.md`. If neither exists, create `AGENTS.md`. Use the repo root.
 2. Write this block exactly. Leave out the RUNBOOK.md line if the pdd-prompting skill has no RUNBOOK.md.
