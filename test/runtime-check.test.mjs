@@ -121,8 +121,10 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.equal(result.out.split('\n')[2], 'Runtime check: ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls');
-  assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
+  assert.deepEqual(result.out.split('\n').slice(2, 4), ['Runtime check (place-order): ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls',
+    'Runtime check: ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.equal(result.out.split('\n').filter(Boolean).slice(4, 7).join('\n').startsWith('REFUSED before sending'), true);
+  assert.equal(result.out.split('\n').filter(Boolean).slice(4, 7).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
   assert.match(result.out, /Warning: the AC1 check expects 899, but the AC1 text says 900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
@@ -205,6 +207,7 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
   const help = pdd('check', '--help');
   assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\]/);
+  assert.match(help.stdout, /pdd check --local \[STORY\.\.\.\] \[--json\] +.*sends nothing/);
   assert.doesNotMatch(help.stdout, /--request/);
   assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
@@ -390,4 +393,64 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
   const doc = readJson(join(repo, 'tests/place-order.json')); doc.steps[0].input.items[0].quantity = 0; writeJson(join(repo, 'tests/place-order.json'), doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.out.split('is named by 2 prompts').length, 2);
+});
+
+// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found" (Serhan's real test, 0.1.6).
+test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+  const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
+  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
+  writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
+  writeFileSync(join(repo, 'tests/unit/board.json'), '{"name": "board"}\n');
+  writeFileSync(join(repo, 'package.json'), '{"name": "game"}\n');
+  writeFileSync(join(repo, 'prompts/board.prompt'), '# Board\n');
+  writeFileSync(join(repo, 'prompts/engine.prompt.md'), '# Engine\n\nNo interface here.\n');
+  git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  const result = await check(repo, home, [], {});
+  assert.equal(result.code, 2); assert.equal(result.out, '');
+  assert.deepEqual(result.err.trimEnd().split('\n'), [
+    'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
+    'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
+    'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
+  for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
+  const many = await check(repo, home, [], {});
+  const lines = many.err.trimEnd().split('\n');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
+});
+
+// Wrong: an index file (PLAN.md, README.md, a story with no criteria) gets "has no test" on every multi-Story run (2048 session, 0.1.6).
+test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance criteria are not Stories', async t => {
+  const { repo } = harbor(t);
+  writeFileSync(join(repo, 'user_stories/PLAN.md'), '# Plan\n\n1. Place an order\n2. Refuse an unknown item\n');
+  writeFileSync(join(repo, 'user_stories/README.md'), '# Stories\n\nOne file for each Story.\n');
+  writeFileSync(join(repo, 'user_stories/play-2048.md'), '# Play 2048\n\nThe game, in parts: see PLAN.md.\n');
+  writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
+  const found = (await import('../src/runtime-preflight.mjs')).findTests({ root: repo });
+  assert.deepEqual(found.stories.map(story => story.path).sort(), ['user_stories/place-order.md', 'user_stories/refund.md', 'user_stories/unknown-item.md']);
+  assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test.']);
+});
+
+// Wrong: agents import pdd's source files by hand to get a local lint (2048 session: 23 calls into pdd/src).
+test('RUNTIME-LOCAL1: pdd check --local runs every local rule and limit, prints the same refusals and sends nothing', async t => {
+  const { repo, home } = harbor(t);
+  const ok = await check(repo, home, [], { '--local': true });
+  assert.equal(ok.code, 0, ok.err); assert.deepEqual(ok.calls, { fetch: 0, gh: 0 });
+  assert.match(ok.out, /^Place a coffee order +tests\/place-order\.json +ready/m);
+  assert.match(ok.out, /^Local check: 2 of 2 tests are ready to send \(6 files, \d+ KB\)\. Nothing was sent\.$/m);
+  assert.doesNotMatch(ok.out, /Runtime check/);
+  const file = join(repo, 'tests/place-order.json'), doc = readJson(file);
+  doc.steps[0].input.items[0].quantity = 0; writeJson(file, doc);
+  const refused = await check(repo, home, ['place-order'], { '--local': true });
+  assert.equal(refused.code, 4); assert.deepEqual(refused.calls, { fetch: 0, gh: 0 });
+  assert.match(refused.out, /REFUSED before sending \(not sent, 0 AI calls\)\n {2}tests\/place-order\.json {2}step 1 {2}invalid-input\n {2}steps\[0\] input \/items\/0\/quantity is 0\. The prompt allows 1 to 20\./);
+  assert.match(refused.out, /^Local check: 0 of 1 tests are ready to send/m);
+  const json = await check(repo, home, ['place-order'], { '--local': true, '--json': true });
+  assert.equal(json.code, 4); assert.equal(json.json.rows[0].refusals[0].code, 'invalid-input');
+  writeFileSync(join(repo, 'server.key'), 'x');
+  const secret = await check(repo, home, ['unknown-item'], { '--local': true });
+  assert.equal(secret.code, 4); assert.match(secret.err, /server\.key: the name looks like a secret/);
+  for (const options of [{ '--local': true, '--read': true }, { '--local': true, '--max-calls': '5' }]) {
+    assert.equal((await check(repo, home, [], options)).code, 2, JSON.stringify(options));
+  }
 });
