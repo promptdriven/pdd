@@ -1,11 +1,11 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: e934b8b503ebe87be246c2529dd2c0b54285f898027ca607e3f6c8c3b52b7e70).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 72b255cd7159a5ca2ddb25516d82648d65128d10696c03fba05ce2cd73605dc8).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout } from './workflow-herdr-layout.mjs';
+import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 
 const ordinary = promisify(execFileCallback);
@@ -77,7 +77,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const startedAt = now();
   await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]);
   return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
-    label: `#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile };
+    label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile };
 }
 
 export async function sendToChat(chat, text, ports = {}) {
@@ -142,9 +142,13 @@ export async function closeChats(run, ports = {}) {
   const last = chats.at(-1);
   if (last?.workspaceId) {
     try {
-      await withHerdrLayoutLock(() => closeHerdrRunLayout({ runId: run.runId, cwd: run.root, layout: { workspaceId: last.workspaceId, repoWorkspaceId: last.repoWorkspaceId } },
-        { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory }), { directory: ports.layoutDirectory });
-    } catch (error) { warnings.push(`warning: the run workspace "#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
+      const layoutPorts = { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory };
+      await withHerdrLayoutLock(async () => {
+        await closeHerdrRunLayout({ runId: run.runId, cwd: run.root, layout: { workspaceId: last.workspaceId, repoWorkspaceId: last.repoWorkspaceId } }, layoutPorts);
+        try { await closeHerdrRepoLayoutIfIdle({ repository: run.repo, commonDir: run.commonDir }, layoutPorts); }
+        catch (error) { warnings.push(`warning: the empty "${run.repo.split('/')[1]}" workspace stays open in Herdr (${error.code ?? 'error'}).`); }
+      }, { directory: ports.layoutDirectory });
+    } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
   }
   return { warnings };
 }

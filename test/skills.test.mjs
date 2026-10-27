@@ -11,10 +11,11 @@ const read = path => readFileSync(join(skills, path), 'utf8');
 // 0.1.3: every code PR ends with a formal step after verify.
 const AREAS = {
   'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify', 'formal'], [], 'pr']],
-  'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'],
+  // 0.1.4 #13: the person tries it and approves before pdd opens PR 1 ("before":"approve").
+  'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'],
     ['code', ['build', 'verify', 'formal'], [], 'pr']],
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
-    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 const frontmatter = text => {
@@ -58,7 +59,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', () => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then]) => ({ name: area, steps, optional, gate, ...(then ? { then } : {}) })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -66,14 +67,14 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(lines.length <= 15, `${name}/${step} has ${lines.length} lines`);
     }
     const { body } = frontmatter(read(`${name}/SKILL.md`));
-    for (const [area, list, optional, gate] of areas) {
+    for (const [area, list, optional, gate, , before] of areas) {
       const shown = list.map(step => optional.includes(step) ? `${step}?` : step).join(', ');
-      assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
+      assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    // 6 KB: the PR 2 method lives in RUNBOOK section 14; the steps only point to it.
-    // pdd-bug needs the most room: the story-gate verdict lines and the real-user rules (0.1.3).
-    assert.ok(bytes <= 6144, `${name} is ${bytes} bytes`);
+    // 6.5 KB: the PR 2 method lives in RUNBOOK section 17; the steps only point to it.
+    // pdd-bug needs the most room: the story-gate verdict lines, the real-user rules (0.1.3) and the 0.1.4 Story rules.
+    assert.ok(bytes <= 6656, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -100,7 +101,8 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
   for (const name of ['pdd-bug', 'pdd-feature']) {
     assert.match(read(`${name}/steps/try.md`), /If the pdd-prompting skill has a RUNBOOK\.md[^\n]*`pdd try STORY`[^\n]*Try link before the gate/);
     const text = read(`${name}/SKILL.md`);
-    assert.match(text, /PR 1 link, the `Runtime check:` line and the Try link/);
+    assert.match(text, /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
+    assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd check`[^\n]*CURRENT prompt/);
@@ -168,7 +170,9 @@ test('SKILLS10: every workflow has a short formal step that points to RUNBOOK se
 
 // Wrong (real-user ISSUES 1 and 3): reproduce skips the prompt check in silence, or PR 1 adds repo tests that turn main red.
 test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds only the prompt, the Story and tests/*.json', () => {
-  assert.ok(read('pdd-bug/steps/reproduce.md').includes('"No prompt exists yet for this behavior, so the bug can only be in the code."'));
+  // RUNBOOK section 14 owns the exact sentence; reproduce points to it.
+  assert.ok(RUNBOOK().includes('"No prompt exists yet for this behavior, so the bug can only be'));
+  assert.match(read('pdd-bug/steps/reproduce.md'), /If no prompt exists, say so plainly, in the words of section 14\./);
   for (const name of ['pdd-bug', 'pdd-feature']) {
     for (const file of [`${name}/SKILL.md`, `${name}/steps/prompt-story.md`]) {
       const text = read(file);
@@ -230,4 +234,20 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
   for (const name of Object.keys(AREAS))
     assert.ok(read(`${name}/SKILL.md`).includes('- When you need the person\'s answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.'), name);
+});
+
+// Wrong (0.1.4 #12, #17, before link): Stories read like code, one rule gets two owner prompts (a CLI's rule copied into
+// the whole-CLI prompt and a module prompt), or bug PR 1 loses the report of the check on the current prompt.
+test('SKILLS17: Stories in the person\'s words, one owner prompt per rule, and the bug "before" report link', () => {
+  const prompting = read('pdd-prompting/SKILL.md');
+  assert.match(prompting, /Story in the person's words[^\n]*no function calls or type names/);
+  assert.match(prompting, /Give each rule one owner prompt\./);
+  assert.match(prompting, /For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt\./);
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const step = read(`${name}/steps/prompt-story.md`);
+    assert.match(step, /Story in the person's words[^\n]*no function calls or type names/, name);
+    assert.match(step, /Change one prompt when you can\./, name);
+    assert.match(step, /one owner prompt[^\n]*whole-CLI prompt[^\n]*module's prompt/, name);
+  }
+  assert.match(read('pdd-bug/steps/reproduce.md'), /`done` summary as the "before" report/);
 });

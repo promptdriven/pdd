@@ -8,6 +8,6 @@ Own `src/workflow-chat.mjs`. An area chat is one native Codex or Claude session 
 - `sendToChat(chat, text, ports)`: `herdr agent prompt <pane> <text>`. Return `{ok}` or `{ok:false, code}` (`agent_not_found`, `agent_blocked`, …).
 - `chatSession(chat, ports)`: read `herdr agent get <pane>`. Return `{alive, sessionId}`.
 - `openChat({run, chat}, ports)`: if the tab is gone, make a new tab in the run workspace. If no agent runs in the pane, resume the native session there (`claude --resume <id>`, `codex resume <id>`, with the same full-access flags). Focus the tab. Attach with `herdr session attach pdd` only when the caller has a terminal and is not inside Herdr. Otherwise print where the chat is.
-- `closeChats(run, ports)`: close each chat tab, then the run workspace. Failures are warnings.
+- `closeChats(run, ports)`: close each chat tab, then the run workspace, then the repository workspace when no other run uses it. Failures are warnings. Chat labels are `<repo name>#N NAME › AREA`.
 
 Full-access flags stay. Do not pin tool versions. No timeouts. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.

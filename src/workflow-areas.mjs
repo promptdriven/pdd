@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: f37aba928f978982e9ba909ebd7699cf643081c0713d2479a2bbbd874ab36a17).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 3883b0c345cd5238f1b1ee1e894fec01571232ae4f8dcc8366ad976789e1a668).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -30,11 +30,13 @@ function parse(name, file) {
   return data.areas.map((area, index) => {
     const last = index === data.areas.length - 1;
     const askCode = !last && area?.gate === 'pr' && area.then === 'ask-code';
+    if (area?.before !== undefined && !(area.before === 'approve' && area.gate === 'pr'))
+      throw invalid(`area ${index + 1} may have "before":"approve" only with gate "pr"`);
     if (!word(area?.name) || !Array.isArray(area.steps) || !area.steps.length || !area.steps.every(word)
       || !Array.isArray(area.optional ?? []) || !(area.optional ?? []).every(step => area.steps.includes(step))
       || !(last ? area.gate === 'pr' && area.then === undefined : area.gate === 'approve' && area.then === undefined || askCode))
       throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? '"pr"' : '"approve", or "pr" with "then":"ask-code"'}`);
-    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}) };
+    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}) };
   });
 }
 
@@ -46,8 +48,9 @@ function found(options) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const name = entry.name.slice(4), dir = join(root, entry.name);
       if (!entry.name.startsWith('pdd-') || !word(name) || workflows.has(name) || !existsSync(join(dir, 'workflow.json'))) continue;
-      // A copy that pdd installed (it has pdd's marker) is not an override: the running package is newer or the same.
-      if (source === 'home' && existsSync(join(dir, '.pdd-skill.json'))) continue;
+      // A home copy of a workflow the package ships is an install (npx skills add or pdd setup), maybe an old one;
+      // only a project may override a bundled workflow. Home folders add workflows the package does not have.
+      if (source === 'home' && existsSync(join(options.packageRoot, 'skills', entry.name, 'workflow.json'))) continue;
       workflows.set(name, { name, skill: entry.name, dir, source });
     }
   }
@@ -69,7 +72,7 @@ export function listWorkflowAreas({ packageRoot, cwd, home }) {
 export function formatWorkflowList(list, { json = false } = {}) {
   if (json) return JSON.stringify({ workflows: list.map(({ name, skill, source, dir, areas }) => ({ name, skill, source, dir, areas })), default: null });
   const lines = list.length ? list.map(({ name, areas, source }) => `${name}  ${areas.map(area =>
-    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.gate}`).join(' → ')}  (${source ?? 'package'})`)
+    `${area.name} [${area.steps.map(step => area.optional.includes(step) ? `${step}?` : step).join(', ')}] → ${area.before ? 'approve → ' : ''}${area.gate}`).join(' → ')}  (${source ?? 'package'})`)
     : ['No workflows found.'];
   lines.push('Listing starts no work. Use pdd workflow run NAME ISSUE.');
   return lines.join('\n');

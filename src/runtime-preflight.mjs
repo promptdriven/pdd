@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5c0730ed11ff62c76469aaca3fa0a002d1c646625c357c9cf9110f8b99999268).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b99173373e690d69c5ca39f6f0af33f1cc6367ff0b815a2d2abb67a3ddbc4e0f).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -630,6 +630,21 @@ export function captureSource(root, { attempts = 3 } = {}) {
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+}
+
+// Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).
+export function sharedSourceFiles(root, visible) {
+  const owners = new Map();
+  for (const prompt of [...visible].filter(path => path.endsWith('.prompt.md')).sort()) {
+    const text = readText(root, prompt);
+    for (const match of text.matchAll(/`([^`\s]+)`/g)) {
+      const path = match[1].replace(/^\.\//, '');
+      if (path === prompt || path.endsWith('.md') || !visible.has(path)) continue;
+      owners.set(path, new Set([...(owners.get(path) ?? []), prompt]));
+    }
+  }
+  return [...owners].filter(([, prompts]) => prompts.size > 1).sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, prompts]) => `Warning: ${path} is named by ${prompts.size} prompts (${[...prompts].join(', ')}). One prompt should own each source file.`);
 }
 
 // Files sent that are not prompt, story or test files.

@@ -1,7 +1,7 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d66506ffd417afac2f958619420943a6284d7b825ee6eff9f4e8fc6dffc75a56).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 34af20a86d3ededfbb25fea7edcc8a8152f152938bd6aa16b600c0520981ac70).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
@@ -12,6 +12,8 @@ import { setupSkills } from './skills-install.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
+const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
+const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex' }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
@@ -65,9 +67,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'setup': {
       let code = 0;
       for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
-        if (result.updated.length) line(stdout, `Updated ${result.updated.length} PDD skills in ${result.root}`);
+        if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
         if (result.found) line(stdout, `PDD skills found in ${result.found}`);
-        else if (result.installed.length) line(stdout, `Installed ${result.installed.length} PDD skills to ${result.root}`);
+        else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
         if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
       }
       try {
@@ -85,6 +87,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
         return 3;
       }
+    case 'prompt-approve': {
+      const { runApprove } = await import('./prompt-approve.mjs');
+      return runApprove({ words: [...plan.operands], cwd }, { stdout, stderr });
+    }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
       try {

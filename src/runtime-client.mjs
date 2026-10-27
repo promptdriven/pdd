@@ -1,12 +1,13 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 04d7c563d5ad6ae52ffa116f7f1b5c5ad7a4958a385ee1a6759b76ea90c2065a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: eada12941a353037d5057d8be88ad3fb7c8814713b31b36bdf6b50380400e9b0).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
@@ -33,7 +34,7 @@ function withDefaults(ports) {
     env, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => spawnSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
-    interactive: ports.interactive ?? !!process.stdout.isTTY, watchMs: ports.watchMs ?? 5000,
+    interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
       const timer = setTimeout(done, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); done(); }, { once: true });
@@ -158,12 +159,22 @@ class Runtime {
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
+// The invite list (Oct 27): a login that is not invited gets 403 {"code": "not-invited", "login": …}. One plain line, exit 5.
+function notInvited(reply) {
+  const json = reply.json, code = json?.code ?? json?.error?.code;
+  if (reply.status !== 403 || code !== 'not-invited') return null;
+  const login = typeof json.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(json.login) ? json.login : null;
+  return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD runtime invite list yet. Ask the PDD team to add you.`;
+}
+
 const sameJob = (json, id, command) => isObject(json) && json.requestId === id && json.id === id && json.command === command && JOB_STATES.has(json.state);
 const gateText = reply => reply.status === 503 && !reply.json && String(reply.text ?? '').includes('The runtime opens soon.');
 
 // One answer to a POST, as the row table of the spec.
 function judgePost(reply, id, command, secrets) {
   if (reply.lost) return { kind: 'unknown', why: 'The answer to the request was lost.' };
+  const uninvited = notInvited(reply);
+  if (uninvited) return { kind: 'stop', note: { code: 'not-invited', message: uninvited }, notInvited: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
@@ -186,6 +197,8 @@ function judgePost(reply, id, command, secrets) {
 // One answer to a GET of a known request ID.
 function judgeGet(reply, id, command) {
   if (reply.lost) return { kind: 'again' };
+  const uninvited = notInvited(reply);
+  if (uninvited) return { kind: 'not-invited', message: uninvited };
   if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
   if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
@@ -289,6 +302,18 @@ function applyAnswer(row, answer, context) {
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
 }
 
+// Before a check of every story (cli 12b): about one AI call for each step plus the calls its prompt may make; the cap is the sum of max_calls.
+function costLine(rows, root, visible) {
+  const prompts = new Map(), callsOf = path => {
+    if (!prompts.has(path)) prompts.set(path, readPrompt(root, visible, path));
+    const calls = prompts.get(path)?.interface?.calls;
+    return (Array.isArray(calls) ? calls : []).reduce((sum, call) => sum + (Number.isInteger(call?.max_calls) ? call.max_calls : 0), 0);
+  };
+  const about = rows.reduce((sum, row) => sum + row.steps.reduce((steps, step) => steps + 1 + callsOf(step?.entry_path), 0), 0);
+  const most = rows.reduce((sum, row) => sum + row.max_calls, 0);
+  return `Checking all ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}: about ${about} AI call${about === 1 ? '' : 's'} (at most ${most}).`;
+}
+
 function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
@@ -324,7 +349,7 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
-  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; }
+  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.notInvited) context.notInvited = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
   else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Math.max(context.deadline, context.ports.now() + LOST_READ_MS) });
 }
@@ -335,6 +360,7 @@ async function readRow(context, row) {
   if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
   else if (verdict.kind === 'auth') context.readStop = 'Run gh auth login';
+  else if (verdict.kind === 'not-invited') context.readStop = verdict.message;
   else if (verdict.kind === 'gate') context.readStop = 'The runtime opens soon.';
 }
 
@@ -351,6 +377,7 @@ async function runLint(context) {
       await context.ports.sleep(verdict.wait, context.signal); continue;
     }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (verdict.notInvited) throw new Stop(5, verdict.note.message);
     if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // A lost lint answer is read by the same ID, like a lost check.
@@ -362,6 +389,7 @@ async function runLint(context) {
       const read = judgeGet(await context.runtime.get(id), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
+      else if (read.kind === 'not-invited') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
@@ -389,8 +417,11 @@ async function checkBatch(context, rows) {
   const toSend = sendable.filter(row => row.state === 'ready');
   line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
+  // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
+  if (toSend.length) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
+  if (context.notInvited && !toSend.some(isOpen)) throw new Stop(5, context.notInvited);
   let waitingShown = -1;
   // Read open rows until the timeout; a row whose POST answer was lost is read for at least 5 min.
   const readable = row => isOpen(row) && (ports.now() < context.deadline || ports.now() < (row.read_until ?? 0));
@@ -551,8 +582,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
-  context.warnings = [...found.warnings, ...checked.warnings];
+  context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
+  if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
   const capture = captureSource(root);
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
@@ -564,7 +596,6 @@ async function runBatch(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${batch}`);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, rows);
@@ -595,7 +626,7 @@ function appMapFor(found, given, cwd, root, stderr) {
   const rel = relative(realpathSync(root), resolve(realpathSync(cwd), given)).split(sep).join('/');
   if (!found.visible.has(rel)) throw new Stop(2, `--app-map ${cleanText(given)} is not a Git-visible file in this repository.`);
   const problem = appMapProblem(root, rel);
-  if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}".`);
+  if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}". See RUNBOOK.md §13.`);
   return rel;
 }
 
@@ -613,6 +644,7 @@ async function readUntil(context, id, command, isDone, ms) {
     if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
     else if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    else if (read.kind === 'not-invited') throw new Stop(5, read.message);
     if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }
@@ -674,6 +706,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (record) {
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+      if (read.kind === 'not-invited') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
@@ -707,6 +740,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
       if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
       if (verdict.kind === 'refused') { Object.assign(row, { state: 'refused', phase: 'server', refusals: [verdict.refusal] }); return printTryProblem(context, row); }
+      if (verdict.notInvited) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
     }
@@ -778,7 +812,7 @@ async function showTry(context, test, link, options, tryId) {
     line(ports.stdout, `Try link for "${test.title}": ${link}`);
     line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
   }
-  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive);
+  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story);
   return 0;
 }
 
@@ -889,36 +923,76 @@ function addSavedCaseSafely(root, saved) {
   return `added to ${target.path} as step ${ids.join(', ')}`;
 }
 
-// Read the saved cases once; with `wait`, keep reading until Ctrl-C or the Try ends.
-async function watchSavedTests(context, tryId, wait) {
+// Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
+async function collectSavedTests(context, tryId) {
   const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
-  let polls = 0, told = false;
-  for (;;) {
-    const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
-    if (reply.status === 200 && Array.isArray(reply.json?.tests)) {
-      const done = store.read(path) ?? {};
-      for (const saved of reply.json.tests) {
-        const key = typeof saved?.id === 'string' ? saved.id : null;
-        if (!key || done[key]) continue;
-        const said = addSavedCase(root, saved);
-        done[key] = { at: new Date(ports.now()).toISOString(), result: said };
-        store.write(path, done);
-        line(ports.stdout, said);
+  const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
+  if ([401, 403, 410].includes(reply.status)) return 'ended';
+  if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
+  const done = store.read(path) ?? {};
+  for (const saved of reply.json.tests) {
+    const key = typeof saved?.id === 'string' ? saved.id : null;
+    if (!key || done[key]) continue;
+    const said = addSavedCase(root, saved);
+    done[key] = { at: new Date(ports.now()).toISOString(), result: said };
+    store.write(path, done);
+    line(ports.stdout, said);
+  }
+  return 'ok';
+}
+
+// Approval requests from the Try page (#9): only a person's y in this terminal approves; the page gets done or declined.
+async function collectApprovals(context, tryId, story, answers) {
+  const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.approvals.json`);
+  const reply = await context.runtime.send(`/v1/try/${tryId}/approvals`, { method: 'GET' }, GET_MS);
+  if ([401, 403, 410].includes(reply.status)) return 'ended';
+  if (reply.status !== 200 || !Array.isArray(reply.json?.approvals)) return reply.lost ? 'ok' : 'missing';
+  const handled = store.read(path) ?? {};
+  for (const request of reply.json.approvals) {
+    const id = typeof request?.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(request.id) ? request.id : null;
+    if (!id || request.state !== 'pending' || handled[id]?.posted) continue;
+    const asked = cleanText(request.prompt_path);
+    if (!handled[id]?.state) {
+      if (!answers) {
+        if (!handled[id]?.noticed) line(ports.stdout, `The Try page asks to approve ${asked}. A person answers it in a terminal: pdd try ${story}`);
+        handled[id] = { noticed: true }; store.write(path, handled);
+        continue;
       }
-    } else if (reply.status === 404 || reply.status === 405 || (reply.status === 200 && !Array.isArray(reply.json?.tests))) {
-      if (wait) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
-      return;
-    } else if ([401, 410].includes(reply.status)) return;
-    if (!wait || context.interrupted) return;
-    if (!told) { line(ports.stdout, 'Waiting for tests saved on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
-    await ports.sleep(ports.watchMs, context.signal);
-    if (context.interrupted) { line(ports.stdout, 'Stopped waiting. The Try link stays open. Run pdd try again to add tests saved later.'); return; }
-    polls += 1;
-    if (polls % 6 === 0) {
-      const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
-      if ((read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) || read.kind === 'missing' || read.status === 410) {
-        wait = false; line(ports.stdout, 'The Try has ended.');
+      const real = realpathSync(root), prompt = typeof request.prompt_path === 'string' ? promptPath(real, real, request.prompt_path) : null;
+      const result = prompt ? await askApproval({ root: real, path: prompt, stdout: ports.stdout, answers, expectedHash: request.prose_sha256 })
+        : { state: 'declined', message: `not approved: ${asked} is not a Git-visible *.prompt.md file in this repository.` };
+      line(ports.stdout, result.message);
+      handled[id] = { state: result.state, at: new Date(ports.now()).toISOString() };
+      store.write(path, handled);
+    }
+    const answer = await context.runtime.send(`/v1/try/${tryId}/approvals/${id}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: handled[id].state }) }, GET_MS);
+    if (answer.status >= 200 && answer.status < 300) { handled[id].posted = true; store.write(path, handled); }
+  }
+  return 'ok';
+}
+
+// Read saved cases and approval requests once; with `wait` (a person's terminal), keep reading until Ctrl-C or the Try ends.
+async function watchSavedTests(context, tryId, wait, story) {
+  const { ports } = context, answers = wait ? lineReader(ports.stdin) : null;
+  let polls = 0, told = false, tests = 'ok', approvals = 'ok';
+  try {
+    for (;;) {
+      if (tests !== 'missing') tests = await collectSavedTests(context, tryId);
+      if (tests === 'missing' && wait && !told) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
+      if (approvals !== 'missing') approvals = await collectApprovals(context, tryId, story, answers);
+      if (tests === 'ended' || approvals === 'ended' || !wait || context.interrupted) return;
+      if (tests === 'missing' && approvals === 'missing') return;
+      if (!told) { line(ports.stdout, 'Waiting for tests saved and approvals asked on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
+      await ports.sleep(ports.watchMs, context.signal);
+      if (context.interrupted) { line(ports.stdout, 'Stopped waiting. The Try link stays open. Run pdd try again to add tests saved later.'); return; }
+      polls += 1;
+      if (polls % 6 === 0) {
+        const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
+        if ((read.kind === 'state' && !LIVE_SESSION.has(read.answer.result?.session?.state)) || read.kind === 'missing' || read.status === 410) {
+          wait = false; line(ports.stdout, 'The Try has ended.');
+        }
       }
     }
-  }
+  } finally { answers?.close(); }
 }

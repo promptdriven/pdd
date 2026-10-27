@@ -218,7 +218,8 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check: ✗ 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Runtime check: running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
 });
@@ -487,4 +488,61 @@ test('RUNTIME-ADDRESS2: Try and report links on the IP origin pass; links on any
   for (const bad of ['https://34.72.131.99/r/abc', 'https://evil.example/r/abc', 'http://34.72.131.98/r/abc', 'https://34.72.131.98/s/abc/']) {
     assert.equal(validLink(bad, origin, 'report'), null, bad);
   }
+});
+
+// Wrong: a check of every story starts with no word on what it costs (cli 12b).
+test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses; a check of one story does not', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const all = await check(setup, fake, []);
+  assert.equal(all.code, 0);
+  const lines = all.err.split('\n');
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') >= 0, all.err);
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') < lines.findIndex(text => text.startsWith('Lint passed')));
+  const one = await check(setup, fake, ['place-order']);
+  assert.doesNotMatch(one.err, /Checking all/);
+});
+
+// Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
+test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, until a row really fails', async () => {
+  const { summaryLine } = await import('../src/runtime-output.mjs');
+  const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
+  assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: unknown · /);
+  assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
+  assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
+});
+
+const NOT_INVITED = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'This GitHub login is not on the invite list.' } };
+const INVITE_LINE = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+
+// Wrong: a person who is not invited sees a table of failures or a retry hint instead of one plain line (invite list, Oct 27).
+test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check is sent', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? NOT_INVITED : f.normal(entry));
+  for (const options of [{}, { '--json': false }]) {
+    const result = await check(setup, fake, [], options);
+    assert.equal(result.code, 5); assert.equal(result.out, '');
+    assert.ok(result.err.trimEnd().split('\n').includes(INVITE_LINE), result.err);
+    assert.doesNotMatch(result.err, /Lint passed|Sent \d|If pdd stops/);
+  }
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']);
+  const later = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { ...NOT_INVITED, json: { error: { code: 'not-invited', message: 'not invited' }, login: 'octo' } } : f.normal(entry));
+  const viaCheck = await check(setup, later, ['place-order']);
+  assert.equal(viaCheck.code, 5); assert.ok(viaCheck.err.includes(INVITE_LINE), viaCheck.err);
+  const gate = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 503, text: 'The runtime opens soon.' } : f.normal(entry));
+  const opens = await check(setup, gate, ['place-order']);
+  assert.equal(opens.code, 5); assert.match(opens.out + opens.err, /The runtime opens soon\./);
+});
+
+// Wrong: the read line shows before lint, when there is nothing to read yet (lead, Oct 27).
+test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the checks are sent', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  const lines = result.err.split('\n'), read = lines.findIndex(text => text.startsWith('If pdd stops, read the results with: pdd check --read '));
+  assert.ok(read > lines.findIndex(text => text.startsWith('Lint passed.')), result.err);
+  assert.equal(lines.filter(text => text.startsWith('If pdd stops')).length, 1);
+  const refused = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
+    ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'stale', admission_state: 'stale', interface: { calls: [] } }]) } : f.normal(entry));
+  const none = await check(setup, refused, ['place-order']);
+  assert.equal(none.code, 4); assert.doesNotMatch(none.err, /If pdd stops/);
 });

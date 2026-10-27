@@ -147,7 +147,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
   assert.equal(f.herdr.tabs.find(tab => tab.tab_id === first.tabId).label, 'plan');
-  assert.equal(f.herdr.workspaces.find(w => w.workspace_id === first.workspaceId).label, '#17 small-change');
+  assert.equal(f.herdr.workspaces.find(w => w.workspace_id === first.workspaceId).label, 'project#17 small-change');
 
   f.tick();
   const gate = await stepDone({ step: 'scope', summary: 'Change value.mjs to 2.', cwd: run.root }, f.agentPorts());
@@ -268,7 +268,8 @@ test('done warns on unknown and out-of-order steps but records them and never br
 
 // The steps come from the bundled workflow.json, so a new step (for example formal) needs no test change.
 for (const name of ['bug', 'feature']) {
-  const areas = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas.map(area => [area.name, area.steps]);
+  const bundled = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas;
+  const areas = bundled.map(area => [area.name, area.steps]);
   test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
     const report = 'https://checks.example.test/r/k3y-123';
@@ -288,7 +289,8 @@ for (const name of ['bug', 'feature']) {
         const next = steps[steps.indexOf(step) + 1];
         if (next && optional.includes(next)) assert.match(out.message, /optional/i);
       }
-      assert.equal(f.prs.length, Math.max(0, index));
+      // A pr area opens its PR after its last step, unless the person approves first ("before":"approve", Try before PR 1).
+      assert.equal(f.prs.length, bundled.slice(0, index + 1).filter((area, at) => area.gate === 'pr' && !(at === index && area.before === 'approve')).length);
       if (index < areas.length - 1) {
         assert.equal(f.record().state, 'waiting');
         f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
@@ -297,7 +299,7 @@ for (const name of ['bug', 'feature']) {
     }
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
-    assert.match(f.prs[0].body, /Runtime report links expire after 7 days\./);
+    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
@@ -320,6 +322,7 @@ test('cancel closes the run tabs, keeps the worktree and branch, and done then t
   assert.equal(f.record().state, 'cancelled'); assert.equal(f.record().cancelled.state, 'cancelled');
   assert.equal(f.herdr.tabs.some(tab => tab.tab_id === run.chats[0].tabId), false);
   assert.equal(f.herdr.workspaces.some(w => w.workspace_id === run.chats[0].workspaceId), false);
+  assert.deepEqual(f.herdr.workspaces, [], 'the repository workspace closes too once no run uses it');
   assert.ok(existsSync(run.root)); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
   const late = await stepDone({ step: 'scope', cwd: run.root }, f.agentPorts());
   assert.match(late.message, /cancelled/); assert.match(late.message, /Stop/);
@@ -426,12 +429,14 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
-  assert.match(f.prs[0].body, /^Part of #17/); assert.doesNotMatch(f.prs[0].body, /Closes #17/);
-  assert.match(f.prs[0].body, /Runtime report links expire after 7 days/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
+  assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /pdd workflow approve 17 any time to make the code PR/);
+  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  // The chat gets the exact sentence to say when the person stops (testers saw it dropped when it was a hint).
+  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, run `pdd workflow approve 17`\."/);
 
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -686,4 +691,121 @@ test('a chat that shows a question dialog is waiting for the person in status, a
   assert.equal(refused.exitCode, 1); assert.match(refused.message, /question dialog/); assert.match(refused.message, /pdd workflow open 17/);
   pane.agent.agent_status = 'idle';
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
+});
+
+// 0.1.4 #13: the person tries the prompt and approves before PR 1 opens.
+async function featureAtTryGate(t) {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['understand', 'prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', before: 'approve', then: 'ask-code' },
+    { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] }));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('understand', 'ok'); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two.\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
+  await done('prompt-story', 'Story'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 2 of 2 criteria · Report: https://rt.example.test/r/abc');
+  const gate = await done('try', 'Try: https://rt.example.test/s/TOKEN/');
+  return { f, run, done, gate };
+}
+
+test('#13: after check and try the chat asks the person to try and approve; PR 1 opens only after approval, then the code question', async t => {
+  const { f, run, gate } = await featureAtTryGate(t);
+  assert.equal(f.prs.length, 0, 'no PR 1 before the person approves');
+  assert.match(gate.message, /Runtime check line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
+  assert.doesNotMatch(gate.message, /pdd opens PR 1 now/);
+  let record = f.record();
+  assert.equal(record.gate.kind, 'approve-pr'); assert.equal(record.state, 'waiting');
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /waiting for you: try it, then approve to open PR 1/);
+  f.tick();
+  const opened = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
+  assert.equal(opened.exitCode, 0, opened.message);
+  assert.equal(f.prs.length, 1); assert.match(opened.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(opened.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/);
+  record = f.record();
+  assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr'); assert.equal(record.chats.length, 2);
+  assert.equal(record.decisions.at(-1).stage, 'prompt-pr');
+  assert.doesNotMatch(f.prs[0].body, /\/s\/TOKEN/);
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Yes, build the code.', userMessageAt: f.clock - 1 }) }));
+  assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+});
+
+test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no stops with the plain approve-later line', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const pane = f.herdr.paneOf(f.record().chats[1]);
+  const answers = [true, false]; f.ports.confirm = async question => { f.prompts.push(question); return answers.shift(); };
+  f.tick();
+  const stopped = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(stopped.exitCode, 0, stopped.message);
+  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
+  assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(stopped.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
+  f.ports.confirm = async question => { f.prompts.push(question); return true; };
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message); assert.match(f.prompts.at(-1), /Make the code PR now/); assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.equal(f.git(run.root, 'branch', '--show-current'), `${run.branch}-code`);
+});
+
+// 0.1.4 #18: PR 1 starts with the Runtime check line and its report link; steps are one short line; no local paths.
+test('#18: the PR body puts the Runtime check and report link on top, cuts steps to one short line, and hides local paths', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const local = `${run.root}/test/x.test.mjs`;
+  writeFileSync(join(run.runDir, 'verify.md'), `Old notes from ${run.runDir}/check.md\n`);
+  f.tick();
+  const done = await stepDone({ step: 'check', summary: `Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls; Report: https://rt.example.test/r/d379-42; ran from ${local} with /Users/someone/pocket/node/bin/node and /home/ci/bin/node ${'and a very long tail of words that keeps going '.repeat(8)}`, cwd: run.root }, f.agentPorts());
+  assert.equal(done.exitCode, 0, done.message);
+  f.tick(); await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); f.ports.confirm = async () => false;
+  await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  const body = f.prs[0].body, top = body.split('\n');
+  assert.equal(top[0], 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
+  assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
+  assert.equal(top[3], 'Part of #17');
+  for (const row of body.split('\n').filter(row => row.startsWith('- **'))) assert.ok(row.length <= 220, row);
+  assert.doesNotMatch(body, /\/Users\/|\/home\/|\/private\/|\/var\/folders/);
+  assert.doesNotMatch(body, /## Verify/, 'PR 1 has no verify step, so no verify.md');
+  assert.match(body, /test\/x\.test\.mjs/, 'a worktree path stays as a repo path');
+});
+
+test('cancel keeps the repository workspace while another run of that repository is open, and a later run gets a new one', async t => {
+  const f = await fixture(t);
+  await f.run(); const first = f.record();
+  // A second issue in the same repository.
+  const execFile = f.ports.execFile;
+  f.ports.execFile = async (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/18'
+    ? { stdout: JSON.stringify({ number: 18, html_url: 'https://github.com/example/project/issues/18', title: 'Other', body: '' }) } : execFile(file, args, opts);
+  assert.equal((await startRun({ name: 'small-change', issue: '18', agent: 'claude', cwd: f.source, packageRoot }, f.ports)).exitCode, 0);
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change', 'project#18 small-change']);
+  await cancelRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#18 small-change']);
+  await cancelRun({ ref: '18', cwd: f.source }, f.ports);
+  assert.deepEqual(f.herdr.workspaces, []);
+  assert.equal((await f.run()).exitCode, 0, 'a run after the repository workspace closed opens a new one');
+  assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change']);
+  assert.notEqual(f.record().chats[0].repoWorkspaceId, first.chats[0].repoWorkspaceId);
+});
+
+// Seen in the 0.1.4 real run: the prompt-story summary also had a (first) Runtime check; the check step's is the result.
+test('#18: the check step\'s Runtime check wins the top of PR 1; the code question already says how to make the code PR later', async t => {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check'], optional: [], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build'], optional: [], gate: 'pr' }] }));
+  await f.run(); const run = f.record();
+  writeFileSync(join(run.root, 'p.prompt.md'), 'x\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'p');
+  f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
 });

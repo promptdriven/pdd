@@ -51,7 +51,7 @@ pdd opens the work in [Herdr](https://herdr.dev) and returns at once. You can cl
 
 ```
 chat 1  story      the agent writes the prompt, Story and tests  → you approve
-chat 2  prompt PR  the agent checks the prompts                   → pdd opens PR 1
+chat 2  prompt PR  the agent checks the prompts and gives a Try link → you try it and approve → pdd opens PR 1
                    "Do you want the code PR now, or stop here?"
 chat 3  code       only if you ask                                → pdd opens PR 2
 ```
@@ -81,6 +81,10 @@ pdd try            # get a link to use the prompt by hand
 
 `pdd check` prints one table with a report link for each Story. Your agent reads [RUNBOOK.md](RUNBOOK.md) to write prompts and tests that the runtime can check.
 
+To approve a prompt, run `pdd approve prompts/NAME.prompt.md` in your terminal (or click **Approve** on the Try page while `pdd try` runs). Only a person can approve.
+
+The runtime is invite-only. If `pdd check` says your GitHub login is not on the invite list, ask the PDD team.
+
 ## Requirements
 
 - [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview), signed in
@@ -95,7 +99,7 @@ PDD works with the versions of these tools that you have. It is tested on macOS 
 > **Agents run with full access.** In a workflow run, Codex and Claude Code do not stop to ask for approval. They can change files and run commands as your user. Use PDD only where you accept this.
 
 - **Update:** run the `npx skills add` and `npm install` lines again. Do not run `npm install -g pdd`, because that is a different package.
-- **Old Python pdd:** if `pdd --version` does not print `0.1.3`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
+- **Old Python pdd:** if `pdd --version` does not print `0.1.4`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
 - **Your own workflow:** copy a skill folder as `pdd-NAME` into `.agents/skills` or `.claude/skills`, then edit it. See [Workflows](docs/workflows.md#make-your-own-workflow).
 - **This is an alpha.** Read the [known limits](docs/USAGE.md), and [report problems](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
 

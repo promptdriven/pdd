@@ -377,3 +377,17 @@ test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number
   assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 900), []);
   assert.deepEqual(warn('No number here.', 5), []);
 });
+
+// Wrong: two prompts claim the same source file and nobody notices until they disagree (cli issue 10).
+test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source file', async t => {
+  const { repo, home } = harbor(t);
+  mkdirSync(join(repo, 'src')); writeFileSync(join(repo, 'src/split.js'), 'export {};\n'); writeFileSync(join(repo, 'src/cli.js'), 'export {};\n');
+  writeFileSync(join(repo, 'prompts/tipjar.prompt.md'), '# tipjar\n\nThe code runs `src/cli.js`; `src/split.js` owns the money math.\n');
+  writeFileSync(join(repo, 'prompts/split.prompt.md'), '# split\n\nThis prompt owns `src/split.js`. It reads `README.md`.\n');
+  const found = (await import('../src/runtime-preflight.mjs')).findTests({ root: repo });
+  const { sharedSourceFiles } = await import('../src/runtime-preflight.mjs');
+  assert.deepEqual(sharedSourceFiles(repo, found.visible), ['Warning: src/split.js is named by 2 prompts (prompts/split.prompt.md, prompts/tipjar.prompt.md). One prompt should own each source file.']);
+  const doc = readJson(join(repo, 'tests/place-order.json')); doc.steps[0].input.items[0].quantity = 0; writeJson(join(repo, 'tests/place-order.json'), doc);
+  const result = await check(repo, home, ['place-order'], {});
+  assert.equal(result.out.split('is named by 2 prompts').length, 2);
+});

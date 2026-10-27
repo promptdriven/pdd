@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
-import { findTests, preflight } from '../src/runtime-preflight.mjs';
+import { findTests, preflight, proseSha256 } from '../src/runtime-preflight.mjs';
+import { Readable } from 'node:stream';
 import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
 async function tryStory(setup, fake, words, options = {}, extra = {}) {
@@ -251,7 +252,7 @@ test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try n
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'public')); writeFileSync(join(repo, 'public/index.html'), '<html></html>\n');
     writeFileSync(join(repo, 'public/map.json'), '{"screens": []}\n'); writeFileSync(join(repo, 'app.json'), `${APP_MAP}\n`); });
   const fake = await fakeRuntime(t, trying());
-  for (const [path, said] of [['public/index.html', /--app-map public\/index\.html is not an app map: it is not JSON\./],
+  for (const [path, said] of [['public/index.html', /--app-map public\/index\.html is not an app map: it is not JSON\. .*See RUNBOOK\.md §13\./],
     ['public/map.json', /--app-map public\/map\.json is not an app map: its schema_version is not "prompt-runtime\.app-map\.v1"\./],
     ['nope.json', /--app-map nope\.json is not a Git-visible file in this repository\./]]) {
     const result = await tryStory(setup, fake, ['place-order'], { '--app-map': path, '--no-open': true });
@@ -348,4 +349,63 @@ test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into no
   const intoPackage = await run(pkg, savedCase('d'));
   assert.match(intoPackage.out, /^not added: package\.json is not a file pdd adds steps to\. Move the test to tests\/\.$/m);
   assert.equal(readFileSync(join(pkg.repo, 'package.json'), 'utf8'), before);
+});
+
+// The Try page's approval requests, as GET /v1/try/<id>/approvals returns them (agreed fields, PLAN-0.1.4).
+const approval = (id, prose_sha256, prompt_path = PLACE) => ({ id, prompt_path, prose_sha256, requested_at: '2026-10-27T21:00:00Z', state: 'pending' });
+const draftPlace = repo => { const file = join(repo, PLACE); writeFileSync(file, readFileSync(file, 'utf8').replace('"status": "approved"', '"status": "draft"')); };
+
+// Wrong: a click on the Try page approves a prompt without the person's y in the terminal, or approves a text that changed (#9).
+test('RUNTIME-TRY17: pdd try asks y/n for each approval request from the Try page and answers the page', async t => {
+  const setup = harbor(t, draftPlace), hash = proseSha256(readFileSync(join(setup.repo, PLACE), 'utf8'));
+  let polls = 0;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'GET' && entry.url.endsWith('/approvals')) {
+      polls += 1;
+      const answered = new Set(f.jsonPosts.map(post => post.url.split('/').at(-1)));
+      const all = polls === 1 ? [] : [approval('a1', '0'.repeat(64)), approval('a2', hash), approval('a3', hash), approval('a4', hash, '../outside.prompt.md')];
+      return { status: 200, json: { approvals: all.filter(item => !answered.has(item.id)) } };
+    }
+    if (entry.method === 'POST' && entry.json) return { status: 200, json: { id: entry.url.split('/').at(-1), state: entry.json.state } };
+    if (entry.method === 'GET' && polls >= 4 && !entry.url.endsWith('/tests')) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1), undefined, 'stopped') };
+    return trying()(entry, f);
+  });
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true, stdin: Readable.from(['y\nn\n']) });
+  assert.equal(result.code, 0, result.err);
+  assert.ok(fake.jsonPosts.every(post => post.url.startsWith(`/v1/try/${fake.posts.find(item => item.command === 'try').request.requestId}/approvals/`)));
+  const states = Object.fromEntries(fake.jsonPosts.map(post => [post.url.split('/').at(-1), post.json.state]));
+  assert.deepEqual(states, { a1: 'declined', a2: 'done', a3: 'done', a4: 'declined' });
+  assert.match(result.out, /prompts\/place_order\.prompt\.md: the prompt changed since you clicked Approve\. Not approved/);
+  assert.match(result.out, /Approve prompts\/place_order\.prompt\.md\? y\/n /);
+  assert.match(result.out, /Approved prompts\/place_order\.prompt\.md\./);
+  assert.match(result.out, /prompts\/place_order\.prompt\.md is already approved and current\./);
+  assert.match(result.out, /not approved: \.\.\/outside\.prompt\.md is not a Git-visible \*\.prompt\.md file in this repository\./);
+  assert.match(readFileSync(join(setup.repo, PLACE), 'utf8'), /"status": "approved"/);
+  assert.equal(result.out.split('Approve prompts/place_order.prompt.md? y/n').length, 2);
+});
+
+// Wrong: an agent's pdd try (no terminal) answers an approval request, or blocks on it.
+test('RUNTIME-TRY18: without a terminal pdd try only names the approval request; it asks nothing and answers nothing', async t => {
+  const setup = harbor(t, draftPlace), hash = proseSha256(readFileSync(join(setup.repo, PLACE), 'utf8'));
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && entry.url.endsWith('/approvals')
+    ? { status: 200, json: { approvals: [approval('b1', hash)] } } : trying()(entry, f));
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(result.code, 0);
+  assert.match(result.out, /The Try page asks to approve prompts\/place_order\.prompt\.md\. A person answers it in a terminal: pdd try place-order/);
+  assert.equal(fake.jsonPosts.length, 0); assert.match(readFileSync(join(setup.repo, PLACE), 'utf8'), /"status": "draft"/);
+});
+
+// Wrong: pdd try hides a not-invited answer behind a Try or link message (invite list, Oct 27).
+test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, and makes no Try', async t => {
+  const line = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+  const denied = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'not invited' } };
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? denied : trying()(entry, f));
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(result.code, 5); assert.equal(result.out, ''); assert.ok(result.err.includes(line), result.err);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+  const open = harbor(t), first = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(open, first, ['place-order'], { '--no-open': true })).code, 0);
+  const now = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? denied : trying()(entry, f));
+  const reuse = await tryStory(open, now, ['place-order'], { '--no-open': true });
+  assert.equal(reuse.code, 5); assert.ok(reuse.err.includes(line), reuse.err); assert.equal(now.posts.length, 0);
 });
