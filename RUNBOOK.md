@@ -35,9 +35,11 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
-- Do not write `prose_sha256`: `pdd check --fill-hash` fills it. Set `"status": "approved"` only after the person says
-  in the chat that they approve this prompt. An approved story at a workflow gate is not an approved prompt.
-- To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd check --fill-hash` and ask the person again.
+- Do not write `prose_sha256`: `pdd check --fill-hash` fills it.
+- To approve a prompt, the person runs `pdd approve <path>` (agents never set approved). It shows the interface in
+  plain words and asks y/n. An approved story at a workflow gate is not an approved prompt.
+- To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd check --fill-hash` and ask the
+  person to run `pdd approve <path>` again.
 
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
 from a GitHub issue often has curly quotes. Put real values in the text: "$10.65", "2026-11-02". Write what a user
