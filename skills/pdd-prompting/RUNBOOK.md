@@ -16,7 +16,7 @@ Read section 3 (schema rules) and section 8 (check paths) before the first check
 | File | What it holds |
 |---|---|
 | `prompts/<job>.prompt.md` | The program in plain English, then `## Dependencies`, then one Runtime interface block. |
-| `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. |
+| `user_stories/<story>.md` | One story with a numbered `## Acceptance criteria` list. pdd skips index files: `PLAN.md`, `README.md` and any file with no `## Acceptance criteria` heading. |
 | `tests/<story>.json` | The test for that story. pdd finds tests in any folder. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
@@ -65,6 +65,12 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
 - Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of` or `count`. Paths: section 8.
 - The `input` must match the `input_schema`. An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).
+- `context` is almost always `[]`. It gives one prompt extra text files to read, in this test only. A file linked in a
+  prompt's `## Dependencies` already goes with that prompt to every run, so link shared data there. Each row is exactly
+  `{"prompt_path": …, "paths": […]}`: a prompt of the repo, and at most 16 UTF-8 text files of the repo (120 KiB in all):
+  `"context": [{"prompt_path": "prompts/ui.prompt.md", "paths": ["docs/tile-colors.md"]}]`. A text note, a missing key
+  or an extra key gives `invalid-context` at `context[N]`. Never give the story, a test or expected values as context:
+  the program would see the answers. Patterns for tests: section 18.
 
 ## 3. Schema rules
 
@@ -198,6 +204,11 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
 - `pdd check` gives each test 4 calls for each step, at least 6 and at most 100. To give more, use `--max-calls N`.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
+- **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
+  prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.
+  `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
+  When one step's worst case is bigger than `--max-calls` (at most 100), the runtime refuses the whole test before it
+  starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
 - **Check small first.** A schema refusal costs 0 AI calls. A wrong check path costs the full run: one cost 34 calls.
   - In a new project, check the story with the fewest steps first. Check the others only after it passes.
   - Start a new test with few steps: often one step for each criterion is enough. Add more cases after it passes.
@@ -208,6 +219,9 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
 `pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
+Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Never import pdd's source.
+`pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
+the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
 A failed check shows the criterion, the path, the expected value and the answer: `AC1  result /totalCents  expected 899, got 900`.
@@ -223,8 +237,6 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
-- A provider "unknown" (`graph-provider-failure`) means the AI service failed: no verdict, also when pdd prints `✗ 1 of 9
-  criteria · … 1 refused`. Do not send it again on your own. Tell the person, with its AI calls. Send again only with their OK.
 - pdd warns "the AC1 check expects 0, but the AC1 text says 409" when a value is not in the criterion text. For counts,
   status codes and exit codes, this warning is often false. Do not change a check for it. The warning "N of the M
   files sent are not prompt, story or test files" is normal in an app repo.
@@ -238,6 +250,9 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 | `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft, fill the hash, ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
+| `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 100), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
+| `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
+| `graph-provider-failure` | The AI service failed. No verdict, also when pdd prints `✗ … 1 refused` | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 
 ## 12. `pdd try` and Save as test
 
@@ -374,3 +389,32 @@ The runtime proves the prompt. PR 2 must prove that the **code** does the same.
 - Control: the planted mistake must fail the formal check too. If it does not, write "Not run: the check cannot
   see the mistake".
 - Commit the replay test and the formal test as normal tests. Do not commit raw logs.
+
+## 18. Patterns: a pure function and a state sequence
+
+Test only the real operations of the program: functions, commands or routes that the code will have. Never add an
+operation only for a check (for example `moveWithInputObservation`, `sequence` or `replay`). The runtime sees results,
+saved data and call counts. It cannot see a browser, a phone layout or whether an input object changed. Put such
+criteria in a story with no runtime test (pdd only warns "has no test"), and prove them with the repo's tests in PR 2.
+Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
+repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
+
+**A pure function:** one operation, input → result, no saved data, no `calls`. Each step costs 1 AI call.
+`initial_world` and `simulation` are `{}`. One step for the 2048 `board` prompt:
+```json
+{"step_id": "merge-row-left", "entry_path": "prompts/board.prompt.md", "operation": "move",
+ "input": {"board": [[2,2,2,2],[0,0,0,0],[0,0,0,0],[0,0,0,0]], "dir": "left"},
+ "checks": [{"criterion_id": "AC1", "target": "result", "path": "/board/0", "op": "equals", "value": [4,4,0,0]},
+            {"criterion_id": "AC1", "target": "result", "path": "/gained", "op": "equals", "value": 8}]}
+```
+
+**A state sequence** (N moves in a row): one test step for each move. Steps run in order. Use one of these ways:
+- The app saves its state: declare a resource (section 5). `initial_world` holds the start, for example
+  `{"kv": {"game": {"board": […], "score": 0}}}`. Each step makes one move. `world` checks read the state after it.
+  Each step costs 2 to 3 AI calls.
+- The state goes in and comes out (`step(state, dir)` returns the new state): give each step the result of the step
+  before it. `"input": {"state": {"$step_result": {"step_id": "move-1", "path": ""}}, "dir": "up"}`. The path `""` is
+  the whole result. Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
+- The app really replays a list of moves: one operation takes the list. Make all moves in that one AI call: link the
+  rule prompt (`board.prompt.md`) under `## Dependencies` with no `calls` entry, so the AI reads its rules. A `calls`
+  entry with `max_calls: 30` makes every step of the prompt need 61 calls (section 10).
