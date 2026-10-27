@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 7c2e2e90882ece24afe20c36016c118089fc85e34fc28da8fd237aa2403b6512).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 6f5ce267ed444bde064ab4b2af253c0e1b8d4915f2dd9ce2073e2d5619b42a00).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -48,7 +48,7 @@ function parseRoute(route, words) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
-  return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
+  return Object.freeze({ commandId: route.id, local: route.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }
 export function parseArgv(argv) {

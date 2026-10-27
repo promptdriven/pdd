@@ -1,8 +1,8 @@
 # Install the PDD skills in the home folder
 
-Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES` (`pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`) and `installSkills({packageRoot, home, claudeConfigDir})`.
+Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES` (`pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature`) and `installSkills({packageRoot, home, claudeConfigDir})`.
 
-The four skills ship in `<packageRoot>/skills/<name>/`. Codex finds personal skills in `<home>/.agents/skills/`. Claude finds them in `<home>/.claude/skills/`, or in `<CLAUDE_CONFIG_DIR>/skills/` when the `CLAUDE_CONFIG_DIR` environment variable is set. `installSkills` keeps one copy of each skill in each of these skills roots, so the person's agent finds them in any chat:
+The PDD skills ship in `<packageRoot>/skills/<name>/`. Codex finds personal skills in `<home>/.agents/skills/`. Claude finds them in `<home>/.claude/skills/`, or in `<CLAUDE_CONFIG_DIR>/skills/` when the `CLAUDE_CONFIG_DIR` environment variable is set. `installSkills` keeps one copy of each skill in each of these skills roots, so the person's agent finds them in any chat:
 
 - `<home>/.agents/skills/`
 - `<home>/.claude/skills/`

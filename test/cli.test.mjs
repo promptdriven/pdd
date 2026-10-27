@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { launchNativeSession } from '../src/native-session.mjs';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -17,15 +15,17 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'completion', 'workflow.list', 'check', 'try']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'try', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
+    ['completion', 'zsh'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
-  for (const argv of [['session','--agent','unknown'], ['session','--agent'], ['session','--agent','codex','--agent','claude'], ['run', 'start', 'issue'], ['verify'], ['lint'], ['runtime', 'discover'],
+  // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
+  for (const argv of [['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
+    ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['lint'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
-    ['unknown', '--help'], ['session', '--dangerously-skip-permissions'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
+    ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
     ['completion'], ['--version', 'extra'], ['--skill'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
     assert.throws(() => parseArgv(argv), CommandInputError, JSON.stringify(argv));
@@ -61,13 +61,12 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/pocket\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['session','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|lint|runtime|doctor|phone)\b/);
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
-  const guide = readFileSync(join(packed, 'docs/prompting-guide.md'), 'utf8');
   const empty = run(['workflow', 'list', '--json']); assert.equal(empty.status, 0,empty.stderr);
   assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
   const recipes = run(['workflow', 'list', '--json'], packed); assert.equal(recipes.status, 0);
@@ -94,96 +93,11 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
   }
-  const fakeBin = join(sandbox, 'native-bin'); mkdirSync(fakeBin);
-  const nativeScript = `#!${process.execPath}
-import fs from 'node:fs';
-const input=fs.readFileSync(0,'utf8');
-console.log(JSON.stringify({executable:process.argv[1],argv:process.argv.slice(2),cwd:process.cwd(),input,setting:process.env.NATIVE_SETTING_EXAMPLE}));
-process.exit(Number(process.env.NATIVE_FIXTURE_EXIT||0));
-`;
-  for (const name of ['codex','claude']) writeFileSync(join(fakeBin,name), nativeScript, {mode:0o755});
-  const nativeEnv = {...env, PATH:fakeBin+':'+env.PATH,NATIVE_SETTING_EXAMPLE:'unchanged'};
-  const request = 'Help with this project; $(touch must-not-exist) "quoted"';
-  for (const agent of ['codex','claude']) {
-    const launched = spawnSync(process.execPath,[bin,'session','--agent',agent,request],
-      {cwd:project,env:nativeEnv,input:'native stdin is inherited\n',encoding:'utf8',timeout:5000});
-    assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout);
-    assert.equal(observed.executable,join(fakeBin,agent));assert.equal(observed.argv.length,agent==='codex'?5:2); assert.ok(observed.argv.at(-1).endsWith('\n'+request));
-    assert.ok(observed.argv.at(-1).startsWith('This is a PDD session in '));assert.equal(observed.argv.at(-1).includes(guide.slice(0,200)),false);
-    assert.equal(observed.cwd,project);assert.equal(observed.input,'native stdin is inherited\n');assert.equal(observed.setting,'unchanged');
+  for (const args of [['session'], ['session', '--agent', 'claude', 'Help'], ['workflow', 'feature'], ['workflow', 'bug', '--', 'Fix it']]) {
+    const refused = run(args); assert.equal(refused.status, 2, args.join(' ')); assert.equal(refused.stdout, '');
   }
-  for (const name of ['feature','bug','small-change']) {
-    for (const agent of [null,'codex','claude']) {
-      const args=[bin,'workflow',name,...(agent?['--agent',agent]:[]),'--',request+' --help'];
-      const launched=spawnSync(process.execPath,args,{cwd:project,env:nativeEnv,input:'selected recipe input',encoding:'utf8',timeout:5000});
-      assert.equal(launched.status,0,launched.stderr);const observed=JSON.parse(launched.stdout),payload=observed.argv.at(-1);
-      assert.equal(observed.executable,join(fakeBin,agent??'codex'));assert.equal(observed.argv.length,(agent??'codex')==='codex'?5:2);
-      assert.ok(payload.endsWith(`\n${request} --help\nUse the pdd-${name} skill for this request.`));assert.equal(payload.includes(guide.slice(0,200)),false);
-      assert.equal(observed.cwd,project);assert.equal(observed.input,'selected recipe input');assert.equal(observed.setting,'unchanged');
-    }
-  }
-  for(const args of [['workflow','unknown'],['workflow','../feature'],['workflow','/feature'],['workflow','unknown','--help'],['workflow','feature','--agent','other']]){
-    const refused=run(args);assert.equal(refused.status,2);assert.equal(refused.stdout,'');
-  }
-  for(const args of [['workflow','feature','--help'],['help','workflow','bug']]){
-    const helped=run(args);assert.equal(helped.status,0);assert.equal(helped.stderr,'');
-  }
-  const selectedExit=spawnSync(process.execPath,[bin,'workflow','bug'],{cwd:project,env:{...nativeEnv,NATIVE_FIXTURE_EXIT:'9'},input:'',encoding:'utf8',timeout:5000});assert.equal(selectedExit.status,9);
-  const missingEntry=join(packed,'skills/pdd-feature/SKILL.md');rmSync(missingEntry);
-  const selectedMissing=spawnSync(process.execPath,[bin,'workflow','feature'],{cwd:project,env:nativeEnv,input:'',encoding:'utf8',timeout:5000});assert.equal(selectedMissing.status,1);assert.equal(selectedMissing.stdout,'');
-  const exited=spawnSync(process.execPath,[bin,'session'],{cwd:project,env:{...nativeEnv,NATIVE_FIXTURE_EXIT:'7'},input:'',encoding:'utf8',timeout:5000});
-  assert.equal(exited.status,7);assert.equal(JSON.parse(exited.stdout).argv.length,5);
-  const missing=spawnSync(process.execPath,[bin,'session','--agent','claude'],{cwd:project,env:{...env,PATH:home},input:'',encoding:'utf8',timeout:5000});
-  assert.equal(missing.status,127);assert.equal(missing.stdout,'');assert.ok(missing.stderr.includes('claude'));
-  rmSync(join(packed,'skills/pdd-prompting/SKILL.md'));
-  const missingGuide=spawnSync(process.execPath,[bin,'session'],{cwd:project,env:nativeEnv,input:'',encoding:'utf8',timeout:5000});
-  assert.equal(missingGuide.status,1);assert.equal(missingGuide.stdout,'');
-  assert.equal(existsSync(join(project,'must-not-exist')),false);
   assert.deepEqual(readdirSync(home).sort(), ['.agents', '.claude']); assert.deepEqual(readdirSync(project), []);
   assert.ok(PUBLIC_COMMAND_MANIFEST.length > 0);
-});
-
-// Wrong: launch uses shell interpolation/config overrides, drops cwd/stdio, retries, or duplicates terminal Ctrl-C.
-test('ALPHA5: native argv and process lifetime preserve settings exits and directed signal semantics', async () => {
-  for (const agent of ['codex','claude']) {
-    const child=new EventEmitter(), signals=new EventEmitter(),calls=[],kills=[];
-    child.kill=name=>kills.push(name);
-    const message='This is a PDD session\nquoted "value"\nx; $(command)';
-    const promise=launchNativeSession({agent,cwd:'/project with spaces',message,stderr:capture()},
-      {spawn:(...args)=>{calls.push(args);return child;},signals,stdinIsTTY:false});
-    assert.equal(calls.length,1);assert.equal(calls[0][0],agent);assert.equal(calls[0][1].length,agent==='codex'?5:2);
-    assert.deepEqual(calls[0][1].slice(0,-1),agent==='codex'?['--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c','projects={"/project with spaces"={trust_level="trusted"}}']:['--dangerously-skip-permissions']);
-    assert.equal(calls[0][1].at(-1),message);
-    assert.deepEqual(calls[0][2],{cwd:'/project with spaces',stdio:'inherit',shell:false,env:{...process.env,PDD_AGENT_SESSION:'1'}});
-    signals.emit('SIGINT');signals.emit('SIGTERM');signals.emit('SIGHUP');assert.deepEqual(kills,['SIGINT','SIGTERM','SIGHUP']);
-    let resolved=false;promise.then(()=>{resolved=true;});
-    // Native process exit alone can precede stdio close; neither a turn nor a handoff is a completion signal.
-    child.emit('exit',19,null);await new Promise(resolve=>setImmediate(resolve));assert.equal(resolved,false);
-    child.emit('close',19,null);assert.equal(await promise,19);
-    for(const name of ['SIGINT','SIGTERM','SIGHUP'])assert.equal(signals.listenerCount(name),0);
-  }
-  const child=new EventEmitter(),signals=new EventEmitter();child.kill=()=>assert.fail('Terminal already delivered SIGINT');
-  const done=launchNativeSession({agent:'codex',cwd:'/project',message:'Short intro',stderr:capture()},
-    {spawn:()=>child,signals,stdinIsTTY:true});signals.emit('SIGINT');child.emit('close',null,'SIGINT');assert.equal(await done,130);
-  assert.equal(signals.listenerCount('SIGINT'),0);
-});
-
-// Wrong: workflow names remain unavailable, paste recipes, or are treated as untrusted paths/native arguments.
-test('ALPHA6: direct workflow names exactly one workflow skill in one unchanged native launch',async t=>{
-  for(const name of ['feature','bug','small-change']){
-    const stdout=capture(),stderr=capture(),calls=[];
-    const code=await runPdd(['workflow',name,'--agent','claude','--','--dangerously-not-a-flag'],
-      {packageRoot:root,cwd:'/chosen project',stdout,stderr,nativeSession:async input=>{calls.push(input);return 17;}});
-    assert.equal(code,17);assert.equal(calls.length,1);const input=calls[0];
-    assert.equal(input.agent,'claude');assert.equal(input.cwd,'/chosen project');
-    assert.ok(input.message.startsWith('This is a PDD session in /chosen project.\n'));
-    assert.ok(input.message.endsWith(`\n--dangerously-not-a-flag\nUse the pdd-${name} skill for this request.`));
-    const plan=parseArgv(['workflow',name]);assert.equal(plan.workflowName,name);assert.equal(plan.local,'session');
-  }
-  for(const words of [['workflow','unknown'],['workflow','../bug'],['workflow','feature/../../bug'],['workflow','unknown','--help']]){
-    assert.equal(await runPdd(words,{packageRoot:'/absent',stdout:capture(),stderr:capture(),nativeSession:()=>assert.fail('No native')}),2);
-  }
-  assert.equal(await runPdd(['workflow','bug','--help'],{packageRoot:'/absent',stdout:capture(),stderr:capture(),nativeSession:()=>assert.fail('No native')}),0);
 });
 
 // Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.

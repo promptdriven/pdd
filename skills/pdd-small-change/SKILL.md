@@ -1,6 +1,6 @@
 ---
 name: pdd-small-change
-description: PDD small-change workflow. Plan a small change that is easy to undo, make it, then verify it.
+description: PDD small-change workflow. Use when the person asks for a small, contained change that is easy to undo, such as a typo, a config value or a small fix. Plan it, make it, verify it, one PR.
 ---
 
 # PDD small change

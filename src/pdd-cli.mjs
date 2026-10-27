@@ -1,13 +1,12 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 385e8bca4ddef3a00df9113fd53af05da64453d86eb58f6ade4bc0f48616f3f5).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7aa8dee485d34c5766a2f02100d878d1ce7d8aca2e5a2b2815b2868858fc5925).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchNativeSession } from './native-session.mjs';
-import { renderSessionIntro } from './session-intro.mjs';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
+import { setupProject } from './project-setup.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -25,12 +24,12 @@ export function renderHelp(prefix = []) {
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    'session and the named workflows open a chat in this terminal.',
+    'Open Codex or Claude as usual and call a PDD skill: /pdd-feature, /pdd-bug, /pdd-small-change or /pdd-prompting.',
     'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
     'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, nativeSession = launchNativeSession, workflowRunner, workflowAreas } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -60,12 +59,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return 1;
       }
     }
-    case 'session': {
-      let message;
-      try { message = renderSessionIntro({ packageRoot, cwd, request: plan.operands.join(' '), workflowName: plan.workflowName }); }
-      catch { line(stderr, 'The PDD skills could not be read. Use a complete PDD package.');return 1; }
-      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, message, stderr });
-    }
+    case 'setup':
+      try {
+        const { file, changed } = setupProject({ cwd, packageRoot });
+        line(stdout, changed ? `pdd setup: wrote the PDD block in ${file}.` : `pdd setup: ${file} already has this PDD block. No change.`);
+        return 0;
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`);return 1; }
     case 'runtime-check':
     case 'runtime-try':
       try {

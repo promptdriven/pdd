@@ -8,6 +8,6 @@ test('-help works like --help', () => {
 });
 
 test('an unknown command is named in the error', () => {
-  assert.throws(() => parseArgv(['setup']), { message: 'Unknown command "setup". Run pdd --help to see the commands.' });
+  assert.throws(() => parseArgv(['install']), { message: 'Unknown command "install". Run pdd --help to see the commands.' });
   assert.throws(() => parseArgv(['se\x1btup']), { message: 'Unknown command "se tup". Run pdd --help to see the commands.' });
 });
