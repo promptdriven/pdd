@@ -9,7 +9,7 @@ Use this for a small change with a clear effect that is easy to undo. If the imp
 
 Each area is one main chat. Step briefs are in `steps/`.
 1. plan: scope → gate: approve
-2. build: change, verify → gate: pr
+2. build: change, verify, formal → gate: pr
 
 ## Rules
 

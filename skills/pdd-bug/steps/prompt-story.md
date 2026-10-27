@@ -5,3 +5,4 @@
 - In the Story, state the correct behavior and what must not change.
 - Keep the bug input as a test case. Take its expected result from the requirement, not from the code.
 - Add nearby edge and unaffected cases in the repo's test format.
+- If a criterion is a precise rule (money, limits, permissions, state order), add it to the Story under `## Rules to check`, in plain words, with its forbidden result.

@@ -8,12 +8,13 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const skills = join(root, 'skills');
 const read = path => readFileSync(join(skills, path), 'utf8');
 // G2: bug and feature stop at PR 1 (prompt PR) and ask before the code area.
+// 0.1.3: every code PR ends with a formal step after verify.
 const AREAS = {
-  'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify'], [], 'pr']],
+  'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify', 'formal'], [], 'pr']],
   'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'],
-    ['code', ['build', 'verify'], [], 'pr']],
+    ['code', ['build', 'verify', 'formal'], [], 'pr']],
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
-    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'], ['code', ['build', 'verify'], [], 'pr']],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 const frontmatter = text => {
@@ -70,7 +71,8 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → gate: ${gate}`), `${name} lists ${area}`);
     }
     const bytes = filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0);
-    assert.ok(bytes <= 4096, `${name} is ${bytes} bytes`);
+    // 6.5 KB: the formal step (about 1.2 KB) and the test-vector lines (0.1.3) carry real method content.
+    assert.ok(bytes <= 6656, `${name} is ${bytes} bytes`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
   }
 });
@@ -122,4 +124,37 @@ test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd
   const prompting = read('pdd-prompting/SKILL.md');
   assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check:` line and the report link. Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
   assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
+});
+
+// Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, a mapping gap counts as a pass, or a failing case is hidden.
+test('SKILLS9: build replays tests/<story>.json, verify runs it with a planted mistake and writes the table, and a failure loops back to build twice', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);
+    assert.match(build, /replay test[^\n]*reads `tests\/<story>\.json` at run time/, name);
+    assert.match(build, /Never edit `tests\/<story>\.json`/, name);
+    assert.match(verify, /planted mistake/, name);
+    assert.match(verify, /A crash[^\n]*does not count/, name);
+    assert.match(verify, /\| Case \| Criterion \| Input \| Expected \| Prompt \(PR 1\) \| Code \(PR 2\) \| Result \|/, name);
+    assert.match(verify, /Not replayed[^\n]*never a pass/, name);
+    assert.match(verify, /git diff[^\n]*tests\/<story>\.json/, name);
+    assert.match(skill, /back to build in a new subagent, at most 2 times/, name);
+    assert.ok(skill.includes('"✗ N vectors fail"'), name);
+    assert.match(read(`${name}/steps/prompt-story.md`), /## Rules to check/, name);
+  }
+});
+
+// Wrong (0.1.3 formal): no formal line in PR 2, a solver by default, a check that cannot see a planted mistake counts, or raw logs get committed.
+test('SKILLS10: every workflow has a formal step with honest result words, a bounded check first and a planted-mistake control', () => {
+  for (const name of Object.keys(AREAS)) {
+    const text = read(`${name}/steps/formal.md`);
+    for (const word of ['Proved (bounded)', 'Proved (solver)', 'Failed', 'Not run', 'Not applicable', '## Formal check', 'Rules to check'])
+      assert.ok(text.includes(word), `${name}: ${word}`);
+    assert.match(text, /every input/);
+    assert.match(text, /Z3|CrossHair/);
+    assert.match(text, /planted mistake/);
+    assert.match(text, /raw logs/);
+    assert.ok(text.trimEnd().split('\n').length <= 15);
+  }
+  assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-feature/steps/formal.md'));
+  assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-small-change/steps/formal.md'));
 });
