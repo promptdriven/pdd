@@ -103,7 +103,7 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     assert.match(text, /PR 1 link, the `Runtime check:` line and the Try link/);
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first?"'), name);
   }
-  assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 11[^\n]*`pdd check`[^\n]*CURRENT prompt/);
+  assert.match(read('pdd-bug/steps/reproduce.md'), /If a prompt owns this behavior[^\n]*section 14[^\n]*`pdd check`[^\n]*CURRENT prompt/);
   assert.match(read('pdd-bug/steps/check.md'), /before ✗ → after ✓/);
   for (const file of ['pdd-bug', 'pdd-feature', 'pdd-small-change'].flatMap(name => [`${name}/SKILL.md`, ...readdirSync(join(skills, name, 'steps')).map(step => `${name}/steps/${step}`)]))
     assert.equal(/session intro/.test(read(file)), false, file);
@@ -127,19 +127,21 @@ test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd
   assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
 });
 
-// Wrong (0.1.3): the steps repeat RUNBOOK section 14 (two homes for one method), or the runbook copy lacks it.
+// Wrong (0.1.3): the steps repeat RUNBOOK section 17 (two homes for one method), or the runbook copy lacks it.
 const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
-const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf('## 14. The code PR (PR 2): test vectors and the formal check'));
+// Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
+const RUNBOOK_SECTIONS = { 14: 'Bug workflow', 17: 'The code PR (PR 2): test vectors and the formal check' };
+const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
 // Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
-test('SKILLS9: build and verify point to RUNBOOK section 14 for the replay test, and a failure loops back to build twice', () => {
+test('SKILLS9: build and verify point to RUNBOOK section 17 for the replay test, and a failure loops back to build twice', () => {
   for (const word of ['tests/<story>.json', 'Never edit it in PR 2', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since PR 1', '✗ N vectors fail'])
-    assert.ok(section14().includes(word), `RUNBOOK section 14: ${word}`);
+    assert.ok(section14().includes(word), `RUNBOOK section 17: ${word}`);
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);
-    assert.match(build, /replay test[^\n]*section 14 of RUNBOOK\.md/, name);
+    assert.match(build, /replay test[^\n]*section 17 of RUNBOOK\.md/, name);
     assert.match(build, /Never edit `tests\/<story>\.json`/, name);
-    assert.match(verify, /section 14 of RUNBOOK\.md/, name);
+    assert.match(verify, /section 17 of RUNBOOK\.md/, name);
     assert.match(verify, /planted mistake/, name);
     assert.match(verify, /table/, name);
     assert.equal(verify.includes('| Case | Criterion |'), false, `${name}: the table format lives in the RUNBOOK`);
@@ -150,13 +152,13 @@ test('SKILLS9: build and verify point to RUNBOOK section 14 for the replay test,
 });
 
 // Wrong (0.1.3 formal): the formal step repeats the method, or the runbook loses the honest result words.
-test('SKILLS10: every workflow has a short formal step that points to RUNBOOK section 14', () => {
+test('SKILLS10: every workflow has a short formal step that points to RUNBOOK section 17', () => {
   for (const word of ['Proved (bounded)', 'Proved (solver)', 'Failed + counterexample', 'Not run + reason', 'Not applicable + reason', 'Rules to check',
     'EVERY input', 'Z3', 'CrossHair', 'planted mistake must fail the formal check', 'Do not commit raw logs'])
-    assert.ok(section14().includes(word), `RUNBOOK section 14: ${word}`);
+    assert.ok(section14().includes(word), `RUNBOOK section 17: ${word}`);
   for (const name of Object.keys(AREAS)) {
     const text = read(`${name}/steps/formal.md`);
-    assert.match(text, /section 14 of RUNBOOK\.md/);
+    assert.match(text, /section 17 of RUNBOOK\.md/);
     assert.match(text, /## Formal check/);
     assert.ok(text.trimEnd().split('\n').length <= 8, `${name}/formal.md is short`);
   }
@@ -195,4 +197,23 @@ test('SKILLS13: the bug story gate starts with exactly one of three verdict line
   for (const verdict of ['Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
     'Verdict: the prompt is right; the bug is only in the CODE.', 'Verdict: no prompt covers this yet; the bug can only be in the code.'])
     assert.ok(skill.includes(`"${verdict}"`), verdict);
+});
+
+// Wrong (RUNBOOK renumbered in 0.1.3): a skill sends the agent to a section that moved or does not exist.
+test('SKILLS14: every RUNBOOK section that a skill names exists with the expected title', () => {
+  const runbook = RUNBOOK(), named = new Set();
+  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
+    for (const [, number] of readFileSync(file, 'utf8').matchAll(/section (\d+) of RUNBOOK\.md/g)) named.add(Number(number));
+  assert.ok(named.size >= 2, [...named].join(','));
+  for (const number of named) {
+    assert.ok(RUNBOOK_SECTIONS[number], `section ${number} is named by a skill but has no expected title in this test`);
+    assert.ok(runbook.split('\n').includes(`## ${number}. ${RUNBOOK_SECTIONS[number]}`), `RUNBOOK.md has no "## ${number}. ${RUNBOOK_SECTIONS[number]}"`);
+  }
+  assert.ok(runbook.includes('**The formal check'), 'formal.md names "The formal check" in section 17');
+});
+
+// Wrong (0.1.3): a PR body shows the agent's machine paths or raw logs.
+test('SKILLS15: every verify step keeps verify.md to commands and results, with no local paths or raw logs', () => {
+  for (const name of Object.keys(AREAS))
+    assert.ok(read(`${name}/steps/verify.md`).includes('- verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.'), name);
 });
