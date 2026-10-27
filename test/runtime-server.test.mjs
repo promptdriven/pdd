@@ -523,7 +523,7 @@ test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check i
     const result = await check(setup, fake, [], options);
     assert.equal(result.code, 5); assert.equal(result.out, '');
     assert.ok(result.err.trimEnd().split('\n').includes(INVITE_LINE), result.err);
-    assert.doesNotMatch(result.err, /Lint passed|Sent \d/);
+    assert.doesNotMatch(result.err, /Lint passed|Sent \d|If pdd stops/);
   }
   assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']);
   const later = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { ...NOT_INVITED, json: { error: { code: 'not-invited', message: 'not invited' }, login: 'octo' } } : f.normal(entry));
@@ -532,4 +532,17 @@ test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check i
   const gate = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 503, text: 'The runtime opens soon.' } : f.normal(entry));
   const opens = await check(setup, gate, ['place-order']);
   assert.equal(opens.code, 5); assert.match(opens.out + opens.err, /The runtime opens soon\./);
+});
+
+// Wrong: the read line shows before lint, when there is nothing to read yet (lead, Oct 27).
+test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the checks are sent', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  const lines = result.err.split('\n'), read = lines.findIndex(text => text.startsWith('If pdd stops, read the results with: pdd check --read '));
+  assert.ok(read > lines.findIndex(text => text.startsWith('Lint passed.')), result.err);
+  assert.equal(lines.filter(text => text.startsWith('If pdd stops')).length, 1);
+  const refused = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
+    ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'stale', admission_state: 'stale', interface: { calls: [] } }]) } : f.normal(entry));
+  const none = await check(setup, refused, ['place-order']);
+  assert.equal(none.code, 4); assert.doesNotMatch(none.err, /If pdd stops/);
 });

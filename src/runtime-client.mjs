@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ca8bfe0fc8b0f7619ea2022c007feac58b55b74519b8e7ae86f70c915820c6c3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: eada12941a353037d5057d8be88ad3fb7c8814713b31b36bdf6b50380400e9b0).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -417,6 +417,8 @@ async function checkBatch(context, rows) {
   const toSend = sendable.filter(row => row.state === 'ready');
   line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
+  // Only now is there something to read again (lead, Oct 27): after lint passes, before the first check POST.
+  if (toSend.length) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
   if (context.notInvited && !toSend.some(isOpen)) throw new Stop(5, context.notInvited);
@@ -594,7 +596,6 @@ async function runBatch(context, cwd, words, options, setRelease) {
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${batch}`);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, rows);
