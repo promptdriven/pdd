@@ -623,3 +623,18 @@ test('code area build → verify → formal: a loop back to build only warns, as
   assert.match(f.prs[1].body, /\| 1 \| 2 \| 2 \| same \|/); assert.match(f.prs[1].body, /Proved \(bounded\): 0\.\.999/);
   assert.match(f.prs[1].body, /\*\*formal\*\*: Proved \(bounded\)/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
 });
+
+// Seen in a real run: the person said "I approve the prompt. Yes, build the code."; the chat committed the approval
+// and ran done again to push it to PR 1, which moved the gate past the person's answer.
+test('pushing more commits to PR 1 at the code gate keeps the gate time, so the person need not say yes twice', async t => {
+  const { f, run } = await featureToPr1(t);
+  const gateAt = f.record().gate.at;
+  f.tick(); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two. Approved.\n'); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
+  const pushed = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  assert.match(pushed.message, /Pushed the new commits to PR 1/); assert.equal(f.record().gate.at, gateAt); assert.equal(f.prs.length, 1);
+  const requests = [];
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async request => { requests.push(request);
+    return { ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve the prompt. Yes, build the code.', userMessageAt: gateAt + 1 }; } }));
+  assert.equal(code.exitCode, 0, code.message); assert.equal(requests[0].gateAskedAt, gateAt);
+});

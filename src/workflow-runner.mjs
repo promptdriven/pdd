@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5b4be9507ccdc5f4e9b65433760f11678fc9443c31086dd9955ec9890c962728).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f37f4826684686fb97ddc3b8daf33df07810b1aba463c5cc970c62fa29e245dd).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -231,7 +231,9 @@ async function finishPr(run, area, step, p, lines) {
   }
   const url = prOf(run, area.name).url;
   if (area.then === 'ask-code') {
-    run.state = 'waiting'; run.gate = { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
+    // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
+    // (a change request with pdd workflow changes moves it).
+    run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
     const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
     const drafts = await pr1Drafts(run, p);
     return done([...lines, `PR 1: ${url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
