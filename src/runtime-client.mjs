@@ -1,17 +1,17 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: eada12941a353037d5057d8be88ad3fb7c8814713b31b36bdf6b50380400e9b0).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0cd92f5d563f9e07bc329a0742e3f71071401ff375a2a3e6772ca34cecd0aab9).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
-export const DEFAULT_RUNTIME_URL = 'https://34.72.131.98';
+export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
 const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 'unknown']);
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -159,9 +159,15 @@ class Runtime {
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
-// The invite list (Oct 27): a login that is not invited gets 403 {"code": "not-invited", "login": …}. One plain line, exit 5.
-function notInvited(reply) {
+// Answers that stop everything with one plain line and exit 5: a login not on the invite list (403 not-invited), and an
+// old pdd that the server no longer serves (code update-required, any status, 0.1.6).
+const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd#alpha';
+function blockingAnswer(reply) {
   const json = reply.json, code = json?.code ?? json?.error?.code;
+  if (code === 'update-required') {
+    const said = cleanText(typeof json?.message === 'string' ? json.message : json?.error?.message).slice(0, 300);
+    return said || UPDATE_TEXT;
+  }
   if (reply.status !== 403 || code !== 'not-invited') return null;
   const login = typeof json.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(json.login) ? json.login : null;
   return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD runtime invite list yet. Ask the PDD team to add you.`;
@@ -173,8 +179,8 @@ const gateText = reply => reply.status === 503 && !reply.json && String(reply.te
 // One answer to a POST, as the row table of the spec.
 function judgePost(reply, id, command, secrets) {
   if (reply.lost) return { kind: 'unknown', why: 'The answer to the request was lost.' };
-  const uninvited = notInvited(reply);
-  if (uninvited) return { kind: 'stop', note: { code: 'not-invited', message: uninvited }, notInvited: true };
+  const stopLine = blockingAnswer(reply);
+  if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
@@ -197,8 +203,8 @@ function judgePost(reply, id, command, secrets) {
 // One answer to a GET of a known request ID.
 function judgeGet(reply, id, command) {
   if (reply.lost) return { kind: 'again' };
-  const uninvited = notInvited(reply);
-  if (uninvited) return { kind: 'not-invited', message: uninvited };
+  const stopLine = blockingAnswer(reply);
+  if (stopLine) return { kind: 'blocked', message: stopLine };
   if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
   if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
@@ -233,8 +239,11 @@ function storyList(found) {
   return found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`);
 }
 
-function select(found, words) {
-  if (!found.tests.length) throw new Stop(2, 'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".');
+function select(found, words, root) {
+  if (!found.tests.length) {
+    throw new Stop(2, ['No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
+      ...(root ? whyNoTests(root, found.visible) : [])].join('\n'));
+  }
   const { selected, unknown } = selectTests(found, words);
   if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories with tests:`, ...storyList(found)].join('\n'));
   return selected;
@@ -349,7 +358,7 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
-  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.notInvited) context.notInvited = verdict.note.message; }
+  else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
   else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Math.max(context.deadline, context.ports.now() + LOST_READ_MS) });
 }
@@ -360,7 +369,7 @@ async function readRow(context, row) {
   if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
   else if (verdict.kind === 'auth') context.readStop = 'Run gh auth login';
-  else if (verdict.kind === 'not-invited') context.readStop = verdict.message;
+  else if (verdict.kind === 'blocked') context.readStop = verdict.message;
   else if (verdict.kind === 'gate') context.readStop = 'The runtime opens soon.';
 }
 
@@ -377,7 +386,7 @@ async function runLint(context) {
       await context.ports.sleep(verdict.wait, context.signal); continue;
     }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
-    if (verdict.notInvited) throw new Stop(5, verdict.note.message);
+    if (verdict.blocked) throw new Stop(5, verdict.note.message);
     if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // A lost lint answer is read by the same ID, like a lost check.
@@ -389,7 +398,7 @@ async function runLint(context) {
       const read = judgeGet(await context.runtime.get(id), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
-      else if (read.kind === 'not-invited') throw new Stop(5, read.message);
+      else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
@@ -421,7 +430,7 @@ async function checkBatch(context, rows) {
   if (toSend.length) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
-  if (context.notInvited && !toSend.some(isOpen)) throw new Stop(5, context.notInvited);
+  if (context.blocked && !toSend.some(isOpen)) throw new Stop(5, context.blocked);
   let waitingShown = -1;
   // Read open rows until the timeout; a row whose POST answer was lost is read for at least 5 min.
   const readable = row => isOpen(row) && (ports.now() < context.deadline || ports.now() < (row.read_until ?? 0));
@@ -481,6 +490,57 @@ function runFiles(root, ports) {
   for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${formatSize(file.size)}`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)}. ${other.length} of them are not prompt, story or test files.`);
   return 0;
+}
+
+// pdd check --lint (Serhan: runtime logic belongs on the server): only the server's lint (0 AI calls) on the captured files.
+// Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
+async function runLintOnly(context, cwd, words, setRelease) {
+  const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
+  const rows = select(found, normalized, root).map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
+    refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
+  const capture = captureSource(root), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
+    secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
+  context.folder = context.store.folder('batches', batch);
+  saveBatch(context);
+  setRelease(interruptible(context));
+  context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  const lint = await runLint(context);
+  if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
+  const answer = lint.answer, program = answer?.result?.report?.program;
+  const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
+    : (answer?.state === 'refused' && !isObject(program) ? projectAnswer(answer, { origin, secrets: context.secrets }).refusals.map(item => ({ ...item, path: null })) : []);
+  if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
+    throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
+  }
+  for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
+    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null });
+  }
+  const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
+  for (const [row, problem] of verdicts) {
+    Object.assign(row, { state: 'refused', refusals: [problem] });
+    const path = /^(\S+?\.prompt\.md)\b/.exec(problem.message ?? '')?.[1] ?? null;
+    if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
+  }
+  if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  for (const row of rows) if (row.state === 'ready') row.state = 'passed';
+  const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
+  const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
+  if (context.json) {
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: answer?.state ?? lint.kind, summary_line: summary, problems,
+      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
+    return exitCode;
+  }
+  const out = [];
+  if (problems.length) {
+    out.push('Lint problems (from the PDD runtime):');
+    for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
+  }
+  for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : `refused: ${row.refusals.map(item => item.code).join(', ')}`}`);
+  out.push(summary, ...found.warnings);
+  ports.stdout.write(`${out.join('\n')}\n`);
+  return exitCode;
 }
 
 function runFillHash(root, ports) {
@@ -555,8 +615,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    const modes = ['--read', '--fill-hash', '--files', '--request'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request'].includes(modes[0])));
+    const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
@@ -565,6 +625,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
     if (modes[0] === '--files') return runFiles(root, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
+    if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
     return await runBatch(context, cwd, words, options, value => { release = value; });
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
@@ -578,7 +639,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
   context.timeoutMin = Number(options['--timeout'] ?? 10);
-  const selected = select(found, normalized);
+  const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
@@ -630,8 +691,8 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
-function oneTest(found, words) {
-  const selected = select(found, words);
+function oneTest(found, words, root) {
+  const selected = select(found, words, root);
   if (selected.length !== 1) throw new Stop(2, ['pdd try needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
   return selected[0];
 }
@@ -644,7 +705,7 @@ async function readUntil(context, id, command, isDone, ms) {
     if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
     else if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
-    else if (read.kind === 'not-invited') throw new Stop(5, read.message);
+    else if (read.kind === 'blocked') throw new Stop(5, read.message);
     if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }
@@ -692,7 +753,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
@@ -706,7 +767,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (record) {
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
-      if (read.kind === 'not-invited') throw new Stop(5, read.message);
+      if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
@@ -740,7 +801,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
       if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
       if (verdict.kind === 'refused') { Object.assign(row, { state: 'refused', phase: 'server', refusals: [verdict.refusal] }); return printTryProblem(context, row); }
-      if (verdict.notInvited) throw new Stop(5, verdict.note.message);
+      if (verdict.blocked) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
     }

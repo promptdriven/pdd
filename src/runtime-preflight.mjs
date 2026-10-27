@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b99173373e690d69c5ca39f6f0af33f1cc6367ff0b815a2d2abb67a3ddbc4e0f).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 81c9f1841074b51b0fc8f738a6179eabc775e4e6cf6ff1e2512dbdaad2ac1feb).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -97,8 +97,10 @@ export function findTests({ root, files = gitFiles(root) }) {
       let doc;
       try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
       if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
-    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories')) {
-      stories.push({ path, name: storyName(path), title: titleOf(readText(root, path)) });
+    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
+      // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
+      const text = readText(root, path);
+      if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
   for (const test of tests) {
@@ -630,6 +632,21 @@ export function captureSource(root, { attempts = 3 } = {}) {
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+}
+
+// Why a repo has no tests (Serhan's real test, 0.1.6): foreign JSON under tests/, *.prompt names, prompts with no interface.
+export function whyNoTests(root, visible) {
+  const files = [...visible].sort(), why = [];
+  for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
+    let doc = null;
+    try { doc = JSON.parse(readText(root, path)); } catch { doc = null; }
+    if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
+  }
+  for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
+  for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
+    if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
+  }
+  return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
 // Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).

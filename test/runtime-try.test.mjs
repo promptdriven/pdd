@@ -409,3 +409,12 @@ test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, an
   const reuse = await tryStory(open, now, ['place-order'], { '--no-open': true });
   assert.equal(reuse.code, 5); assert.ok(reuse.err.includes(line), reuse.err); assert.equal(now.posts.length, 0);
 });
+
+// Wrong: pdd try hides "update required" behind a Try message (0.1.6).
+test('RUNTIME-TRY20: pdd try prints the update-required message as one line, exit 5, and makes no Try', async t => {
+  const said = { status: 426, json: { code: 'update-required', message: 'Please update pdd.' } };
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? said : trying()(entry, f));
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(result.code, 5); assert.equal(result.out, ''); assert.equal(result.err.trimEnd().split('\n').at(-1), 'Please update pdd.');
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});

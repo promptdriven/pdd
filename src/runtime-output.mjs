@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 156695f64ddc43161b32318727ed4ae86acc41f2fe36f24af92df3dd61d002fb).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 31950901b783bbac888f3427cd803ad039e81f78abfd01bf33ca9ba9cebeecd5).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -82,12 +82,21 @@ export function jsonRow(row) {
 }
 
 export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
-  return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft), rows: rows.map(jsonRow), warnings };
+  const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
+  return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
+    rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
 }
 
 const count = (number, word) => `${number} ${word}${number === 1 ? '' : 's'}`;
 // One line an agent can paste into a PR: ✓ only when every story passed.
-export function summaryLine(rows) {
+// One paste line per Story (0.1.6: many Stories in one run), in table order; a Story with two test files gets one line.
+export function storyLines(rows) {
+  const groups = new Map();
+  for (const row of rows) groups.set(row.story, [...(groups.get(row.story) ?? []), row]);
+  return [...groups].map(([story, own]) => [story, summaryLine(own, story)]);
+}
+
+export function summaryLine(rows, story = null) {
   const own = row => row.criteria ?? { passed: row.state === 'passed' ? row.criteria_total ?? 0 : 0, total: row.criteria_total ?? 0 };
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
@@ -99,7 +108,7 @@ export function summaryLine(rows) {
   const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state));
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : 'unknown ·';
-  return [`Runtime check${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
@@ -119,23 +128,28 @@ function refusalLines(item) {
   return lines;
 }
 
-// The terminal result of a batch (stdout).
-export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
-  const out = [];
-  if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
-  out.push(...table(rows), summaryLine(rows));
-  for (const row of rows.filter(row => row.state === 'failed')) {
-    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).map(check => `  ${checkLine(check, secrets)}`),
-      ...(row.warnings ?? []).map(text => `  ${text}`),
-      `  Report: ${row.report_url ?? 'none'}   Next: show the person this check. Do not change the expected value yourself.`);
-  }
-  const local = rows.filter(row => row.state === 'refused' && !sentRow(row));
+function localRefusals(rows) {
+  const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
     out.push('REFUSED before sending (not sent, 0 AI calls)');
     for (const row of local) for (const item of row.refusals) {
       out.push(`  ${row.test}${item.step ? `  step ${item.step}` : ''}  ${item.code}`, `  ${item.message}`, ...(item.hint ? [`  ${item.hint}`] : []));
     }
   }
+  return out;
+}
+
+// The terminal result of a batch (stdout).
+export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+  const out = [];
+  if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
+  out.push(...table(rows), ...storyLines(rows).map(([, text]) => text), summaryLine(rows));
+  for (const row of rows.filter(row => row.state === 'failed')) {
+    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).map(check => `  ${checkLine(check, secrets)}`),
+      ...(row.warnings ?? []).map(text => `  ${text}`),
+      `  Report: ${row.report_url ?? 'none'}   Next: show the person this check. Do not change the expected value yourself.`);
+  }
+  out.push(...localRefusals(rows));
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(refusalLines), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }

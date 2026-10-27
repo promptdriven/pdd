@@ -17,7 +17,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 
 ## `pdd check`
 
-Modes: `--fill-hash` and `--files` take no other option or STORY and make no network call. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` and `--files` take no other option or STORY and make no network call. `--lint [STORY...] [--json]` (Serhan: runtime logic belongs on the server) runs ONLY the server's lint, `POST /v1/lint` (0 AI calls), on the captured files and sends no checks. Locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 when the lint passes for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, 3 when the lint result is unknown. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 Order:
 1. [Preflight](runtime-preflight.prompt.md), capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A = for each step, 1 plus the `max_calls` of the calls its entry prompt declares; M = the sum of the tests' `max_calls` (cli 12b).
@@ -33,6 +33,7 @@ Order:
 | 429 without `dispatch: "not_started"` | not run | no new attempt |
 | 503 JSON `pool-low-room`, `pool-copy-*`, `github-unavailable` | not run | no new attempt; show the server text |
 | 503 text `The runtime opens soon.`, or 401 | not run | send no more POSTs; the gate text or `Run gh auth login` |
+| any status with `code` `update-required` (top level or `error.code`) | not run | stop the batch before anything else is sent: the server's `message` as one plain line (else `Please update pdd: npm install -g github:promptdriven/pdd#alpha`), exit 5 (0.1.6: the server retires an old address) |
 | 403 `not-invited` (top-level `code` or `error.code`, with `login`) | not run | stop the batch: one plain line `Your GitHub login <login> is not on the PDD runtime invite list yet. Ask the PDD team to add you.`, exit 5 (lint, checks, GETs, `pdd try` and its stop alike) |
 | 400, 413, 415, 422 JSON | refused | no new attempt; show code and message |
 | timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch |
