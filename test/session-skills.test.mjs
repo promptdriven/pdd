@@ -18,7 +18,7 @@ const MARKER = '.pdd-skill.json';
 function packageCopy(t) {
   const sandbox = temp(t), pkg = join(sandbox, 'installed "pkg"');
   mkdirSync(pkg);
-  for (const name of ['src', 'bin', 'package.json', 'docs', 'skills', '.pdd']) cpSync(join(root, name), join(pkg, name), { recursive: true });
+  for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
   const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"'), native = join(sandbox, 'native');
   for (const dir of [home, project, native]) mkdirSync(dir);
   writeFileSync(join(native, 'agent.mjs'), `import fs from 'node:fs';

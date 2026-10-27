@@ -348,3 +348,21 @@ test('a workflow skill in the project wins the lookup, and the chat is told wher
   assert.match(message, /Use the pdd-docs skill/); assert.ok(message.includes(join(skill, 'SKILL.md')));
   assert.match(message, /Steps: outline, write/);
 });
+
+test('after cancel a new run on the same issue gets a fresh worktree and branch, and the old ones stay', async t => {
+  const f = await fixture(t);
+  await f.run(); const old = f.record();
+  writeFileSync(join(old.root, 'draft.txt'), 'old work\n'); f.git(old.root, 'add', '.'); f.git(old.root, 'commit', '-qm', 'old work');
+  await cancelRun({ ref: '17', cwd: f.source }, f.ports);
+  const again = await f.run();
+  assert.equal(again.exitCode, 0, again.message); assert.match(again.message, /had a cancelled run/);
+  const fresh = f.record();
+  assert.equal(fresh.state, 'running'); assert.notEqual(fresh.runId, old.runId);
+  assert.notEqual(fresh.root, old.root); assert.notEqual(fresh.branch, old.branch); assert.equal(existsSync(join(fresh.root, 'draft.txt')), false);
+  assert.equal(readFileSync(join(old.root, 'draft.txt'), 'utf8'), 'old work\n'); assert.equal(f.git(old.root, 'branch', '--show-current'), old.branch);
+  const archived = `${old.runDir}-cancelled-${old.runId.slice(0, 8)}`;
+  assert.equal(JSON.parse(readFileSync(join(archived, 'status.json'), 'utf8')).state, 'cancelled');
+  assert.deepEqual(fresh.previous.map(item => [item.root, item.branch, item.runDir]), [[old.root, old.branch, archived]]);
+  const refused = await f.run();
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /already has a run/);
+});

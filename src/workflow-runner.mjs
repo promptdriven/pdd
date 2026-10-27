@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d4359942fac5b83397e2d23c2a8b3ac48c4092acfbf8188232717b8eefc9e9a).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 04da0aec667074d24a2d53703d7d51efea94a9c5c26f25da0cbd08ca5e2b575e).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
-import { allocateIssueWorktree } from './workflow-worktree.mjs';
+import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats } from './workflow-chat.mjs';
 
@@ -29,7 +29,8 @@ function deps(ports = {}) {
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY) };
 }
-const pddFor = (p, packageRoot) => p.pdd ?? [process.execPath, join(packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs')].map(shell).join(' ');
+export const pddCommand = (packageRoot = PACKAGE_ROOT) => [process.execPath, join(packageRoot, 'bin', 'pdd.mjs')].map(shell).join(' ');
+const pddFor = (p, packageRoot) => p.pdd ?? pddCommand(packageRoot ?? PACKAGE_ROOT);
 async function git(p, cwd, ...args) { return String((await p.execFile('git', args, { cwd })).stdout ?? '').trim(); }
 
 async function confirm(p, question) {
@@ -95,10 +96,13 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${error.code ?? 'error'}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
-  if (existing) return fail(existing.state === 'cancelled'
-    ? `Issue #${number} has a cancelled run. Its worktree stays at ${existing.root}. pdd 0.2 cannot start the same issue again.`
-    : `Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
+  if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [];
+  if (existing) {
+    const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
+    if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
+    warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
+  }
   try { await p.execFile('git', ['fetch', 'origin', binding.defaultBranch], { cwd: context.toplevel }); }
   catch { warnings.push(`warning: "git fetch origin ${binding.defaultBranch}" failed; the worktree starts from the last fetched ${binding.defaultBranch}.`); }
   const runId = randomUUID();
@@ -106,12 +110,15 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
     workflowName: name, baseRef: `refs/remotes/origin/${binding.defaultBranch}` }, p.commandPorts);
   if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
   const a = allocated.assignment;
+  // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
+  if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch: binding.defaultBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
     configDir: (agent === 'claude' ? p.env.CLAUDE_CONFIG_DIR : p.env.CODEX_HOME) || null,
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
-    approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0 };
+    approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
+    previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
   mkdirSync(runDir, { recursive: true });
   writeRun(run, p);
   const first = workflow.areas[0];

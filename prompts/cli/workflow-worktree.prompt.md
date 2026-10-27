@@ -1,10 +1,12 @@
 # Isolated issue workflow worktrees
 
-Own `src/workflow-worktree.mjs`, exporting the module functions `allocateIssueWorktree` and `lookupIssueWorktree`. Give each issue run an actual separate Git worktree without switching, resetting, stashing or otherwise changing the person's checkout. The helper owns durable allocation and exclusive issue claims; the runner owns its per-worktree journal and workflow stages. Preserve the literal interfaces and identity below. All claims and uncertain work persist: there is no cleanup, release, delete, retry or native/GitHub operation in this slice.
+Own `src/workflow-worktree.mjs`, exporting the module functions `allocateIssueWorktree`, `lookupIssueWorktree` and `releaseIssueClaim`. Give each issue run an actual separate Git worktree without switching, resetting, stashing or otherwise changing the person's checkout. The helper owns durable allocation and exclusive issue claims; the runner owns its per-worktree journal and workflow stages. Preserve the literal interfaces and identity below. All claims and uncertain work persist: there is no cleanup, release, delete, retry or native/GitHub operation in this slice.
 
 `allocateIssueWorktree({cwd,repository,issueNumber,runId,workflowName,baseRef},ports={execFile})` returns `{state,assignment,message}`. States are ready, conflict or recovery_required; assignment is null unless the actual owned worktree is verified. Conflict means an invalid/colliding request or an issue claimed by another run. Missing, incomplete, changed or unreadable durable/physical identity yields recovery_required without another allocation.
 
 `lookupIssueWorktree({cwd,runId},ports={execFile})` uses the same result envelope. It reads the common-repository run index from the original checkout or another checkout sharing that common repository. It performs only filesystem/Git reads; missing or uncertain identity remains recovery_required. Never repair metadata or repeat add while looking up or resuming an existing intent.
+
+`releaseIssueClaim({cwd,runId,issueNumber},ports={execFile})` frees an issue for a new run after the runner cancelled the old run. It removes only the issue claim link `<commonDir>/pdd/worktree-assignments/issues/<N>.json`, and only when that claim names the same run and issue. It keeps the run record, the worktree and the branch. A missing claim is already released. It returns `{state:'released'|'conflict'|'recovery_required',message}` and never throws.
 
 ## Allocate once, then reconcile the original
 

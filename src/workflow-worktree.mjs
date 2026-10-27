@@ -1,8 +1,8 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 797a2fb446d42842b970709095332705bdaba3246625e94c8b13bb8ccb61c9cb).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: f1c642aa36c4210c2a8b5ae3a6ed625d4b77042ad8d5fd915d57d9fe605fd9e2).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, realpath, mkdir, open, link } from 'node:fs/promises';
+import { lstat, realpath, mkdir, open, link, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -239,4 +239,18 @@ export async function allocateIssueWorktree(input, ports = {}) {
       ? 'Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work.'
       : 'Cannot establish repository or allocation metadata identity. No new worktree is confirmed.');
   }
+}
+
+export async function releaseIssueClaim(input, ports = {}) {
+  try {
+    const { cwd, runId, issueNumber } = structuredClone(input ?? {});
+    if (!safe(runId) || !Number.isSafeInteger(issueNumber) || issueNumber < 1) return result('conflict', 'Supply the cancelled run and its issue number.');
+    const c = commands(ports), ctx = await context(cwd, c), p = locations(ctx.commonDir, runId, issueNumber);
+    if (!await exists(p.issue)) return result('released', 'The issue has no claim.');
+    const claim = await readRecord(p.issue);
+    if (claim?.runId !== runId || claim?.issueNumber !== issueNumber) return result('conflict', 'The issue claim belongs to another run.');
+    await unlink(p.issue);
+    await syncDirectory(p.issues);
+    return result('released', 'The issue claim is free; the old worktree and branch stay.');
+  } catch { return result('recovery_required', 'The issue claim could not be read or removed. Nothing else changed.'); }
 }
