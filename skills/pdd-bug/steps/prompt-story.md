@@ -1,5 +1,7 @@
 # prompt-story
 
+- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 (in the pdd-prompting skill): prompts are `prompts/<name>.prompt.md` with a Runtime interface block; tests are `tests/<story>.json` in the runtime's test format. Copy its example.
+- PDD tests are runtime test files (RUNBOOK §2–§4). They are not the repo's unit tests; the code area adds those.
 - Read the pdd-prompting skill's guide.md in full first.
 - Find the prompt that owns the behavior. Change it only if it is wrong or incomplete. Change one prompt when you can. If none exists, write the SMALLEST prompt that owns only the issue's behavior (one function or one endpoint), not the whole module.
 - Write the Story in the person's words, with no function calls or type names: the correct behavior and what must not change.
