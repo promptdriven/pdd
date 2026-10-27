@@ -10,7 +10,6 @@ import { launchNativeSession } from '../src/native-session.mjs';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { listLocalWorkflows } from '../src/workflow-list.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -18,7 +17,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'completion', 'workflow.list']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'completion', 'workflow.list']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -31,21 +30,6 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
     ['completion'], ['--version', 'extra'], ['--skill'], ['--skill', '--json'], ['help', 'runtime'], ['--help', 'extra'], ['\0']]) {
     assert.throws(() => parseArgv(argv), CommandInputError, JSON.stringify(argv));
   }
-});
-
-// Wrong: local recipe discovery follows outside symlinks, installs defaults or executes an agent.
-test('ALPHA3: project listing is sorted, empty when absent and never traverses symlinks', t => {
-  const cwd = temp(t), outside = temp(t);
-  assert.deepEqual(listLocalWorkflows({ cwd }), { workflows: [], default: null });
-  for (const name of ['small-change', 'bug']) {
-    mkdirSync(join(cwd, '.pdd/workflows', name), { recursive: true });
-    writeFileSync(join(cwd, '.pdd/workflows', name, 'WORKFLOW.md'), '# Instructions\n');
-  }
-  mkdirSync(join(outside, 'outside')); writeFileSync(join(outside, 'outside/WORKFLOW.md'), '# Outside\n');
-  symlinkSync(join(outside, 'outside'), join(cwd, '.pdd/workflows/linked'));
-  assert.deepEqual(listLocalWorkflows({ cwd }), { workflows: [
-    { name: 'bug', file: '.pdd/workflows/bug/WORKFLOW.md' },
-    { name: 'small-change', file: '.pdd/workflows/small-change/WORKFLOW.md' }], default: null });
 });
 
 // Wrong: source-only smoke passes while packed dependencies, bin mappings or bundled guidance fail in a clean consumer.
@@ -61,7 +45,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     { cwd: root, env, encoding: 'utf8', timeout: 30000 }))[0];
   const archive = join(sandbox, pack.filename), names = pack.files.map(f => f.path);
   for (const required of ['bin/pdd.mjs', 'docs/prompting-guide.md', 'skills/pdd/SKILL.md', '.pdd/workflows/feature/WORKFLOW.md',
-    '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-definition-loader.mjs', '.pdd/workflows/feature/workflow.json']) assert.ok(names.includes(required), required);
+    '.pdd/workflows/bug/WORKFLOW.md', '.pdd/workflows/small-change/WORKFLOW.md', 'examples/ticket-status/README.md','src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
   assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui)\//.test(name)), false);
@@ -77,7 +61,7 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/pocket\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['session','--help'], ['workflow','run','--help'], ['workflow','resume','--help'], ['workflow','attach','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['session','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|try|lint|runtime|doctor|phone)\b/);
   }
@@ -98,15 +82,11 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
       const selected=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow bug --agent ""); COMP_CWORD=4; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
-      const decisions=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); COMP_CWORD=5; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
-      assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
     } else {
       const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
       const selected=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow feature --agent ""); CURRENT=5; _pdd','test',script],{env,encoding:'utf8'});
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
-      const decisions=spawnSync('zsh',['-f','-c','autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); CURRENT=6; _pdd','test',script],{env,encoding:'utf8'});
-      assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
     }
   }
   for (const word of ['run', 'verify', 'try', 'lint', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
@@ -206,42 +186,42 @@ test('ALPHA6: direct workflow names exactly one workflow skill in one unchanged 
   assert.equal(await runPdd(['workflow','bug','--help'],{packageRoot:'/absent',stdout:capture(),stderr:capture(),nativeSession:()=>assert.fail('No native')}),0);
 });
 
-// Wrong: workflow.run reuses the one-conversation shortcut, preloads resume identity, or leaks a structured object instead of its actual message.
-test('ALPHA7: run and resume dispatch structured owner API with exact existing ports and saved identity owned by runner',async()=>{
-  const uuid='a1234567-1234-4123-8123-123456789abc';
-  for(const issue of ['42','owner/repo#42','https://github.com/owner/repo/issues/42']){
-    const output=capture(),errors=capture(),calls=[];
-    const runner={runWorkflow:async(input,ports)=>{calls.push({input,ports});return {exitCode:2,state:'waiting',runId:uuid,stage:'approve',message:'waiting '+uuid+' approve'};}};
-    const code=await runPdd(['workflow','run','feature',issue,'--agent','claude'],{workflowRunner:runner,cwd:'/chosen',packageRoot:'/bundle',stdout:output,stderr:errors});
-    assert.equal(code,2);assert.equal(calls.length,1);assert.deepEqual(calls[0].input,{name:'feature',issue,agent:'claude',cwd:'/chosen',packageRoot:'/bundle'});
-    assert.equal(typeof calls[0].ports.loadGuidance,'function');assert.equal(calls[0].ports.launchNativeSession,launchNativeSession);
-    assert.equal(calls[0].ports.stdout,output);assert.equal(calls[0].ports.stderr,errors);assert.equal(calls[0].input.context,undefined);
-    assert.ok(output.text.startsWith('Starting feature for issue '+(/^\d+$/.test(issue)?'#':'')+issue+'.'));assert.ok(output.text.endsWith('waiting '+uuid+' approve\n'));assert.equal(errors.text,'');
+// Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.
+test('ALPHA7: each runner route calls its own export once with parsed values, cwd and package root, and prints the message', async () => {
+  const cases = [
+    [['workflow','run','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
+    [['workflow','run','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
+    [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
+    [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
+    [['workflow','approve'], 'approveRun', { ref: undefined }],
+    [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],
+    [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
+    [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],
+    [['workflow','status'], 'runStatus', { ref: undefined }],
+    [['workflow','open','7'], 'openRun', { ref: '7' }]];
+  for (const [argv, name, input] of cases) {
+    const calls = [], stdout = capture(), stderr = capture();
+    const runner = { [name]: async value => { calls.push(value); return { exitCode: 0, message: `${name} ok` }; } };
+    assert.equal(await runPdd(argv, { workflowRunner: runner, cwd: '/chosen', packageRoot: '/bundle', stdout, stderr }), 0, argv.join(' '));
+    assert.deepEqual(calls, [{ ...input, cwd: '/chosen', packageRoot: '/bundle' }]);
+    assert.equal(stdout.text, `${name} ok\n`); assert.equal(stderr.text, '');
   }
-  for(const decision of [undefined,'approve','skip']){
-    const output=capture(),calls=[];
-    const code=await runPdd(['workflow','resume',uuid,...(decision?['--decision',decision]:[])],{
-      cwd:'/chosen',packageRoot:'/absent-guide',stdout:output,stderr:capture(),workflowRunner:{resumeWorkflow:async(input,ports)=>{
-        calls.push(input);assert.equal(typeof ports.loadGuidance,'function');return {exitCode:0,state:'completed',runId:uuid,stage:'wait-merge',message:'completed '+uuid};}}});
-    assert.equal(code,0);assert.deepEqual(calls,[{runId:uuid,cwd:'/chosen',packageRoot:'/absent-guide',...(decision?{decision}:{})}]);
-    assert.ok(output.text.startsWith('Inspecting run '+uuid+'.'));assert.ok(output.text.endsWith('completed '+uuid+'\n'));
-  }
-  const calls=[];assert.equal(await runPdd(['workflow','run','small-change','1'],{stdout:capture(),stderr:capture(),workflowRunner:{runWorkflow:async input=>{
-    calls.push(input);return {exitCode:1,state:'recovery_required',runId:uuid,stage:'change',message:'recovery_required '+uuid};}}}),1);
-  assert.equal(calls[0].agent,'codex');assert.equal(calls.length,1);
+  const stderr = capture();
+  assert.equal(await runPdd(['workflow','approve','7'], { workflowRunner: { approveRun: async () => ({ exitCode: 1, message: 'Only the person can approve.' }) }, stdout: capture(), stderr }), 1);
+  assert.equal(stderr.text, 'Only the person can approve.\n');
 });
 
-// Wrong: malformed references/options reach effects, omitted resume decision dispatches native directly, or an owner failure is automatically retried.
-test('ALPHA8: runner argument failures and invalid replies are finite without native effects or a second call',async()=>{
-  const uuid='a1234567-1234-4123-8123-123456789abc';
-  const invalid=[['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','bug','../issue'],
-    ['workflow','run','feature','https://example.com/o/r/issues/1'],['workflow','run','feature','42','extra'],
-    ['workflow','run','feature','42','--agent','other'],['workflow','resume','../run'],['workflow','resume',uuid,'--agent','claude'],
-    ['workflow','resume',uuid,'--decision','yes'],['workflow','resume',uuid,'--decision','skip','--decision','approve']];
-  for(const args of invalid){assert.equal(await runPdd(args,{packageRoot:'/absent',stdout:capture(),stderr:capture(),workflowRunner:{
-    runWorkflow:()=>assert.fail('No runner'),resumeWorkflow:()=>assert.fail('No runner')}}),2);}
-  for(const answer of [undefined,{exitCode:0,state:'invented',message:'no'}, {exitCode:NaN,state:'completed',message:'no'}, {exitCode:0,state:'completed',message:''}]){
-    let calls=0;assert.equal(await runPdd(['workflow','run','feature','42'],{stdout:capture(),stderr:capture(),workflowRunner:{runWorkflow:async()=>{calls++;return answer;}}}),1);assert.equal(calls,1);
+// Wrong: malformed references/options reach effects, or an owner failure is retried.
+test('ALPHA8: runner argument failures and invalid replies are finite without a second call', async () => {
+  const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
+    ['workflow','run','feature','42','--agent','other'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
+    ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
+    ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--json']];
+  for (const args of invalid) assert.equal(await runPdd(args, { stdout: capture(), stderr: capture(), workflowRunner: new Proxy({}, { get: () => assert.fail('No runner') }) }), 2, args.join(' '));
+  for (const answer of [undefined, { exitCode: NaN, message: 'no' }, { exitCode: 0, message: '' }]) {
+    let calls = 0;
+    assert.equal(await runPdd(['workflow','status'], { stdout: capture(), stderr: capture(), workflowRunner: { runStatus: async () => { calls++; return answer; } } }), 1); assert.equal(calls, 1);
   }
-  let calls=0;assert.equal(await runPdd(['workflow','resume',uuid],{stdout:capture(),stderr:capture(),workflowRunner:{resumeWorkflow:async()=>{calls++;throw Error('possible effect, no retry');}}}),1);assert.equal(calls,1);
+  let calls = 0;
+  assert.equal(await runPdd(['workflow','open','7'], { stdout: capture(), stderr: capture(), workflowRunner: { openRun: async () => { calls++; throw Error('possible effect'); } } }), 1); assert.equal(calls, 1);
 });

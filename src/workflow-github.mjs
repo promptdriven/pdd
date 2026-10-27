@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: c6b061533414187d4c391aeac11c411184e20191e2a3b446339a4ce123ec8424).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 99f315b5e6626a7aa356fae966f1590839f39ac3ac1c6215602b46a37e5dfd3e).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
@@ -18,7 +18,7 @@ const outcome = (state, message, pr = null) => ({ state, pr, message });
 
 function dependencies(ports = {}) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
-    { cwd, encoding: 'utf8', shell: false, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }));
+    { cwd, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
   async function raw(cwd, file, args) {
     let result;
     try { result = await run(file, args, { cwd }); }
@@ -161,13 +161,13 @@ async function localTopic(cwd, baseBranch, bodyFile, deps) {
 }
 
 export async function prepareWorkflowPr(input, ports = {}) {
-  const { cwd, runId, stageId, repository, baseBranch, bodyFile } = structuredClone(input ?? {});
-  if (!identifier(runId) || !identifier(stageId) || !repositoryName(repository) || !text(bodyFile))
-    fail('workflow_github_intent_invalid');
+  const { cwd, runId, stageId, repository, baseBranch, bodyFile, title: suppliedTitle } = structuredClone(input ?? {});
+  if (!identifier(runId) || !identifier(stageId) || !repositoryName(repository) || !text(bodyFile)
+    || suppliedTitle !== undefined && (!text(suppliedTitle) || suppliedTitle.length > 256)) fail('workflow_github_intent_invalid');
   const deps = dependencies(ports), actual = await repositoryAt(cwd, deps);
   if (!sameRepo(repository, actual.repository)) fail('workflow_github_repository_mismatch');
   const file = resolve(cwd, bodyFile), topic = await localTopic(cwd, baseBranch, file, deps);
-  const title = (await deps.command(cwd, 'git', ['log', '-1', '--format=%s'])).trim();
+  const title = suppliedTitle ?? (await deps.command(cwd, 'git', ['log', '-1', '--format=%s'])).trim();
   if (!text(title) || title.length > 256) fail('workflow_github_title_invalid');
   const marker = `pdd-workflow:${runId}:${stageId}`;
   let body;
@@ -276,4 +276,20 @@ export async function publishWorkflowPr(input, ports = {}) {
       ? outcome('recovery_required', 'Push or PR creation is unconfirmed. Reconcile this same saved intent; do not publish again.')
       : outcome('failed', 'Publication did not start. Check the saved intent, repository, clean topic branch and marked body file.');
   }
+}
+
+export async function readWorkflowPrStatus(input, ports = {}) {
+  try {
+    const { cwd, url } = structuredClone(input ?? {});
+    if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup']));
+    const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
+    if (!state) fail('workflow_github_pr_state_invalid');
+    const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
+    const outcome = check => String(check?.conclusion ?? check?.state ?? '').toUpperCase();
+    const ci = !checks.length ? 'none'
+      : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
+      : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
+    return { state, ci };
+  } catch { return { state: 'unknown', ci: 'unknown' }; }
 }
