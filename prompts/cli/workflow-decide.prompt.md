@@ -89,3 +89,6 @@ the far end of that interval; exact bound decision-id retries remain inspect-onl
 The ledger port may be supplied as lookupPhone or as clientAdapter.lookupPhone
 from mobile's createPhoneLookupAdapter; preserve receiver and prefer an explicit
 port. Unknown/unreadable/unverifiable ledger authority is phone_ledger_unavailable.
+
+Supply every durable phone nonce from this run to verification, across phoneIds.
+A different active phone using an admitted nonce is also phone_token_replayed.

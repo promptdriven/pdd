@@ -87,3 +87,7 @@ signature verification succeed. No failure admits authority or leaks the token.
   nonce consumption and stale checks. The verifier cannot replace these guards.
 - Trusted `lookupPhone` port: runtime; ledger endpoint/schema adaptation is owned
   by the mobile host. Without that port this module refuses safely.
+
+Nonce uniqueness is per run, across all phones: usedNonces contains every admitted
+phone nonce from this run. A different active phone cannot reuse one; phoneId in
+a supplied nonce record is informational and does not narrow the replay check.

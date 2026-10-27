@@ -994,22 +994,24 @@ test('two simultaneous decisions admit one and preserve one following stage chai
  const f=await fixture(t),started=await f.run();const results=await Promise.all([decideAt(f,started.runId),decideAt(f,started.runId)]);assert.equal(results.filter(r=>r.state==='recorded').length,1);assert.equal(f.native.length,3);assert.equal(f.saved(started.runId).decisions.length,1);
 });
 
-test('phone nonce history survives a fresh process across the full ten-minute clock window',async t=>{
+test('phone nonce history is run-wide across phones and survives restart for the full ten-minute window',async t=>{
  const {webcrypto}=await import('node:crypto');
  const f=await fixture(t),started=await f.run(),now=Date.now(),nonce=randomUUID();
  const key=await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
  const phone={phoneId:'persisted-phone',removed:false,state:'active',publicKeyJwk:await webcrypto.subtle.exportKey('jwk',key.publicKey)};
- const sign=async(gate,decision,text)=>{const payload={runId:started.runId,stage:gate.stage,decision,expectSeq:gate.seq,phoneId:phone.phoneId,time:now+300000,nonce,...(text?{text}:{})};const signature=Buffer.from(await webcrypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key.privateKey,new TextEncoder().encode(JSON.stringify(payload)))).toString('base64url');return Buffer.from(JSON.stringify({v:1,alg:'ES256',payload,signature})).toString('base64url');};
+ const sign=async(gate,decision,text,signingKey=key,phoneKeyId=phone.phoneId)=>{const payload={runId:started.runId,stage:gate.stage,decision,expectSeq:gate.seq,phoneId:phoneKeyId,time:now+300000,nonce,...(text?{text}:{})};const signature=Buffer.from(await webcrypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},signingKey.privateKey,new TextEncoder().encode(JSON.stringify(payload)))).toString('base64url');return Buffer.from(JSON.stringify({v:1,alg:'ES256',payload,signature})).toString('base64url');};
  const gate=f.saved(started.runId).waitingDecision;
  const first=await decideAt(f,started.runId,{decision:'changes',text:'Add boundary coverage.',via:'phone',phoneId:phone.phoneId,approval:await sign(gate,'changes','Add boundary coverage.')},{now:()=>now,lookupPhone:async()=>phone});
  assert.equal(first.state,'recorded');
  const saved=f.saved(started.runId),current=saved.waitingDecision;
- const request={runId:started.runId,decisionId:randomUUID(),decision:'approve',expectStage:current.stage,expectSeq:current.seq,via:'phone',phoneId:phone.phoneId,approval:await sign(current,'approve'),cwd:f.cwd,packageRoot:f.packageRoot};
+ const secondKey=await webcrypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+ const secondPhone={phoneId:'second-active-phone',removed:false,state:'active',publicKeyJwk:await webcrypto.subtle.exportKey('jwk',secondKey.publicKey)};
+ const request={runId:started.runId,decisionId:randomUUID(),decision:'approve',expectStage:current.stage,expectSeq:current.seq,via:'phone',phoneId:secondPhone.phoneId,approval:await sign(current,'approve',undefined,secondKey,secondPhone.phoneId),cwd:f.cwd,packageRoot:f.packageRoot};
  const probe=join(f.gitDir,'nonce-restart.mjs');
  writeFileSync(probe,`import {decideWorkflow} from ${JSON.stringify(new URL('../src/workflow-decide.mjs',import.meta.url).href)};
 import {loadGuidance} from ${JSON.stringify(new URL('../src/guidance.mjs',import.meta.url).href)};
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-const exec=promisify(execFile),assignment=${JSON.stringify(saved.assignment)},phone=${JSON.stringify(phone)};
+const exec=promisify(execFile),assignment=${JSON.stringify(saved.assignment)},phone=${JSON.stringify(secondPhone)};
 const result=await decideWorkflow(${JSON.stringify(request)},{loadGuidance,now:()=>${now+600000},lookupPhone:async()=>phone,
  lookupIssueWorktree:async()=>({state:'ready',assignment}),execFile:async(file,args,options)=>{
  if(file!=='gh')return exec(file,args,options);

@@ -56,7 +56,7 @@ export async function verifyPhoneApproval(input,ports={}) {
     const now=(ports.now??Date.now)();
     if(!Number.isSafeInteger(now)||now<0)return refuse('phone_invalid_token');
     if(payload.time<now-300000||payload.time>now+300000)return refuse('phone_token_expired');
-    if((input.usedNonces??[]).some(used=>used===payload.nonce||object(used)&&used.phoneId===payload.phoneId&&used.nonce===payload.nonce))return refuse('phone_token_replayed');
+    if((input.usedNonces??[]).some(used=>used===payload.nonce||object(used)&&used.nonce===payload.nonce))return refuse('phone_token_replayed');
     if(typeof ports.lookupPhone!=='function')return refuse('phone_ledger_unavailable');
     let phone;
     try{phone=await ports.lookupPhone(payload.phoneId);}catch{return refuse('phone_ledger_unavailable');}

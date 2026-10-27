@@ -43,7 +43,7 @@ test('saved nonce refuses replay without ledger call',async()=>{
  const f=await fixture(),token=await f.sign();
  for(const usedNonces of [[nonce],[{phoneId,nonce}]])assert.equal((await verifyPhoneApproval({...f.input(token),usedNonces},f.ports)).code,'phone_token_replayed');
  assert.equal(f.lookups,0);
- assert.equal((await verifyPhoneApproval({...f.input(token),usedNonces:[{phoneId:'different',nonce}]},f.ports)).ok,true);
+ assert.equal((await verifyPhoneApproval({...f.input(token),usedNonces:[{phoneId:'different',nonce}]},f.ports)).code,'phone_token_replayed');
 });
 test('ledger unavailable, missing, mismatched and removed phone all refuse',async()=>{
  const f=await fixture(),input=f.input(await f.sign());
