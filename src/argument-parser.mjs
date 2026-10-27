@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 08c4985eac708efcd7569dd061e10951fa020027cbf8b58f03544c59f58ca005).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 6f5ce267ed444bde064ab4b2af253c0e1b8d4915f2dd9ce2073e2d5619b42a00).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -17,18 +17,22 @@ function helpFor(words) {
   if (words.length === 1 && routes.some(route => route.prefix[0] === words[0])) return help(words);
   fail();
 }
+const optionValue = (option, value) => option.kind === 'integer'
+  ? /^[1-9][0-9]{0,5}$/.test(value ?? '') && Number(value) >= option.min && Number(value) <= option.max
+  : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
+  : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
 function parseRoute(route, words) {
   const options = Object.create(null), operands = []; let literal = false;
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
-    if (word === '--' && route.local === 'session' && !literal) { literal = true; continue; }
+    if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
       if (!option || Object.hasOwn(options, word)) fail();
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (!optionValue(option, value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -44,14 +48,14 @@ function parseRoute(route, words) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
-  return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
+  return Object.freeze({ commandId: route.id, local: route.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }
 export function parseArgv(argv) {
   if (!Array.isArray(argv) || argv.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
   if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return helpFor(argv.slice(1));
-  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.local === 'session' && argv.includes('--'))) {
+  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
     parseRoute(route, words.slice(route.prefix.length));

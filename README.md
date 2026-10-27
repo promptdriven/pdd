@@ -1,179 +1,110 @@
-# PDD Alpha
+# PDD
 
-> Looking for the original Python PDD (`pdd-cli` 0.0.x)? It lives on the [`main` branch](https://github.com/promptdriven/pdd/tree/main) and on PyPI: `pip install pdd-cli`.
+**Prompt-driven development for Codex and Claude Code.**
 
-**Prompt-driven development for your coding agent.**
+In PDD, prompts are the source of your software. Your agent writes the prompt, the Story and the test cases first, then the code. You review the prompts and stay in control.
 
-> **This is the `alpha` branch of `promptdriven/pdd`.** It holds PDD Alpha, a new command-line tool for Node.js. The `main` branch holds the older Python `pdd-cli`. They are different programs, but both install a command named `pdd`. Read [If you have the old Python pdd](#if-you-have-the-old-python-pdd) before you install.
+> Looking for the Python `pdd-cli`? It is on the [`main` branch](https://github.com/promptdriven/pdd/tree/main).
 
-In PDD, prompts are the source of your software. You and your coding agent write down what the software must do: a prompt for each module, a Story and test cases. Then agents build the code from them.
+## Quick start
 
-PDD Alpha takes a GitHub issue to a real pull request:
+Add the PDD skills to your agent:
 
-1. Agents work in stages. Each stage is a fresh Codex or Claude Code session that starts with the [Prompting guide](docs/prompting-guide.md).
-2. You approve the plan and its test commands before the agents change code.
-3. PDD runs the approved tests itself.
-4. PDD opens a real PR on GitHub. It never merges. You review and merge.
+```sh
+npx skills add promptdriven/pdd
+```
 
-> [!WARNING]
-> **Agents run with full access.** PDD starts Codex and Claude Code in full-access mode, so they do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
+Then open Codex or Claude Code in your project, as usual. Run `/pdd-setup` once, then call a skill:
 
-The full guide is in [docs/USAGE.md](docs/USAGE.md).
+```
+/pdd-setup
+/pdd-feature Add a CSV export button to the orders page.
+```
 
-## Requirements
+`/pdd-setup` adds a short PDD note to your `CLAUDE.md` or `AGENTS.md`, so every chat in the repo knows the project uses PDD. Run it once in each repo.
 
-| You need | Check it with | Get it |
-|---|---|---|
-| Node.js 22.16 or newer | `node -v` | [nodejs.org](https://nodejs.org) |
-| Git 2.36 or newer | `git --version` | [git-scm.com](https://git-scm.com) |
-| GitHub CLI, signed in | `gh auth status` | [cli.github.com](https://cli.github.com), then `gh auth login` |
-| Herdr (for workflow runs) | `herdr --version` | [herdr.dev](https://herdr.dev). Tested with 0.9.1 |
-| Codex CLI or Claude Code, signed in | `codex login status` | [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview) |
-
-Codex is the default agent and the most tested one. PDD Alpha is tested on macOS and Linux. Windows is not tested.
-
-## Install
+For runs that open pull requests, and for `pdd check`, also install the `pdd` command:
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.1
-which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-Always install and update with that full `github:` line. Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different, unrelated package called `pdd`, and npm would replace PDD Alpha with it.
+## Skills
 
-### If you have the old Python pdd
+| Skill | Use it to |
+|---|---|
+| `/pdd-feature` | add new behavior |
+| `/pdd-bug` | fix something that is broken |
+| `/pdd-small-change` | make a small edit that is easy to undo |
+| `/pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
+| `/pdd-setup` | set up a repo for PDD |
 
-The Python `pdd-cli` (from the `main` branch and PyPI) also installs a `pdd` command. If `pdd --version` does not print `0.1.1`, the old one comes first on your PATH. Remove it with the tool you used to install it:
+The skills work in any chat. Only the skill you call is loaded, so your chat stays small. Add `-g` to `npx skills add` to install them for all your projects.
+
+## From a GitHub issue to pull requests
 
 ```sh
-uv tool uninstall pdd-cli    # or: pipx uninstall pdd-cli   or: pip uninstall pdd-cli
-hash -r                      # zsh users can also run: rehash
-which -a pdd
+pdd workflow run feature 42
 ```
 
-If you want to keep the old one, call PDD Alpha by its full path: `"$(npm prefix -g)/bin/pdd"`. The agents that PDD starts always use the full path, so they are not affected.
+pdd opens the work in [Herdr](https://herdr.dev) and returns at once. You can close the terminal.
 
-## Start a session
-
-<a id="open-an-ordinary-native-session"></a>
-
-```sh
-cd your-project
-pdd session
+```
+chat 1  story      the agent writes the prompt, Story and tests  → you approve
+chat 2  prompt PR  the agent checks the prompts                   → pdd opens PR 1
+                   "Do you want the code PR now, or stop here?"
+chat 3  code       only if you ask                                → pdd opens PR 2
 ```
 
-This opens Codex with the Prompting guide, the PDD skill and the three workflows loaded. The agent summarizes the method and asks what you want to work on. You need no issue and no setup. Plan a change, draft prompts, Stories and test cases, or write code.
-
-You can also give the first request, or pick Claude Code:
-
-```sh
-pdd session "Help me write a prompt, a Story and test cases for a CSV export button."
-pdd session --agent claude
-```
-
-## Run a workflow on a GitHub issue
-
-Run this in a clone of a GitHub repository that you can push to. The issue must be in that same repository.
-
-```sh
-cd your-clone
-git fetch origin
-pdd workflow run small-change 42
-```
-
-1. PDD reads issue #42 with `gh`. It makes a new branch (`pdd/small-change-42-…`) and a new Git worktree next to your clone. Your own checkout is not changed.
-2. Each stage runs a fresh agent in the background in Herdr. The command stays busy and prints nothing while the agents work.
-3. At the approval gate the command stops and prints a line like this:
-   ```
-   waiting: run 6f1c…-… / change. Review the independent proposal and test plan; resume with approve to advance.
-   ```
-4. Review the plan. Then approve it with the run ID from that line:
-   ```sh
-   pdd workflow resume RUN_ID --decision approve
-   ```
-5. The agents make the change. PDD runs the approved tests, pushes the branch and opens the PR. Then it stops with `Waiting for actual merge of <PR URL>`.
-6. Review and merge the PR on GitHub. Then run `pdd workflow resume RUN_ID` once more to mark the run completed.
-
-Pick the workflow that fits the issue:
-
-| Workflow | Use it for | Stages (you act at the **bold** ones) |
-|---|---|---|
-| `small-change` | A small, contained edit | scope, **approve**, change, verify, open PR, **merge** |
-| `bug` | Something is broken | reproduce, prompt and Story, check, try (optional), **approve**, prompt PR (optional), build, verify, code PR, **merge** |
-| `feature` | New behavior | understand, visual (optional), prompt and Story, check, try (optional), **approve**, prompt PR (optional), build, verify, code PR, **merge** |
-
-At each optional stage the run stops. Choose `--decision approve` to run it or `--decision skip` to leave it out. For your first runs, skip the optional prompt PR. Then the prompts and the code come in one PR.
-
-To watch or talk to the agent of the current stage, run `pdd workflow attach RUN_ID` in a second terminal. Read [docs/USAGE.md](docs/USAGE.md) for the full steps, how to find the run ID early, and what to do when something stops.
-
-## Commands
+- Talk to the chat at any time. If you ask for changes, the same chat revises.
+- Approve in the chat in your own words, or with `pdd workflow approve 42`.
+- `small-change` makes one PR. `bug` works like `feature`.
+- Codex is the default agent. Add `--agent claude` for Claude Code.
+- The agents run your tests, and each PR shows the real output. **pdd never merges.**
 
 | Command | What it does |
 |---|---|
-| `pdd session [--agent codex\|claude] [request]` | Open your coding agent with PDD loaded |
-| `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Run a workflow on a GitHub issue (number, `owner/repo#N` or URL) |
-| `pdd workflow resume RUN_ID` | Show where a run is. It starts no new work |
-| `pdd workflow resume RUN_ID --decision approve` | Approve the current step and continue the run |
-| `pdd workflow resume RUN_ID --decision skip` | Skip the current optional step and continue |
-| `pdd workflow attach RUN_ID` | Watch and talk to the agent of the current stage |
-| `pdd workflow list [--json]` | List the workflows you can run (not the runs) |
-| `pdd workflow feature\|bug\|small-change [request]` | Follow one workflow in a single normal session (no stages, no PR) |
-| `pdd --skill` | Print the full Prompting guide and the PDD skill |
-| `pdd completion bash\|zsh` | Print shell completion |
-| `pdd --help`, `pdd --version` | Help and version |
+| `pdd workflow status --all` | every run on this machine, the ones waiting for you first |
+| `pdd workflow status 42` | where one run is, and what it waits for |
+| `pdd workflow open 42` | open the run's chat |
+| `pdd workflow approve 42` | approve the gate, or make the code PR |
+| `pdd workflow changes 42 "…"` | ask for changes |
+| `pdd workflow cancel 42` | stop the run |
 
-## Make a workflow your own
-
-Workflows are plain Markdown and JSON. Copy one into your project and edit it:
+## Check your prompts
 
 ```sh
-mkdir -p .pdd/workflows
-cp -R "$(npm prefix -g)/lib/node_modules/pdd/.pdd/workflows/small-change" .pdd/workflows/
-pdd workflow list   # small-change now shows "project"
+pdd check          # run every Story's tests on the PDD runtime
+pdd try            # get a link to use the prompt by hand
 ```
 
-A project folder replaces the bundled workflow of the same name. You can also add a new one with a new name. See [docs/USAGE.md](docs/USAGE.md#make-a-workflow-your-own).
+`pdd check` prints one table with a report link for each Story. Your agent reads [RUNBOOK.md](RUNBOOK.md) to write prompts and tests that the runtime can check.
 
-## Update and uninstall
+## Requirements
 
-```sh
-npm install -g github:promptdriven/pdd#alpha   # update to the newest alpha
-npm uninstall -g pdd                           # remove PDD Alpha
-```
+- [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview), signed in
+- [Node.js](https://nodejs.org) 22 or newer, for `npx` and the `pdd` command
+- For the `pdd` command: [Git](https://git-scm.com), the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`), and [Herdr](https://herdr.dev) for workflow runs
 
-## Known limits of this alpha
+PDD works with the versions of these tools that you have. It is tested on macOS and Linux.
 
-- **Keep the terminal of a run open.** If you close it, the agent in Herdr can go on, but PDD stops moving the run forward. When that agent is done, run `pdd workflow resume RUN_ID --decision approve` to go on. A fix ("never lose work") is in progress.
-- `pdd workflow run` keeps your terminal busy until the run stops at a gate or ends. There is no command to list runs or to stop a run.
-- One run per issue in a clone. A second run on the same issue points back to the first one. There is no "reject" decision. If a plan is wrong, open a new, clearer issue.
-- A busy or rate-limited model (HTTP 429) can fail a stage, and resume may not recover it.
-- If the agent is not signed in, a stage can stop or hang at a sign-in screen. Check `codex login status` before you start.
-- The controller waits at most 30 minutes for one stage. Then it stops with `stage_wait_timeout`. Continue as after a closed terminal.
-- The PR step can fail when an agent leaves files that are not committed. The PR title is the last commit message, and the body does not link the issue. Edit them before you merge.
-- Do not edit files in a run's worktree while it runs. PDD refuses to continue when the saved input changed.
-- `small-change` has made real PRs. `bug` has made one real PR. `feature` is not yet tested on real issues. Claude Code inside workflow runs is less tested than Codex.
-- Each session and each stage starts with the full guide (about 21,000 tokens). This uses your agent plan's quota.
-- PDD does not remove old worktrees or Herdr sessions. See [Clean up](docs/USAGE.md#clean-up-after-a-run).
+## Good to know
 
-## Report a problem
+> [!WARNING]
+> **Agents run with full access.** In a workflow run, Codex and Claude Code do not stop to ask for approval. They can change files and run commands as your user. Use PDD only where you accept this.
 
-[Open an issue](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) on `promptdriven/pdd` and put **[alpha]** at the start of the title. Add your OS, the output of `pdd --version`, `node -v` and `herdr --version`, the agent you used, the command you ran, the run ID and the last lines of output. Do not paste tokens or secrets.
+- **Update:** run the `npx skills add` and `npm install` lines again. Do not run `npm install -g pdd`, because that is a different package.
+- **Old Python pdd:** if `pdd --version` does not print `0.1.2`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
+- **Your own workflow:** copy a skill folder as `pdd-NAME` into `.agents/skills` or `.claude/skills`, then edit it. See [Workflows](docs/workflows.md#make-your-own-workflow).
+- **This is an alpha.** Read the [known limits](docs/USAGE.md), and [report problems](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
 
 ## Documentation
 
-- [Usage guide](docs/USAGE.md): install, sessions, workflow runs, approvals, limits and fixes
-- [Prompting guide](docs/prompting-guide.md)
-- [PDD skill](skills/pdd/SKILL.md)
-- [Sessions](docs/prompt-sessions.md)
-- [Workflows in depth](docs/workflows.md)
+- [Usage guide](docs/USAGE.md): install, runs, gates, runtime checks, clean up and troubleshooting
+- [Workflows](docs/workflows.md): areas, steps and your own workflows
 - [CLI reference](docs/cli.md)
-- [Example project](examples/ticket-status/README.md)
-
-## Contributing
-
-Contributions are welcome. Open pull requests against the `alpha` branch. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- [Prompting guide](docs/prompting-guide.md)
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Contributions go to the `alpha` branch. See [CONTRIBUTING.md](CONTRIBUTING.md).

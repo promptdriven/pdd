@@ -1,0 +1,28 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/unknown-item.md",
+  "criteria": [
+    {"id": "AC1", "text": "An order with the item \"pumpkin-spice\" is refused with the error \"unknown-item\"."}
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "lee-orders-an-item-not-on-the-menu",
+      "entry_path": "prompts/place_order.prompt.md",
+      "operation": "place_order",
+      "input": {
+        "customerName": "Lee",
+        "pickupAt": "09:00",
+        "items": [
+          {"itemId": "pumpkin-spice", "size": "M", "quantity": 1}
+        ]
+      },
+      "expected_error": "unknown-item",
+      "checks": [
+        {"criterion_id": "AC1", "target": "error", "path": "/code", "op": "equals", "value": "unknown-item"}
+      ]
+    }
+  ]
+}

@@ -1,34 +1,37 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d32cb11ce18ae710bb5bdd0e818317e5e61ed2d8ebaf26e973349bb6e3696b84).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8c0550f53885d96bcf0211db7b3c83bd6ae8358222f33cfffbd6ffd8fc12fa17).
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadGuidance } from './guidance.mjs';
-import { launchNativeSession } from './native-session.mjs';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
-import { formatLocalWorkflows } from './workflow-list.mjs';
-import { createWorkflowProgress } from './workflow-progress.mjs';
+import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
+import { setupProject } from './project-setup.mjs';
+import { setupSkills } from './skills-install.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
+const RUNNER_ROUTES = {
+  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex' }],
+  'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
+  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
+  'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
+  'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
+  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
+  'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
+};
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    'Read the entire Prompting guide with pdd --skill before drafting any Story.',
-    'Session and recipe shortcuts open foreground native conversations. Workflow run/resume may push branches and create real PRs.',
-    'Keep the PDD controller running while its native stages work in background Herdr. After controller exit, use explicit resume to reconcile the original; no background PDD daemon continues it.',
-    'Use workflow attach RUN_ID for the actual active stage; completed archives are not live sessions.'].join('\n');
-}
-function guidanceError(stderr) {
-  line(stderr, 'The complete PDD guidance could not be read. Use a package containing the canonical guide, skill, references and manual recipes.');
-  return 1;
+    'Open Codex or Claude as usual and call a PDD skill: /pdd-feature, /pdd-bug, /pdd-small-change or /pdd-prompting.',
+    'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
+    'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages,
-  signalSource = process, exit = code => process.exit(code) } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -42,59 +45,53 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
         line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
-    case 'skill':
-      try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }
-      catch { return guidanceError(stderr); }
-    case 'workflow-run':
-    case 'workflow-resume':
-    case 'workflow-attach': {
-      const progress = plan.local === 'workflow-attach' ? null : createWorkflowProgress({ stdout });
-      const interrupted = () => { progress.interrupt(); exit(130); };
-      if (progress) {
-        if (plan.local === 'workflow-resume') progress.observe({ event: 'resume.requested', runId: plan.operands[0] });
-        line(stdout, plan.local === 'workflow-run'
-          ? `Starting ${plan.operands[0]} for issue ${/^\d+$/.test(plan.operands[1]) ? '#' : ''}${plan.operands[1]}. This terminal stays busy until the run stops at a gate.`
-          : `Inspecting run ${plan.operands[0]}. With a decision, this terminal stays busy until the next gate.`);
-        signalSource.once('SIGINT', interrupted);
-      }
+    case 'workflow-run': case 'workflow-done': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': {
+      const [name, input] = RUNNER_ROUTES[plan.local](plan);
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
-        const stages = workflowStages ?? await import('./workflow-stage-herdr.mjs');
-        const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,closeHerdrRun} = stages;
-        if (![runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage].every(fn=>typeof fn==='function')) throw Error('Missing stage transport');
-        const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,closeHerdrRun,stdout,stderr, ...(progress ? { onProgress: progress.observe } : {})};
-        const result = plan.local === 'workflow-run'
-          ? await runner.runWorkflow({name:plan.operands[0],issue:plan.operands[1],
-            agent:plan.options['--agent']??'codex',cwd,packageRoot},ports)
-          : plan.local === 'workflow-attach'
-          ? await runner.attachWorkflow({runId:plan.operands[0],cwd,packageRoot},ports)
-          : await runner.resumeWorkflow({runId:plan.operands[0],cwd,packageRoot,
-            ...(plan.options['--decision']!==undefined?{decision:plan.options['--decision']}:{} )},ports);
-        if (!result || !['completed','waiting','failed','recovery_required'].includes(result.state)
-          || !Number.isInteger(result.exitCode) || result.exitCode<0 || result.exitCode>255
-          || typeof result.message!=='string' || !result.message.trim()) throw Error('Invalid local workflow reply');
-        if (!(result.state === 'waiting' && progress?.gateShown?.())) line(stdout,result.message);
+        if (typeof runner[name] !== 'function') throw Error('Missing runner export');
+        const result = await runner[name]({ ...input, cwd, packageRoot });
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
+          || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
       } catch {
-        line(stderr,'The local workflow runner could not confirm this operation. Inspect its saved state before repeating a mutation; no automatic retry was sent.');
+        line(stderr, 'The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.');
         return 1;
-      } finally { if (progress) signalSource.off('SIGINT', interrupted); }
+      }
     }
-    case 'session': {
-      let context;
-      try { context = loadGuidance({ packageRoot, cwd, workflows: true, workflowName: plan.workflowName }); }
-      catch { return guidanceError(stderr); }
-      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, context,
-        request: plan.operands.join(' '), stderr });
+    case 'setup': {
+      let code = 0;
+      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
+        if (result.updated.length) line(stdout, `Updated ${result.updated.length} PDD skills in ${result.root}`);
+        if (result.found) line(stdout, `PDD skills found in ${result.found}`);
+        else if (result.installed.length) line(stdout, `Installed ${result.installed.length} PDD skills to ${result.root}`);
+        if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
+      }
+      try {
+        const { file, changed } = setupProject({ cwd, packageRoot });
+        line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      return code;
     }
+    case 'runtime-check':
+    case 'runtime-try':
+      try {
+        const runtime = await import('./runtime-client.mjs');
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr });
+      } catch {
+        line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
+        return 3;
+      }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
       try {
-        const definitions=workflowDefinitions??await import('./workflow-definition-loader.mjs');
-        const workflows=await definitions.listWorkflowDefinitions({cwd,packageRoot});
-        if (!Array.isArray(workflows)) throw Error('Invalid definition listing');
-        line(stdout,formatLocalWorkflows({workflows,default:null},{json:plan.options['--json']===true}));return 0;
-      } catch { line(stderr,'Workflow definitions could not be read or validated. Check the selected project definitions and bundled package.');return 1; }
+        const areas = workflowAreas ?? { listWorkflowAreas, formatWorkflowList };
+        const workflows = await areas.listWorkflowAreas({ packageRoot, cwd, home: env.HOME });
+        if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
+        line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
+      } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
   }
 }

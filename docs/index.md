@@ -1,13 +1,12 @@
 # PDD Alpha documentation
 
-Start with the [README](../README.md). Before any Story or prompt authoring, have the actual agent conversation read the entire [Prompting guide](prompting-guide.md) and [PDD skill](../skills/pdd/SKILL.md).
+Start with the [README](../README.md).
 
-- [Usage guide](USAGE.md): install from the `alpha` branch, sessions, workflow runs, approvals, known limits and troubleshooting.
-- [Local setup](setup.md): source and Node prerequisites.
-- [Local native session or existing conversation](prompt-sessions.md): load the guide and work on a useful request.
-- [Local issue workflows and recipes](workflows.md): fresh background native stages, issue worktrees, editable definitions, human decisions and GitHub PR steps.
-- [Local CLI](cli.md): native sessions, issue run/resume/attach, help, skill output, listing and completion.
-- [Evidence and checks](checks.md): what the results prove.
-- [Complete ticket-status example](../examples/ticket-status/README.md): prompt, Story, independent cases, implementation and native tests.
+- [Usage guide](USAGE.md): install, the PDD skills, setup, runs, gates, runtime checks, clean up and fixes.
+- [Workflows in depth](workflows.md): areas, steps, gates, PR 1 and PR 2, the run folder, tests and your own workflows.
+- [RUNBOOK.md](../RUNBOOK.md): what the agent does for `pdd check` and `pdd try`.
+- [CLI reference](cli.md): every command, and how to run from a source checkout.
+- [Prompting guide](prompting-guide.md): the method. The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) has the same text in `guide.md`.
+- [Example project](../examples/ticket-status/README.md): a prompt, a Story, test cases, code and tests.
 
-The guide is canonical at `docs/prompting-guide.md`. Keep it complete and maintain links to that one file; do not ship a divergent guide inside the skill.
+The guide's source is `docs/prompting-guide.md`. A test keeps `skills/pdd-prompting/guide.md` the same. Link to the guide. Do not copy its rules into other files.

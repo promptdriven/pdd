@@ -1,44 +1,76 @@
-# Local CLI
+# CLI reference
 
-Use Node.js 22.16.0 or newer. From the package root:
+`pdd --help` shows all commands. `help` and `-h` also work.
+
+You need the pdd command only for runs with PRs and for `pdd check` and `pdd try`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with `/pdd-setup` in your agent. Then call a PDD skill in Codex or Claude Code: `/pdd-feature`, `/pdd-bug`, `/pdd-small-change` or `/pdd-prompting`. There is no `pdd session` command. See [Install](USAGE.md#2-install).
+
+## Set up a repo
+
+| Command | What it does |
+|---|---|
+| `pdd setup` | Install the five [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. A second run changes nothing |
+
+`pdd setup` copies the skills to `~/.agents/skills` (Codex) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The skill `/pdd-setup` writes the same block in a chat. Run it in the top folder of the repo.
+
+## Runs on a GitHub issue
+
+| Command | What it does |
+|---|---|
+| `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once |
+| `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
+| `pdd workflow status [N] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. Without N, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data |
+| `pdd workflow open N` | Show the current chat of the run. If the chat ended, resume it in its tab |
+| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat. At the PR 1 gate of `feature` and `bug`, this makes the code PR. Without N, approve the run of the current worktree, or else the one run in this repo that waits for a person |
+| `pdd workflow changes N "text"` | Send the text to the same chat. The chat revises. The gate stays open |
+| `pdd workflow cancel N` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
+
+- NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
+- ISSUE is the issue number in the repo of your clone. An issue can have only one active run. `run` refuses a second one. After `cancel`, a new `run` on the issue starts fresh.
+- The run folder is `.git/pdd/runs/N/` in your clone. See [workflows.md](workflows.md#the-run-folder).
+- With Claude Code, the first chat can ask once to trust the new worktree. `run` prints a hint when your clone's folder is not trusted yet.
+- N is the issue number of a run in the current repo, worktrees included. If several repos match, use `owner/repo#N`.
+- In a terminal, `approve` asks y/N and shows the repo, the issue and its title. From an agent chat, `approve` works only when the person's own message after the gate is in that chat.
+- Codex is the default agent. The chats start in full-access mode: Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`. PDD does not choose a model and does not change your agent's settings, sign-in or config.
+- The first message of each chat gives the full path of this pdd. The agent uses it, so another `pdd` on its PATH does not matter.
+- No command has a time limit. You can close the terminal at any time.
+- pdd never merges.
+
+## Runtime checks
+
+| Command | What it does |
+|---|---|
+| `pdd check [STORY...]` | Check stories on the PDD runtime with your gh login. Print one table, a `Runtime check:` line and a report link for each story |
+| `pdd check --read [BATCH]` | Show saved check results again. Sends no check |
+| `pdd check --fill-hash` | Fill the hash of draft interfaces. No network |
+| `pdd check --files` | List the files a check would send. No network |
+| `pdd try [STORY]` | Make a Try link and open it in your browser. It ends in 24 hours |
+| `pdd try --stop [STORY]` | Stop the open Try link of a story |
+
+A `draft` prompt can be checked, and its result is marked DRAFT. See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, and `pdd check --help` for all options.
+
+## Used by the agent
+
+| Command | What it does |
+|---|---|
+| `pdd workflow done STEP [--summary TEXT]` | Record a finished step. Print the next instruction: the next step, the gate, or "pdd opens the PR now". After the last step of an area with a PR gate, push the branch and open the PR |
+
+The agent runs `done` from the run's worktree. pdd finds the run from that folder. You do not run `done` yourself.
+
+## Other commands
+
+| Command | What it does |
+|---|---|
+| `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
+| `pdd --help`, `pdd --version` | Help and version |
+
+## Run from a source checkout
+
+From a clone of this repository, run the CLI without a global install:
 
 ```sh
 node bin/pdd.mjs --help
 node bin/pdd.mjs --version
-node bin/pdd.mjs --skill
-node bin/pdd.mjs session --help
-node bin/pdd.mjs session --agent codex "Help me review my project."
-node bin/pdd.mjs session --agent claude "Help me review my project."
-node bin/pdd.mjs workflow run --help
-node bin/pdd.mjs workflow resume --help
-node bin/pdd.mjs workflow attach --help
-node bin/pdd.mjs workflow feature --agent codex "Help me define a useful change."
-node bin/pdd.mjs workflow bug --agent claude "Help me reproduce this failure."
-node bin/pdd.mjs workflow small-change "Help me make a contained change."
-node bin/pdd.mjs workflow list
-node bin/pdd.mjs workflow list --json
-node bin/pdd.mjs completion bash
-node bin/pdd.mjs completion zsh
+npm test
 ```
 
-`help` and `-h` are alternatives to `--help`. The `pdd …` forms below describe command syntax. From another project or inside a native agent, invoke this package by its actual absolute entrypoint, such as `node /actual/package/bin/pdd.mjs`, retaining an absolute Node executable path when supplied. A native login shell can resolve bare `pdd` to a different installation despite the outer terminal's PATH. Local invocation avoids changing an existing global command.
-
-`--skill` prints the complete canonical [Prompting guide](prompting-guide.md) first, then [the skill](../skills/pdd/SKILL.md) and every bundled Markdown reference, with their package paths. The actual conversation must load that complete guide before Story authoring. If output is truncated, read its files in complete sections.
-
-`session [--agent codex|claude] [request text]` launches the installed native agent, defaulting to Codex. The canonical guide is supplied first, then the skill, its references, docs/workflows.md and all bundled workflow Markdown in the native initial positional prompt, before Story authoring. The launcher preserves cwd, native login and the inherited terminal/environment. It starts agents in full-access mode without approval prompts: Codex uses --no-daemon, --dangerously-bypass-approvals-and-sandbox and an invocation-only folder-trust override for the exact cwd; Claude uses --dangerously-skip-permissions. It does not select a model, copy credentials or write global configuration. Use the native agent's ordinary setup if it is not already usable; an existing usable login needs no replacement. No request text is required. Optional request words are joined into the same native initial prompt after guidance. `--` ends PDD options; arbitrary native flags are not forwarded. The native exit status is preserved; a missing executable exits 127. Missing required package context refuses with exit 1 before launching. Native signal termination is reported as 128 plus its signal number. These invocations can use your native agent/provider allowance; they are not inert discovery commands.
-
-`workflow feature|bug|small-change [--agent codex|claude] [request text]` opens one normal native conversation for the selected packaged recipe. Codex is the default. It uses the same native launcher, cwd, inherited environment, full-access launch mode, initial-prompt context and missing-tool/exit behavior as `session`. The guide is complete and first, followed by skill/all-reference context, docs/workflows.md and only the selected recipe WORKFLOW plus all sibling/subdirectory Markdown steps before any Story. An explicit selected-recipe instruction tells the agent to follow that recipe after summarizing the guide. `session` still supplies all bundled recipes. Optional `--` ends PDD options; no arbitrary recipe paths or native flags are accepted. A valid named recipe with `--help` returns usage without native launch; an unknown recipe returns exit 2 before effects. It does not require the selected recipe to exist in the caller's project. A direct workflow shortcut is a native launch, not an inert listing.
-
-In that shortcut, stages are followed in one conversation; the command does not start separate agent sessions per stage, persist a managed workflow or publish PRs automatically. The person can request actual Git/GitHub publication later through the agent's normal tools. Local PR preparation alone supplies no URL or publication result.
-
-For local GitHub issue execution, use `pdd workflow run NAME ISSUE [--agent codex|claude]`, default Codex. NAME is a safe lowercase/digit name beginning with a letter, with single hyphens between nonempty groups, up to 64 characters. The definition loader selects and validates project overrides or bundled definitions; the CLI does not limit names to three built-ins. ISSUE is a positive number, owner/repo#number or HTTPS GitHub issue URL resolved against the current repository. Use the actual package entrypoint from your project. The runner assigns a separate issue worktree/branch for stage execution. This command can perform agent work, push branches and create real PRs.
-
-`pdd workflow resume RUN_ID [--decision approve|skip]` uses the saved UUIDv4 identity and its workflow snapshot, agent and issue worktree. Without a decision it inspects/reconciles or observes merge state and does not launch the next native stage or PR. Approval advances eligible work or applies to current human/optional work; skip is only for optional work. Merge waits inspect the actual saved PR and never merge. Exit 0 is completed, 2 waiting and 1 failed/recovery_required. Unknown native/PR outcomes never authorize blind relaunch/resend.
-
-`pdd workflow attach RUN_ID` asks the runner to resolve the actual current active backend from the common-repository index. It attaches that live native terminal, not a new conversation. Attachment and stage acceptance/cleanup are mutually exclusive; new interaction invalidates earlier candidates. Archived stages produce finite information rather than a promise of a live pane. There is no agent override or arbitrary native flag passthrough.
-
-The PDD controller remains foreground while issue stages use fresh native agents in owned background Herdr workspaces. Ready-before-submit, one durable prompt intent and the same agent's working-to-ready observation provide a candidate only. The runner validates the exact handoff, artifacts, revision and actual tests before acceptance and cleanup. Active/blocked backing panes still consume resources; completed accepted stages do not need permanent panes. There is no automatic progression after the controller exits. Explicit resume reconciles the saved original. See [workflow execution and recovery](workflows.md).
-
-`workflow list [--json]` uses the authoritative definition loader. JSON returns `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated entries and source `project` or `bundled`. A complete valid project definition overrides the matching bundled name; an invalid override or unavailable loader refuses, without a legacy Markdown fallback. Listing is local discovery, not native/GitHub work. Bash/Zsh completion consumes this local listing as data, filters safe names and does not evaluate returned text.
-
-Completion prints shell text to stdout; it does not modify shell configuration. Save or source it using your own shell's usual setup. The local native session command loads the full guide and bundled manual workflow context before Stories using the installed agent. The package provides local commands only. Unsupported operations must remain unsupported, with no hosted-service fallback.
+You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).

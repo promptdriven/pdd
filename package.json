@@ -1,6 +1,6 @@
 {
   "name": "pdd",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "PDD Alpha: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
@@ -11,12 +11,12 @@
     "LICENSE",
     "CONTRIBUTING.md",
     "AGENTS.md",
+    "RUNBOOK.md",
     "bin/",
     "src/",
     "prompts/cli/",
     "docs/",
     "skills/",
-    ".pdd/workflows/",
     "examples/"
   ],
   "scripts": {

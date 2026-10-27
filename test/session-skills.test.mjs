@@ -1,0 +1,136 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { setupSkills, PDD_SKILL_NAMES } from '../src/skills-install.mjs';
+
+const root = fileURLToPath(new URL('..', import.meta.url));
+const temp = t => { const p = realpathSync(mkdtempSync(join(tmpdir(), "pdd skills ' "))); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
+const filesUnder = (dir, base = dir) => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
+  entry.isDirectory() ? filesUnder(join(dir, entry.name), base) : [relative(base, join(dir, entry.name))]).sort();
+const ROOTS = ['.agents/skills', '.claude/skills'];
+const version = () => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+const MARKER = '.pdd-skill.json';
+
+// A copied package in a quoted path, so install never depends on the source checkout.
+function packageCopy(t) {
+  const sandbox = temp(t), pkg = join(sandbox, 'installed "pkg"');
+  mkdirSync(pkg);
+  for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
+  const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"');
+  for (const dir of [home, project]) mkdirSync(dir);
+  const env = { ...process.env, HOME: home };
+  delete env.CLAUDE_CONFIG_DIR;
+  const run = (args, extra = {}) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), ...args],
+    { cwd: project, env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });
+  return { sandbox, pkg, home, project, env, run };
+}
+
+// Wrong: an ordinary command writes skill folders into the person's home (only pdd setup may install them).
+test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or CLAUDE_CONFIG_DIR', t => {
+  const { sandbox, home, project, run } = packageCopy(t);
+  const config = join(sandbox, 'claude config');
+  for (const args of [['--version'], ['--help'], ['workflow', 'list']]) {
+    const result = run(args, { CLAUDE_CONFIG_DIR: config });
+    assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
+  }
+  assert.deepEqual(readdirSync(home), []); assert.deepEqual(readdirSync(project), []); assert.equal(existsSync(config), false);
+});
+
+// Wrong: setup leaves an agent without the skills, copies them into the repo, or rewrites them on a second run.
+test('INSTALL2: pdd setup installs missing skills into each agent user folder, says so, and a second run changes nothing', t => {
+  const { pkg, home, project, run } = packageCopy(t);
+  const first = run(['setup']);
+  assert.equal(first.status, 0, first.stderr);
+  for (const skillRoot of ROOTS) {
+    assert.ok(first.stdout.includes(`Installed 5 PDD skills to ${join(home, skillRoot)}\n`), first.stdout);
+    assert.deepEqual(readdirSync(join(home, skillRoot)).sort(), [...PDD_SKILL_NAMES].sort());
+    for (const name of PDD_SKILL_NAMES) {
+      const installed = join(home, skillRoot, name), source = join(pkg, 'skills', name);
+      assert.deepEqual(filesUnder(installed).filter(file => file !== MARKER), filesUnder(source));
+      for (const file of filesUnder(source)) assert.deepEqual(readFileSync(join(installed, file)), readFileSync(join(source, file)), file);
+      assert.equal(JSON.parse(readFileSync(join(installed, MARKER), 'utf8')).version, version());
+    }
+  }
+  assert.deepEqual(readdirSync(project), ['AGENTS.md']);
+  const inodes = ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd-bug')).ino), block = readFileSync(join(project, 'AGENTS.md'), 'utf8');
+  const second = run(['setup']);
+  assert.equal(second.status, 0, second.stderr);
+  for (const skillRoot of ROOTS) assert.ok(second.stdout.includes(`PDD skills found in ${join(home, skillRoot)}\n`), second.stdout);
+  assert.doesNotMatch(second.stdout, /Installed|Updated/);
+  assert.deepEqual(ROOTS.map(skillRoot => statSync(join(home, skillRoot, 'pdd-bug')).ino), inodes);
+  assert.equal(readFileSync(join(project, 'AGENTS.md'), 'utf8'), block);
+});
+
+// Wrong: setup copies over skills that npx skills add already installed (symlinked folders without the pdd marker).
+test('INSTALL3: after an npx-style install in the project, pdd setup finds the skills and copies nothing', t => {
+  const { home, project, run } = packageCopy(t);
+  for (const name of PDD_SKILL_NAMES) {
+    mkdirSync(join(project, '.agents/skills', name), { recursive: true });
+    writeFileSync(join(project, '.agents/skills', name, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+    mkdirSync(join(project, '.claude/skills'), { recursive: true });
+    symlinkSync(join(project, '.agents/skills', name), join(project, '.claude/skills', name));
+  }
+  const result = run(['setup']);
+  assert.equal(result.status, 0, result.stderr);
+  for (const skillRoot of ROOTS) assert.ok(result.stdout.includes(`PDD skills found in ${join(project, skillRoot)}\n`), result.stdout);
+  assert.doesNotMatch(result.stdout, /Installed|Updated/);
+  assert.deepEqual(readdirSync(home), []);
+  assert.equal(existsSync(join(project, '.agents/skills/pdd-bug', MARKER)), false);
+});
+
+// Wrong: an update keeps stale files, a newer copy is downgraded, or a person's own folder or symlink is overwritten.
+test('INSTALL4: setup updates only older or changed copies that carry the pdd marker', t => {
+  const { pkg, home } = packageCopy(t);
+  const opts = { packageRoot: pkg, cwd: join(home, 'none'), home };
+  setupSkills(opts);
+  const [agents, claude] = ROOTS.map(skillRoot => join(home, skillRoot));
+  const marker = dir => JSON.parse(readFileSync(join(dir, MARKER), 'utf8'));
+  writeFileSync(join(agents, 'pdd-bug/steps/old.md'), 'stale\n');
+  writeFileSync(join(agents, 'pdd-bug', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd-bug')), version: '0.0.1' }));
+  writeFileSync(join(agents, 'pdd-feature/SKILL.md'), 'edited\n');
+  writeFileSync(join(agents, 'pdd-feature', MARKER), JSON.stringify({ ...marker(join(agents, 'pdd-feature')), digest: 'other' }));
+  writeFileSync(join(claude, 'pdd-bug/SKILL.md'), 'newer\n');
+  writeFileSync(join(claude, 'pdd-bug', MARKER), JSON.stringify({ ...marker(join(claude, 'pdd-bug')), version: '99.0.0' }));
+  rmSync(join(claude, 'pdd-feature'), { recursive: true }); mkdirSync(join(claude, 'pdd-feature'));
+  writeFileSync(join(claude, 'pdd-feature/SKILL.md'), 'mine\n');
+  const own = join(home, 'own-skill'); mkdirSync(own); writeFileSync(join(own, 'SKILL.md'), 'linked\n');
+  rmSync(join(claude, 'pdd-small-change'), { recursive: true }); symlinkSync(own, join(claude, 'pdd-small-change'));
+  rmSync(join(agents, 'pdd-prompting'), { recursive: true });
+
+  const results = setupSkills(opts);
+  assert.deepEqual(results.map(result => [result.agent, result.root, result.found, result.installed.length, result.updated.length]),
+    [['Codex', agents, null, 1, 2], ['Claude', claude, claude, 0, 0]]);
+  assert.equal(existsSync(join(agents, 'pdd-bug/steps/old.md')), false);
+  assert.equal(marker(join(agents, 'pdd-bug')).version, version());
+  assert.deepEqual(readFileSync(join(agents, 'pdd-feature/SKILL.md')), readFileSync(join(pkg, 'skills/pdd-feature/SKILL.md')));
+  assert.deepEqual(readFileSync(join(agents, 'pdd-prompting/guide.md')), readFileSync(join(pkg, 'docs/prompting-guide.md')));
+  assert.equal(readFileSync(join(claude, 'pdd-bug/SKILL.md'), 'utf8'), 'newer\n');
+  assert.equal(readFileSync(join(claude, 'pdd-feature/SKILL.md'), 'utf8'), 'mine\n');
+  assert.equal(readFileSync(join(claude, 'pdd-small-change/SKILL.md'), 'utf8'), 'linked\n');
+});
+
+// Wrong: Claude started with CLAUDE_CONFIG_DIR reads <dir>/skills, so a ~/.claude copy is invisible to it.
+test('INSTALL5: with CLAUDE_CONFIG_DIR set, setup installs Claude skills in <dir>/skills', t => {
+  const { sandbox, home, run } = packageCopy(t);
+  const config = join(sandbox, 'claude config');
+  const result = run(['setup'], { CLAUDE_CONFIG_DIR: config });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes(`Installed 5 PDD skills to ${join(config, 'skills')}\n`), result.stdout);
+  assert.deepEqual(readdirSync(join(config, 'skills')).sort(), [...PDD_SKILL_NAMES].sort());
+  assert.deepEqual(readdirSync(home), ['.agents']);
+});
+
+// Wrong: one broken agent folder stops the other agent's install or the project block.
+test('INSTALL6: an install failure is reported, the other agent and the block still happen, and setup exits 1', t => {
+  const { home, project, run } = packageCopy(t);
+  writeFileSync(join(home, '.agents'), 'not a folder\n');
+  const result = run(['setup']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /pdd setup: the PDD skills could not be installed in .*\.agents\/skills/);
+  assert.ok(existsSync(join(home, '.claude/skills/pdd-prompting/SKILL.md')));
+  assert.ok(existsSync(join(project, 'AGENTS.md')));
+});
