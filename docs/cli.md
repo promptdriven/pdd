@@ -46,7 +46,7 @@ The skill `/pdd-setup` does the same in a chat. Run it in the top folder of the 
 | `pdd try [STORY]` | Make a Try link and open it in your browser. It ends in 24 hours |
 | `pdd try --stop [STORY]` | Stop the open Try link of a story |
 
-A `draft` prompt can be checked, and its result is marked DRAFT. Until the next server update, a draft check may be refused with a plain message. See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, and `pdd check --help` for all options.
+A `draft` prompt can be checked, and its result is marked DRAFT. See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, and `pdd check --help` for all options.
 
 ## Used by the agent
 

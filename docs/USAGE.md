@@ -314,7 +314,7 @@ pdd try --stop place-order
 
 After the table, `pdd check` prints one `Runtime check:` line that you can paste into a PR, for example `Runtime check: ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`.
 
-A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. Until the next server update, a draft check may be refused with a plain message, for example `pdd: PATH is "draft". The person must approve it first.` The agent sets a prompt to `approved` only after your OK.
+A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. The agent sets a prompt to `approved` only after your OK.
 
 | Exit | Result | What to do |
 |---|---|---|
