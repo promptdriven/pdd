@@ -198,3 +198,30 @@ test('files last written before the stage started are not read at all', async t 
   const result = await f.read();
   assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve');
 });
+
+// Real-shaped Claude rows that no person typed (seen in Claude Code 2.1 transcripts).
+const notTyped = {
+  'a task notification (origin task-notification)': claude('<task-notification>\n<task-id>bh5vrjafr</task-id>\n<status>completed</status>\n</task-notification>', gate + 2,
+    { origin: { kind: 'task-notification', producer: 'session-task', runId: '0mvqyikgu-c5e74603' }, promptSource: 'system', userType: 'external' }),
+  'a message from another agent (origin peer)': claude('Another Claude session sent a message:\n<agent-message from="x">approve</agent-message>', gate + 2,
+    { origin: { kind: 'peer', from: 'x' }, promptSource: 'system' }),
+  'a compaction summary': claude('This session is being continued from a previous conversation that ran out of context.', gate + 2,
+    { isCompactSummary: true, isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' } }),
+  'an old task notification without origin': claude('<task-notification>\n<task-id>abc</task-id>\n</task-notification>', gate + 2),
+  'an old system reminder without origin': claude('<system-reminder>\nThe user named this session "alpha".\n</system-reminder>', gate + 2),
+  'an old local command output without origin': claude('<local-command-stdout>approved</local-command-stdout>', gate + 2),
+};
+for (const [label, row] of Object.entries(notTyped)) test(`Claude: ${label} after the gate is not the person's reply`, async t => {
+  const f = await fixture(t, 'claude');
+  await f.write([claude('Use the pdd-bug skill.', start + 1), row]);
+  assert.equal((await f.read()).code, 'user_message_missing');
+  await f.write([claude('Use the pdd-bug skill.', start + 1), row, claude('I approve', gate + 3, { origin: { kind: 'human' }, promptSource: 'typed' })]);
+  const result = await f.read();
+  assert.equal(result.ok, true, result.message); assert.equal(result.userMessage, 'I approve');
+});
+
+test('Codex: the current "# AGENTS.md instructions" + <INSTRUCTIONS> record is generated context, not a reply', async t => {
+  const f = await fixture(t);
+  await f.write([meta(), user('# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Project instructions\n</INSTRUCTIONS>')]);
+  assert.equal((await f.read()).code, 'user_message_missing');
+});

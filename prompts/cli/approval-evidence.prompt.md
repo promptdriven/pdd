@@ -68,7 +68,11 @@ Use the first main conversation record carrying UUID `sessionId`, `cwd` and
 `timestamp` as identity/start. Native Claude needs no Codex `session_meta` record.
 Only `type:user` with `message.role:user`, matching session/cwd, and string or
 `text` content counts. Exclude `isMeta`, `isSidechain`, tool-result-only content,
-and `subagents` directories. A later conflicting identity invalidates the file.
+and `subagents` directories. Claude writes user rows that no person typed:
+when a row has `origin`, only `origin.kind:"human"` counts (not `task-notification`
+or `peer`); skip `isCompactSummary` and `isVisibleInTranscriptOnly` rows; and skip
+text that starts with `<task-notification>`, `<system-reminder>` or `<local-command-`
+(older versions write those without `origin`). A later conflicting identity invalidates the file.
 
 Text blocks join with newlines; blank-only text cannot serve as evidence.
 Timestamps accept finite epoch milliseconds or parseable date strings. The
@@ -77,7 +81,7 @@ Assistant, developer, tool and system records cannot serve as user evidence.
 Codex can store generated environment context and AGENTS instructions in user-role
 records. Exclude messages consisting only of `<environment_context>` or
 `<permissions instructions>` wrappers, and messages beginning with the generated
-`# AGENTS.md instructions for ` heading. These are not a person's reply; role
+`# AGENTS.md instructions for ` heading or with `# AGENTS.md instructions` followed by `<INSTRUCTIONS>`. These are not a person's reply; role
 alone does not make these known generated records evidence.
 Malformed complete records in a matched file refuse; an unterminated final line
 is an in-progress write and never serves as evidence. A matched file's metadata

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: cfc0bb7d35ad854c6d99375d3fc77a87c701ed10f88c32505c34e0d442efca3c).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: f60f10e1dc83290074c5f5bd572e991b59dc564e2d1a1cf8bf04a556f949764d).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -66,15 +66,20 @@ function textBlocks(content, types) {
 
 function generatedContext(text) {
   const value = text.trim();
-  return value.startsWith('# AGENTS.md instructions for ')
+  return value.startsWith('# AGENTS.md instructions for ') || /^# AGENTS\.md instructions\s*\n\s*<INSTRUCTIONS>/.test(value)
     || /^(?:<environment_context>[\s\S]*?<\/environment_context>\s*|<permissions instructions>[\s\S]*?<\/permissions instructions>\s*)+$/.test(value);
 }
 
 function userText(row, agent, meta) {
   if (agent === 'claude') {
+    // Claude also writes user rows that no person typed: task notifications, messages from other agents,
+    // compaction summaries and (in older versions, without origin) system reminders and local command output.
     if (row.type !== 'user' || row.message?.role !== 'user' || row.isMeta === true || row.isSidechain === true
+      || row.isCompactSummary === true || row.isVisibleInTranscriptOnly === true
+      || row.origin !== undefined && row.origin?.kind !== 'human'
       || row.sessionId !== meta.id || row.cwd !== meta.cwd) return '';
-    return textBlocks(row.message.content, ['text']);
+    const text = textBlocks(row.message.content, ['text']);
+    return /^\s*<(?:task-notification|system-reminder|local-command-)/.test(text) ? '' : text;
   }
   const payload = row.payload;
   if (row.type === 'response_item' && payload?.type === 'message' && payload.role === 'user') {
