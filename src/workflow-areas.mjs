@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: d9f61443c2a1abff4ebcb4c95b5f21bf487778d19471c9f091ef17081d93e236).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 4b518c084dd9c06f1068075e9e79d72fb118102880250ef7e62828d0a214fb82).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -48,8 +48,9 @@ function found(options) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const name = entry.name.slice(4), dir = join(root, entry.name);
       if (!entry.name.startsWith('pdd-') || !word(name) || workflows.has(name) || !existsSync(join(dir, 'workflow.json'))) continue;
-      // A copy that pdd installed (it has pdd's marker) is not an override: the running package is newer or the same.
-      if (source === 'home' && existsSync(join(dir, '.pdd-skill.json'))) continue;
+      // A home copy of a workflow the package ships is an install (npx skills add or pdd setup), maybe an old one;
+      // only a project may override a bundled workflow. Home folders add workflows the package does not have.
+      if (source === 'home' && existsSync(join(options.packageRoot, 'skills', entry.name, 'workflow.json'))) continue;
       workflows.set(name, { name, skill: entry.name, dir, source });
     }
   }
