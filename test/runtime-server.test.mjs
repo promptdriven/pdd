@@ -568,3 +568,21 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
   assert.ok(draft.out.split('\n').includes('Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
   assert.ok(draft.out.split('\n').includes('Runtime check (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
 });
+
+// Wrong: when the server retires an address it answers "update required", and an old pdd shows a failure table or retries (0.1.6).
+test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code) is one plain line, exit 5, and no check is sent', async t => {
+  const setup = harbor(t);
+  const said = { status: 426, json: { code: 'update-required', message: 'This pdd is too old for the PDD runtime. Run: npm install -g github:promptdriven/pdd#alpha' } };
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? said : f.normal(entry));
+  const result = await check(setup, fake, []);
+  assert.equal(result.code, 5); assert.equal(result.out, '');
+  assert.deepEqual(result.err.trimEnd().split('\n').slice(-1), [said.json.message]);
+  assert.doesNotMatch(result.err, /Lint passed|If pdd stops/);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+  const bare = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 400, json: { error: { code: 'update-required' } } } : f.normal(entry));
+  const fallback = await check(setup, bare, ['place-order']);
+  assert.equal(fallback.code, 5); assert.ok(fallback.err.includes('Please update pdd: npm install -g github:promptdriven/pdd#alpha'), fallback.err);
+  const onRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? said : f.normal(entry));
+  const reading = await check(setup, onRead, ['place-order']);
+  assert.ok(reading.err.includes(said.json.message), reading.err);
+});
