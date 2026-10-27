@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, defaultMaxCalls, isSecretPath, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
+import { captureSource, defaultMaxCalls, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
@@ -277,4 +277,103 @@ test('RUNTIME-CAPTURE3: the secret-name filter covers common credential files', 
   writeFileSync(join(repo, 'deploy.pem'), 'x');
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4); assert.match(result.err, /deploy\.pem: the name looks like a secret/); assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
+});
+
+// Replace the place_order input schema in the Harbor prompt (status draft, hash refilled so P7 passes).
+function withInputSchema(repo, edit) {
+  const file = join(repo, 'prompts/place_order.prompt.md'), text = readFileSync(file, 'utf8');
+  const start = text.indexOf('```json') + 7, end = text.indexOf('```', start);
+  const iface = JSON.parse(text.slice(start, end));
+  edit(iface.entries[0].input_schema, iface);
+  iface.status = 'draft';
+  const next = `${text.slice(0, start)}\n${JSON.stringify(iface, null, 2)}\n${text.slice(end)}`;
+  writeFileSync(file, next.replace(/"prose_sha256": "[0-9a-f]*"/, `"prose_sha256": "${proseSha256(next)}"`));
+}
+
+// Wrong: the runtime refuses schema rules one at a time with no field (real-user web test, issue 1); pdd sends a schema the engine refuses.
+test('RUNTIME-SCHEMA1: every rule of the engine schema subset is checked locally, all at once, each with its JSON pointer', async t => {
+  const { repo, home } = harbor(t);
+  withInputSchema(repo, schema => {
+    delete schema.required;                                     // object with no "required" list
+    schema.properties.customerName.type = ['string', 'null'];   // a type list
+    schema.properties.note = { type: 'array' };                 // an array with no "items"
+    schema.properties.items.items.properties.extra = { type: 'object', properties: {}, required: [] };   // an open object
+    schema.properties.pickupAt.anyOf = [{ type: 'string' }];    // a keyword the runtime does not support
+  });
+  const result = await check(repo, home, ['place-order']);
+  assert.equal(result.code, 4); assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
+  const got = result.json.rows[0].refusals.map(item => [item.code, item.section]);
+  assert.deepEqual(got.sort(), [
+    ['graph-schema-invalid', '/entries/0/input_schema'],
+    ['graph-schema-invalid', '/entries/0/input_schema/properties/note'],
+    ['graph-schema-open-object', '/entries/0/input_schema/properties/items/items/properties/extra'],
+    ['graph-schema-type-list', '/entries/0/input_schema/properties/customerName'],
+    ['graph-schema-unsupported-keyword', '/entries/0/input_schema/properties/pickupAt'],
+  ].sort());
+  const text = await check(repo, home, ['place-order'], {});
+  assert.match(text.out, /prompts\/place_order\.prompt\.md \/entries\/0\/input_schema needs "required": a list of the property names that must be present/);
+  assert.match(text.out, /\/entries\/0\/input_schema\/properties\/customerName has a list of types \(string, null\)\. Use "oneOf"/);
+  assert.match(text.out, /\/entries\/0\/input_schema\/properties\/note is an array with no "items"/);
+});
+
+// Wrong: pdd is stricter than the engine: an optional field, oneOf with null, and the allowed keywords must pass.
+test('RUNTIME-SCHEMA2: valid strict schemas pass: optional fields, oneOf variants, annotations and constraints', async t => {
+  const { repo, home } = harbor(t);
+  withInputSchema(repo, schema => {
+    schema.properties.note = { oneOf: [{ type: 'string', maxLength: 80 }, { type: 'null' }], description: 'Optional note.' };
+    schema.properties.tip = { type: 'integer', minimum: 0, exclusiveMaximum: 1000, multipleOf: 5, title: 'Tip in cents' };
+    schema.properties.tags = { type: 'array', items: { type: 'string', pattern: '^[a-z]+$' }, uniqueItems: true, maxItems: 3 };
+  });
+  const file = join(repo, 'tests/place-order.json'), doc = readJson(file);
+  doc.steps[0].input.note = null; writeJson(file, doc);
+  const result = await check(repo, home, ['place-order']);
+  assert.equal(result.code, 5, result.out + result.err);
+  assert.doesNotMatch(result.err + result.out, /not checked here/);
+});
+
+// Wrong: input problems come one run at a time, or a oneOf input is skipped with a warning (issues 1, 7, 9).
+test('RUNTIME-SCHEMA3: all input problems of all steps are refused at once; oneOf inputs are checked; a pattern miss only warns', async t => {
+  const { repo, home } = harbor(t);
+  withInputSchema(repo, schema => {
+    schema.properties.note = { oneOf: [{ type: 'string', maxLength: 5 }, { type: 'null' }] };
+    schema.properties.code = { type: 'string', pattern: '^[0-9]{4}$' };
+    schema.properties.tip = { type: 'integer', multipleOf: 5 };
+  });
+  const file = join(repo, 'tests/place-order.json'), doc = readJson(file);
+  Object.assign(doc.steps[0].input, { note: 'too long here', code: 'ABCD', tip: 7 });
+  doc.steps[0].input.items[0].quantity = 0;
+  doc.steps.push({ ...structuredClone(doc.steps[0]), step_id: 'second', input: { ...doc.steps[0].input, customerName: '', note: 3, tip: 10, items: doc.steps[0].input.items.slice(1) } });
+  writeJson(file, doc);
+  const result = await check(repo, home, ['place-order']);
+  assert.equal(result.code, 4);
+  assert.deepEqual(result.json.rows[0].refusals.map(item => item.section).sort(), [
+    'steps[0].input.items[0].quantity', 'steps[0].input.note', 'steps[0].input.tip', 'steps[1].input.customerName', 'steps[1].input.note'].sort());
+  const messages = result.json.rows[0].refusals.map(item => item.message);
+  assert.ok(messages.includes('steps[0] input /note has 13 characters. The prompt allows at most 5 characters.'), messages.join('\n'));
+  assert.ok(messages.includes('steps[0] input /tip is 7. The prompt wants a multiple of 5.'), messages.join('\n'));
+  assert.ok(messages.includes('steps[1] input /note is 3. The prompt allows a string or null.'), messages.join('\n'));
+  assert.ok(result.json.warnings.some(text => /steps\[0\] input \/code is "ABCD"\. It does not match the pattern \^\[0-9\]\{4\}\$/.test(text)), result.json.warnings.join('\n'));
+});
+
+// Wrong: the number warning fires on call counts and world values (issue 9: "expects 0, but the text says 409").
+test('RUNTIME-SCHEMA4: the number warning skips calls and world targets and count checks', () => {
+  const doc = { criteria: [{ id: 'AC1', text: 'A duplicate title is refused with 409 and nothing is saved.' }],
+    steps: [{ checks: [{ criterion_id: 'AC1', target: 'calls', path: '/resources/store', op: 'equals', value: 0 },
+      { criterion_id: 'AC1', target: 'world', path: '/books/length', op: 'equals', value: 3 },
+      { criterion_id: 'AC1', target: 'result', path: '/items', op: 'count', value: 2 },
+      { criterion_id: 'AC1', target: 'result', path: '/status', op: 'equals', value: 400 }] }] };
+  assert.deepEqual(numberWarnings(doc), ['Warning: the AC1 check expects 400, but the AC1 text says 409.']);
+});
+
+// Wrong: the number warning fires when the check measures something else than the number in the text (lead, Oct 27: 8 false warnings).
+test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number in the criterion text', () => {
+  const warn = (text, value, extra = {}) => numberWarnings({ criteria: [{ id: 'AC1', text }],
+    steps: [{ checks: [{ criterion_id: 'AC1', target: 'result', path: '/x', op: 'equals', value, ...extra }] }] });
+  assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0), []);
+  assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0, { target: 'calls', path: '/resources/store' }), []);
+  assert.deepEqual(warn('The shelf shows 2 of 5 books.', 3), []);
+  assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 899),
+    ['Warning: the AC1 check expects 899, but the AC1 text says 900.']);
+  assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 900), []);
+  assert.deepEqual(warn('No number here.', 5), []);
 });

@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
 import { findTests, preflight } from '../src/runtime-preflight.mjs';
-import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { PLACE, fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
 async function tryStory(setup, fake, words, options = {}, extra = {}) {
   const opened = [];
@@ -129,13 +129,13 @@ test('RUNTIME-TRY5: a recorded Try that is not ready gives exit 3 and no new Try
 
 // Wrong: the Try page gets no app map, so the Screen tab is empty (runtime session, Oct 27).
 test('RUNTIME-TRY6: pdd try sends the app map it finds, opens on the screen tab, and --app-map and --tab win', async t => {
-  const withMap = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), '{"screens": []}\n'); });
+  const withMap = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), `${APP_MAP}\n`); });
   const fake = await fakeRuntime(t, trying());
   assert.equal((await tryStory(withMap, fake, ['place-order'], { '--no-open': true })).code, 0);
   const sent = fake.posts.filter(post => post.command === 'try');
   assert.equal(sent[0].request.app_map, 'app/app-map.json'); assert.equal(sent[0].request.tab, 'screen');
-  const rooted = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), '{}\n'); writeFileSync(join(repo, 'app-map.json'), '{}\n');
-    writeFileSync(join(repo, 'other-map.json'), '{}\n'); });
+  const rooted = harbor(t, repo => { mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app/app-map.json'), `${APP_MAP}\n`); writeFileSync(join(repo, 'app-map.json'), `${APP_MAP}\n`);
+    writeFileSync(join(repo, 'other-map.json'), `${APP_MAP}\n`); });
   const second = await fakeRuntime(t, trying());
   assert.equal((await tryStory(rooted, second, ['place-order'], { '--tab': 'call' })).code, 0);
   assert.equal(second.posts[1].request.app_map, 'app-map.json'); assert.equal(second.posts[1].request.tab, 'call');
@@ -242,4 +242,110 @@ test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are n
   assert.equal(result.code, 0);
   const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
   assert.deepEqual(said, ['Sent 6 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
+});
+
+const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });
+
+// Wrong: --app-map with an HTML page is sent (or silently ignored) and the Try breaks later (real-user web test, issue 4).
+test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try needs --new for a new app map or tab', async t => {
+  const setup = harbor(t, repo => { mkdirSync(join(repo, 'public')); writeFileSync(join(repo, 'public/index.html'), '<html></html>\n');
+    writeFileSync(join(repo, 'public/map.json'), '{"screens": []}\n'); writeFileSync(join(repo, 'app.json'), `${APP_MAP}\n`); });
+  const fake = await fakeRuntime(t, trying());
+  for (const [path, said] of [['public/index.html', /--app-map public\/index\.html is not an app map: it is not JSON\./],
+    ['public/map.json', /--app-map public\/map\.json is not an app map: its schema_version is not "prompt-runtime\.app-map\.v1"\./],
+    ['nope.json', /--app-map nope\.json is not a Git-visible file in this repository\./]]) {
+    const result = await tryStory(setup, fake, ['place-order'], { '--app-map': path, '--no-open': true });
+    assert.equal(result.code, 2, path); assert.match(result.err, said, path); assert.equal(fake.posts.length, 0, path);
+  }
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  for (const options of [{ '--app-map': 'app.json' }, { '--tab': 'screen' }]) {
+    const open = await tryStory(setup, fake, ['place-order'], { ...options, '--no-open': true });
+    assert.equal(open.code, 2, JSON.stringify(options));
+    assert.match(open.err, /A Try for "Place a coffee order" is already open\. --app-map and --tab apply only to a new Try: run pdd try place-order --new/);
+  }
+  const fresh = await tryStory(setup, fake, ['place-order'], { '--app-map': 'app.json', '--new': true, '--no-open': true });
+  assert.equal(fresh.code, 0, fresh.err);
+  assert.equal(fake.posts.filter(post => post.command === 'try').at(-1).request.app_map, 'app.json');
+});
+
+// Wrong: after a Try setup that the server lost (state unknown, for example after a restart), pdd try stays stuck until --new (issue 4).
+test('RUNTIME-TRY13: a Try setup that ends unknown is forgotten, and the next pdd try makes a new Try', async t => {
+  const setup = harbor(t), lost = new Set();
+  const fake = await fakeRuntime(t, (entry, f) => {
+    const id = entry.url.split('/').at(-1);
+    if (entry.method === 'GET' && lost.has(id)) return { status: 200, json: f.job(id, 'try', 'unknown', { exitCode: 3, refusals: [{ code: 'service-restarted', message: 'The run may have executed.' }] }) };
+    if (entry.method === 'POST' && entry.command === 'try' && f.posts.filter(post => post.command === 'try').length === 2) lost.add(entry.request.requestId);
+    return trying()(entry, f);
+  });
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  const restarted = await tryStory(setup, fake, ['place-order'], { '--new': true, '--no-open': true });
+  assert.equal(restarted.code, 3);
+  assert.match(restarted.err, /The Try setup did not finish on the server \(its state is unknown; the server may have restarted\)\. It used no AI calls\. Run pdd try place-order to make a new Try\./);
+  const next = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(next.code, 0, next.err);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 3);
+  lost.add(fake.posts.filter(post => post.command === 'try').at(-1).request.requestId);
+  const after = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(after.code, 0, after.err); assert.equal(fake.posts.filter(post => post.command === 'try').length, 4);
+});
+
+// Wrong: adding a saved case to a compact test file rewrites the whole file (issue 16).
+test('RUNTIME-TRY14: a saved case is added to a one-line test file without rewriting the rest', async t => {
+  const setup = harbor(t, repo => {
+    const file = join(repo, 'tests/place-order.json'); writeFileSync(file, `${JSON.stringify(JSON.parse(readFileSync(file, 'utf8')))}\n`);
+  });
+  const original = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8');
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && entry.url.endsWith('/tests') ? { status: 200, json: { tests: [savedCase('a')] } } : trying()(entry, f));
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  const text = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8'), close = original.lastIndexOf(']');
+  assert.ok(text.startsWith(original.slice(0, close)), text.slice(0, 200));
+  assert.equal(JSON.parse(text).steps.length, 2);
+});
+
+// Wrong: on a branch without the story, pdd try --stop says "No tests found" and the open link cannot be stopped (issue 14).
+test('RUNTIME-TRY15: pdd try --stop finds the Try by story name in the state, without the story on this branch', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
+  rmSync(join(setup.repo, 'tests'), { recursive: true }); rmSync(join(setup.repo, 'user_stories'), { recursive: true });
+  const unknown = await tryStory(setup, fake, ['refund'], { '--stop': true });
+  assert.equal(unknown.code, 2); assert.match(unknown.err, /No open Try for "refund"\. Open Try links: place-order/);
+  const stopped = await tryStory(setup, fake, ['place-order'], { '--stop': true });
+  assert.equal(stopped.code, 0, stopped.err); assert.equal(fake.deletes.length, 1);
+  assert.equal(stopped.out, 'The Try link for "Place a coffee order" is stopped.\n');
+  assert.equal((await tryStory(setup, fake, [], { '--stop': true })).code, 2);
+});
+
+// Wrong: a saved case from anyone with the Try link writes outside the repo, follows a symlink, or edits a non-test file (runtime review).
+test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into non-test files', async t => {
+  const outside = temp(t);
+  const run = async (setup, saved) => {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' && entry.url.endsWith('/tests') ? { status: 200, json: { tests: [saved] } } : trying()(entry, f));
+    return tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  };
+  const story = harbor(t), parent = readdirSync(join(story.repo, '..')).sort();
+  const escape = await run(story, savedCase('a', { story: '../../package' }));
+  assert.equal(escape.code, 0); assert.match(escape.out, /^not added: its story "\.\.\/\.\.\/package" is not a story file in this repository\.$/m);
+  assert.deepEqual(readdirSync(join(story.repo, '..')).filter(name => name !== 'state').sort(), parent); assert.equal(existsSync(join(story.repo, 'tests/package.json')), false);
+  const refund = { story: 'user_stories/refund.md', criterion: { id: 'AC1', text: 'A refund returns the total.' } };
+  const addRefund = repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n');
+  const named = harbor(t, addRefund);
+  assert.equal((await run(named, { ...savedCase('b', refund), path: '../x.json' })).code, 0);
+  assert.equal(existsSync(join(named.repo, '../x.json')), false); assert.equal(existsSync(join(named.repo, 'x.json')), false);
+  assert.ok(existsSync(join(named.repo, 'tests/refund.json')));
+  const linked = harbor(t, repo => {
+    addRefund(repo); mkdirSync(join(repo, 'scenarios'));
+    for (const name of ['place-order.json', 'unknown-item.json']) writeFileSync(join(repo, 'scenarios', name), readFileSync(join(repo, 'tests', name)));
+    rmSync(join(repo, 'tests'), { recursive: true }); symlinkSync(outside, join(repo, 'tests')); writeFileSync(join(repo, '.gitignore'), 'tests\n');
+  });
+  const viaLink = await run(linked, savedCase('c', refund));
+  assert.match(viaLink.out, /^not added: tests\/ is a symbolic link\. pdd writes test files only inside the repository\.$/m);
+  assert.deepEqual(readdirSync(outside), []);
+  const pkg = harbor(t, repo => {
+    const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
+    writeFileSync(join(repo, 'package.json'), JSON.stringify(doc)); rmSync(join(repo, 'tests/place-order.json'));
+  });
+  const before = readFileSync(join(pkg.repo, 'package.json'), 'utf8');
+  const intoPackage = await run(pkg, savedCase('d'));
+  assert.match(intoPackage.out, /^not added: package\.json is not a file pdd adds steps to\. Move the test to tests\/\.$/m);
+  assert.equal(readFileSync(join(pkg.repo, 'package.json'), 'utf8'), before);
 });

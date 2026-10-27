@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 1781d11a7ba37fc08a6207caccdfe1734ed5bbaa1f45bbb878aeb3c5335d2304).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 5c0730ed11ff62c76469aaca3fa0a002d1c646625c357c9cf9110f8b99999268).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -13,8 +13,9 @@ const REQUIRED_KEYS = ['schema_version', 'criteria', 'initial_world', 'steps'];
 const STEP_KEYS = new Set(['step_id', 'entry_path', 'operation', 'input', 'checks', 'expected_error', 'simulation_overrides', 'model']);
 const RULE_OPS = new Set(['at_most', 'at_least', 'not_contains', 'all_in', 'equals_ignore_case']);
 const EXACT_OPS = new Set(['equals', 'not_equals', 'one_of', 'count', ...RULE_OPS]);
-const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const',
-  'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems']);
+const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const', 'oneOf',
+  'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'minLength', 'maxLength', 'pattern',
+  'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties']);
 const SCHEMA_NOTES = new Set(['title', 'description', 'default', 'examples', 'format', '$comment', '$schema', '$id']);
 
 // The engine's _INTERFACE regex (prompt_program_discovery.py, 7b03d3ea).
@@ -145,68 +146,187 @@ function unknownKeyword(schema) {
     if (!SCHEMA_RULES.has(key) && !SCHEMA_NOTES.has(key)) return key;
     if (key === 'properties' && isObject(value)) for (const child of Object.values(value)) { const found = unknownKeyword(child); if (found) return found; }
     if (key === 'items' || key === 'additionalProperties') { const found = unknownKeyword(value); if (found) return found; }
+    if (key === 'oneOf' && Array.isArray(value)) for (const child of value) { const found = unknownKeyword(child); if (found) return found; }
   }
   return null;
 }
 
-// The small JSON Schema check of rule P9. Returns null or {pointer, tokens, rule}.
-function schemaProblem(value, schema, tokens = []) {
-  const at = rule => ({ tokens, rule });
-  if (!isObject(schema)) return null;
+const either = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items.at(-1)}` : items[0];
+const variantNames = variants => [...new Set(variants.map(variant => typeof variant?.type === 'string' ? (variant.type === 'null' ? 'null' : article(variant.type)) : 'another shape'))];
+
+// The JSON Schema check of rule P9: every problem, not only the first. Pattern misses are warnings (JS and Python regexes differ).
+function schemaProblems(value, schema, tokens, out, warnings) {
+  const at = rule => out.push({ tokens, rule });
+  if (!isObject(schema)) return;
+  if (Array.isArray(schema.oneOf)) {
+    const runs = schema.oneOf.map(variant => { const own = []; schemaProblems(value, variant, tokens, own, []); return own; });
+    const fits = runs.filter(own => !own.length).length;
+    if (fits === 1) return;
+    if (fits > 1) return at(`fits more than one of the allowed shapes (oneOf). Make the shapes exclusive.`);
+    const same = schema.oneOf.findIndex(variant => typeof variant?.type === 'string' && typeMatches(value, variant.type));
+    if (same >= 0) { out.push(...runs[same]); return; }
+    return at(`is ${show(value)}. The prompt allows ${either(variantNames(schema.oneOf))}.`);
+  }
   if (schema.type !== undefined) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
     if (!types.some(type => typeMatches(value, type))) return at(`is ${show(value)}. The prompt wants ${types.map(article).join(' or ')}.`);
   }
-  if (Object.hasOwn(schema, 'const') && !isDeepStrictEqual(value, schema.const)) return at(`is ${show(value)}. The prompt wants ${show(schema.const)}.`);
-  if (Array.isArray(schema.enum) && !schema.enum.some(choice => isDeepStrictEqual(choice, value))) {
-    const choices = schema.enum.map(show);
-    return at(`is ${show(value)}. The prompt allows ${choices.length > 1 ? `${choices.slice(0, -1).join(', ')} or ${choices.at(-1)}` : choices[0]}.`);
-  }
-  if (typeof value === 'number' && ((schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum))) {
-    return at(`is ${show(value)}. The prompt allows ${range(schema.minimum, schema.maximum)}.`);
+  if (Object.hasOwn(schema, 'const') && !isDeepStrictEqual(value, schema.const)) at(`is ${show(value)}. The prompt wants ${show(schema.const)}.`);
+  if (Array.isArray(schema.enum) && !schema.enum.some(choice => isDeepStrictEqual(choice, value))) at(`is ${show(value)}. The prompt allows ${either(schema.enum.map(show))}.`);
+  if (typeof value === 'number') {
+    if ((schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum)) at(`is ${show(value)}. The prompt allows ${range(schema.minimum, schema.maximum)}.`);
+    if (typeof schema.exclusiveMinimum === 'number' && value <= schema.exclusiveMinimum) at(`is ${show(value)}. The prompt wants more than ${schema.exclusiveMinimum}.`);
+    if (typeof schema.exclusiveMaximum === 'number' && value >= schema.exclusiveMaximum) at(`is ${show(value)}. The prompt wants less than ${schema.exclusiveMaximum}.`);
+    if (typeof schema.multipleOf === 'number' && schema.multipleOf > 0) {
+      const ratio = value / schema.multipleOf;
+      if (Math.abs(ratio - Math.round(ratio)) > 1e-9) at(`is ${show(value)}. The prompt wants a multiple of ${schema.multipleOf}.`);
+    }
   }
   if (typeof value === 'string') {
     const length = [...value].length;
     if ((schema.minLength !== undefined && length < schema.minLength) || (schema.maxLength !== undefined && length > schema.maxLength)) {
-      return at(`has ${plural(length, 'character')}. The prompt allows ${range(schema.minLength, schema.maxLength, 'character')}.`);
+      at(`has ${plural(length, 'character')}. The prompt allows ${range(schema.minLength, schema.maxLength, 'character')}.`);
+    }
+    if (typeof schema.pattern === 'string') {
+      let pattern = null;
+      try { pattern = new RegExp(schema.pattern, 'u'); } catch { pattern = null; }
+      const pointer = pointerOf(tokens);
+      if (pattern && !pattern.test(value)) warnings.push(`input${pointer ? ` ${pointer}` : ''} is ${show(value)}. It does not match the pattern ${schema.pattern}, so the runtime will likely refuse it.`);
     }
   }
   if (Array.isArray(value)) {
     if ((schema.minItems !== undefined && value.length < schema.minItems) || (schema.maxItems !== undefined && value.length > schema.maxItems)) {
-      return at(`has ${plural(value.length, 'item')}. The prompt allows ${range(schema.minItems, schema.maxItems, 'item')}.`);
+      at(`has ${plural(value.length, 'item')}. The prompt allows ${range(schema.minItems, schema.maxItems, 'item')}.`);
     }
-    if (isObject(schema.items)) for (const [index, item] of value.entries()) {
-      const problem = schemaProblem(item, schema.items, [...tokens, String(index)]);
-      if (problem) return problem;
-    }
+    if (schema.uniqueItems === true && value.some((item, index) => value.findIndex(other => isDeepStrictEqual(other, item)) !== index)) at('has the same item twice. The prompt wants unique items.');
+    if (isObject(schema.items)) for (const [index, item] of value.entries()) schemaProblems(item, schema.items, [...tokens, String(index)], out, warnings);
   }
   if (isObject(value)) {
-    for (const key of Array.isArray(schema.required) ? schema.required : []) if (!Object.hasOwn(value, key)) return at(`has no ${show(key)}. The prompt requires it.`);
+    const count = Object.keys(value).length;
+    if ((schema.minProperties !== undefined && count < schema.minProperties) || (schema.maxProperties !== undefined && count > schema.maxProperties)) {
+      at(`has ${plural(count, 'field')}. The prompt allows ${range(schema.minProperties, schema.maxProperties, 'field')}.`);
+    }
+    for (const key of Array.isArray(schema.required) ? schema.required : []) if (!Object.hasOwn(value, key)) at(`has no ${show(key)}. The prompt requires it.`);
     const properties = isObject(schema.properties) ? schema.properties : {};
     for (const [key, child] of Object.entries(value)) {
-      if (Object.hasOwn(properties, key)) { const problem = schemaProblem(child, properties[key], [...tokens, key]); if (problem) return problem; }
-      else if (schema.additionalProperties === false) return at(`has ${show(key)}. The prompt does not allow it.`);
-      else if (isObject(schema.additionalProperties)) { const problem = schemaProblem(child, schema.additionalProperties, [...tokens, key]); if (problem) return problem; }
+      if (Object.hasOwn(properties, key)) schemaProblems(child, properties[key], [...tokens, key], out, warnings);
+      else if (schema.additionalProperties === false) at(`has ${show(key)}. The prompt does not allow it.`);
+      else if (isObject(schema.additionalProperties)) schemaProblems(child, schema.additionalProperties, [...tokens, key], out, warnings);
     }
   }
-  return null;
 }
 
 const hasReference = value => Array.isArray(value) ? value.some(hasReference)
   : isObject(value) && (Object.hasOwn(value, '$step_result') || Object.values(value).some(hasReference));
-const pointerOf = tokens => tokens.map(token => `/${token.replace(/~/g, '~0').replace(/\//g, '~1')}`).join('');
+const pointerOf = tokens => tokens.map(token => `/${String(token).replace(/~/g, '~0').replace(/\//g, '~1')}`).join('');
 const sectionOf = (base, tokens) => tokens.reduce((text, token) => /^\d+$/.test(token) ? `${text}[${token}]` : `${text}.${token}`, base);
 
-// P9 on one step input. Returns {skip: keyword} | {code, section, message} | null.
+// P9 on one step input: {refusals, warnings}. An unknown schema keyword skips that input with a warning.
 export function checkInput(input, schema, index) {
-  if (hasReference(input)) return null;
+  if (hasReference(input)) return { refusals: [], warnings: [] };
   const keyword = unknownKeyword(schema);
-  if (keyword) return { skip: keyword };
-  const problem = schemaProblem(input, schema);
-  if (!problem) return null;
-  const pointer = pointerOf(problem.tokens);
-  return refusal('invalid-input', sectionOf(`steps[${index}].input`, problem.tokens),
-    `steps[${index}] input${pointer ? ` ${pointer}` : ''} ${problem.rule}`, { step: index + 1 });
+  if (keyword) return { refusals: [], warnings: [`steps[${index}] input was not checked here: the prompt schema uses "${keyword}". The runtime still checks it.`] };
+  const problems = [], warnings = [];
+  schemaProblems(input, schema, [], problems, warnings);
+  const seen = new Set();
+  return {
+    refusals: problems.filter(problem => { const key = `${pointerOf(problem.tokens)} ${problem.rule}`; if (seen.has(key)) return false; seen.add(key); return true; })
+      .map(problem => refusal('invalid-input', sectionOf(`steps[${index}].input`, problem.tokens),
+        `steps[${index}] input${problem.tokens.length ? ` ${pointerOf(problem.tokens)}` : ''} ${problem.rule}`, { step: index + 1 })),
+    warnings: warnings.map(text => `steps[${index}] ${text}`),
+  };
+}
+
+// The engine's executable schema subset (graph_runtime_protocol.py, _validate_schema_node, eae2202a).
+const SCHEMA_ANNOTATIONS = new Set(['default', 'description', 'title', 'examples', 'format']);
+const SCHEMA_FORBIDDEN = new Set(['$ref', '$dynamicRef', 'anyOf', 'allOf', 'not', 'if', 'then', 'else', 'contains',
+  'unevaluatedProperties', 'patternProperties', 'propertyNames', 'contentEncoding']);
+const NUMBER_FIELDS = ['type', 'enum', 'const', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf'];
+const SCHEMA_FIELDS = { null: ['type', 'enum', 'const'], boolean: ['type', 'enum', 'const'], string: ['type', 'enum', 'const', 'minLength', 'maxLength', 'pattern'],
+  integer: NUMBER_FIELDS, number: NUMBER_FIELDS, array: ['type', 'items', 'enum', 'const', 'minItems', 'maxItems', 'uniqueItems'],
+  object: ['type', 'properties', 'required', 'additionalProperties', 'enum', 'const', 'minProperties', 'maxProperties'] };
+const COUNT_FIELDS = ['minLength', 'maxLength', 'minItems', 'maxItems', 'minProperties', 'maxProperties'];
+const BOUND_FIELDS = ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'];
+
+function schemaRules(schema, pointer, out) {
+  const add = (code, rule) => out.push({ code, pointer, rule });
+  if (!isObject(schema) || !Object.keys(schema).length) return add('graph-schema-type-invalid', 'is not a schema. Use an object such as {"type": "string"}.');
+  if (Array.isArray(schema.type)) {
+    return add('graph-schema-type-list', `has a list of types (${schema.type.map(String).join(', ')}). Use "oneOf" with one schema for each type, for example {"oneOf": [{"type": "string"}, {"type": "null"}]}.`);
+  }
+  for (const key of Object.keys(schema)) if (SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which the runtime does not support.`);
+  if (Object.hasOwn(schema, 'oneOf')) {
+    for (const key of Object.keys(schema)) if (key !== 'oneOf' && !SCHEMA_ANNOTATIONS.has(key) && !SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `has "${key}" next to "oneOf". Put it inside each oneOf schema.`);
+    if (!Array.isArray(schema.oneOf) || !schema.oneOf.length) add('graph-schema-invalid', '"oneOf" must be a list of at least one schema.');
+    else {
+      schema.oneOf.forEach((variant, index) => schemaRules(variant, `${pointer}/oneOf/${index}`, out));
+      if (schema.oneOf.some((variant, index) => schema.oneOf.findIndex(other => isDeepStrictEqual(other, variant)) !== index)) add('graph-schema-invalid', '"oneOf" has the same schema twice.');
+    }
+    return annotationRules(schema, add);
+  }
+  const type = schema.type;
+  if (typeof type !== 'string' || !Object.hasOwn(SCHEMA_FIELDS, type)) {
+    return add('graph-schema-type-invalid', `${type === undefined ? 'has no "type"' : `has the type ${show(type)}`}. Use null, boolean, string, integer, number, array or object, or "oneOf".`);
+  }
+  const allowed = new Set(SCHEMA_FIELDS[type]);
+  for (const key of Object.keys(schema)) {
+    if (!allowed.has(key) && !SCHEMA_ANNOTATIONS.has(key) && !SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which a ${type} schema cannot have. It can have ${[...allowed].join(', ')}.`);
+  }
+  if (type === 'array') {
+    if (!Object.hasOwn(schema, 'items')) add('graph-schema-invalid', 'is an array with no "items". Add "items" with the schema of one item.');
+    else schemaRules(schema.items, `${pointer}/items`, out);
+  }
+  if (type === 'object') {
+    if (schema.additionalProperties !== false) add('graph-schema-open-object', 'needs "additionalProperties": false.');
+    const properties = isObject(schema.properties) ? schema.properties : null, required = schema.required;
+    if (!properties) add('graph-schema-invalid', 'needs "properties": an object with one schema for each field (it may be empty).');
+    if (!Array.isArray(required)) add('graph-schema-invalid', 'needs "required": a list of the property names that must be present. It may be empty; a property that is not in the list is optional.');
+    else {
+      const wrong = required.find(name => typeof name !== 'string' || !properties || !Object.hasOwn(properties, name));
+      if (wrong !== undefined) add('graph-schema-invalid', `has ${show(wrong)} in "required", but not in "properties".`);
+      else if (new Set(required).size !== required.length) add('graph-schema-invalid', 'names a property twice in "required".');
+    }
+    for (const [name, child] of Object.entries(properties ?? {})) schemaRules(child, `${pointer}/properties/${pointerOf([name]).slice(1)}`, out);
+  }
+  for (const key of COUNT_FIELDS) if (Object.hasOwn(schema, key) && !(Number.isInteger(schema[key]) && schema[key] >= 0)) add('graph-schema-invalid', `"${key}" must be a whole number of 0 or more.`);
+  for (const key of BOUND_FIELDS) if (Object.hasOwn(schema, key) && typeof schema[key] !== 'number') add('graph-schema-invalid', `"${key}" must be a number.`);
+  if (Object.hasOwn(schema, 'multipleOf') && !(typeof schema.multipleOf === 'number' && schema.multipleOf > 0)) add('graph-schema-invalid', '"multipleOf" must be a number above 0.');
+  if (Object.hasOwn(schema, 'pattern') && typeof schema.pattern !== 'string') add('graph-schema-invalid', '"pattern" must be a string.');
+  if (Object.hasOwn(schema, 'uniqueItems') && typeof schema.uniqueItems !== 'boolean') add('graph-schema-invalid', '"uniqueItems" must be true or false.');
+  if (Object.hasOwn(schema, 'enum')) {
+    if (!Array.isArray(schema.enum) || !schema.enum.length) add('graph-schema-invalid', '"enum" must be a list of at least one value.');
+    else if (schema.enum.some((item, index) => schema.enum.findIndex(other => isDeepStrictEqual(other, item)) !== index)) add('graph-schema-invalid', '"enum" has the same value twice.');
+    else if (schema.enum.some(item => !typeMatches(item, type))) add('graph-schema-invalid', `"enum" has a value that is not ${article(type)}.`);
+  }
+  if (Object.hasOwn(schema, 'const') && !typeMatches(schema.const, type)) add('graph-schema-invalid', `"const" is not ${article(type)}.`);
+  if (Object.hasOwn(schema, 'default') && !typeMatches(schema.default, type)) add('graph-schema-invalid', `"default" is not ${article(type)}.`);
+  annotationRules(schema, add);
+}
+
+function annotationRules(schema, add) {
+  for (const key of ['description', 'title', 'format']) if (Object.hasOwn(schema, key) && typeof schema[key] !== 'string') add('graph-schema-invalid', `"${key}" must be a string.`);
+  if (Object.hasOwn(schema, 'examples') && !Array.isArray(schema.examples)) add('graph-schema-invalid', '"examples" must be a list.');
+}
+
+// Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
+export function interfaceSchemaProblems(iface) {
+  const out = [];
+  for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
+    for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
+  }
+  for (const [index, resource] of (Array.isArray(iface?.resources) ? iface.resources : []).entries()) {
+    for (const [opIndex, operation] of (Array.isArray(resource?.operations) ? resource.operations : []).entries()) {
+      for (const key of ['arguments_schema', 'result_schema']) {
+        if (!isObject(operation) || !Object.hasOwn(operation, key)) continue;
+        const pointer = `/resources/${index}/operations/${opIndex}/${key}`;
+        schemaRules(operation[key], pointer, out);
+        if (isObject(operation[key]) && !Array.isArray(operation[key].type) && operation[key].type !== 'object' && !Object.hasOwn(operation[key], 'oneOf')) {
+          out.push({ code: 'graph-schema-invalid', pointer, rule: 'must be an object schema ("type": "object").' });
+        }
+      }
+    }
+  }
+  return out;
 }
 
 // The prompt file of an entry: {path, text, blocks, interface, error}.
@@ -263,11 +383,15 @@ export function numberWarnings(doc) {
   const warnings = new Set();
   for (const step of Array.isArray(doc?.steps) ? doc.steps : []) for (const check of Array.isArray(step?.checks) ? step.checks : []) {
     if (!isObject(check) || typeof texts.get(check.criterion_id) !== 'string') continue;
-    const values = check.op === 'one_of' && Array.isArray(check.value) ? check.value : ['equals', 'count'].includes(check.op) ? [check.value] : [];
+    // Call counts, world values and counts are often not numbers of the criterion text (real-user issue 9).
+    if (['calls', 'world'].includes(check.target)) continue;
+    const values = check.op === 'one_of' && Array.isArray(check.value) ? check.value : check.op === 'equals' ? [check.value] : [];
     const found = numbersIn(texts.get(check.criterion_id));
     for (const value of values) {
       if (typeof value !== 'number' || !found.length || found.some(item => item.value === value)) continue;
       const closest = found.reduce((best, item) => Math.abs(item.value - value) < Math.abs(best.value - value) ? item : best);
+      // Only a near miss (within 10%) looks like a typo; a far number (0 calls vs status 409) measures something else.
+      if (Math.abs(closest.value - value) > 0.1 * Math.max(Math.abs(closest.value), Math.abs(value))) continue;
       warnings.add(`Warning: the ${check.criterion_id} check expects ${value}, but the ${check.criterion_id} text says ${closest.text}.`);
     }
   }
@@ -286,6 +410,19 @@ function firstDifference(testTexts, storyTexts) {
     left.splice(index, 1);
   }
   return `The story has this criterion, but the test does not: "${left[0]}"`;
+}
+
+// The schema rules of a prompt and of the prompts it calls, all at once (cached per prompt).
+function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
+  if (!prompt?.interface || seen.has(prompt.path)) return [];
+  seen.add(prompt.path);
+  prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
+    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`));
+  const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
+  return [...prompt.schemaIssues, ...called.flatMap(target => {
+    if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target));
+    return promptSchemaRefusals(root, found, prompts.get(target), prompts, seen);
+  })];
 }
 
 function checkTest(root, found, test, prompts) {
@@ -315,7 +452,7 @@ function checkTest(root, found, test, prompts) {
   const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
   if (!isDeepStrictEqual(testTexts, storyTexts)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
   if (!Array.isArray(doc.steps) || !doc.steps.length) return refusal('missing-steps', 'steps', 'The test has no steps.');
-  const checked = new Set(), exact = new Set();
+  const checked = new Set(), exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {
     const section = `steps[${index}]`, at = { step: index + 1 };
     if (!isObject(step) || Object.keys(step).some(key => !STEP_KEYS.has(key)) || ['step_id', 'entry_path', 'operation', 'input', 'checks'].some(key => !Object.hasOwn(step, key))
@@ -328,6 +465,8 @@ function checkTest(root, found, test, prompts) {
     if (!prompts.has(step.entry_path)) prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path));
     const prompt = prompts.get(step.entry_path), broken = promptRefusal(prompt, section);
     if (broken) return { ...broken, ...at };
+    const schemaIssues = promptSchemaRefusals(root, found, prompt, prompts);
+    if (schemaIssues.length) return schemaIssues;
     const entry = (Array.isArray(prompt.interface.entries) ? prompt.interface.entries : []).find(item => item?.operation === step.operation);
     if (!entry) return refusal('entry-operation-missing', section, `${step.entry_path} has no operation "${step.operation}".`, at);
     const errorStep = Object.hasOwn(step, 'expected_error');
@@ -348,9 +487,9 @@ function checkTest(root, found, test, prompts) {
     if (errorStep && errorChecks === 0) {
       return refusal('missing-error-check', `${section}.checks`, `An error step needs one check: target "error", path "/code", op "equals", value "${step.expected_error}".`, at);
     }
-    const input = checkInput(step.input, entry.input_schema, index);
-    if (input?.code) return input;
+    inputIssues.push(...checkInput(step.input, entry.input_schema, index).refusals);
   }
+  if (inputIssues.length) return inputIssues;
   const unchecked = [...ids].filter(id => !checked.has(id));
   if (unchecked.length) return refusal('unchecked-criteria', 'criteria', `These criteria have no check: ${unchecked.join(', ')}.`);
   const loose = [...ids].filter(id => !exact.has(id));
@@ -363,14 +502,13 @@ export function preflight({ root, found, selected }) {
   const prompts = new Map(), warnings = [];
   const rows = selected.map(test => {
     const refused = checkTest(root, found, test, prompts);
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused] : [], warnings: numberWarnings(test.doc),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
-    if (!refused) for (const [index, step] of row.steps.entries()) {
-      const prompt = prompts.get(step.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step.operation);
-      const input = entry ? checkInput(step.input, entry.input_schema, index) : null;
-      if (input?.skip) warnings.push(`Warning: ${test.path} steps[${index}] input was not checked here: the prompt schema uses "${input.skip}". The runtime still checks it.`);
+    for (const [index, step] of row.steps.entries()) {
+      const prompt = prompts.get(step?.entry_path), entry = prompt?.interface?.entries?.find?.(item => item?.operation === step?.operation);
+      for (const text of entry ? checkInput(step.input, entry.input_schema, index).warnings : []) warnings.push(`Warning: ${test.path} ${text}`);
     }
     return row;
   });
