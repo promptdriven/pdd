@@ -814,7 +814,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
 // 0.1.6 items 6 and 7: many Stories in one run.
 const storyLines = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
   + 'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call; Runtime check: ✗ 7 of 8 criteria · 24/26 checks · 4 AI calls; Report: https://rt.example.test/r/batch-1';
-test('0.1.6: PR 1 starts with one Runtime check line per Story, then the overall line and the report; status counts the Stories that pass', async t => {
+test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total pdd adds up and the report; status counts the Stories that pass', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.ports.timeZone = 'UTC';
   f.tick(); await stepDone({ step: 'check', summary: storyLines, cwd: run.root }, f.agentPorts());
@@ -834,7 +834,7 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the overall
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
     'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
-    'Runtime check: ✓ 8 of 8 criteria · 24/26 checks · 4 AI calls',
+    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
     'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
 });
 
@@ -861,7 +861,7 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
-    'Runtime check: ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    'Runtime check (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
     'Report: https://rt.example.test/r/one (report links expire after 7 days)',
     'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
 });
@@ -878,8 +878,60 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Runtime check (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
+    'Runtime check (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
+});
+
+test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one Story; pdd drops it and adds up all Stories itself', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  // The check summary exactly as the chat stored it in the real run (the last line copied swipe-play's run).
+  const summary = 'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d '
+    + 'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls Report: https://34.72.131.98/r/ddab0595-645e-47e5-9bff-74c47614d9a1 '
+    + 'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls Report: https://34.72.131.98/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 '
+    + 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d';
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
+    'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
+    'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
+    'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
+    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
+    'Report: https://34.72.131.98/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
+    'Report: https://34.72.131.98/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
+    'Report: https://34.72.131.98/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
+});
+
+test('0.1.6: a summary with no overall line works; a Story checked again takes its latest line', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  // skills 2f52fa3: only the Stories' current lines, then one report per report row.
+  const summary = 'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (merge-tiles): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls; '
+    + 'Report (move-tiles): https://rt.example.test/r/one; Report (merge-tiles): https://rt.example.test/r/two';
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
+  // A chat that adds the re-check after the old lines: the later merge-tiles line wins and keeps its place.
+  f.tick(); await stepDone({ step: 'check', summary: `${summary}; Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (merge-tiles): https://rt.example.test/r/three`, cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
+    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
+    'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
+    'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
+    'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
+});
+
+test('0.1.6: one named Story gets no total line; its line is the total', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (move-tiles): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
+    'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });

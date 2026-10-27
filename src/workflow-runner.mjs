@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 18fbf8b83eaf6c0a8a855e99238160deb36e2482b8c395dd828d2288a9e369f5).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 612d1f4c923e7896029ca17bab2e78573113ade1ed24e360dfda4793b7a853b8).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -202,19 +202,44 @@ function hideLocalPaths(text, run) {
 // at a line break, ";", a "Report" line, a link or the next Runtime check.
 function runtimeLines(text) {
   return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
-    const story = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim()).find(group => group && group.toUpperCase() !== 'DRAFT') ?? null;
+    const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
+    const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
     const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
-    return { story, line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
+    return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
+      line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
+}
+// One line per Story: a Story checked again keeps its place and takes its latest line.
+const latestStories = lines => [...new Map(lines.filter(line => line.story).map(line => [line.story, line])).values()];
+// The total over the Stories, added up by pdd: a pasted overall line can cover only the Stories checked last.
+// ✓ only when every Story passes, DRAFT when any Story is a draft; a count goes in only when every line has it.
+function totalLine(stories) {
+  const sum = pattern => {
+    const found = stories.map(line => line.result.match(pattern));
+    return found.every(Boolean) ? found.reduce((total, match) => [total[0] + Number(match[1]), total[1] + Number(match[2] ?? 0)], [0, 0]) : null;
+  };
+  const criteria = sum(/(\d+) of (\d+) criteria/), checks = sum(/(\d+)\/(\d+) checks/), calls = sum(/(\d+) AI calls?/);
+  const counts = [criteria && `${criteria[0]} of ${criteria[1]} criteria`, checks && `${checks[0]}/${checks[1]} checks`,
+    calls && `${calls[0]} AI call${calls[0] === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
+  const mark = stories.every(line => line.pass) ? '✓' : stories.some(line => line.result.includes('✗')) ? '✗' : stories.find(line => !line.pass).result.split(/[\s·]+/)[0];
+  const result = !counts ? mark : /^[✓✗]$/.test(mark) ? `${mark} ${counts}` : `${mark} · ${counts}`;
+  return `Runtime check (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
+}
+// The Runtime check lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
+// are two or more); without, the lines as the chat wrote them.
+function runtimeTop(text) {
+  const lines = runtimeLines(text), stories = latestStories(lines);
+  if (!stories.length) return lines.map(line => line.line);
+  return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
 // The step summary that holds the run's runtime result: the check step's, else the latest one with a Runtime check.
 const checkSummary = (run, steps = Object.keys(run.done ?? {})) => /Runtime check/.test(run.done?.check?.summary ?? '') ? run.done.check.summary
   : steps.map(step => run.done[step]?.summary ?? '').reverse().find(text => /Runtime check/.test(text)) ?? null;
-// "N of M Stories pass" from the latest check lines; a summary with only the overall line is one Story.
+// "N of M Stories pass" from the latest check lines; a summary with only an overall line is one Story.
 function storyCount(run) {
   const lines = runtimeLines(checkSummary(run));
   if (!lines.length) return null;
-  const named = lines.filter(line => line.story), counted = named.length ? named : lines.slice(-1);
+  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
   return { pass: counted.filter(line => line.pass).length, total: counted.length, failing: counted.filter(line => !line.pass && line.story).map(line => line.story) };
 }
 const storyText = count => `${count.pass} of ${count.total} Stories pass`;
@@ -252,7 +277,7 @@ function prBody(run, area, env, drafts = []) {
   const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
   const reports = checked ? reportLinks(checked, env) : [];
   const report = reports[0] ?? null;
-  const runtime = checked ? [...runtimeLines(checked).map(line => line.line), ...reports] : [];
+  const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const top = [...failing, ...runtime];
   return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!report && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
