@@ -1,109 +1,165 @@
-# Local issue workflows and recipe conversations
+# Workflows in depth
 
-## Run an issue through stages
+A PDD workflow is a skill: a folder of plain Markdown and one JSON file. Your agent follows it. pdd itself does only four things: it starts the run, it holds the gates, it opens the PR and it shows the status.
 
-The local workflow runner uses a current Git checkout, GitHub CLI and the installed native Codex or Claude executable. Run it from the actual Git checkout root, using this package's absolute entrypoint if it is elsewhere:
+## The three workflows
 
-```sh
-node /actual/package/bin/pdd.mjs workflow run feature 123 --agent codex
+| Workflow | Use it for |
+|---|---|
+| `pdd-small-change` | A small change with a clear effect that is easy to undo. If the impact grows, the agent suggests `bug` or `feature`. |
+| `pdd-bug` | The code breaks an accepted expectation. |
+| `pdd-feature` | New behavior. |
+
+Each workflow has areas. Each area has steps and ends at a gate. `?` marks an optional step.
+
+| Workflow | Area 1 | Area 2 | Area 3 |
+|---|---|---|---|
+| `small-change` | plan: scope, gate **approve** | build: change, verify, gate **PR** | |
+| `bug` | solution: reproduce, prompt-story, check, try?, gate **approve** | build: build, verify, gate **PR** | |
+| `feature` | solution: understand, visual?, gate **approve** | story: prompt-story, check, try?, gate **approve** | build: build, verify, gate **PR** |
+
+What each step does:
+
+| Step | What the subagent does |
+|---|---|
+| scope | States the result, the files, why the change is small and how to undo it. Writes the expected result and names the test command. |
+| change | Makes only the approved change. If a prompt owns the behavior, it changes the prompt first. Adds a test. |
+| reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
+| understand | States the wanted result, what must not change and what is out of scope. |
+| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. |
+| prompt-story | Reads the full Prompting guide. Writes or changes the prompt, the Story and the test cases. Takes the expected results from the requirement, not from the code. |
+| check | Reviews the prompt and the cases with the `pdd-prompting` review rules. Traces cases through the prompt. |
+| try? | Shows the plan or the bug in a safe local preview or demo, if the repo has one. |
+| build | Builds only what you approved. Tests through the public interface. |
+| verify | Runs the tests and the repo's required checks. Writes the exact commands and their real output. |
+
+Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting` core rules and review rules. change reads the guide only when it changes a prompt.
+
+## Two ways to use a workflow
+
+| | In one chat | As a run on an issue |
+|---|---|---|
+| Start | `pdd workflow NAME [request]`, or ask your agent in any chat | `pdd workflow run NAME ISSUE` |
+| Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
+| Chats | One | One for each area, in Herdr |
+| Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
+| PR | No. Ask the agent if you want one | pdd opens one PR. It never merges |
+
+## How a run works
+
+```
+pdd workflow run feature 42        returns at once
+  |
+chat 1  solution: understand, visual?
+  |     gate: approve
+chat 2  story: prompt-story, check, try?
+  |     gate: approve
+chat 3  build: build, verify
+  |     pdd pushes the branch and opens the PR
+you     review and merge the PR on GitHub
 ```
 
-Replace `/actual/package` and `123` with the actual package path and an issue in that project. Keep using this absolute entrypoint inside native stages and when resuming or attaching; retain the supplied Node executable path if absolute. The native shell can resolve bare `pdd` differently from the outer terminal, so its PATH is not evidence that the same package will run. The syntax is `pdd workflow run NAME ISSUE [--agent codex|claude]`. Bundled names are `feature`, `bug` and `small-change`; validated project definitions can add safe names or override a complete bundled definition. Codex is the default. ISSUE is a positive number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Git/GitHub resolution requires the same current repository and an actual issue, not a PR.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. Then it returns. You can close the terminal.
+2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
+3. The main chat coordinates and talks with you. It does not write code itself.
+4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets a short brief and file paths, not the chat history.
+5. After each step, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
+6. At a gate, the chat shows the result, asks you and stops. There is no time limit.
+7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
+8. If you approve, pdd starts a new chat for the next area. That chat gets the outputs of the approved area: the files, the summaries and the run folder.
+9. After the last build step, pdd pushes the branch and opens the PR.
+10. You merge the PR on GitHub. `pdd workflow status` reads the PR state. When the PR is merged, the run is completed.
 
-Starting a run permits agent work and the workflow's real Git/PR effects under the user's existing access. The runner resolves the repository and assigns this issue a separate Git worktree and branch. Each agent stage invokes a fresh native session in that immutable assigned worktree with the full canonical [Prompting guide](prompting-guide.md) loaded first, skill/references, selected workflow and actual issue/current-step/prior-artifact context. The agent must summarize the relevant guide method before Story drafting. Each stage must supply its required evidence; process exit zero alone does not establish that evidence.
+### Who can approve
 
-## Background stages and attachment
+Only a person approves a gate. The agent never approves for you.
 
-The PDD `run` or `resume` process is the foreground controller. Native agent stages run in an owned named Herdr session, without a visible TUI requirement. Each active agent still needs a real backing pane/PTY. This is not a pane-free engine or a PDD daemon.
+- In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title.
+- In the chat: say it in your own words. The agent then runs `pdd workflow approve`. pdd checks that your own message is in the chat after the gate. If it is not there, pdd refuses.
 
-For every agent stage, the runner records its exact identity and prompt intent before one submission to a fresh ready agent. It observes that same agent working and then ready. That is a candidate, not a pass: the runner must also validate the exact closed handoff, input revision, file hashes, approved tests and currentness. Only durable acceptance permits cleanup of that owned settled workspace and a fresh next stage. Do not fabricate a child exit, native turn ID, handoff or success status.
+### The run folder
 
-Use the actual printed UUIDv4 run ID:
+Each run has a run folder. The first message of each chat names it.
 
-```sh
-node /actual/package/bin/pdd.mjs workflow attach RUN_ID
-```
+| File | What it holds |
+|---|---|
+| `STEP.md` (one for each step) | The notes of that step |
+| `verify.md` | The exact test commands and their real output |
+| `status.json` | The area, the step, what the run waits for and the PR |
 
-Run attach from another terminal in the same repository, including its original or a linked checkout. This attaches the saved active conversation. Normal Herdr detach leaves that native process running; it is different from exiting or closing the agent. Normal detach reports workflow waiting (exit 2), not completed. Use the actual run/stage message. Attachment pauses acceptance and cleanup. Responding to a permission prompt or submitting more work requires fresh settlement/currentness validation, not reuse of a prior candidate. The runner preserves the original identity; it does not start another conversation to satisfy attach.
+The code that the steps write is committed on the run's branch, in the run's worktree.
 
-Accepted completed stage panes can be closed after evidence is retained. Their archived identities are not live attach targets. Later native history resume is not promised by this command. The adapter allows one active stage workspace per owned run server, plus at most one recorded seed workspace; occupied or unknown inventory refuses instead of killing work. Each running stage is a full Codex or Claude session on your computer. There is no fixed repository stage limit; PDD keeps one run per issue and one active stage per run. A run server may retain its seed workspace: automatic cleanup of historical servers is not promised. Concurrent-session throughput is not guaranteed.
+## Tests and evidence
 
-Keep the PDD controller alive for automatic handoff. If it exits, Herdr native work may continue, but PDD does not keep advancing. Explicitly resume the saved run to inspect/reconcile. Blocked, unknown, stalled, timed-out or ambiguously delivered work remains the original attempt; do not resend a prompt, restart an agent or close uncertain work as a retry.
+pdd does not run tests. The agents do.
 
-### Environment and prerequisites
+- The verify step runs in a fresh subagent that did not write the code.
+- It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
+- It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
+- The PR body includes `verify.md`.
 
-Herdr 0.9.1 is the capability baseline; compatibility with other versions is not guaranteed. The owned target's client/server/API compatibility must be checked; unsupported targets fail without automatic upgrade, restart or shared-session takeover.
+Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
 
-The backing native shell inherits the owned server environment and its normal shell startup. It does not automatically inherit each later CLI invoker's environment. Native executable lookup/login/provider settings follow that backing shell. PDD must pass the assigned absolute issue-worktree cwd and check the actual ready cwd before prompt submission. A missing tool/login/configuration mismatch is surfaced in the original session; it is not repaired by copying environment tokens/credentials, changing HOME or restarting a shared server.
-
-## Stages and decisions
-
-| Workflow | Total listed steps | Agent stages | Human, PR and merge stages |
-|---|---:|---|---|
-| [Feature](../.pdd/workflows/feature/WORKFLOW.md) | 12 | understand, visual (optional), prompt-story, check, try (optional), build, verify | approve, prompt-pr (optional), prompt-merge (conditional), code-pr, code-merge |
-| [Bug](../.pdd/workflows/bug/WORKFLOW.md) | 11 | reproduce, prompt-story, check, try (optional), build, verify | approve, prompt-pr (optional), prompt-merge (conditional), code-pr, code-merge |
-| [Small change](../.pdd/workflows/small-change/WORKFLOW.md) | 5 | scope, change, verify | open-pr, wait-merge |
-
-For the bundled definitions, these are 7 possible native sessions for feature (5 required), 6 for bug (5 required), and 3 for small-change. The total step counts include optional/human work. Optional preview uses the project's actual available preview tools, not a PDD-hosted preview service. A recorded skip remains a skip after interruption; the skipped stage must not run on resume. A skipped prompt PR skips its merge wait. Human approval applies to the current revision, not a prior draft.
-
-## Saved identity and resume
-
-The runner retains the canonical repository/issue, saved workflow snapshot, native agent and assigned worktree/branch/base. Complete source context is saved before allocation under the common Git directory's `pdd/workflow-inputs/RUN_ID`; the assigned worktree's actual Git directory contains its `pdd/workflows/RUN_ID` journal and artifacts. Each issue has its own actual Git worktree and journal; stage cwd never falls back to the original checkout. Allocation preserves existing user work, including a dirty original checkout. A shared canonical common-repository index lets original and linked checkouts locate the same assignment/run.
-
-Issue ownership, serialized shared-index updates and one active controller per run apply across linked checkouts sharing that common Git directory. Separate clones do not share those locks. Attachment uses a separate stage guard so it can coexist with a controller waiting for native work without racing acceptance or cleanup. Do not delete journals/claims, reuse another issue's checkout or remove uncertain worktrees to force progress. The runner does not automatically clean up ambiguous user work.
-
-Use the saved run:
+The [ticket-status example](../examples/ticket-status/README.md) shows a full prompt, Story, test cases, code and tests. Run its tests from the repository root:
 
 ```sh
-node /actual/package/bin/pdd.mjs workflow resume RUN_ID
-node /actual/package/bin/pdd.mjs workflow resume RUN_ID --decision approve
-node /actual/package/bin/pdd.mjs workflow resume RUN_ID --decision skip
+node --test examples/ticket-status/test/status.test.mjs
 ```
 
-Replace RUN_ID with the actual returned UUIDv4 identity. Resume retains the saved workflow, agent, issue and repository. Without a decision, it only inspects/reconciles saved evidence or reads merge state; it cannot launch the next agent, push or create a PR. `approve` explicitly advances eligible work, accepts the current human decision or selects optional work. `skip` bypasses optional work only. A merge wait reads the saved PR number/URL and actual head state; it advances only after GitHub reports that same original PR head MERGED and never invokes a merge operation. Do not invent a new status or recovery command.
+<a id="make-your-own-workflow"></a>
 
-Exit 0 means completed; 2 means waiting; 1 means failed or recovery_required. Use the actual message and current stage. Uncertain native work requires inspection of the saved original identity and durable attempt. An earlier readiness candidate does not authorize progress after changed inputs, attachment or new activity. The runner must freshly validate the original current evidence; it cannot blindly launch another attempt. Uncertain PR effects are reconciled without blind resend. Saved-input HEAD, branch/worktree contents and accepted file hashes are checked before progress. Manual source changes after that input are refused, except for the explicit merged-prompt transition below. No decision flag supplies missing artifacts or accepts arbitrary source changes.
+## Make your own workflow
 
-### After a separate prompt PR merges
+### Where skills live
 
-Before implementation continues, the immutable assigned issue branch must contain the exact recorded prompt merge commit. Prepare that transition through your normal Git workflow in that worktree, with a clean working tree and the approved contract files unchanged. Keep the assigned branch identity; do not move the run to another checkout or branch. Then resume the saved run with `--decision approve`. The runner validates that transition; it does not check out a branch, reset work or rewrite the base for you. Without a decision, merge observation does not launch code work. A different revision or modified approved contract does not inherit the prior approval.
+| Level | Codex | Claude Code |
+|---|---|---|
+| For you, in all projects | `~/.agents/skills/NAME/` | `~/.claude/skills/NAME/` |
+| For one project (commit it) | `.agents/skills/NAME/` in the repo | `.claude/skills/NAME/` in the repo |
 
-## Evidence between fresh sessions
+pdd installs its four skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a folder without that file.
 
-Each agent receives the canonical issue, current step, exact input revision, accepted prior file pointers and a required handoff location under the run's `artifacts` directory. It must write a JSON handoff with `version`, `runId`, `stageId`, `issueUrl`, `inputRevision`, `summary` and `files`; each file records its project-relative `path`, actual `sha256` and `role`. The exact schema is supplied in the stage request. Any named project files must be real regular files within the project. The understand, visual, check, try and reproduce stages may instead supply a substantive report-only handoff; that report does not establish executable evidence. Work stages require actual files.
-
-The runner checks the identities, input revision, containment and actual file hashes. Missing or stale evidence cannot be repaired by declaring the native session successful. The prompt-story stage supplies prompt, Story and independent-case files plus concrete `testCommands` argument arrays. The small-change scope supplies expectations/cases and its test plan. Review those actual files and commands before approving their use. Approval pins the current revision, contract files and test plan; it is not permission to change the expectations to match code.
-
-At verify, the runner executes the approved commands as argv without a shell and records their real results. After those checks it rereads the exact closed handoff, rechecks pinned and output file hashes and starting-commit ancestry, and requires the execution HEAD and Git-visible worktree fingerprint to be unchanged. Ordinary ignored generated files are outside that fingerprint. Test exit zero cannot certify a changed execution input or handoff. An agent's report or process exit zero does not substitute for test execution. A failed or interrupted native stage needs inspection; resume cannot blindly relaunch it. Do not fabricate or edit journal evidence to force completion.
-
-## Real PR effects
-
-At a PR stage the runner needs clean committed work on a non-base branch, with commits beyond the local default-branch tracking ref. A verified publication also requires actual successful approved checks for that exact current HEAD, worktree fingerprint and accepted argv plan. Later edits, including files changed by a report stage, cannot reuse an older pass. Proposal PRs retain their separate accepted-proposal semantics. The project must have a GitHub `origin` and an existing `refs/remotes/origin/<default-branch>` commit ref. The helper does not fetch that ref for you. It saves intent before push/create and uses explicit repository, base, head and a body file with a stable run/stage marker. It verifies the returned PR number/URL, repository, branch, base, head commit and run/stage marker. Once saved, that exact PR identity must remain the one observed; another matching-intent PR is not a substitute. After uncertainty it reconciles that same identity before any further create; unknown delivery never authorizes a blind resend. Do not fabricate a URL or equate local PR preparation with a real posted PR.
-
-Workflow run is separate from ordinary `session` and the named-recipe shortcuts below. Starting either kind of native work can consume the existing provider allowance; no account eligibility or private service setup is imposed by this kit.
-
-## Use a recipe in one conversation
-
-`pdd workflow feature|bug|small-change [--agent codex|claude] [request text]` remains a companion shortcut for a single native conversation. It loads the complete guide, skill/references, overview and selected WORKFLOW with sibling/subdirectory Markdown. It does not itself create separate stage sessions, drive the local run journal or post PRs. You can also follow the same recipe manually in an existing conversation after loading the full guide.
-
-`pdd session` loads all bundled recipes for open-ended native work. Native login and conversation resume remain with the installed tool. Sessions and workflow stages start agents in full-access mode without approval prompts, with invocation-only Codex trust for the exact cwd and no global configuration writes.
-
-## Discover executable workflows
-
-From the target project, invoke the actual package entrypoint:
+### Copy and edit
 
 ```sh
-node /actual/package/bin/pdd.mjs workflow list --json
+cp -R ~/.agents/skills/pdd-small-change ~/.agents/skills/pdd-docs-fix
+rm ~/.agents/skills/pdd-docs-fix/.pdd-skill.json
 ```
 
-The JSON shape is `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated names and `project` or `bundled` sources. Listing performs no agent or PR work. Completion uses that same local catalog as data.
+Then edit the copy:
 
-## Edit workflows
+1. In `SKILL.md`, set `name: pdd-docs-fix` and a new `description`. The description tells the agent when to use the skill.
+2. Edit the areas in `SKILL.md` and in `workflow.json`. Keep them the same.
+3. Edit, add or remove the step files in `steps/`. Keep each one short.
+4. Copy the folder to `~/.claude/skills/` too if you use Claude Code.
 
-Executable definitions live in `.pdd/workflows/NAME/workflow.json`, with their Markdown under that same folder. To customize, copy a complete bundled workflow folder into your project's `.pdd/workflows`, keep its name or rename both the folder and JSON `name`, then edit its stages and instructions. Use a safe lowercase name beginning with a letter, digits and single separating hyphens, at most 64 characters. Run your custom definition with `pdd workflow run NAME ISSUE`; no CLI source change is required.
+To use your workflow, ask your agent in a chat, for example: "Use the pdd-docs-fix skill for issue 42."
 
-A present project folder is a complete override. A malformed JSON file, missing referenced Markdown or invalid graph refuses; it does not silently mix in bundled files. Without a project override, the bundled definition is used. Listing validates selected definitions as well.
+To change a PDD workflow for all your projects, you can also edit its installed folder and delete its `.pdd-skill.json` file. pdd then keeps your folder and does not update it.
 
-The closed version-1 definition has `version`, `name`, `overview` and `stages`. `overview` and each stage's `file` are contained Markdown paths. Every stage has a unique `id`, `kind` and `file`; `kind` is `agent`, `human`, `pr` or `merge`. Only agent/PR stages can be optional. Agent stages declare `protocol`: `report`, `proposal`, `work` or `verify`. A proposal declares required artifact roles and approval through `human` or `next-advance`; `next-advance` still pauses until an explicit current approve before further effects. Work requires prior proposal acceptance. A verified PR requires mandatory verification after the latest work stage; later work invalidates an earlier verification. PR stages declare publication `proposal` or `verified`; merge stages reference their prior PR with `prStage`. Invalid references, unknown fields and unsafe file paths refuse. Use a complete bundled JSON as the editable schema example rather than inventing unsupported fields.
+### The files
 
-The runner captures the definition and complete referenced Markdown with their digests before worktree allocation. Each fresh conversation receives the full canonical guide first plus the saved selected workflow context. Make workflow edits before starting a new run. During an existing run, changed definition/Markdown, canonical guide/skill/reference context or saved snapshot bytes refuse progress; the runner does not silently reload the edited source. The original source selection must still match the saved snapshot on resume. Accepted test commands come from the proposal handoff and person's current decision, not arbitrary executable fields in workflow JSON.
+```
+pdd-docs-fix/
+  SKILL.md          frontmatter (name, description), when to use it, the areas, the rules
+  workflow.json     the areas, their steps and their gates
+  steps/
+    scope.md        one short brief for each step
+    change.md
+    verify.md
+```
+
+`workflow.json` lists the areas in order:
+
+```json
+{"version":2,"areas":[
+{"name":"plan","steps":["scope"],"optional":[],"gate":"approve"},
+{"name":"build","steps":["change","verify"],"optional":[],"gate":"pr"}]}
+```
+
+- Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.
+- `gate` is `approve` (the person approves, then a new chat starts) or `pr` (pdd opens the PR).
+- Each step has a file `steps/STEP.md`.
+- The last area ends with `pr`. Its last step should be `verify`, so that the PR body has the test output.
+
+Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves, pushes, opens a PR or merges.
