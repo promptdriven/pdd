@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: ead3a121e50be250f991f6f8ed47d67ff8a801195c86434e98f3933733f48032).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: bcdb0a72b2661bd276e6a87f2eb718de7355f3decfc17132d2aa30d556588f7d).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -334,7 +334,9 @@ export async function runHerdrStage(input, ports = {}) {
     });
     if (startupResult) return startupResult;
     const startedAt = rt.now(), deadline = startedAt + rt.timeoutMs;
-    let activityDeadline = startedAt + rt.activityMs;
+    // Real Codex can spend the startup window loading the guide before it
+    // reports working; do not call that normal startup a stalled prompt.
+    let activityDeadline = startedAt + Math.max(rt.activityMs, rt.startupMs);
     while (rt.now() < deadline) {
       const seen = await observe(rt, b, input.checkpoint);
       b = seen.backend;
