@@ -37,7 +37,7 @@ test('SETUP1: pdd setup creates AGENTS.md with the one short block when no agent
   assert.equal(text, `${skillBlock(pkg, true)}\n`);
   const lines = text.trimEnd().split('\n');
   assert.ok(lines.length <= 10, `${lines.length} lines`);
-  for (const word of ['/pdd-prompting', '/pdd-feature', '/pdd-bug', '/pdd-small-change', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md']) assert.ok(text.includes(word), word);
+  for (const word of ['pdd-prompting (the Prompting guide)', '`$pdd-feature` in Codex', '`/pdd-feature` in Claude Code', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md']) assert.ok(text.includes(word), word);
   assert.equal(text.includes('Give the reader a useful first path'), false);
   const before = statSync(join(project, 'AGENTS.md')).mtimeMs;
   const second = run();
@@ -85,4 +85,12 @@ test('SETUP4: an unmatched marker or extra words refuse without writing', t => {
   const extra = run('now');
   assert.equal(extra.status, 2);
   assert.equal(existsSync(join(project, 'CLAUDE.md')), false);
+});
+
+// Wrong (0.1.4): help says /pdd-… only; Codex calls a skill with $pdd-….
+test('SETUP5: pdd help says how to call a PDD skill in Codex and in Claude Code', () => {
+  // --help writes nothing to HOME, so the real environment is safe here.
+  const help = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0, help.stderr);
+  assert.ok(help.stdout.includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).'), help.stdout);
 });
