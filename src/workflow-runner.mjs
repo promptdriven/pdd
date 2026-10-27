@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5a4969f967a5c201848debf981b8a26c042e14b4483d35bb7c0a3e92886c90d5).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3a474de81f57e8d678c0ae5a8dc1295eb3a66e8b0eddf64c8d6d46be01506e20).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -216,7 +216,8 @@ function prBody(run, area, env, drafts = []) {
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
   // The Runtime check line and its report link go on top (#18).
-  const checked = Object.values(summaries).find(text => /Runtime check/.test(text));
+  // The check step's result wins; else the latest step that reports a Runtime check.
+  const checked = /Runtime check/.test(summaries.check ?? '') ? summaries.check : Object.values(summaries).reverse().find(text => /Runtime check/.test(text));
   const report = checked ? reportUrl(checked, env) : null;
   const runtime = checked ? [checked.slice(checked.indexOf('Runtime check')).split(/;|\s+Report:|\s+https?:\/\//)[0].trim().replace(/[.,]$/, ''),
     ...(report ? [`Report: ${report} (report links expire after 7 days)`] : [])] : [];
@@ -264,7 +265,7 @@ async function askCodeLines(run, area, p) {
   const summaries = area.steps.filter(item => run.done[item]).map(item => `  ${item}: ${run.done[item].summary || 'done'}`);
   const drafts = await pr1Drafts(run, p);
   return [`PR 1: ${prOf(run, area.name).url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
-    'Gate: show the person PR 1, the Runtime check line and the Try link, then ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Stop there.',
+    `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
     `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }

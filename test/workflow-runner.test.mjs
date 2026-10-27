@@ -791,3 +791,21 @@ test('cancel keeps the repository workspace while another run of that repository
   assert.deepEqual(f.herdr.workspaces.map(w => w.label), ['project', 'project#17 small-change']);
   assert.notEqual(f.record().chats[0].repoWorkspaceId, first.chats[0].repoWorkspaceId);
 });
+
+// Seen in the 0.1.4 real run: the prompt-story summary also had a (first) Runtime check; the check step's is the result.
+test('#18: the check step\'s Runtime check wins the top of PR 1; the code question already says how to make the code PR later', async t => {
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check'], optional: [], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build'], optional: [], gate: 'pr' }] }));
+  await f.run(); const run = f.record();
+  writeFileSync(join(run.root, 'p.prompt.md'), 'x\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'p');
+  f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
+  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
+});
