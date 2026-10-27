@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f7e0a94958703e7ad6c64b800cac920aa2108bc9a8d076192777ac576c05a881).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7d4359942fac5b83397e2d23c2a8b3ac48c4092acfbf8188232717b8eefc9e9a).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -70,7 +70,7 @@ async function areaMessage(run, index, p, packageRoot) {
     area.gate === 'approve'
       ? `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: they approve in their own words, or run pdd workflow approve ${run.number}.`
       : 'After the last step, pdd pushes the branch and opens the PR. Never push, open a PR or merge yourself.',
-    `If the ${run.skill} skill is not available, read ${join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill, 'SKILL.md')}.`,
+    `If the ${run.skill} skill is not available, read ${join(run.skillDir ?? join(packageRoot ?? PACKAGE_ROOT, 'skills', run.skill), 'SKILL.md')}.`,
   ].join('\n') + '\n';
 }
 
@@ -87,7 +87,7 @@ function describe(run) {
 export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   let workflow;
-  try { workflow = readWorkflowAreas({ packageRoot, name }); } catch (error) { return fail(error.message); }
+  try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
   if (!['codex', 'claude'].includes(agent)) return fail('Choose --agent codex or --agent claude.');
   const context = await gitContext(cwd, p);
   if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
@@ -106,7 +106,7 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
     workflowName: name, baseRef: `refs/remotes/origin/${binding.defaultBranch}` }, p.commandPorts);
   if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
   const a = allocated.assignment;
-  const run = { v: 1, runId, workflow: name, skill: workflow.skill, repo: binding.repository,
+  const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch: binding.defaultBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
     configDir: (agent === 'claude' ? p.env.CLAUDE_CONFIG_DIR : p.env.CODEX_HOME) || null,
@@ -135,12 +135,19 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
     'You can close this terminal. The chat keeps working in Herdr.'].join('\n'));
 }
 
-function prBody(run) {
+// A runtime report link has a /r/ path segment, or starts with PDD_RUNTIME_URL when that is set. No host is fixed here.
+function hasReportLink(text, env) {
+  const base = String(env.PDD_RUNTIME_URL ?? '').replace(/\/+$/, '');
+  return (text.match(/https?:\/\/[^\s)<>\]"']+/g) ?? []).some(url => /^https?:\/\/[^/]+\/(?:[^\s]*\/)?r\/[^/\s]+/.test(url) || base && url.startsWith(`${base}/`));
+}
+
+function prBody(run, env) {
   const steps = run.areas.flatMap(area => area.steps).filter(step => run.done[step]);
   let verify;
   try { verify = readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim(); } catch { verify = '_verify.md was not written in the run folder._'; }
-  return [`Closes #${run.number}`, '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps',
-    ...steps.map(step => `- **${step}**: ${oneLine(run.done[step].summary) || 'done'}`), '', '## Verify', '', verify, ''].join('\n');
+  const lines = steps.map(step => `- **${step}**: ${oneLine(run.done[step].summary) || 'done'}`);
+  return [`Closes #${run.number}`, '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+    ...(hasReportLink([...lines, verify].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []), '', '## Verify', '', verify, ''].join('\n');
 }
 
 async function finishPr(run, step, p, lines) {
@@ -158,7 +165,7 @@ async function finishPr(run, step, p, lines) {
     lines.push(`Pushed the new commits to the PR.`);
   } else {
     const bodyFile = join(run.runDir, 'pr-body.md');
-    writeFileSync(bodyFile, prBody(run));
+    writeFileSync(bodyFile, prBody(run, p.env));
     let intent;
     try {
       intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: 'pr', repository: run.repo, baseBranch: run.baseBranch,
