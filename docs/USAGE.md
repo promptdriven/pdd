@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.2 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.3 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -75,7 +75,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.2
+pdd --version   # prints 0.1.3
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -96,7 +96,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.2
+pdd --version   # PDD Alpha prints 0.1.3
 ```
 
 Remove the old one with the tool you used to install it:
@@ -217,8 +217,8 @@ The areas of the three workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify) opens PR 2, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify) opens PR 2, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?) opens PR 1, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
 | `small-change` | plan (scope), **approve**, build (change, verify) opens one PR, **merge** |
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
@@ -262,13 +262,16 @@ Rules:
 | PR | What it holds | When |
 |---|---|---|
 | PR 1 | The prompt, the Story and the test cases | After the prompt PR area. Its body says `Part of #42` |
-| PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1 |
+| PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason |
 
 At the PR 1 gate, the chat shows the PR 1 link, the `Runtime check:` line and the Try link, when there are any. Then it asks: "Do you want the code PR now, or stop here and merge PR 1 first?"
 
 - **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
 - **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
 - If the prompts in PR 1 are still `draft`, approve them before the code PR. The agent sets them to `approved` only after your OK.
+- If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
+
+**When the chat asks you something in the middle of a step,** `pdd workflow status` shows "waiting for you: <the question>". Answer in the chat, or from any terminal with `pdd workflow changes 42 "your answer"`.
 
 For all workflows:
 
@@ -434,7 +437,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.2` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.3` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |

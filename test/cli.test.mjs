@@ -15,7 +15,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'try', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'try', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -108,6 +108,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],
+    [['workflow','ask','--','Should','-h','work?'], 'askPerson', { text: 'Should -h work?' }],
     [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],
     [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
     [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],

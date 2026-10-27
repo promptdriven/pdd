@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8c0550f53885d96bcf0211db7b3c83bd6ae8358222f33cfffbd6ffd8fc12fa17).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d66506ffd417afac2f958619420943a6284d7b825ee6eff9f4e8fc6dffc75a56).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -16,6 +16,7 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex' }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
+  'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
@@ -45,7 +46,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
         line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
-    case 'workflow-run': case 'workflow-done': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': {
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
       try {

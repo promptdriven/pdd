@@ -5,11 +5,18 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun } from '../src/workflow-runner.mjs';
+import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '..');
 const issueUrl = 'https://github.com/example/project/issues/17';
+// Steps after verify in the bundled small-change build area (formal since 0.1.3); the PR opens after the last one.
+const smallChangeAfterVerify = JSON.parse(readFileSync(join(packageRoot, 'skills/pdd-small-change/workflow.json'), 'utf8')).areas.at(-1).steps
+  .slice(JSON.parse(readFileSync(join(packageRoot, 'skills/pdd-small-change/workflow.json'), 'utf8')).areas.at(-1).steps.indexOf('verify') + 1);
+async function lastSteps(f, run, out) {
+  for (const step of smallChangeAfterVerify) { f.tick(); out = await stepDone({ step, summary: `${step} done`, cwd: run.root }, f.agentPorts()); }
+  return out;
+}
 
 // A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
 function fakeHerdr() {
@@ -56,7 +63,7 @@ function fakeHerdr() {
       return {};
     }
     if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
-    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
+    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
     fail(`unexpected herdr ${args.join(' ')}`);
   };
   h.paneOf = chat => h.panes.find(p => p.pane_id === chat.paneId);
@@ -135,7 +142,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.match(pane.commands[0], /^env PDD_AGENT_SESSION=1 CLAUDE_CONFIG_DIR=\S+ claude --dangerously-skip-permissions --session-id [0-9a-f-]{36} "\$\(cat '.+plan-start\.md'\)"$/);
   assert.equal(first.session.id, pane.agent.agent_session.value);
   const message = readFileSync(join(run.runDir, 'plan-start.md'), 'utf8');
-  for (const part of ['Use the pdd-small-change skill', '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
+  for (const part of [`Use the pdd-small-change skill: ${join(packageRoot, 'skills/pdd-small-change/SKILL.md')}`, '#17', 'Use value two', issueUrl, run.root, run.runDir, 'plan', 'scope', '/abs/node /abs/pdd.mjs workflow done'])
     assert.ok(message.includes(part), part);
   assert.ok(message.split('\n').length <= 14, message);
   assert.doesNotMatch(message, /Prompting guide/);
@@ -183,7 +190,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   f.tick();
   writeFileSync(join(run.runDir, 'verify.md'), '$ node --test\n# pass 3\n');
   writeFileSync(join(run.root, 'notes.txt'), 'left behind\n');
-  const opened = await stepDone({ step: 'verify', summary: 'tests pass', cwd: run.root }, f.agentPorts());
+  const opened = await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'tests pass', cwd: run.root }, f.agentPorts()));
   assert.equal(opened.exitCode, 0, opened.message);
   assert.match(opened.message, /pdd opens the PR now/); assert.match(opened.message, /https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(opened.message, /never merges/);
   assert.match(opened.message, /notes\.txt/, 'auto-commit names the files it committed');
@@ -259,13 +266,15 @@ test('done warns on unknown and out-of-order steps but records them and never br
   assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
 });
 
-for (const [name, areas] of [['bug', [['story', ['reproduce', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]],
-  ['feature', [['story', ['understand', 'visual', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]]]) {
+// The steps come from the bundled workflow.json, so a new step (for example formal) needs no test change.
+for (const name of ['bug', 'feature']) {
+  const areas = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas.map(area => [area.name, area.steps]);
   test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
     const report = 'https://checks.example.test/r/k3y-123';
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
+    assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
     assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
@@ -522,7 +531,7 @@ test('status --all shows PR states, done runs last, and reads the Herdr registry
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
-  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts()); await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts()); await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   rmSync(join(f.state, 'runs.json'));
   const open = await runStatus({ all: true, cwd: f.source }, f.ports);
   assert.match(open.message, /^example\/project#17 · small-change · build · PR open · PR #23 · /);
@@ -555,7 +564,7 @@ test('R5: Try links (/s/<token>/) are removed from PR bodies; report links (/r/)
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
   await stepDone({ step: 'change', summary: 'Try it: https://rt.example.test/s/AbC_123-xyz/ and https://rt.example.test/s/QqQ/?tab=call', cwd: run.root }, f.agentPorts());
   writeFileSync(join(run.runDir, 'verify.md'), 'Try: https://rt.example.test/s/TTTTTTTT/\nReport: https://rt.example.test/r/360b7197\n');
-  await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts());
+  await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
   assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Try link removed)').length - 1, 3);
   assert.match(body, /https:\/\/rt\.example\.test\/r\/360b7197/);
@@ -583,4 +592,98 @@ test('R9: a session id that is not a UUID is never stored or put in a shell comm
   record.chats[0].session = { agent: 'claude', id: '$(touch /tmp/pwned)' }; writeFileSync(join(record.runDir, 'status.json'), JSON.stringify(record));
   const refused = await openRun({ ref: '17', cwd: f.source }, { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1' }, findNativeSessions: async () => [] });
   assert.equal(refused.exitCode, 1); assert.equal(pane.commands.length, 1, 'no resume command was typed');
+});
+
+test('code area build → verify → formal: a loop back to build only warns, asks for verify again, and PR 2 opens after the last step', async t => {
+  const f = await fixture(t, { name: 'bug', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-bug');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['reproduce', 'prompt-story'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build', 'verify', 'formal'], optional: [], gate: 'pr' }] }));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  await done('reproduce', 'seen'); writeFileSync(join(run.root, 'story.md'), 'Story\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'story');
+  await done('prompt-story', 'Story and cases'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 1 of 1'); await done('try', 'skipped'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n'); f.git(run.root, 'commit', '-qam', 'first try');
+  assert.match((await done('build', 'first build')).message, /Next step: verify/);
+  assert.match((await done('verify', '✗ 2 vectors fail')).message, /Next step: formal/);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'second try');
+  const again = await done('build', 'second build');
+  assert.match(again.message, /warning: build ran again after verify/); assert.match(again.message, /Next step: verify/);
+  assert.equal(f.prs.length, 1, 'no PR 2 before the last step');
+  assert.equal(f.record().done.verify, undefined, 'the old verify result no longer counts');
+  writeFileSync(join(run.runDir, 'verify.md'), '| case | expected | code | result |\n|---|---|---|---|\n| 1 | 2 | 2 | same |\n\n## Formal check\nProved (bounded): 0..999, planted mistake caught.\n');
+  assert.match((await done('verify', '✓ 2 vectors same')).message, /Next step: formal/);
+  assert.equal(f.prs.length, 1);
+  const pr2 = await done('formal', 'Proved (bounded)');
+  assert.match(pr2.message, /pdd opens PR 2 now/); assert.equal(f.prs.length, 2);
+  assert.match(f.prs[1].body, /\| 1 \| 2 \| 2 \| same \|/); assert.match(f.prs[1].body, /Proved \(bounded\): 0\.\.999/);
+  assert.match(f.prs[1].body, /\*\*formal\*\*: Proved \(bounded\)/); assert.doesNotMatch(f.prs[1].body, /first build|✗ 2 vectors fail/);
+});
+
+// Seen in a real run: the person said "I approve the prompt. Yes, build the code."; the chat committed the approval
+// and ran done again to push it to PR 1, which moved the gate past the person's answer.
+test('pushing more commits to PR 1 at the code gate keeps the gate time, so the person need not say yes twice', async t => {
+  const { f, run } = await featureToPr1(t);
+  const gateAt = f.record().gate.at;
+  f.tick(); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two. Approved.\n'); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
+  const pushed = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  assert.match(pushed.message, /Pushed the new commits to PR 1/); assert.equal(f.record().gate.at, gateAt); assert.equal(f.prs.length, 1);
+  const requests = [];
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async request => { requests.push(request);
+    return { ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve the prompt. Yes, build the code.', userMessageAt: gateAt + 1 }; } }));
+  assert.equal(code.exitCode, 0, code.message); assert.equal(requests[0].gateAskedAt, gateAt);
+});
+
+test('a first verify.md line that starts with ✗ goes to the top of the PR body', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts());
+  writeFileSync(join(run.runDir, 'verify.md'), '\n✗ 2 vectors fail\n\n| case | result |\n|---|---|\n| a | different |\n');
+  await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'two cases still fail', cwd: run.root }, f.agentPorts()));
+  assert.equal(f.prs[0].body.split('\n')[0], '✗ 2 vectors fail'); assert.match(f.prs[0].body, /\| a \| different \|/);
+});
+
+// Seen with a CLI tester: the chat asked a question in the middle of a step, status still said "the agent works",
+// and pdd workflow changes could not reach the chat while it showed a question dialog.
+test('ask marks the run as waiting for the person; changes answers it in the same chat; the next done clears it', async t => {
+  const f = await fixture(t);
+  f.ports.timeZone = 'UTC';
+  await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]); f.tick();
+  const asked = await askPerson({ text: 'Should -h also print the usage?', cwd: run.root }, f.agentPorts());
+  assert.equal(asked.exitCode, 0, asked.message);
+  assert.match(asked.message, /plain chat message/); assert.match(asked.message, /end your turn/); assert.match(asked.message, /pdd workflow changes 17/);
+  let record = f.record();
+  assert.equal(record.question.text, 'Should -h also print the usage?'); assert.equal(record.state, 'waiting');
+  assert.deepEqual(record.waitingFor, { decisions: ['changes'], what: 'Should -h also print the usage?' });
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: Should -h also print the usage\?/);
+  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /^example\/project#17 · small-change · plan · waiting for you: Should -h also print the usage\? · /);
+  f.tick();
+  const answered = await changeRun({ ref: '17', text: 'Yes, the same text as --help.', cwd: f.source }, f.ports);
+  assert.equal(answered.exitCode, 0, answered.message); assert.match(answered.message, /answer/);
+  assert.match(pane.agent.prompts.at(-1), /^The person answers your question: Yes, the same text as --help\./);
+  record = f.record(); assert.equal(record.question, null); assert.equal(record.state, 'running');
+  await askPerson({ text: 'One more?', cwd: run.root }, f.agentPorts());
+  f.tick(); await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  assert.equal(f.record().question, null); assert.equal(f.record().gate.kind, 'approve');
+  const outside = await askPerson({ text: 'x', cwd: f.source }, f.agentPorts());
+  assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
+});
+
+test('a chat that shows a question dialog is waiting for the person in status, and changes says to answer in the chat', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  pane.agent.agent_status = 'blocked';
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: waiting for you: the chat asks a question in its window \(pdd workflow open 17\)/);
+  const refused = await changeRun({ ref: '17', text: 'yes', cwd: f.source }, f.ports);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /question dialog/); assert.match(refused.message, /pdd workflow open 17/);
+  pane.agent.agent_status = 'idle';
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State: the agent works on scope/);
 });

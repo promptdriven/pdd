@@ -58,6 +58,7 @@ chat 3  code       only if you ask                                → pdd opens 
 
 - Talk to the chat at any time. If you ask for changes, the same chat revises.
 - Approve in the chat in your own words, or with `pdd workflow approve 42`.
+- PR 2 runs PR 1's test cases on the real code and shows the result in a table, with a formal check line.
 - `small-change` makes one PR. `bug` works like `feature`.
 - Codex is the default agent. Add `--agent claude` for Claude Code.
 - The agents run your tests, and each PR shows the real output. **pdd never merges.**
@@ -94,7 +95,7 @@ PDD works with the versions of these tools that you have. It is tested on macOS 
 > **Agents run with full access.** In a workflow run, Codex and Claude Code do not stop to ask for approval. They can change files and run commands as your user. Use PDD only where you accept this.
 
 - **Update:** run the `npx skills add` and `npm install` lines again. Do not run `npm install -g pdd`, because that is a different package.
-- **Old Python pdd:** if `pdd --version` does not print `0.1.2`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
+- **Old Python pdd:** if `pdd --version` does not print `0.1.3`, the Python `pdd-cli` comes first on your PATH. Remove it with `uv tool uninstall pdd-cli` (or `pipx` or `pip`).
 - **Your own workflow:** copy a skill folder as `pdd-NAME` into `.agents/skills` or `.claude/skills`, then edit it. See [Workflows](docs/workflows.md#make-your-own-workflow).
 - **This is an alpha.** Read the [known limits](docs/USAGE.md), and [report problems](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
 

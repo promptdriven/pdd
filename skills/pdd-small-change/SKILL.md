@@ -9,7 +9,7 @@ Use this for a small change with a clear effect that is easy to undo. If the imp
 
 Each area is one main chat. Step briefs are in `steps/`.
 1. plan: scope → gate: approve
-2. build: change, verify → gate: pr
+2. build: change, verify, formal → gate: pr
 
 ## Rules
 
@@ -24,5 +24,5 @@ Each area is one main chat. Step briefs are in `steps/`.
 
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
 - After each step, run `<pdd> workflow done STEP --summary "…"` (or `"skipped"`).
+- When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
 - Never approve for the person. When the person approves in their own words, run `<pdd> workflow approve N`.
-- `verify.md` holds the exact test commands and real output. pdd adds it to the PR.

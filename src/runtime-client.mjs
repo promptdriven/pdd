@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4f77e3e77b435273d355334e5cf8470466441a1888c93237db22946634205d58).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 04d7c563d5ad6ae52ffa116f7f1b5c5ad7a4958a385ee1a6759b76ea90c2065a).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, PreflightError, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
@@ -269,8 +269,9 @@ function addHints(row, root, visible) {
     const prompt = readPrompt(root, visible, step.entry_path);
     if (item.code === 'invalid-input') {
       const entry = prompt.interface?.entries?.find?.(candidate => candidate?.operation === step.operation);
-      const local = entry ? checkInput(step.input, entry.input_schema, index) : null;
-      if (local?.message) item.hint = local.message;
+      const local = entry ? checkInput(step.input, entry.input_schema, index).refusals : [];
+      const match = local.find(problem => problem.section === item.section) ?? local[0];
+      if (match) item.hint = match.message;
     } else if (item.code === 'interface-unapproved' && (row.draft || prompt.interface?.status === 'draft')) {
       item.message = DRAFT_SERVER_TEXT;
     } else if (item.code === 'interface-stale' && prompt.interface) item.hint = staleHint;
@@ -387,7 +388,7 @@ async function checkBatch(context, rows) {
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
   const toSend = sendable.filter(row => row.state === 'ready');
   line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
-    + `(${context.capture.files.length} files, ${formatSize(context.capture.bytes)}) at ${clock(ports.now())}.`);
+    + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
   let waitingShown = -1;
@@ -553,12 +554,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   const capture = captureSource(root);
-  const other = otherFiles(capture.files, found);
-  if (other.length) {
-    const note = `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`;
-    context.warnings.push(note);
-    line(ports.stderr, note);
-  }
+  context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
@@ -579,10 +575,27 @@ async function runBatch(context, cwd, words, options, setRelease) {
 // ---- pdd try ----
 
 // The app map for the Screen tab: --app-map, else app-map.json at the root, else app/app-map.json.
-function appMapFor(found, given, cwd, root) {
-  if (given === undefined) return ['app-map.json', 'app/app-map.json'].find(path => found.visible.has(path)) ?? null;
+// An app map is a Git-visible JSON object with schema_version prompt-runtime.app-map.v1 and a name (the engine's first checks).
+const APP_MAP_VERSION = 'prompt-runtime.app-map.v1';
+function appMapProblem(root, path) {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(root, path), 'utf8')); } catch { return 'it is not JSON'; }
+  if (!isObject(doc) || doc.schema_version !== APP_MAP_VERSION) return `its schema_version is not "${APP_MAP_VERSION}"`;
+  if (typeof doc.name !== 'string' || !doc.name) return 'it has no "name"';
+  return null;
+}
+
+function appMapFor(found, given, cwd, root, stderr) {
+  if (given === undefined) {
+    const path = ['app-map.json', 'app/app-map.json'].find(candidate => found.visible.has(candidate));
+    const problem = path ? appMapProblem(root, path) : null;
+    if (problem) line(stderr, `${path} is not an app map (${problem}), so pdd sends no app map.`);
+    return path && !problem ? path : null;
+  }
   const rel = relative(realpathSync(root), resolve(realpathSync(cwd), given)).split(sep).join('/');
   if (!found.visible.has(rel)) throw new Stop(2, `--app-map ${cleanText(given)} is not a Git-visible file in this repository.`);
+  const problem = appMapProblem(root, rel);
+  if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}".`);
   return rel;
 }
 
@@ -604,6 +617,16 @@ async function readUntil(context, id, command, isDone, ms) {
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }
 }
+
+// Why a ready Try's link was refused, in one line, without the secret link itself.
+function refusedLink(answer, origin) {
+  let at = null;
+  try { at = new URL(answer.result.url).origin; } catch { at = null; }
+  if (at && at !== 'null' && at !== origin) return `Try link refused: it points at ${cleanText(at)}, not ${origin}. The server's address setting may be wrong; tell the PDD team.`;
+  return 'Try link refused: it is not a valid Try link. Tell the PDD team.';
+}
+
+const otherNote = count => count ? `(${count} ${count === 1 ? 'is' : 'are'} not prompt, story or test files; run \`pdd check --files\` to see them)` : '';
 
 // A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
 const LIVE_SESSION = new Set(['running', 'paused']);
@@ -633,25 +656,15 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   try {
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
-    const origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    const appMap = options['--stop'] ? null : appMapFor(found, options['--app-map'], cwd, root);
+    const origin = runtimeOrigin(ports.env);
+    if (options['--stop']) return await stopByName(context, cwd, words, origin);
+    const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
-    if (options['--stop']) {
-      if (!record) throw new Stop(2, `No open Try for "${test.title}".`);
-      const identity = signIn(ports.gh, context.store);
-      context.secrets = [identity.token];
-      context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
-      await stopTry(context, record);
-      delete repoState.tries[test.path];
-      store.saveRepo(root, repoState);
-      line(ports.stdout, `The Try link for "${test.title}" is stopped.`);
-      return 0;
-    }
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), other = otherFiles(capture.files, found);
-    if (other.length) line(ports.stderr, `Warning: ${other.length} of the ${capture.files.length} files sent are not prompt, story or test files. Run pdd check --files to see them.`);
+    const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -664,9 +677,14 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
-      const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused'].includes(answer?.state)
-        || (answer?.state === 'passed' && ['stopped', 'stopping'].includes(answer.result?.session?.state));
+      // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
+      const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
+        || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
+      if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
+        throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
+      }
       if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
+      if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd try ${test.story} again later, or pdd try ${test.story} --new to stop it and make a new one.`);
@@ -682,6 +700,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
     store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
     store.posted(context.folder, request.requestId);
+    if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
     if (verdict.answer) store.write(join(context.folder, `${request.requestId}.json`), verdict.answer);
     if (verdict.kind !== 'accepted') {
@@ -695,18 +714,46 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS);
     const link = tryLink(done.answer, origin);
     if (link) return await showTry(context, test, link, options, request.requestId);
-    if (done.unknownWhy || done.open || !done.answer || done.answer.state === 'unknown') {
-      throw new Stop(3, `The Try setup is not finished or its result is unknown. Run pdd try ${test.story} again later; it reuses a running Try.`);
+    if (done.answer?.state === 'unknown') {
+      delete repoState.tries[test.path];
+      store.saveRepo(root, repoState);
+      throw new Stop(3, `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd try ${test.story} to make a new Try.`);
     }
+    if (done.unknownWhy || done.open || !done.answer) {
+      throw new Stop(3, `The Try setup is not finished yet. Run pdd try ${test.story} again later; it reads this Try first and makes no second one.`);
+    }
+    // A ready Try with a bad link stays recorded, so pdd try --stop can still end it; pdd never prints that link.
+    if (done.answer.state === 'passed' && LIVE_SESSION.has(done.answer.result?.session?.state)) throw new Stop(3, refusedLink(done.answer, origin));
     applyAnswer(row, done.answer, context);
-    // A Try that is running with a bad link stays recorded, so pdd try --stop can still end it.
-    if (row.state === 'passed') Object.assign(row, { state: 'unknown', why: `The runtime did not return a valid Try link. Stop this Try with: pdd try --stop ${test.story}` });
-    else { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
+    delete repoState.tries[test.path];
+    store.saveRepo(root, repoState);
     return printTryProblem(context, row);
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); }
+}
+
+// pdd try --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
+async function stopByName(context, cwd, words, origin) {
+  const { ports } = context, root = repoRoot(cwd), store = stateFor(ports.env, root), repoState = store.repo(root);
+  const entries = Object.entries(repoState.tries ?? {}), word = words[0]?.replace(/^\.\//, '');
+  const names = entries.map(([path, record]) => record.story ?? basename(path, '.json')).join(', ') || 'none';
+  const hits = word === undefined ? entries : entries.filter(([path, record]) => [record.story, path, basename(path, '.json')].includes(word));
+  if (hits.length !== 1) {
+    throw new Stop(2, word !== undefined ? `No open Try for "${cleanText(word)}". Open Try links: ${names}.`
+      : entries.length ? `Name the Try to stop. Open Try links: ${names}.` : 'No open Try in this repository.');
+  }
+  const [path, record] = hits[0], title = record.title ?? record.story ?? path;
+  Object.assign(context, { root, store, origin });
+  const identity = signIn(ports.gh, store);
+  context.secrets = [identity.token];
+  context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
+  await stopTry(context, record);
+  delete repoState.tries[path];
+  store.saveRepo(root, repoState);
+  line(ports.stdout, `The Try link for "${title}" is stopped.`);
+  return 0;
 }
 
 async function checkLint(context, rows) {
@@ -772,30 +819,55 @@ function appendStep(text, doc, step) {
   const want = { ...doc, steps: [...doc.steps, step] }, range = stepsArray(text);
   if (range) {
     const [start, end] = range, close = end - 1, before = text.slice(start + 1, close).trimEnd();
-    const lineStart = text.lastIndexOf('\n', close) + 1, indent = (/^[ \t]*/.exec(text.slice(lineStart))[0]) + '  ';
-    const body = JSON.stringify(step, null, 2).replace(/\n/g, `\n${indent}`);
-    const next = `${text.slice(0, start + 1)}${before}${before ? ',' : ''}\n${indent}${body}\n${text.slice(lineStart, close)}${text.slice(close)}`;
+    const lineStart = text.lastIndexOf('\n', close) + 1, closing = text.slice(lineStart, close);
+    // A "]" on its own line gets an indented step; a one-line array gets a one-line step.
+    const next = /^[ \t]*$/.test(closing)
+      ? `${text.slice(0, start + 1)}${before}${before ? ',' : ''}\n${closing}  ${JSON.stringify(step, null, 2).replace(/\n/g, `\n${closing}  `)}\n${closing}${text.slice(close)}`
+      : `${text.slice(0, start + 1)}${before}${before ? ', ' : ''}${JSON.stringify(step)}${text.slice(close)}`;
     try { if (isDeepStrictEqual(JSON.parse(next), want)) return next; } catch { /* fall back */ }
   }
   return `${JSON.stringify(want, null, 2)}\n`;
 }
 
-// One saved case → a new step in its story's test file. Returns the line to print.
+// Anyone with a Try link can save a case, so a saved case is untrusted: pdd writes only to a real file inside the repo,
+// only to a scenario test file found by discovery or a new tests/<story>.json, and never follows a symbolic link.
+const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json|jsconfig\.json|composer\.json|deno\.json|bower\.json|app-map\.json|.+\.config\.json)$/;
+const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
+
+// One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
 function addSavedCase(root, saved) {
+  try { return addSavedCaseSafely(realpathSync(root), saved); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+}
+
+function addSavedCaseSafely(root, saved) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
   if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
-  const target = findTests({ root }).tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const found = findTests({ root });
+  if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
+    return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
+  }
+  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
   if (!target) {
-    // A story with no test gets tests/<story>.json, as the runbook names test files.
-    const base = slug(story.split('/').at(-1).replace(/\.md$/, '')) || (/^tests\/[A-Za-z0-9._-]+\.json$/.test(saved.path ?? '') ? saved.path.slice(6, -5) : 'saved');
+    // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
+    const folder = statOrNull(join(root, 'tests'));
+    if (folder?.isSymbolicLink()) return 'not added: tests/ is a symbolic link. pdd writes test files only inside the repository.';
+    if (folder && !folder.isDirectory()) return 'not added: tests is not a folder.';
+    const base = slug(story.split('/').at(-1).replace(/\.md$/, '')) || 'saved';
     let path = `tests/${base}.json`;
     for (let number = 2; statOrNull(join(root, path)); number += 1) path = `tests/${base}-${number}.json`;
-    mkdirSync(join(root, 'tests'), { recursive: true });
+    if (!folder) mkdirSync(join(root, 'tests'));
+    if (!inRepo(root, 'tests')) return 'not added: tests/ is not inside the repository.';
     writeFileSync(join(root, path), `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
     return `added to ${path} as step ${cleanText(test.steps.map(step => step?.step_id).join(', '))}`;
   }
-  const file = join(root, target.path), text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
+  if (!target.path.endsWith('.json') || NOT_TEST_FILES.test(target.path.split('/').at(-1))) {
+    return `not added: ${target.path} is not a file pdd adds steps to. Move the test to tests/.`;
+  }
+  const file = join(root, target.path), stat = statOrNull(file);
+  if (!stat?.isFile() || !inRepo(root, target.path)) return `not added: ${target.path} is not a regular file inside the repository.`;
+  const text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
+  if (!isObject(doc) || doc.schema_version !== TEST_SCHEMA || !Array.isArray(doc.steps)) return `not added: ${target.path} is not a "${TEST_SCHEMA}" test.`;
   const byText = new Map((Array.isArray(doc.criteria) ? doc.criteria : []).map(item => [item.text, item.id]));
   const savedText = new Map((Array.isArray(test.criteria) ? test.criteria : []).map(item => [item.id, item.text]));
   let next = text, current = doc;
