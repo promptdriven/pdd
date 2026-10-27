@@ -80,7 +80,7 @@ test('SETUP4: an unmatched marker or extra words refuse without writing', t => {
   const broken = `# Rules\n${START}\nno end marker\n`;
   writeFileSync(join(project, 'AGENTS.md'), broken);
   const refused = run();
-  assert.equal(refused.status, 1); assert.equal(refused.stdout, ''); assert.match(refused.stderr, /pdd:start|pdd:end/);
+  assert.equal(refused.status, 1); assert.doesNotMatch(refused.stdout, /PDD block/); assert.match(refused.stderr, /pdd:start|pdd:end/);
   assert.equal(readFileSync(join(project, 'AGENTS.md'), 'utf8'), broken);
   const extra = run('now');
   assert.equal(extra.status, 2);

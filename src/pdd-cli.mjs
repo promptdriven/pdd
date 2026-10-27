@@ -1,5 +1,6 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9369642ae71768de8f0645409f74cc84d957ae5ba29d5326474c56d3debc24cd).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8c0550f53885d96bcf0211db7b3c83bd6ae8358222f33cfffbd6ffd8fc12fa17).
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
@@ -7,6 +8,7 @@ import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
+import { setupSkills } from './skills-install.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -59,12 +61,20 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return 1;
       }
     }
-    case 'setup':
+    case 'setup': {
+      let code = 0;
+      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
+        if (result.updated.length) line(stdout, `Updated ${result.updated.length} PDD skills in ${result.root}`);
+        if (result.found) line(stdout, `PDD skills found in ${result.found}`);
+        else if (result.installed.length) line(stdout, `Installed ${result.installed.length} PDD skills to ${result.root}`);
+        if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
+      }
       try {
         const { file, changed } = setupProject({ cwd, packageRoot });
-        line(stdout, changed ? `pdd setup: wrote the PDD block in ${file}.` : `pdd setup: ${file} already has this PDD block. No change.`);
-        return 0;
-      } catch (error) { line(stderr, `pdd setup: ${error.message}`);return 1; }
+        line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
+      } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      return code;
+    }
     case 'runtime-check':
     case 'runtime-try':
       try {

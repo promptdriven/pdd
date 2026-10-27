@@ -96,7 +96,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   for (const args of [['session'], ['session', '--agent', 'claude', 'Help'], ['workflow', 'feature'], ['workflow', 'bug', '--', 'Fix it']]) {
     const refused = run(args); assert.equal(refused.status, 2, args.join(' ')); assert.equal(refused.stdout, '');
   }
-  assert.deepEqual(readdirSync(home).sort(), ['.agents', '.claude']); assert.deepEqual(readdirSync(project), []);
+  assert.deepEqual(readdirSync(home), []); assert.deepEqual(readdirSync(project), []);
   assert.ok(PUBLIC_COMMAND_MANIFEST.length > 0);
 });
 

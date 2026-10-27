@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 7e193db372acedc4b52150f03d6760bf1eb5833516c1a04137acd13e9429f9ba).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6b6ce0bca17c60a43d451a5c4d70a03a1af6c2b52060239aa437bcc9f73346dc).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -47,7 +47,7 @@ const routes = [
     forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. In a terminal it waits and adds each test saved on the Try page to the story\'s test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
-    forms: [form('pdd setup', 'Add or update the short PDD block in CLAUDE.md, else AGENTS.md, of this folder. A second run changes nothing.')] },
+    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. A second run changes nothing.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), operands: Object.freeze(route.operands.map(Object.freeze)),
