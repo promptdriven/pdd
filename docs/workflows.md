@@ -112,40 +112,55 @@ node --test examples/ticket-status/test/status.test.mjs
 
 ### Where skills live
 
-| Level | Codex | Claude Code |
+| Level | Codex reads | Claude Code reads |
 |---|---|---|
-| For you, in all projects | `~/.agents/skills/NAME/` | `~/.claude/skills/NAME/` |
-| For one project (commit it) | `.agents/skills/NAME/` in the repo | `.claude/skills/NAME/` in the repo |
+| For one project (commit it) | `.agents/skills/` in the repo | `.claude/skills/` in the repo |
+| For you, in all projects | `~/.agents/skills/` | `~/.claude/skills/` |
+
+`pdd workflow run NAME` finds the skill folder `pdd-NAME` with a `workflow.json` in any of these four folders. Put your copy where your agent reads it, or in both folders of a level.
 
 pdd installs its four skills at the "for you" level. Each has a `.pdd-skill.json` file. pdd replaces a folder with that file when you update pdd. pdd never changes a folder without that file.
 
 ### Copy and edit
 
+This example makes the workflow `mybug` for one repo. Run it in your repo:
+
 ```sh
-cp -R ~/.agents/skills/pdd-small-change ~/.agents/skills/pdd-docs-fix
-rm ~/.agents/skills/pdd-docs-fix/.pdd-skill.json
+mkdir -p .agents/skills
+cp -R ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug
+rm .agents/skills/pdd-mybug/.pdd-skill.json
 ```
 
 Then edit the copy:
 
-1. In `SKILL.md`, set `name: pdd-docs-fix` and a new `description`. The description tells the agent when to use the skill.
+1. In `SKILL.md`, set `name: pdd-mybug` and a new `description`. The description tells the agent when to use the skill.
 2. Edit the areas in `SKILL.md` and in `workflow.json`. Keep them the same.
 3. Edit, add or remove the step files in `steps/`. Keep each one short.
-4. Copy the folder to `~/.claude/skills/` too if you use Claude Code.
+4. If you use Claude Code, also copy the folder to `.claude/skills/pdd-mybug`.
 
-To use your workflow, ask your agent in a chat, for example: "Use the pdd-docs-fix skill for issue 42."
+Then use it:
+
+```sh
+pdd workflow list            # pdd-mybug is in the list
+pdd workflow run mybug 42    # a run on issue 42
+```
+
+In a chat, ask your agent: "Use the pdd-mybug skill." Commit the folder so that your team gets the same workflow.
 
 To change a PDD workflow for all your projects, you can also edit its installed folder and delete its `.pdd-skill.json` file. pdd then keeps your folder and does not update it.
 
 ### The files
 
 ```
-pdd-docs-fix/
+pdd-mybug/
   SKILL.md          frontmatter (name, description), when to use it, the areas, the rules
   workflow.json     the areas, their steps and their gates
   steps/
-    scope.md        one short brief for each step
-    change.md
+    reproduce.md    one short brief for each step
+    prompt-story.md
+    check.md
+    try.md
+    build.md
     verify.md
 ```
 
@@ -153,8 +168,8 @@ pdd-docs-fix/
 
 ```json
 {"version":2,"areas":[
-{"name":"plan","steps":["scope"],"optional":[],"gate":"approve"},
-{"name":"build","steps":["change","verify"],"optional":[],"gate":"pr"}]}
+{"name":"solution","steps":["reproduce","prompt-story","check","try"],"optional":["try"],"gate":"approve"},
+{"name":"build","steps":["build","verify"],"optional":[],"gate":"pr"}]}
 ```
 
 - Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.

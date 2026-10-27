@@ -12,7 +12,7 @@ PDD Alpha gives your agent (Codex or Claude Code) four skills:
 
 | Skill | What it is |
 |---|---|
-| `pdd-prompting` | The [Prompting guide](docs/prompting-guide.md) and its core rules |
+| [`pdd-prompting`](skills/pdd-prompting/SKILL.md) | The [Prompting guide](docs/prompting-guide.md) and its core rules |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-feature` | A workflow for new behavior |
@@ -28,12 +28,12 @@ The full guide is in [docs/USAGE.md](docs/USAGE.md).
 
 | You need | Check it with |
 |---|---|
-| [Node.js](https://nodejs.org) and [Git](https://git-scm.com) | `node -v`, `git --version` |
+| [Node.js](https://nodejs.org) 22 or newer, and [Git](https://git-scm.com) | `node -v`, `git --version` |
 | [GitHub CLI](https://cli.github.com), signed in | `gh auth status` |
 | [Herdr](https://herdr.dev) (for workflow runs) | `herdr --version` |
 | [Codex CLI](https://developers.openai.com/codex/cli/) or [Claude Code](https://code.claude.com/docs/en/overview), signed in | `codex login status`, or start `claude` |
 
-PDD works with the versions you have. Codex is the default agent. PDD Alpha is tested on macOS and Linux, not on Windows.
+The other tools work with the versions you have. Codex is the default agent. PDD Alpha is tested on macOS and Linux, not on Windows.
 
 ## Install
 
@@ -108,9 +108,10 @@ A run always makes one PR. The agents run the tests. A fresh subagent that did n
 | `pdd session [--agent codex\|claude] [request]` | Start your agent with the PDD intro |
 | `pdd workflow NAME [request]` | Start your agent on one workflow, in one chat (no issue, no PR) |
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Start a run on a GitHub issue |
-| `pdd workflow status [N]` | Show the area, the step, what it waits for and the PR |
+| `pdd workflow list` | List the workflow skills that pdd finds |
+| `pdd workflow status [N]` | Show the area, the step, what it waits for and the PR. Without N: all runs in this repo |
 | `pdd workflow open N` | Show the chat of the run. It resumes an ended chat |
-| `pdd workflow approve [N]` | Approve the gate. The next area starts in a new chat |
+| `pdd workflow approve [N]` | Approve the gate. The next area starts in a new chat. Without N: the one run that waits |
 | `pdd workflow changes N "text"` | Ask for changes. The same chat revises |
 | `pdd workflow cancel N` | Stop the run. pdd keeps the worktree and the branch |
 
@@ -118,14 +119,16 @@ N is the issue number in the current repo. If several repos match, use `owner/re
 
 ## Make your own workflow
 
-A workflow is a skill folder: `SKILL.md`, `workflow.json` and one short file for each step. Copy one under a new name, then edit its name and steps:
+A workflow is a skill folder: `SKILL.md`, `workflow.json` and one short file for each step. Copy one as `pdd-NAME`, then edit its name and steps. In your repo:
 
 ```sh
-cp -R ~/.agents/skills/pdd-small-change ~/.agents/skills/pdd-docs-fix   # Claude: ~/.claude/skills
-rm ~/.agents/skills/pdd-docs-fix/.pdd-skill.json
+mkdir -p .agents/skills                                   # Claude Code: .claude/skills
+cp -R ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug
+rm .agents/skills/pdd-mybug/.pdd-skill.json
+pdd workflow run mybug 42
 ```
 
-Then ask your agent: "Use the pdd-docs-fix skill." For one project, use the repo's `.agents/skills/` or `.claude/skills/` folder. Do not edit the installed `pdd-*` folders: an update replaces them. See [docs/workflows.md](docs/workflows.md#make-your-own-workflow).
+pdd finds `pdd-NAME` in the repo's `.agents/skills` or `.claude/skills`, or in your user skills folders. Do not edit the installed `pdd-*` folders: an update replaces them. See [docs/workflows.md](docs/workflows.md#make-your-own-workflow).
 
 ## Update and uninstall
 
@@ -153,7 +156,7 @@ The uninstall keeps the skills. To remove them, see [Update and uninstall](docs/
 - [Usage guide](docs/USAGE.md): install, sessions, runs, gates, clean up and fixes
 - [Workflows in depth](docs/workflows.md): areas, steps, gates, tests and your own workflows
 - [CLI reference](docs/cli.md)
-- [Prompting guide](docs/prompting-guide.md)
+- [Prompting guide](docs/prompting-guide.md) and the [pdd-prompting skill](skills/pdd-prompting/SKILL.md)
 - [Example project](examples/ticket-status/README.md)
 
 ## Contributing and license

@@ -18,13 +18,14 @@ The intro has the folder, the core rules of the `pdd-prompting` skill, the names
 | Command | What it does |
 |---|---|
 | `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once |
-| `pdd workflow status [N]` | Show the area, the step, what the run waits for, and the PR with its CI state |
+| `pdd workflow list` | List the workflow skills that pdd finds: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
+| `pdd workflow status [N]` | Show the area, the step, what the run waits for, and the PR with its CI state. Without N, show all runs in this repo |
 | `pdd workflow open N` | Show the current chat of the run. If the chat ended, resume it in its tab |
-| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat, or pdd opens the PR |
+| `pdd workflow approve [N]` | Approve the open gate. The next area starts in a new chat, or pdd opens the PR. Without N, approve the run that waits, when exactly one run in this repo waits |
 | `pdd workflow changes N "text"` | Send the text to the same chat. The chat revises. The gate stays open |
 | `pdd workflow cancel N` | Mark the run cancelled and close its tabs. Keep the worktree and the branch |
 
-- NAME is `small-change`, `bug` or `feature`.
+- NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
 - ISSUE is the issue number in the repo of your clone.
 - N is the issue number of a run in the current repo, worktrees included. If several repos match, use `owner/repo#N`.
 - In a terminal, `approve` asks y/N and shows the repo, the issue and its title. From an agent chat, `approve` works only when the person's own message after the gate is in that chat.
@@ -56,4 +57,4 @@ node bin/pdd.mjs --version
 npm test
 ```
 
-The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).

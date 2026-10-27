@@ -28,18 +28,18 @@ PDD runs on your own machine, with your own agent account and your own GitHub ac
 Check your tools:
 
 ```sh
-node -v               # Node.js
+node -v               # Node.js 22 or newer
 git --version         # Git
 gh auth status        # "Logged in to github.com"
 herdr --version       # Herdr, for workflow runs
 codex login status    # "Logged in ..."  (or use Claude Code)
 ```
 
-PDD works with the versions you have. If a tool is missing:
+PDD needs Node.js 22 or newer. The other tools work with the versions you have. If a tool is missing:
 
 | Tool | How to get it |
 |---|---|
-| Node.js | [nodejs.org](https://nodejs.org), or your Node version manager |
+| Node.js 22 or newer | [nodejs.org](https://nodejs.org), or your Node version manager |
 | Git | [git-scm.com](https://git-scm.com) |
 | GitHub CLI | [cli.github.com](https://cli.github.com). Then run `gh auth login`. If `git push` asks for a password later, run `gh auth setup-git`. |
 | Herdr | `curl -fsSL https://herdr.dev/install.sh \| sh`, or see [herdr.dev/docs/install](https://herdr.dev/docs/install/). You need Herdr only for workflow runs. You do not have to open it yourself. |
@@ -100,7 +100,7 @@ PDD is four skills. A skill is a folder of plain Markdown that your agent reads 
 
 | Skill | What it is |
 |---|---|
-| `pdd-prompting` | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules and how to review a prompt |
+| [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules and how to review a prompt |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-feature` | A workflow for new behavior |
@@ -173,7 +173,7 @@ git fetch origin
 pdd workflow run small-change 42
 ```
 
-ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug` or `feature`.
+ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#7-make-your-own-workflow).
 
 The command returns at once. It prints where the run is and the commands to open and approve it. **You can close the terminal now. There are no time limits.**
 
@@ -220,7 +220,7 @@ Rules:
 
 - Only you can approve. An agent never approves for you. When you approve in the chat, the agent runs `pdd workflow approve`. pdd then checks that your own message is in the chat after the gate.
 - In a terminal, `approve` asks y/N. The question shows the repo, the issue and its title.
-- `approve` without N works when one run in this repo waits for you.
+- `approve` without N works when exactly one run in this repo waits for you.
 - Changes stay in the same chat. The chat revises and asks you again.
 - `cancel` marks the run cancelled and closes its tabs. pdd keeps the worktree and the branch.
 
@@ -242,7 +242,7 @@ A run always makes one PR. The prompts, the Story, the tests and the code are al
 
 ```sh
 pdd workflow status 42
-pdd workflow status        # the runs of this repo
+pdd workflow status        # all runs in this repo
 ```
 
 `status` shows the area, the step, what the run waits for, and the PR with its CI state. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
@@ -259,7 +259,17 @@ Each issue gets its own branch, worktree and Herdr tab. You can start several ru
 
 ## 7. Make your own workflow
 
-A workflow is a skill folder. Copy one of the PDD workflows under a new name, and edit it. [workflows.md](workflows.md#make-your-own-workflow) has the steps and the file format.
+A workflow is a skill folder. Copy one of the PDD workflows as `pdd-NAME`, and edit it. For example, in your repo:
+
+```sh
+mkdir -p .agents/skills
+cp -R ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug
+rm .agents/skills/pdd-mybug/.pdd-skill.json
+pdd workflow list            # pdd-mybug is in the list
+pdd workflow run mybug 42
+```
+
+[workflows.md](workflows.md#make-your-own-workflow) has the steps and the file format.
 
 ## 8. Shell completion
 
