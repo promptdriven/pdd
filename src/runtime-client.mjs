@@ -1,10 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 919bf6f6ab2dad36b5f30693279ca3a0f23e4497d16b72a43e306d40d23d7625).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c5cc4aea0c8fae9db1e992a36904e4ec01b522ba5fd93af7f5b262fad73c4dae).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { PreflightError, captureSource, checkInput, draftHint, fillHashes, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, PreflightError, captureSource, checkInput, fillHashes, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
@@ -22,6 +23,7 @@ const LOST_READ_MS = 300_000;
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
 const line = (stream, text) => stream.write(`${text}\n`);
+const statOrNull = path => { try { return lstatSync(path); } catch { return null; } };
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clock = ms => new Date(ms).toTimeString().slice(0, 8);
 
@@ -31,6 +33,7 @@ function withDefaults(ports) {
     env, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => spawnSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
+    interactive: ports.interactive ?? !!process.stdout.isTTY, watchMs: ports.watchMs ?? 5000,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
       const timer = setTimeout(done, ms);
       signal?.addEventListener('abort', () => { clearTimeout(timer); done(); }, { once: true });
@@ -227,7 +230,7 @@ function select(found, words) {
 const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
   request_ids: [], report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
-// Lint verdict for each test: the prompts it reaches must be approved and not refused.
+// Lint verdict for each test: the prompts it reaches must be approved or a current draft, and not refused. A draft marks the row.
 function judgeLint(answer, rows, root, visible, secrets = []) {
   const program = answer?.result?.report?.program;
   if (!isObject(program) || !Array.isArray(program.prompts)) return null;
@@ -244,12 +247,14 @@ function judgeLint(answer, rows, root, visible, secrets = []) {
       const prompt = byPath.get(path), state = prompt?.admission_state ?? prompt?.state;
       if (refused.has(path)) problem = { code: cleanText(refused.get(path).code, secrets) || 'lint-refused', section: 'lint', message: `${cleanText(path, secrets)}: ${cleanText(refused.get(path).message || refused.get(path).code, secrets)}` };
       else if (!prompt) problem = { code: 'unknown-target', section: 'lint', message: `${path} is not in the lint report.` };
-      else if (state !== 'approved') {
+      else if (state !== 'approved' && state !== 'draft') {
         const local = readPrompt(root, visible, path);
-        problem = state === 'stale' ? { code: 'interface-stale', section: 'lint', message: `${path} changed after its interface was approved.`, hint: staleHint }
-          : state === 'draft' ? { code: 'interface-unapproved', section: 'lint', message: `${path} is not approved.`, hint: draftHint(path) }
-          : { code: `interface-${cleanText(state, secrets) || 'unapproved'}`, section: 'lint', message: `${path} has no approved Runtime interface${local.error ? ` (${local.error})` : ''}.` };
-      } else for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
+        problem = state === 'stale' ? { code: 'interface-stale', section: 'lint', message: `${path} changed after its hash was filled or approved.`, hint: staleHint }
+          : { code: `interface-${cleanText(state, secrets) || 'unapproved'}`, section: 'lint', message: `${path} has no usable Runtime interface${local.error ? ` (${local.error})` : ''}.` };
+      } else {
+        if (state === 'draft') row.draft = true;
+        for (const call of Array.isArray(prompt.interface?.calls) ? prompt.interface.calls : []) if (typeof call?.target === 'string') queue.push(call.target);
+      }
     }
     if (problem) verdicts.set(row, problem);
   }
@@ -266,9 +271,9 @@ function addHints(row, root, visible) {
       const entry = prompt.interface?.entries?.find?.(candidate => candidate?.operation === step.operation);
       const local = entry ? checkInput(step.input, entry.input_schema, index) : null;
       if (local?.message) item.hint = local.message;
-    } else if (['interface-unapproved', 'interface-stale'].includes(item.code) && prompt.interface) {
-      item.hint = prompt.interface.status !== 'approved' ? draftHint(step.entry_path) : staleHint;
-    }
+    } else if (item.code === 'interface-unapproved' && (row.draft || prompt.interface?.status === 'draft')) {
+      item.message = DRAFT_SERVER_TEXT;
+    } else if (item.code === 'interface-stale' && prompt.interface) item.hint = staleHint;
   }
 }
 
@@ -290,7 +295,7 @@ function batchRecord(context) {
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
-      engine_sha: row.engine_sha ?? null })) };
+      engine_sha: row.engine_sha ?? null, draft: !!row.draft })) };
 }
 
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
@@ -616,7 +621,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false };
   let release = () => {};
   try {
-    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
+    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = options['--stop'] ? null : appMapFor(found, options['--app-map'], cwd, root);
@@ -648,7 +653,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       const ended = read.kind === 'missing' || ['failed', 'refused'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping'].includes(answer.result?.session?.state));
-      if (link && !options['--new']) return await showTry(context, test, link, options);
+      if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd try ${test.story} again later, or pdd try ${test.story} --new to stop it and make a new one.`);
@@ -676,7 +681,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const done = ENDED.has(verdict.answer.state) ? { answer: verdict.answer }
       : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS);
     const link = tryLink(done.answer, origin);
-    if (link) return await showTry(context, test, link, options);
+    if (link) return await showTry(context, test, link, options, request.requestId);
     if (done.unknownWhy || done.open || !done.answer || done.answer.state === 'unknown') {
       throw new Stop(3, `The Try setup is not finished or its result is unknown. Run pdd try ${test.story} again later; it reuses a running Try.`);
     }
@@ -706,10 +711,127 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options) {
+async function showTry(context, test, link, options, tryId) {
   const { ports } = context, ends = `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
-  if (!options['--no-open'] && await ports.openUrl(link)) { line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`); return 0; }
-  line(ports.stdout, `Try link for "${test.title}": ${link}`);
-  line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
+  if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
+  else {
+    line(ports.stdout, `Try link for "${test.title}": ${link}`);
+    line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
+  }
+  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive);
   return 0;
+}
+
+// ---- Save as test: cases saved on the Try page become steps of the story's test file ----
+
+const slug = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+
+// The [start, end) offsets of the top-level "steps" array in a JSON text, or null.
+function stepsArray(text) {
+  let depth = 0, key = null, index = 0;
+  const skipString = at => { let i = at + 1; while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1; return i + 1; };
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '"') {
+      const end = skipString(index);
+      if (depth === 1 && /^\s*:/.test(text.slice(end))) key = JSON.parse(text.slice(index, end));
+      index = end; continue;
+    }
+    if (char === '[' && depth === 1 && key === 'steps') {
+      let inner = 0, at = index;
+      while (at < text.length) {
+        if (text[at] === '"') { at = skipString(at); continue; }
+        if (text[at] === '[' || text[at] === '{') inner += 1;
+        if (text[at] === ']' || text[at] === '}') { inner -= 1; if (inner === 0) return [index, at + 1]; }
+        at += 1;
+      }
+      return null;
+    }
+    if (char === '{' || char === '[') depth += 1;
+    if (char === '}' || char === ']') depth -= 1;
+    index += 1;
+  }
+  return null;
+}
+
+// Append one step and keep every other byte of the file; fall back to a plain rewrite.
+function appendStep(text, doc, step) {
+  const want = { ...doc, steps: [...doc.steps, step] }, range = stepsArray(text);
+  if (range) {
+    const [start, end] = range, close = end - 1, before = text.slice(start + 1, close).trimEnd();
+    const lineStart = text.lastIndexOf('\n', close) + 1, indent = (/^[ \t]*/.exec(text.slice(lineStart))[0]) + '  ';
+    const body = JSON.stringify(step, null, 2).replace(/\n/g, `\n${indent}`);
+    const next = `${text.slice(0, start + 1)}${before}${before ? ',' : ''}\n${indent}${body}\n${text.slice(lineStart, close)}${text.slice(close)}`;
+    try { if (isDeepStrictEqual(JSON.parse(next), want)) return next; } catch { /* fall back */ }
+  }
+  return `${JSON.stringify(want, null, 2)}\n`;
+}
+
+// One saved case → a new step in its story's test file. Returns the line to print.
+function addSavedCase(root, saved) {
+  const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
+  const label = cleanText(saved?.name || saved?.id || 'a saved case');
+  if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
+  const target = findTests({ root }).tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  if (!target) {
+    // A story with no test gets tests/<story>.json, as the runbook names test files.
+    const base = slug(story.split('/').at(-1).replace(/\.md$/, '')) || (/^tests\/[A-Za-z0-9._-]+\.json$/.test(saved.path ?? '') ? saved.path.slice(6, -5) : 'saved');
+    let path = `tests/${base}.json`;
+    for (let number = 2; statOrNull(join(root, path)); number += 1) path = `tests/${base}-${number}.json`;
+    mkdirSync(join(root, 'tests'), { recursive: true });
+    writeFileSync(join(root, path), `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
+    return `added to ${path} as step ${cleanText(test.steps.map(step => step?.step_id).join(', '))}`;
+  }
+  const file = join(root, target.path), text = readFileSync(file, 'utf8'), doc = JSON.parse(text);
+  const byText = new Map((Array.isArray(doc.criteria) ? doc.criteria : []).map(item => [item.text, item.id]));
+  const savedText = new Map((Array.isArray(test.criteria) ? test.criteria : []).map(item => [item.id, item.text]));
+  let next = text, current = doc;
+  const ids = [];
+  for (const raw of test.steps) {
+    const checks = Array.isArray(raw?.checks) ? raw.checks : [];
+    const mapped = checks.map(check => ({ ...check, criterion_id: byText.get(savedText.get(check?.criterion_id)) ?? (byText.has(savedText.get(check?.criterion_id)) ? check.criterion_id : null) }));
+    const lost = checks.find((check, index) => !mapped[index].criterion_id);
+    if (lost || !checks.length) return `not added: "${label}" checks a criterion that ${target.path} does not have ("${cleanText(savedText.get(lost?.criterion_id) ?? lost?.criterion_id ?? 'none')}"). Add it by hand.`;
+    const taken = new Set(current.steps.map(step => step?.step_id));
+    let id = slug(raw.step_id) || slug(saved.name) || slug(saved.id) || 'saved-case';
+    for (let number = 2, base = id; taken.has(id); number += 1) id = `${base}-${number}`;
+    const step = { ...raw, step_id: id, checks: mapped };
+    next = appendStep(next, current, step);
+    current = { ...current, steps: [...current.steps, step] };
+    ids.push(id);
+  }
+  writeFileSync(file, next);
+  return `added to ${target.path} as step ${ids.join(', ')}`;
+}
+
+// Read the saved cases once; with `wait`, keep reading until Ctrl-C or the Try ends.
+async function watchSavedTests(context, tryId, wait) {
+  const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
+  let polls = 0, told = false;
+  for (;;) {
+    const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
+    if (reply.status === 200 && Array.isArray(reply.json?.tests)) {
+      const done = store.read(path) ?? {};
+      for (const saved of reply.json.tests) {
+        const key = typeof saved?.id === 'string' ? saved.id : null;
+        if (!key || done[key]) continue;
+        const said = addSavedCase(root, saved);
+        done[key] = { at: new Date(ports.now()).toISOString(), result: said };
+        store.write(path, done);
+        line(ports.stdout, said);
+      }
+    } else if (reply.status === 404 || reply.status === 405 || (reply.status === 200 && !Array.isArray(reply.json?.tests))) {
+      if (wait) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
+      return;
+    } else if ([401, 410].includes(reply.status)) return;
+    if (!wait || context.interrupted) return;
+    if (!told) { line(ports.stdout, 'Waiting for tests saved on the Try page. Press Ctrl-C to stop waiting; the Try link stays open.'); told = true; }
+    await ports.sleep(ports.watchMs, context.signal);
+    if (context.interrupted) return;
+    polls += 1;
+    if (polls % 6 === 0) {
+      const read = judgeGet(await context.runtime.get(tryId), tryId, 'try');
+      if (read.kind === 'state' && read.answer.result?.session?.state !== 'running') { wait = false; line(ports.stdout, 'The Try has ended.'); }
+    }
+  }
 }

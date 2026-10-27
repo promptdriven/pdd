@@ -92,7 +92,7 @@ const RULES = [
   ['P7 entry missing', 'entry-missing', (r, doc) => { doc.steps[0].entry_path = 'prompts/gone.prompt.md'; }],
   ['P7 no interface', 'interface-missing', r => writeFileSync(join(r, 'prompts/place_order.prompt.md'), '# Place an order\n')],
   ['P7 two interfaces', 'pdd-two-interfaces', r => { const f = join(r, 'prompts/place_order.prompt.md'), s = readFileSync(f, 'utf8'); writeFileSync(f, s + s.slice(s.indexOf('<details>'))); }],
-  ['P7 draft', 'interface-unapproved', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('"approved"', '"draft"')); }],
+  ['P7 draft stale', 'interface-stale', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('"approved"', '"draft"').replace('Use this menu.', 'Use this menu now.')); }],
   ['P7 stale', 'interface-stale', r => { const f = join(r, 'prompts/place_order.prompt.md'); writeFileSync(f, readFileSync(f, 'utf8').replace('Use this menu.', 'Use this menu now.')); }],
   ['P8 operation', 'entry-operation-missing', (r, doc) => { doc.steps[0].operation = 'cancel_order'; }],
   ['P9 input', 'invalid-input', (r, doc) => { doc.steps[0].input.items[0].quantity = 0; }],
@@ -128,9 +128,10 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   assert.match(result.out, /Warning: the AC1 check expects 899, but the AC1 text says 900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
-  const unapproved = await check(repo, home, ['unknown-item'], {});
-  assert.equal(unapproved.code, 4); assert.deepEqual(unapproved.calls, { fetch: 0, gh: 0 });
-  assert.match(unapproved.out, /pdd: prompts\/place_order\.prompt\.md is "draft"\. The person must approve it first\./);
+  writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
+  const stale = await check(repo, home, ['unknown-item'], {});
+  assert.equal(stale.code, 4); assert.deepEqual(stale.calls, { fetch: 0, gh: 0 });
+  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd check --fill-hash\./);
 });
 
 // Wrong: an unknown story sends every test, or the error hides the stories that exist.
@@ -239,4 +240,14 @@ test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may
   assert.equal(named.json.rows[0].refusals[0].code, 'invalid-input');
   doc.steps[0].model = 7; writeJson(file, doc);
   assert.equal((await check(repo, home, ['place-order'])).json.rows[0].refusals[0].code, 'invalid-step-model');
+});
+
+// Wrong: a draft prompt is refused before it reaches the runtime (Serhan, Oct 27: drafts may run, marked DRAFT).
+test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and is marked as a draft', async t => {
+  const { repo, home } = harbor(t), prompt = join(repo, 'prompts/place_order.prompt.md');
+  writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
+  const result = await check(repo, home, ['place-order']);
+  assert.equal(result.code, 5, result.err);
+  assert.equal(result.calls.gh, 1);
+  assert.match(result.err, /Run gh auth login/);
 });

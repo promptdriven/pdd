@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
-import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
+import { findTests, preflight } from '../src/runtime-preflight.mjs';
+import { PLACE, fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
 async function tryStory(setup, fake, words, options = {}, extra = {}) {
   const opened = [];
@@ -19,6 +20,7 @@ function trying(link) {
     if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
     if (entry.method === 'POST') return { status: 202, json: f.job(entry.request.requestId, 'try', 'queued') };
     if (entry.method === 'DELETE') return { status: 202, json: { ...f.job(entry.headers['x-request-id'], 'stop', 'running'), session_id: entry.url.split('/').at(-1) } };
+    if (entry.url.endsWith('/tests')) return { status: 404, json: { error: { code: 'not-found', message: 'The requested run or session was not found.' } } };
     const id = entry.url.split('/').at(-1), stop = f.deletes.find(item => item.headers['x-request-id'] === id);
     if (stop) return { status: 200, json: f.stopJob(id, stop.url.split('/').at(-1)) };
     const stopped = f.deletes.some(item => item.url.endsWith(`/${id}`));
@@ -136,4 +138,54 @@ test('RUNTIME-TRY6: pdd try sends the app map it finds, opens on the screen tab,
   assert.equal(third.posts[1].request.app_map, 'other-map.json');
   const missing = await tryStory(rooted, third, ['place-order'], { '--app-map': 'nope.json', '--new': true });
   assert.equal(missing.code, 2); assert.match(missing.err, /nope\.json/); assert.equal(third.posts.length, 2);
+});
+
+const AC1 = 'An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).';
+// One case saved on the Try page, as GET /v1/try/<id>/tests returns it (try-page DESIGN.md).
+const savedCase = (id, { story = 'user_stories/place-order.md', criterion = { id: 'AC1', text: AC1 }, name = `Case ${id}` } = {}) => ({
+  id, path: `tests/${id}.json`, name, created: '2026-10-27T18:02:11Z', story_path: story,
+  test: { schema_version: 'prompt-runtime.program-scenario.v1', story_path: story, criteria: [criterion], initial_world: {}, simulation: {}, context: [],
+    steps: [{ step_id: `saved-${id}`, entry_path: PLACE, operation: 'place_order',
+      input: { customerName: 'Ana', pickupAt: '07:45', items: [{ itemId: 'latte', size: 'M', quantity: 1 }] },
+      checks: [{ criterion_id: criterion.id, target: 'result', path: '/totalCents', op: 'equals', value: 445 }] }] } });
+
+// Wrong: a case saved on the Try page is lost, makes a second test file, or is added twice (Serhan, Oct 27: save as test).
+test('RUNTIME-TRY7: pdd try stays open and appends each saved case as a new step of the story\'s test file', async t => {
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n'));
+  const original = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8');
+  let polls = 0, reopened = false;
+  const lists = [[], [savedCase('a')], [savedCase('a'), savedCase('b', { criterion: { id: 'ac-1', text: AC1 } }),
+    savedCase('c', { criterion: { id: 'ac-9', text: 'Something the story does not say.' } }),
+    savedCase('d', { story: 'user_stories/refund.md', criterion: { id: 'AC1', text: 'A refund returns the total.' } })]];
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'GET' && entry.url.endsWith('/tests')) { polls += 1; return { status: 200, json: { tests: lists[Math.min(polls - 1, 2)] } }; }
+    if (entry.method === 'GET' && polls >= 5 && !reopened) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1), undefined, 'stopped') };
+    return trying()(entry, f);
+  });
+  const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
+  assert.equal(result.code, 0, result.err);
+  assert.equal(result.out.split('\n').filter(text => text.startsWith('added to')).join('\n'), ['added to tests/place-order.json as step saved-a',
+    'added to tests/place-order.json as step saved-b', 'added to tests/refund.json as step saved-d'].join('\n'));
+  assert.match(result.out, /not added: "Case c" checks a criterion that tests\/place-order\.json does not have/);
+  const text = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8'), doc = JSON.parse(text);
+  assert.ok(text.startsWith(original.slice(0, original.lastIndexOf('}', original.lastIndexOf(']')) + 1)));
+  assert.deepEqual(doc.steps.map(step => step.step_id), ['sam-orders-espressos-and-a-muffin', 'saved-a', 'saved-b']);
+  assert.deepEqual(doc.steps.slice(1).map(step => step.checks[0].criterion_id), ['AC1', 'AC1']);
+  assert.equal(JSON.parse(readFileSync(join(setup.repo, 'tests/refund.json'), 'utf8')).steps[0].step_id, 'saved-d');
+  const found = findTests({ root: setup.repo }), checked = preflight({ root: setup.repo, found, selected: found.tests });
+  assert.deepEqual(checked.rows.map(row => [row.test, row.refusals.map(item => item.code)]),
+    [['tests/place-order.json', []], ['tests/refund.json', []], ['tests/unknown-item.json', []]]);
+  reopened = true;
+  const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+  assert.equal(again.code, 0); assert.doesNotMatch(again.out, /added to/);
+  assert.equal(JSON.parse(readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8')).steps.length, 3);
+});
+
+// Wrong: an agent's pdd try blocks forever, or a missing saved-tests endpoint looks like an error.
+test('RUNTIME-TRY8: --no-wait returns at once; a runtime with no saved-tests endpoint is said plainly', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  const quick = await tryStory(setup, fake, ['place-order'], { '--no-open': true, '--no-wait': true }, { interactive: true });
+  assert.equal(quick.code, 0); assert.doesNotMatch(quick.out, /Waiting/);
+  const waiting = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
+  assert.equal(waiting.code, 0); assert.match(waiting.out, /The runtime does not keep saved tests yet/);
 });

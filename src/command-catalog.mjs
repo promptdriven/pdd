@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: e583b432b6c920609860e57beae8492bd3a426cd0cb56618fa3b9ac583eda992).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d3e38dec007c3361713f85f96216ed556f87bfe683eebd92629485034a98030e).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -43,8 +43,8 @@ const routes = [
       form('pdd check --files', 'List the files a check would send; no network.')] },
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
-      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }],
-    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours.'),
+      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
+    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. In a terminal it waits and adds each test saved on the Try page to the story\'s test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
     forms: [form('pdd setup', 'Add or update the short PDD block in CLAUDE.md, else AGENTS.md, of this folder. A second run changes nothing.')] },
