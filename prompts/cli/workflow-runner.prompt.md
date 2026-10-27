@@ -85,3 +85,53 @@ The runner supplies native `ports.withStageGuard(backend, action)` using the act
 ## Independent issue stages
 
 Do not cap active or unresolved native stages across a repository. Each running stage is a full Codex or Claude session on the person's computer. Distinct issues may retain independent unresolved stages concurrently; this does not promise tested throughput or automatic cleanup. Preserve one assigned run per issue and one active stage per run, controller and attachment exclusion, exact identity/currentness checks and uncertain-delivery refusal. Do not allocate or release repository admission slots. Historical admission metadata and claims may remain on disk; ignore them without clearing or rewriting live journals or claims.
+
+## Bound person decisions
+
+Export `applyWorkflowDecision(input, ports)` for the decide module. Under the
+existing assignment/run lock, read the complete validated journal, compare the
+current stage and positive journal seq, and revalidate saved input before any
+admission. Gates persist `waitingDecision:{stage,seq,at,decisions}`; `at` is epoch
+ms, seq includes that gate's durable record. Repeated inspection retains the
+same gate/time/seq. A new run saves startedAt for native session discovery.
+Only a settled human, optional or next-advance proposal gate admits decisions;
+active/recovery work and external merge waits do not. Skip needs an optional
+stage. Changes needs a completed proposal before this gate.
+
+Check historical decisions before current-gate checks: same id and exact
+payload/expected binding returns recorded without authorization or new effects;
+changed payload is bad_args. For a new id, call `ports.authorizeDecision` with
+the authoritative state and require `{ok:true,approvalRecord}`. Persist the
+binding and evidence as `decisions[]` and latest `approvalRecord` before advance.
+A crash after admission must never repeat the effect on retry.
+
+Approve/skip use existing foreground advancement, preserving artifact/issue and
+native validation. Changes preserves removed completion/proposal/acceptance in
+revisionHistory, clears downstream acceptance and optional choices, records the
+person's text in changes, and starts a fresh attempt of the most recent proposal
+stage. The prompt supplied to that stage includes the changes text. No published
+PR or accepted merge is rewound. Result recorded certifies admission, never stage
+completion; failed/uncertain advancement retains the recorded id and evidence.
+Area-chat composition may provide the same applyWorkflowDecision port and must
+honor all admission/evidence rules while starting one fresh next/revision chat.
+
+`readWorkflowDecision({runId,cwd},ports)` is the read-only selector for CLI adapters:
+validate assignment and journal, return ready with runId,stage,journalSeq,issue,
+repo,root for a current saved person gate; otherwise refuse without mutation.
+Its result supplies no authority: applyWorkflowDecision rechecks under lock.
+
+A stopped foreground run with a pending attempt also saves an approve-only
+recovery gate. A person can authorize reconciliation of that original attempt;
+the runner still refuses duplicate launch/PR effects and unresolved native work.
+This preserves legacy explicit recovery without bypassing evidence. Recovery
+validates original pending ancestry/artifacts rather than assuming its worktree
+still equals the pre-agent fingerprint. Recovery gates never offer changes/skip.
+Gate evidenceStage selects the current pending or most recent completed native
+stage's actual start/end window, so earlier chats cannot make later approval
+ambiguous; a missing historical time window fails chat verification closed.
+
+When the independently supplied14a workflow-run-records module is present, finish
+both ordinary and decide advancement by writing runStatusFromState phase exit
+through writeRunStatus under the same run lock; a newly saved decision gate must
+project waiting, not running. An admitted but uncertain advancement projects
+recovery_required. Projection failures never change authoritative journal results.

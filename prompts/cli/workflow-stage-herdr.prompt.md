@@ -75,3 +75,9 @@ Existing withStageGuard(backend,action) throws WORKFLOW_STAGE_BUSY when ordinary
 ## Full-access native launch
 
 Start every new workflow stage in full-access mode without approval prompts. Codex native arguments after Herdr's -- boundary are --no-daemon --dangerously-bypass-approvals-and-sandbox followed by -c and one invocation-only projects={"<actual assigned absolute cwd>"={trust_level="trusted"}} override; use the simple root override key projects because Codex 0.159.1 splits override keys on literal dots. Encode the path as a quoted TOML inline-table VALUE key so dots, spaces, quotes, backslashes and equals signs remain one exact worktree key; native config selects an exact cwd entry before a parent repo-root entry; Claude uses --dangerously-skip-permissions. Preserve canonical installed agent, cwd/environment/auth/provider/model/effort and actual stage identity/first-prompt/noresend checks. No permission/config/sandbox fallback or global writes. Existing startup/consent/root failure remains actionable/finite, no autoanswer or mode retry. Never persist trust/config/auth/environment changes, automate update choices or alter an existing live agent. Existing live runs/agents must not be relaunched or modified when launch options change. Preserve the four exports and controller semantics.
+
+Native stage tool environments carry PDD_AGENT_SESSION=<runId>/<stageId> so
+person decisions inside that chat enter session-evidence verification. Use
+per-launch native configuration (Codex shell_environment_policy.set; Claude
+settings env); preserve the person's login, cwd and global config. This routing
+marker is defence in depth, not a same-user security boundary.

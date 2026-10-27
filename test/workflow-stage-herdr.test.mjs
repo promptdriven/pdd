@@ -44,7 +44,7 @@ function harness(cwd, options = {}) {
         if(options.requireNoDaemon && !a.includes('--no-daemon'))throw Object.assign(Error('unsupported daemon'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Cannot use the shared background server: api_key_model_discovery must be disabled'}})});
         if(options.requireTrust && a[a.indexOf('-c')+1]!==`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`)throw Object.assign(Error('folder trust required'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Trust this folder'}})});
         if(options.startBlocked)throw Object.assign(Error('pending'),{code:1,stderr:JSON.stringify({error:{code:'agent_not_ready',message:'Native startup awaits person'}})});
-        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]:['--','--dangerously-skip-permissions'])]);
+        assert.deepEqual(a.slice(3),['--kind',options.agent ?? 'codex','--pane',pane,'--timeout','4000',...((options.agent??'codex')==='codex'?['--','--no-daemon','--dangerously-bypass-approvals-and-sandbox','-c',`projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`,'-c',`shell_environment_policy.set={PDD_AGENT_SESSION=${JSON.stringify(`${input.runId}/${input.stageId}`)}}`]:['--','--dangerously-skip-permissions','--settings',JSON.stringify({env:{PDD_AGENT_SESSION:`${input.runId}/${input.stageId}`}})])]);
         return encode({result:{agent:options.startAck?options.startAck(agent()):agent()}});
       }
       if (a[0] === 'agent' && a[1] === 'prompt') {

@@ -1,7 +1,13 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5e5d9ec77b120c7c35ae2a1eb82a29c8bd69cb2e6195c28b4f44c59dd0fba12c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: c9fc4197c58379215291391cfff6d7b1d1220b2e65c52b0923cd78e6ba06a0ec).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
+  { id: 'workflow.decide', prefix: ['workflow', 'decide'], local: 'workflow-decide',
+    operands:[{name:'run-id',type:'uuid'}], options:[{name:'--decision',kind:'value',choices:['approve','changes','skip']},
+      {name:'--via',kind:'value',choices:['phone']},
+      ...['--text','--id','--expect-stage','--expect-seq','--phone','--approval'].map(name=>({name,kind:'value'})),
+      {name:'--yes',kind:'flag'},{name:'--json',kind:'flag'}],
+    forms:[form('pdd workflow decide RUN_ID --decision approve|changes|skip [--text TEXT] --id UUID --expect-stage STAGE --expect-seq N [--yes] [--via phone --phone PHONE_ID --approval TOKEN] [--json]', 'Apply one bound person decision and continue the saved workflow.')] },
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']}],

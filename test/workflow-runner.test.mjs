@@ -766,7 +766,13 @@ test('main joins frozen native adapter through same-agent first dispatch, accept
   const inspection=await f.resume(first.runId);assert.equal(inspection.state,'waiting',inspection.message);
   assert.equal(calls.filter(x=>x==='prompt').length,0);assert.equal(calls.filter(x=>x==='start').length,1);
   const live=[...sessions.values()][0].active;live.agent_status='idle';live.interactive_ready=true;
-  const continued=await f.resume(first.runId,'approve');assert.equal(continued.stage,'change',continued.message);
+  const {runPdd}=await import('../src/pdd-cli.mjs');
+  const {readWorkflowDecision,applyWorkflowDecision}=await import('../src/workflow-runner.mjs');
+  const output={text:'',write(x){this.text+=x;}};
+  const continued=await runPdd(['workflow','resume',first.runId,'--decision','approve'],{
+    cwd:f.cwd,packageRoot:f.packageRoot,stdout:output,stderr:{isTTY:true,write(){}},stdin:{isTTY:true},env:{},confirm:async()=>true,
+    workflowRunner:{readWorkflowDecision:(i)=>readWorkflowDecision(i,f.ports),applyWorkflowDecision:(i,p)=>applyWorkflowDecision(i,{...f.ports,authorizeDecision:p.authorizeDecision})}});
+  assert.equal(continued,0,output.text);assert.equal(f.saved(first.runId).definitions[f.saved(first.runId).index].id,'change');
   const accepted=f.saved(first.runId).completed[0];
   assert.equal(accepted.backend.attemptId,original.attemptId);assert.equal(accepted.backend.terminalId,original.backend.terminalId);
   assert.equal(calls.filter(x=>x==='start').length,1);assert.equal(calls.filter(x=>x==='create').length,1);
@@ -960,4 +966,30 @@ test('first-dispatch continuation refuses changed original request or worktree b
   writeFileSync(join(f.cwd, 'value.mjs'), 'export const value = 9;\n');
   const changed = await f.resume(first.runId, 'approve');
   assert.equal(changed.state, 'failed'); assert.match(changed.message, /HEAD or worktree changed/); assert.equal(calls.length, 1);
+});
+
+async function decideAt(f, runId, overrides={}, ports={}) {
+  const {decideWorkflow}=await import('../src/workflow-decide.mjs');
+  const s=f.saved(runId), gate=s.waitingDecision;
+  return decideWorkflow({runId,decisionId:randomUUID(),decision:'approve',expectStage:gate?.stage,expectSeq:gate?.seq,cwd:f.cwd,packageRoot:f.packageRoot,...overrides},
+    {...f.ports,env:{},stdin:{isTTY:true},stderr:{isTTY:true,write(){}},confirm:async()=>true,...ports});
+}
+test('bound decision records person evidence before launch and duplicate never launches twice',async t=>{
+ const f=await fixture(t),started=await f.run(),s=f.saved(started.runId),gate=s.waitingDecision;
+ assert.equal(gate.stage,'change');assert.equal(gate.seq,s.seq);assert.ok(gate.at>=s.startedAt);assert.deepEqual(gate.decisions,['approve','changes']);
+ const id=randomUUID(),r=await decideAt(f,started.runId,{decisionId:id});assert.equal(r.state,'recorded');assert.equal(f.native.length,3);assert.equal(f.saved(started.runId).approvalRecord.kind,'terminal');
+ const retry=await decideAt(f,started.runId,{decisionId:id,expectStage:gate.stage,expectSeq:gate.seq});assert.equal(retry.state,'recorded');assert.equal(f.native.length,3);
+ const changed=await decideAt(f,started.runId,{decisionId:id,decision:'changes',text:'Different',expectStage:gate.stage,expectSeq:gate.seq});assert.equal(changed.code,'bad_args');
+});
+test('stale binding, refused person and nonoptional skip leave journal and stages untouched',async t=>{
+ const f=await fixture(t),started=await f.run(),before=f.saved(started.runId);
+ for(const [patch,ports,code] of [[{expectSeq:before.seq-1},{},'stale_decision'],[{decision:'skip'},{},'run_not_waiting'],[{}, {confirm:async()=>false},'person_required']]){assert.equal((await decideAt(f,started.runId,patch,ports)).code,code);assert.deepEqual(f.saved(started.runId),before);assert.equal(f.native.length,1);}
+});
+test('changes starts a fresh proposal attempt, preserves prior evidence and gates again',async t=>{
+ const f=await fixture(t),started=await f.run(),before=f.saved(started.runId);
+ const r=await decideAt(f,started.runId,{decision:'changes',text:'Include the edge case.'});assert.equal(r.state,'recorded');const after=f.saved(started.runId);
+ assert.equal(f.native.length,2);assert.equal(f.native[1].input.stageId,'scope');assert.match(f.native[1].request,/Include the edge case/);assert.equal(after.changes[0].text,'Include the edge case.');assert.deepEqual(after.revisionHistory[0].completed,before.completed);assert.equal(after.accepted,undefined);assert.ok(after.waitingDecision.at>=before.waitingDecision.at);assert.ok(after.waitingDecision.seq>before.seq);assert.ok(after.waitingDecision.evidenceStage.startedAt>before.waitingDecision.evidenceStage.startedAt);assert.ok(after.waitingDecision.evidenceStage.endedAt<=after.waitingDecision.at);
+});
+test('two simultaneous decisions admit one and preserve one following stage chain',async t=>{
+ const f=await fixture(t),started=await f.run();const results=await Promise.all([decideAt(f,started.runId),decideAt(f,started.runId)]);assert.equal(results.filter(r=>r.state==='recorded').length,1);assert.equal(f.native.length,3);assert.equal(f.saved(started.runId).decisions.length,1);
 });
