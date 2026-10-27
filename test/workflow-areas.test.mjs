@@ -8,16 +8,23 @@ import { readWorkflowAreas, listWorkflowAreas, formatWorkflowList } from '../src
 const areas = first => ({ version: 2, areas: [{ name: first, steps: ['one'], optional: [], gate: 'approve' }, { name: 'build', steps: ['verify'], optional: [], gate: 'pr' }] });
 function put(root, name, data) { mkdirSync(join(root, `pdd-${name}`), { recursive: true }); writeFileSync(join(root, `pdd-${name}`, 'workflow.json'), typeof data === 'string' ? data : JSON.stringify(data)); }
 
-test('lookup order: project .agents, project .claude, home .agents, home .claude, then the package', t => {
+test('lookup order: project .agents, project .claude, home .agents, home .claude, then the package; home never shadows a package workflow', t => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-areas-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
   const project = join(base, 'project'), home = join(base, 'home'), pkg = join(base, 'package'), cwd = join(project, 'src', 'deep');
   mkdirSync(cwd, { recursive: true }); mkdirSync(join(project, '.git'));
   const roots = [join(project, '.agents/skills'), join(project, '.claude/skills'), join(home, '.agents/skills'), join(home, '.claude/skills'), join(pkg, 'skills')];
   roots.forEach((root, index) => put(root, 'flow', areas(`from${index}`)));
-  for (let index = 0; index < roots.length; index++) {
+  // A home copy of a workflow the package has is an install (npx skills add or pdd setup), maybe an old one: the package wins.
+  for (const index of [0, 1, 4]) {
     const found = readWorkflowAreas({ packageRoot: pkg, name: 'flow', cwd, home });
     assert.equal(found.areas[0].name, `from${index}`); assert.equal(found.dir, join(roots[index], 'pdd-flow'));
-    assert.equal(found.source, index < 2 ? 'project' : index < 4 ? 'home' : 'package');
+    assert.equal(found.source, index < 2 ? 'project' : 'package');
+    rmSync(join(roots[index], 'pdd-flow'), { recursive: true });
+  }
+  // A workflow only in a home folder (a person's own) comes from home: .agents before .claude.
+  for (const index of [2, 3]) {
+    const found = readWorkflowAreas({ packageRoot: pkg, name: 'flow', cwd, home });
+    assert.equal(found.areas[0].name, `from${index}`); assert.equal(found.source, 'home');
     rmSync(join(roots[index], 'pdd-flow'), { recursive: true });
   }
   put(join(pkg, 'skills'), 'small-change', areas('plan')); put(join(home, '.claude/skills'), 'docs', areas('draft'));
@@ -44,7 +51,7 @@ test('a pr gate before the last area needs then ask-code; the last area needs a 
   }
 });
 
-test('a pdd-installed copy in a home folder (marker .pdd-skill.json) never shadows the running package; a hand-made home skill still wins', t => {
+test('an installed home copy (with or without pdd\'s marker) never shadows the running package', t => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-areas-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
   const home = join(base, 'home'), pkg = join(base, 'package');
   put(join(pkg, 'skills'), 'bug', areas('new'));
@@ -53,7 +60,7 @@ test('a pdd-installed copy in a home folder (marker .pdd-skill.json) never shado
   const found = readWorkflowAreas({ packageRoot: pkg, name: 'bug', home });
   assert.equal(found.areas[0].name, 'new'); assert.equal(found.source, 'package'); assert.equal(found.dir, join(pkg, 'skills/pdd-bug'));
   rmSync(join(home, '.agents/skills/pdd-bug/.pdd-skill.json'));
-  assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'bug', home }).areas[0].name, 'stale');
+  assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'bug', home }).areas[0].name, 'new', 'npx skills add copies have no marker; they still lose to the package');
 });
 
 test('#13: "before":"approve" is allowed only on a pr gate', t => {

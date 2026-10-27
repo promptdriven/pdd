@@ -11,7 +11,7 @@ pdd looks for `pdd-NAME/workflow.json` in these skill folders, in this order, an
 4. `<home>/.claude/skills`
 5. `<packageRoot>/skills`
 
-A home skill folder that holds pdd's install marker `.pdd-skill.json` is a copy that pdd installed, not an override: skip it, so an old installed copy never shadows the running package. A hand-made home skill (no marker) still wins.
+A home skill folder never overrides a workflow that the package ships (same `pdd-NAME` with a `workflow.json` in `<packageRoot>/skills`): such a copy comes from `npx skills add` or `pdd setup` and may be old, with or without pdd's `.pdd-skill.json` marker. Only a project folder overrides a bundled workflow. Home folders add workflows that the package does not have (a person's own `pdd-docs`).
 
 `<project>` is the nearest folder at or above `cwd` that has a `.git` entry; outside a repository there is no project folder. A person can copy a bundled workflow skill to `pdd-docs` in one of these folders and run `pdd workflow run docs N`.
 
