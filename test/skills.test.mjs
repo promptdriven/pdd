@@ -232,7 +232,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const check = read(`${name}/steps/check.md`);
     assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
-    assert.match(check, name === 'pdd-feature' ? /Put only pdd check's `Runtime check \(<story>\):` line/ : /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
+    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Runtime check \(<story>\): …` line/ : /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
   }
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd check`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
@@ -275,7 +275,9 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own `tests\/<story>\.json`/);
   assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
   assert.match(check, /run `pdd check` on every Story/);
-  assert.match(check, /`Runtime check \(<story>\):` line and its `Report:` line for each Story, in PLAN\.md order, then the overall `Runtime check:` and `Report:` lines/);
+  // The format agreed with runner-builder and runtime-client-builder: pdd check's paste lines, joined with "; ".
+  assert.ok(check.includes('every `Runtime check (<story>): …` line as pdd check prints it, then the overall `Runtime check: …` line, then `Report (<story>): <url>` for each row of its Reports block, joined with "; "'));
+  assert.match(check, /After a re-check, keep the lines of the Stories that passed and replace the re-checked ones\./);
   assert.match(check, /fix only the failing Stories[^\n]*check only those again/);
   const skill = read('pdd-feature/SKILL.md');
   assert.match(skill, /At the story gate, show the plan list/);
