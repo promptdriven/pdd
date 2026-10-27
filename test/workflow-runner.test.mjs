@@ -434,7 +434,9 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /pdd workflow approve 17 any time to make the code PR/);
+  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  // The chat gets the exact sentence to say when the person stops (testers saw it dropped when it was a hint).
+  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, run `pdd workflow approve 17`\."/);
 
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -742,6 +744,7 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
   assert.match(stopped.message, /To make the code PR later, run `pdd workflow approve 17`\./);
   assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
+  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, run `pdd workflow approve 17`\./);
   assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
   f.ports.confirm = async question => { f.prompts.push(question); return true; };
   f.tick();

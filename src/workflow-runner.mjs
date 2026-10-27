@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 427c8df457ec97dc43560c3652a24cddc5a500dd8f85362f35e872bf8b1921d5).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 5a4969f967a5c201848debf981b8a26c042e14b4483d35bb7c0a3e92886c90d5).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -84,6 +84,8 @@ async function areaMessage(run, index, p, packageRoot) {
   ].join('\n') + '\n';
 }
 
+// The one sentence a person gets when they stop at PR 1 (0.1.4: testers saw the chat drop it when it was a hint).
+const codeLater = run => `To make the code PR later, run \`pdd workflow approve ${run.number}\`.`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
 const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
@@ -114,10 +116,10 @@ function describe(run, blocked = false) {
   if (run.state === 'cancelled') return 'cancelled';
   if (run.question && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (blocked && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
-  if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). Run pdd workflow approve ${run.number} any time to make the code PR`;
+  if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
   if (run.state === 'completed') return 'complete: the PR is merged';
   if (run.gate?.kind === 'approve-pr') return `waiting for you: try it, then approve to open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} (or ask for changes)`;
-  if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. Run pdd workflow approve ${run.number} any time to make the code PR`;
+  if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
   if (run.gate) return `waiting for you: approve the ${run.gate.area} area or ask for changes`;
   if (prOf(run, area?.name) && area.gate === 'pr') return `waiting for you: review and merge ${prLabel(run, area)} on GitHub`;
   const step = area?.steps.find(item => !run.done[item]);
@@ -264,7 +266,7 @@ async function askCodeLines(run, area, p) {
   return [`PR 1: ${prOf(run, area.name).url}`, ...summaries, ...(drafts.length ? [draftLine(drafts), 'The code PR waits until the person approves those prompts.'] : []),
     'Gate: show the person PR 1, the Runtime check line and the Try link, then ask: "Do you want the code PR now, or stop here and merge PR 1 first?" Stop there.',
     `If they want the code PR now (in their own words), run: ${p.pdd} workflow approve ${run.number}`,
-    `If they stop, tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR at any time. pdd never merges.`];
+    `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }
 
 async function finishPr(run, area, step, p, lines) {
@@ -404,8 +406,8 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
     if (!await confirm(p, `Make the code PR now for ${label}? PR 1: ${url} (y/N) `)) {
-      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them PR 1 is open and that "pdd workflow approve ${run.number}" makes the code PR later. Then stop.`, p);
-      return done([...head, `PR 1: ${url}`, `Stopped at PR 1. To make the code PR later, run \`pdd workflow approve ${run.number}\`.`].join('\n'));
+      await sendToChat(currentChat(run), `pdd opened PR 1: ${url}. The person approved it in their terminal and stops here for now. Tell them exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Then stop.`, p);
+      return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
     }
     const drafts = await pr1Drafts(run, p);
     if (drafts.length) return fail([...head, `PR 1: ${url}`, `Approve the draft prompts first: ${drafts.join(', ')}. Then run pdd workflow approve ${run.number} to make the code PR.`].join('\n'));
