@@ -16,6 +16,23 @@ async function terminalQuestion(question,stdin,stderr) {
   try{return /^(?:y|yes)$/i.test((await rl.question(question)).trim());}finally{rl.close();}
 }
 const clean=value=>String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,' ');
+function matchesChatDecision(message,input) {
+  if(typeof message!=='string')return false;
+  const text=message.trim();
+  // Match the whole statement: a keyword (or the reader's echoed decision)
+  // cannot establish consent in a refusal, question or qualified instruction.
+  const statements={
+    approve:/^(?:(?:please |i )?approve(?: (?:this |the )?plan)?|approved)[.!]?$/i,
+    changes:/^(?:(?:please |i )?request changes|changes)[.!]?$/i,
+    skip:/^(?:please |i )?skip(?: (?:this |the )?(?:optional )?step)?[.!]?$/i,
+  };
+  if(statements[input.decision].test(text))return true;
+  if(input.decision==='changes') {
+    const request=/^(?:please |i )?request changes:\s*/i.exec(text);
+    return !!request&&text.slice(request[0].length)===input.text.trim();
+  }
+  return false;
+}
 async function authorize(input,state,ports) {
   const refused=(code,message)=>({ok:false,code,message});
   const now=(ports.now??Date.now)();
@@ -43,6 +60,7 @@ async function authorize(input,state,ports) {
   if(typeof read!=='function')return refused('approval_evidence_unavailable','A terminal confirmation, authenticated phone tap or verified user chat message is required; chat evidence verification is unavailable.');
   const evidence=await read({stage:state.waitingDecision?.evidenceStage??{agent:state.agent,root:state.root,startedAt:undefined,endedAt:undefined},gateAskedAt:state.waitingDecision?.at,decision:input.decision},ports);
   if(evidence?.ok!==true)return refused('person_required',clean(evidence?.message||'No user message after the gate could be verified.'));
+  if(!matchesChatDecision(evidence.userMessage,input))return refused('person_required','A clear matching user decision is required: say "approve", "request changes", or "skip".');
   return {ok:true,approvalRecord:{kind:'chat',agent:evidence.agent,sessionId:evidence.sessionId,userMessage:evidence.userMessage,userMessageAt:evidence.userMessageAt,at:now}};
 }
 export async function decideWorkflow(input,ports={}) {

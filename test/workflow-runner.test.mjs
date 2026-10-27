@@ -1062,3 +1062,34 @@ const result=await decideWorkflow(${JSON.stringify(request)},{loadGuidance,now:(
  const restarted=JSON.parse((await exec(process.execPath,[probe],{cwd:f.cwd})).stdout);
  assert.equal(restarted.code,'phone_token_replayed');assert.equal(restarted.exitCode,1);assert.deepEqual(f.saved(started.runId),saved);assert.equal(f.native.length,2);
 });
+
+test('real Codex chat intent refuses without journal writes and records clear approval before advance',async t=>{
+ let readApprovalEvidence;
+ try {({readApprovalEvidence}=await import(process.env.PDD_TEST_APPROVAL_EVIDENCE_MODULE??new URL('../src/approval-evidence.mjs',import.meta.url).href));}
+ catch(error) {
+  if(process.env.PDD_TEST_APPROVAL_EVIDENCE_MODULE||error.code!=='ERR_MODULE_NOT_FOUND')throw error;
+  t.skip('optional W11 evidence module is not installed');return;
+ }
+ const f=await fixture(t),started=await f.run('small-change','codex'),before=f.saved(started.runId);
+ const home=mkdtempSync(join(tmpdir(),'pdd-chat-intent-'));t.after(()=>rmSync(home,{recursive:true,force:true}));
+ mkdirSync(join(home,'sessions'));
+ const journal=join(f.gitDir,'pdd/workflows',started.runId,'journal.jsonl');
+ const original=readFileSync(journal,'utf8'),sessionId=randomUUID(),at=before.waitingDecision.at+1;
+ const rows=[{type:'session_meta',payload:{id:sessionId,cwd:f.cwd,timestamp:before.waitingDecision.evidenceStage.startedAt}}];
+ const ports={env:{PDD_AGENT_SESSION:'test'},stdin:{isTTY:false},codexHome:home,now:()=>at+10,readApprovalEvidence};
+ for(const [index,message] of ['Do not approve this plan.','What does this change do?','I approve this plan.'].entries()) {
+  rows.push({type:'response_item',timestamp:at+index,payload:{type:'message',role:'user',content:[{type:'input_text',text:message}]}});
+  writeFileSync(join(home,'sessions','rollout-intent.jsonl'),rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+  const result=await decideAt(f,started.runId,{},ports);
+  if(index<2) {
+   assert.equal(result.code,'person_required');assert.equal(f.native.length,1);
+   assert.equal(readFileSync(journal,'utf8'),original);
+  } else {
+   assert.equal(result.state,'recorded');assert.equal(f.native.length,3);
+   const events=readFileSync(journal,'utf8').trim().split('\n').map(JSON.parse);
+   const receipt=events.find(row=>row.event==='decision.received');
+   assert.deepEqual(receipt.state.approvalRecord,{kind:'chat',agent:'codex',sessionId,userMessage:message,userMessageAt:at+index,at:at+10});
+   assert.equal(f.saved(started.runId).decisions.length,1);
+  }
+ }
+});

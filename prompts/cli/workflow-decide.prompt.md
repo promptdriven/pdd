@@ -42,7 +42,18 @@ endedAt},gateAskedAt,decision}, ports)`. Values come from the saved run and gate
 root is the assigned worktree; the saved gate's evidenceStage carries the current
 pending or latest completed native stage's actual start/end window, and
 gateAskedAt is its durable gate time. Missing historical times cannot be invented. Require exactly one native session and
-a USER message strictly after the gate. Persist its returned userMessage,
+a USER message strictly after the gate. A verified message proves provenance,
+not consent: require an explicit person intent matching the requested approve,
+changes or skip decision before admission. Recognize complete, unqualified decision
+statements (case-insensitive, surrounding whitespace and final period/exclamation
+allowed), such as `approve`, `I approve this plan`, `approved`, `request changes`,
+`I request changes`, `skip`, or `please skip this step`. Changes may include
+`Request changes: <text>` with the exact submitted changes text. Refusals,
+questions, quoted commands, conditional or mixed instructions, unrelated text,
+ambiguous assent and another decision all refuse with person_required. Do not
+infer consent from a keyword or the reader's echoed decision. Explain that a
+clear matching statement is needed. Preserve phone and terminal authorization.
+Persist its returned userMessage,
 userMessageAt, sessionId and agent as approvalRecord. Missing verifier refuses
 approval_evidence_unavailable; verifier refusal is person_required with its plain
 message. A caller cannot supply the claimed message in place of file evidence.
