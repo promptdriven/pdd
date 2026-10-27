@@ -259,13 +259,15 @@ test('done warns on unknown and out-of-order steps but records them and never br
   assert.equal(outside.exitCode, 1); assert.match(outside.message, /worktree/);
 });
 
-for (const [name, areas] of [['bug', [['story', ['reproduce', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]],
-  ['feature', [['story', ['understand', 'visual', 'prompt-story']], ['prompt-pr', ['check', 'try']], ['code', ['build', 'verify']]]]]) {
+// The steps come from the bundled workflow.json, so a new step (for example formal) needs no test change.
+for (const name of ['bug', 'feature']) {
+  const areas = JSON.parse(readFileSync(join(packageRoot, `skills/pdd-${name}/workflow.json`), 'utf8')).areas.map(area => [area.name, area.steps]);
   test(`${name}: the bundled workflow runs story, PR 1 at the code-or-stop gate, then the code area and PR 2`, async t => {
     const f = await fixture(t, { name, agent: 'codex' });
     const report = 'https://checks.example.test/r/k3y-123';
     assert.equal((await f.run()).exitCode, 0);
     let run = f.record();
+    assert.deepEqual(areas.map(([area]) => area), ['story', 'prompt-pr', 'code']);
     assert.match(f.herdr.paneOf(run.chats[0]).commands[0], /^env PDD_AGENT_SESSION=1 codex --no-daemon --dangerously-bypass-approvals-and-sandbox -c 'projects=\{".+"=\{trust_level="trusted"\}\}' "\$\(cat '.+story-start\.md'\)"$/);
     for (const [index, [area, steps]] of areas.entries()) {
       assert.equal(f.record().area, index); assert.equal(f.record().chats.at(-1).area, area);
