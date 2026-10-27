@@ -18,7 +18,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.decide', 'workflow.run', 'workflow.resume', 'workflow.attach', 'workflow.feature', 'workflow.bug', 'workflow.small-change', 'session', 'help', 'version', 'skill', 'completion', 'workflow.list']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['--skill'], ['completion', 'bash'],
     ['completion', 'zsh'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -111,7 +111,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|phone|machine)\b/);
+    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|lint|machine)\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
@@ -120,6 +120,8 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
       const decisions=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow resume a1234567-1234-4123-8123-123456789abc --decision ""); COMP_CWORD=5; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
       assert.equal(decisions.status,0,decisions.stderr);assert.deepEqual(decisions.stdout.trim().split('\n').sort(),['approve','skip']);
+      const decide=spawnSync('bash',['--noprofile','--norc','-c','source "$1"; COMP_WORDS=(pdd workflow decide a1234567-1234-4123-8123-123456789abc --decision ""); COMP_CWORD=5; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"','test',script],{env,encoding:'utf8'});
+      assert.equal(decide.status,0,decide.stderr);assert.deepEqual(decide.stdout.trim().split('\n').sort(),['approve','changes','skip']);
     } else {
       const loaded = spawnSync('zsh', ['-f', '-c', 'autoload -Uz compinit; compinit -D -i || exit 1; source "$1"; [[ $_comps[pdd] == _pdd ]] || exit 3; _describe() { print -rl -- "${choices[@]}"; }; words=(pdd workflow ""); CURRENT=3; _pdd', 'test', script], { env, encoding: 'utf8' });
       assert.equal(loaded.status, 0, loaded.stderr); assert.ok(loaded.stdout.split('\n').includes('list'));
@@ -246,7 +248,7 @@ test('ALPHA7: run and resume dispatch structured owner API with exact existing p
     assert.equal(calls[0].ports.stdout,output);assert.equal(calls[0].ports.stderr,errors);assert.equal(calls[0].input.context,undefined);
     assert.equal(output.text,'waiting '+uuid+' approve\n');assert.equal(errors.text,'');
   }
-  for(const decision of [undefined,'approve','skip']){
+  for(const decision of [undefined]){
     const output=capture(),calls=[];
     const code=await runPdd(['workflow','resume',uuid,...(decision?['--decision',decision]:[])],{
       cwd:'/chosen',packageRoot:'/absent-guide',stdout:output,stderr:capture(),workflowRunner:{resumeWorkflow:async(input,ports)=>{

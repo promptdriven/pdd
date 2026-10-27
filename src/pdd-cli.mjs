@@ -1,4 +1,5 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3bd47f7c3f777a7d966352136c1eee6602d1ebcd03e09827473d5e3af170391d).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3ae1e4e9c9580fd7ffad8653e7395e3660e51435bd5192be8236de3b5fff9bac).
+import {randomUUID} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,11 @@ import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { formatLocalWorkflows } from './workflow-list.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+function validDecisionResult(value) {
+  return value&&['recorded','started','refused','uncertain','failed'].includes(value.state)
+    &&Number.isInteger(value.exitCode)&&value.exitCode>=0&&value.exitCode<=255
+    &&typeof value.message==='string'&&value.message.trim()&&!/[\r\n]/.test(value.message);
+}
 const line = (stream, text) => stream.write(`${text}\n`);
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
@@ -26,7 +32,7 @@ function guidanceError(stderr) {
   return 1;
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, nativeSession = launchNativeSession, workflowRunner, workflowDefinitions, workflowStages, workflowDecider, stdin = process.stdin, env = process.env, confirm, lookupPhone, clientAdapter } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -43,6 +49,20 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'skill':
       try { line(stdout, loadGuidance({ packageRoot, cwd }));return 0; }
       catch { return guidanceError(stderr); }
+    case 'workflow-decide': {
+      try {
+        const decider=workflowDecider??await import('./workflow-decide.mjs');
+        const stages=workflowStages??await import('./workflow-stage-herdr.mjs');
+        const json=plan.options['--json']===true;
+        const result=await decider.decideWorkflow({runId:plan.operands[0],decision:plan.options['--decision'],
+          decisionId:plan.options['--id'],expectStage:plan.options['--expect-stage'],expectSeq:Number(plan.options['--expect-seq']),
+          ...(plan.options['--text']!==undefined?{text:plan.options['--text']}:{}),yes:plan.options['--yes']===true,via:plan.options['--via'],phoneId:plan.options['--phone'],approval:plan.options['--approval'],cwd,packageRoot},
+          {...stages,loadGuidance,workflowRunner,stdin,env,confirm,lookupPhone,clientAdapter,stdout:json?stderr:stdout,stderr});
+        if(!validDecisionResult(result))throw Error('Invalid decision reply');
+        const {exitCode,...body}=result;
+        line(stdout,json?JSON.stringify({v:1,...body}):body.message);return exitCode;
+      } catch {line(stderr,'The decision could not be confirmed. Inspect the saved run before retrying.');return 1;}
+    }
     case 'workflow-run':
     case 'workflow-resume':
     case 'workflow-attach': {
@@ -52,6 +72,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const {runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage} = stages;
         if (![runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage].every(fn=>typeof fn==='function')) throw Error('Missing stage transport');
         const ports = {loadGuidance,launchNativeSession:nativeSession,runHerdrStage,inspectHerdrStage,attachHerdrStage,closeHerdrStage,stdout,stderr};
+        if(plan.local==='workflow-resume'&&plan.options['--decision']!==undefined) {
+          const gate=await runner.readWorkflowDecision({runId:plan.operands[0],cwd},ports);
+          if(gate.state!=='ready'){line(stdout,gate.message);return 1;}
+          const decider=workflowDecider??await import('./workflow-decide.mjs');
+          const decided=await decider.decideWorkflow({runId:plan.operands[0],decisionId:randomUUID(),decision:plan.options['--decision'],
+            expectStage:gate.stage,expectSeq:gate.journalSeq,cwd,packageRoot},{...ports,workflowRunner:runner,stdin,env,confirm});
+          if(!validDecisionResult(decided))throw Error('Invalid decision reply');
+          line(stdout,decided.message);return decided.exitCode;
+        }
         const result = plan.local === 'workflow-run'
           ? await runner.runWorkflow({name:plan.operands[0],issue:plan.operands[1],
             agent:plan.options['--agent']??'codex',cwd,packageRoot},ports)

@@ -42,3 +42,20 @@ The PDD controller remains foreground while issue stages use fresh native agents
 `workflow list [--json]` uses the authoritative definition loader. JSON returns `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated entries and source `project` or `bundled`. A complete valid project definition overrides the matching bundled name; an invalid override or unavailable loader refuses, without a legacy Markdown fallback. Listing is local discovery, not native/GitHub work. Bash/Zsh completion consumes this local listing as data, filters safe names and does not evaluate returned text.
 
 Completion prints shell text to stdout; it does not modify shell configuration. Save or source it using your own shell's usual setup. The local native session command loads the full guide and bundled manual workflow context before Stories using the installed agent. The package provides local commands only. Unsupported operations must remain unsupported, with no hosted-service fallback.
+
+For an authenticated phone subprocess, the installed private client entrypoint
+composes its signed-ledger adapter with the public CLI:
+
+```js
+const clientAdapter = createPhoneLookupAdapter({ home, linkDir, signal });
+process.exitCode = await runPdd(process.argv.slice(2), { clientAdapter });
+```
+
+`createPhoneLookupAdapter` belongs to the private client's fleet/phone-lookup
+module; it acquires and verifies installed ledger authority for each call. The
+public package does not import it or discover a key file. Its `lookupPhone`
+method supplies the final phoneId, removed, publicKeyJwk and state fields. The
+plain public bin refuses phone_ledger_unavailable when not composed with this
+adapter. Link passes the signed token unchanged using `workflow decide` with
+`--via phone --phone PHONE_ID --approval TOKEN --json` and the explicit run,
+decision id, expected stage and sequence. No key in the token is used.

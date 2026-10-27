@@ -13,3 +13,14 @@ Named workflow routes have the same session options/request text/literal -- beha
 workflow.run requires exactly a safe free workflow name and syntactic issue reference plus optional --agent. workflow.resume requires exactly UUIDv4 run ID plus optional --decision approve|skip, with omitted decision absent. Live issue/repo/journal/agent/decision eligibility belongs to runner. Reject unsafe names/unsupported issues/UUIDs/options/extras with2 before guidance/runner/native. Known run/resume help is local.
 
 workflow.run accepts exactly safe free NAME (lowercase letter followed by lowercase letters/digits and single hyphen-separated nonempty segments, max64) plus existing ISSUE and agent; do not reject a syntactically valid custom name based on bundled catalog. Definition existence/graph/content belongs solely to loader/main. workflow.attach takes exactly UUIDv4, no options or other operands; route/help admission has no backend effect.
+
+workflow.decide requires its decision, id, expected-stage and expected-seq options.
+Validate UUIDv4, safe stage, canonical positive decimal safe integer and changes
+text (1–4000 Unicode characters, controls except tab/newline refused); reject
+text on other decisions. yes/json are Boolean flags. Value options without a
+choices list accept exactly one non-option string, then their route validation
+applies. Missing, duplicate, unknown and malformed arguments refuse2 before I/O.
+
+Decide phone transport accepts exactly --via phone --phone PHONE_ID --approval
+TOKEN together; missing companions refuse before any runner call. Validation of
+signature, phone identity and ledger eligibility belongs to the verifier.

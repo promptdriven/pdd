@@ -16,3 +16,7 @@ For editable workflow execution, workflow.run NAME is a safe free workflow-name 
 ## Workflow runner help
 
 Describe workflow.run, workflow.resume and workflow.attach without preview labels. Keep their route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts.
+
+Add workflow.decide: `pdd workflow decide RUN_ID --decision approve|changes|skip
+[--text TEXT] --id UUID --expect-stage STAGE --expect-seq N [--yes] [--json]`.
+It is the shared bound person-decision seam. All other public routes are preserved.

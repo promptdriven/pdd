@@ -1,4 +1,5 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 5b7a57fa779d31954698591f5b9a92320012d925123d21a069b3c8c8f45ec9d8).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 8f1bb93263e01ae31a41d361048721d87658186acc6139832756b7b04ddd4241).
+import {validDecisionInput} from './workflow-decide.mjs';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -27,7 +28,7 @@ function parseRoute(route, words) {
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (typeof value !== 'string' || value.startsWith('--') || option.choices && !option.choices.includes(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -43,6 +44,9 @@ function parseRoute(route, words) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
+  if (route.local === 'workflow-decide' && (!/^[1-9][0-9]*$/.test(options['--expect-seq']??'')
+    || !validDecisionInput({runId:operands[0],decisionId:options['--id'],decision:options['--decision'],
+      expectStage:options['--expect-stage'],expectSeq:Number(options['--expect-seq']),text:options['--text'],via:options['--via'],phoneId:options['--phone'],approval:options['--approval']}))) fail();
   return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }

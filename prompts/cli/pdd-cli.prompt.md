@@ -26,3 +26,23 @@ workflow list delegates to authoritative listWorkflowDefinitions({cwd,packageRoo
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root, workflow group and exact workflow run/resume/attach help describe the commands without preview labels or a claim that real workflow PRs are unproven. Retain command syntax, the real push/PR side-effect warning, foreground controller/explicit resume and saved active attachment facts. Help is exit0/local, with no runner/native/loader/network/auth effects and no added refusal, gate, flag or success claim.
+
+workflow.decide calls the shared decide module with declared binding and normal
+runner/stage/guidance ports, plus stdin/env for person verification. It never
+provides a phone-authentication port from argv or environment. A JSON invocation
+prints exactly one v:1 result line without exitCode; send progress to stderr.
+Otherwise print the returned finite message. Preserve existing runner routes.
+
+Legacy `workflow resume RUN_ID --decision approve|skip` also resolves its current
+journal gate with `readWorkflowDecision` and enters decideWorkflow (new UUID),
+so a non-TTY/agent caller cannot bypass person evidence via the older spelling.
+Plain resume keeps its previous inspect/reconcile behavior. Phone decision input
+is forwarded as via,phoneId,approval; lookupPhone is trusted host composition,
+never a key or secret supplied through CLI argv.
+
+The private installed entrypoint can pass
+`clientAdapter:createPhoneLookupAdapter({home,linkDir,signal})` from mobile's
+signed-ledger adapter. Preserve its lookupPhone receiver when routing phone
+verification. An explicit lookupPhone port takes precedence; neither argv nor
+token chooses adapter paths, home or keys. The public package imports no private
+client; its uncomposed bin continues to refuse unavailable ledger authority.
