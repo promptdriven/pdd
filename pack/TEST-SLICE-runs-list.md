@@ -65,3 +65,10 @@ state=idle:app=codex
 ```
 
 The resumed process was observed as `codex ... resume 01a17aba-98bf-71b1-9ae3-9be6ee0f6811` while the TTY was live, then stopped with Ctrl-C without changing the worktree. Full captures are `/tmp/pdd-runs-real.ofPnAz/real-run-final.tty.log`, `runs-list.tty.log`, `runs-detail.tty.log`, and `reopen.tty.log`.
+
+The live process check (paths abbreviated) showed the same saved session id in both the Node launcher and native Codex child:
+
+```text
+node /opt/node/bin/codex ... resume 01a17aba-98bf-71b1-9ae3-9be6ee0f6811
+.../vendor/.../codex ... resume 01a17aba-98bf-71b1-9ae3-9be6ee0f6811
+```
