@@ -121,8 +121,10 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.equal(result.out.split('\n')[2], 'Runtime check: ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls');
-  assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
+  assert.deepEqual(result.out.split('\n').slice(2, 4), ['Runtime check (place-order): ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls',
+    'Runtime check: ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.equal(result.out.split('\n').filter(Boolean).slice(4, 7).join('\n').startsWith('REFUSED before sending'), true);
+  assert.equal(result.out.split('\n').filter(Boolean).slice(4, 7).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
   assert.match(result.out, /Warning: the AC1 check expects 899, but the AC1 text says 900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
@@ -390,4 +392,28 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
   const doc = readJson(join(repo, 'tests/place-order.json')); doc.steps[0].input.items[0].quantity = 0; writeJson(join(repo, 'tests/place-order.json'), doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.out.split('is named by 2 prompts').length, 2);
+});
+
+// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found" (Serhan's real test, 0.1.6).
+test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+  const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
+  mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
+  writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
+  writeFileSync(join(repo, 'tests/unit/board.json'), '{"name": "board"}\n');
+  writeFileSync(join(repo, 'package.json'), '{"name": "game"}\n');
+  writeFileSync(join(repo, 'prompts/board.prompt'), '# Board\n');
+  writeFileSync(join(repo, 'prompts/engine.prompt.md'), '# Engine\n\nNo interface here.\n');
+  git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  const result = await check(repo, home, [], {});
+  assert.equal(result.code, 2); assert.equal(result.out, '');
+  assert.deepEqual(result.err.trimEnd().split('\n'), [
+    'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
+    'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
+    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
+    'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
+  for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
+  const many = await check(repo, home, [], {});
+  const lines = many.err.trimEnd().split('\n');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
 });

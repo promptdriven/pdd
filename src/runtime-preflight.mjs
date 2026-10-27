@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: b99173373e690d69c5ca39f6f0af33f1cc6367ff0b815a2d2abb67a3ddbc4e0f).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7c060b38ac90fb24420e9b75408308cd52c2f69de52d09b83024cc23ca22ad0f).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -630,6 +630,21 @@ export function captureSource(root, { attempts = 3 } = {}) {
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+}
+
+// Why a repo has no tests (Serhan's real test, 0.1.6): foreign JSON under tests/, *.prompt names, prompts with no interface.
+export function whyNoTests(root, visible) {
+  const files = [...visible].sort(), why = [];
+  for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
+    let doc = null;
+    try { doc = JSON.parse(readText(root, path)); } catch { doc = null; }
+    if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
+  }
+  for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
+  for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
+    if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
+  }
+  return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
 // Source files named (in backticks) by more than one prompt: one warning line each (real-user cli issue 10).

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { exitCodeFor, validLink } from '../src/runtime-output.mjs';
@@ -45,7 +45,8 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   const json = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
   assert.deepEqual(json.json.warnings, []);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
-  assert.equal(result.out.split('\n')[3], 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls');
+  assert.deepEqual(result.out.split('\n').slice(3, 6), ['Runtime check (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
+    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
   assert.match(result.out, /^2 of 2 stories passed\. Model asked for: gpt-6\.1-sol\.$/m);
   assert.match(result.out, /^Reports \(anyone with a link can open it\):\n {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/[0-9a-f]+$/m);
   assert.doesNotMatch(result.out + result.err, new RegExp(checks[0].request.requestId));
@@ -313,7 +314,8 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
   });
   const text = await check(setup, fake, []);
   assert.equal(text.code, 1);
-  assert.equal(text.out.split('\n')[3], 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
+  assert.deepEqual(text.out.split('\n').slice(3, 6), ['Runtime check (place-order): ✗ 1 of 2 criteria · 1/2 checks · 1 AI call',
+    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
   assert.equal(json.json.summary_line, 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
   const refused = harbor(t, repo => {
@@ -545,4 +547,24 @@ test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the 
     ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'stale', admission_state: 'stale', interface: { calls: [] } }]) } : f.normal(entry));
   const none = await check(setup, refused, ['place-order']);
   assert.equal(none.code, 4); assert.doesNotMatch(none.err, /If pdd stops/);
+});
+
+// Wrong: many Stories in one run give one blended line, so the gate and PR 1 cannot say which Story failed (0.1.6).
+test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall line last, and summary_line on each --json row', async t => {
+  const setup = harbor(t, repo => cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-2.json')));
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const result = await check(setup, fake, []);
+  assert.equal(result.code, 0, result.err);
+  const lines = result.out.split('\n'), table = lines.findIndex(text => text.startsWith('Story '));
+  assert.deepEqual(lines.slice(table + 4, table + 7), ['Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls',
+    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls']);
+  const json = await check(setup, fake, [], { '--json': true });
+  assert.deepEqual(json.json.rows.map(row => [row.test, row.summary_line]), [
+    ['tests/place-order-2.json', 'Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/place-order.json', 'Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/unknown-item.json', 'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']]);
+  assert.equal(json.json.summary_line, 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
+  const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);
+  assert.ok(draft.out.split('\n').includes('Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
+  assert.ok(draft.out.split('\n').includes('Runtime check (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
 });

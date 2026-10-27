@@ -5,7 +5,7 @@ import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, rea
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, findTests, formatSize, gitFiles, otherFiles,
+import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
@@ -233,8 +233,11 @@ function storyList(found) {
   return found.tests.map(test => `  ${test.story}  ${test.path}${test.title && test.title !== test.story ? `  (${test.title})` : ''}`);
 }
 
-function select(found, words) {
-  if (!found.tests.length) throw new Stop(2, 'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".');
+function select(found, words, root) {
+  if (!found.tests.length) {
+    throw new Stop(2, ['No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
+      ...(root ? whyNoTests(root, found.visible) : [])].join('\n'));
+  }
   const { selected, unknown } = selectTests(found, words);
   if (unknown.length) throw new Stop(2, [`Unknown story ${unknown.map(word => `"${cleanText(word)}"`).join(', ')}. Stories with tests:`, ...storyList(found)].join('\n'));
   return selected;
@@ -578,7 +581,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
   context.timeoutMin = Number(options['--timeout'] ?? 10);
-  const selected = select(found, normalized);
+  const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
@@ -630,8 +633,8 @@ function appMapFor(found, given, cwd, root, stderr) {
   return rel;
 }
 
-function oneTest(found, words) {
-  const selected = select(found, words);
+function oneTest(found, words, root) {
+  const selected = select(found, words, root);
   if (selected.length !== 1) throw new Stop(2, ['pdd try needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
   return selected[0];
 }
@@ -692,7 +695,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
