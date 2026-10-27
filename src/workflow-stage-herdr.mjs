@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 0e98435dd2c4b92661601558d09484e0f13f72f3ea0d480f37dddd89b3a4d5d2).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: ead3a121e50be250f991f6f8ed47d67ff8a801195c86434e98f3933733f48032).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -77,6 +77,19 @@ async function command(rt, session, args, cwd, timeout = 10000) {
     throw commandError(result, args, 'invalid_herdr_reply');
   }
   return result;
+}
+async function firstPrompt(rt, session, agentName, prompt, cwd) {
+  const deadline = rt.now() + rt.startupMs;
+  for (;;) {
+    try { return await command(rt, session, ['agent', 'prompt', agentName, prompt], cwd); }
+    catch (error) {
+      // Herdr may acknowledge an agent before Codex has drawn its prompt.
+      // This explicit pre-delivery refusal is safe to retry against the same
+      // durable intent; other prompt failures remain one-send uncertainty.
+      if (error.code !== 'agent_not_ready' || rt.now() >= deadline) throw error;
+      await rt.sleep(rt.pollMs);
+    }
+  }
 }
 function preNative(b) {
   const allowed = new Set(['version','runId','stageId','attemptId','agent','cwd','session','agentName',
@@ -309,7 +322,7 @@ export async function runHerdrStage(input, ports = {}) {
       recordAgent(b, current);
       b.phase = 'prompt_intent';
       await save(b, input.checkpoint);
-      const delivered = await command(rt, b.session, ['agent', 'prompt', b.agentName, prompt], cwd);
+      const delivered = await firstPrompt(rt, b.session, b.agentName, prompt, cwd);
       const acknowledgement = await checkAgent(rt, b, agentFrom(delivered));
       recordAgent(b, acknowledgement);
       if (acknowledgement.agent_status === 'working' && acknowledgement.state_change_seq > b.evidence.readySeq) {

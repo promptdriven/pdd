@@ -50,7 +50,9 @@ function harness(cwd, options = {}) {
       if (a[0] === 'agent' && a[1] === 'prompt') {
         assert.equal(checkpoints.at(-1).phase,'prompt_intent');assert.ok(checkpoints.at(-1).promptDigest);
         assert.ok(a[3].startsWith('# Entire guide\n'));assert.ok(a[3].includes('Actual selected recipe'));assert.ok(a[3].includes('literal $(not shell)'));
-        assert.equal(a.length,4);assert.equal(prompted,false);prompted=true;
+        assert.equal(a.length,4);assert.equal(prompted,false);
+        if (options.promptNotReady && !options.promptRetried) { options.promptRetried=true; throw Object.assign(Error('agent still starting'),{code:'agent_not_ready'}); }
+        prompted=true;
         if (options.lostReply) throw Object.assign(Error('reply lost'),{code:'ETIMEDOUT'});
         return encode({result:{agent:agent()}});
       }
@@ -92,6 +94,11 @@ test('fresh owned stage checkpoints actual IDs before one full prompt, observes 
   assert.equal(denied.state,'recovery_required');assert.equal(h.closed(),false);
   const released=await closeHerdrStage({backend:result.backend,acceptance:acceptance(result.backend),}, {...h.ports,checkpoint:h.input.checkpoint});
   assert.equal(released.state,'closed');assert.equal(h.closed(),true);assert.equal(released.backend.nativeSession.value,'native-real');
+});
+
+test('pre-delivery agent_not_ready retries the same prompt intent once native startup is ready',async t=>{
+  const h=harness(await temp(t),{promptNotReady:true});const result=await runHerdrStage(h.input,h.ports);
+  assert.equal(result.state,'settled',result.reason);assert.equal(h.promptCount(),2);
 });
 
 test('reply loss retains original prompt intent; same attempt/repeated inspection never resends',async t=>{
