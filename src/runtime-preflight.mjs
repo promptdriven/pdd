@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7c060b38ac90fb24420e9b75408308cd52c2f69de52d09b83024cc23ca22ad0f).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 81c9f1841074b51b0fc8f738a6179eabc775e4e6cf6ff1e2512dbdaad2ac1feb).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -97,8 +97,10 @@ export function findTests({ root, files = gitFiles(root) }) {
       let doc;
       try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
       if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
-    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories')) {
-      stories.push({ path, name: storyName(path), title: titleOf(readText(root, path)) });
+    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
+      // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
+      const text = readText(root, path);
+      if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
   for (const test of tests) {

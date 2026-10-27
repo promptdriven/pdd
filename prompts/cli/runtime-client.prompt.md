@@ -17,7 +17,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 
 ## `pdd check`
 
-Modes: `--fill-hash` and `--files` take no other option or STORY and make no network call. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` and `--files` take no other option or STORY and make no network call. `--local [STORY...] [--json]` runs discovery, preflight (P1-P10, the schema rules, the hash check) and the capture limits, prints the table, the same `REFUSED before sending` lines and the warnings, and ends with `Local check: N of M tests are ready to send (F files, S). Nothing was sent.`; it sends nothing and needs no sign-in; exit 0 when every test is ready, 4 on a refusal (so agents never import pdd's source for a local lint). `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 Order:
 1. [Preflight](runtime-preflight.prompt.md), capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A = for each step, 1 plus the `max_calls` of the calls its entry prompt declares; M = the sum of the tests' `max_calls` (cli 12b).

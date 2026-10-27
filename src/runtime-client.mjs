@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4f44f1b80832861ce3576e5fbecf8c93daf5f0df1a9d43b8f8c3aca3a4a28f4a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 10b4eaecc3bcbec0249d68ebf348249ffa097cc600cbd042b7819bdf260bc3d3).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderLocal, renderText, summaryLine, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -492,6 +492,19 @@ function runFiles(root, ports) {
   return 0;
 }
 
+// pdd check --local: discovery, preflight (P1-P10, schema rules, hashes) and the capture limits; nothing is sent (2048 session).
+function runLocal(context, cwd, words) {
+  const { ports } = context, { root, found, normalized } = localSetup(cwd, words);
+  const checked = preflight({ root, found, selected: select(found, normalized, root) });
+  const rows = localRows(checked.rows);
+  const warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
+  const capture = rows.some(row => row.state === 'ready') ? captureSource(root) : null;
+  const exitCode = rows.some(row => row.state === 'refused') ? 4 : 0;
+  if (context.json) line(ports.stdout, JSON.stringify(renderJson({ repo: root, rows, warnings, exitCode })));
+  else ports.stdout.write(renderLocal({ rows, warnings, capture }));
+  return exitCode;
+}
+
 function runFillHash(root, ports) {
   const result = fillHashes({ root });
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
@@ -564,14 +577,15 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
-    const modes = ['--read', '--fill-hash', '--files', '--request'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request'].includes(modes[0])));
+    const modes = ['--read', '--fill-hash', '--files', '--request', '--local'].filter(name => options[name] !== undefined);
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--local'].includes(modes[0])));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
     if (modes[0] === '--files') return runFiles(root, ports);
+    if (modes[0] === '--local') return runLocal(context, cwd, words);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
     return await runBatch(context, cwd, words, options, value => { release = value; });
