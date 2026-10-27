@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 0eee98f339cf7498e45105e49ce16288ee07672e0f2a52f82f0ae47e0d777ea0).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 55bc4e3841987408121a7b39dbded4b82b392bd0d78c15399dc8f0bdcca2bdb0).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -31,11 +31,7 @@ function claimLock(directory) {
 }
 export async function withHerdrLayoutLock(action, ports = {}) {
   const directory=directoryFor(ports);await ensureDirectory(directory);
-  const deadline=Date.now()+30000;
-  while(!claimLock(directory)) {
-    if(Date.now()>=deadline)throw problem('herdr_layout_busy');
-    await new Promise(r=>setTimeout(r,25));
-  }
+  if(!claimLock(directory))throw problem('herdr_layout_busy');
   try {return await action();} finally {unlinkSync(join(directory,'lock'));}
 }
 async function readRegistry(directory) {

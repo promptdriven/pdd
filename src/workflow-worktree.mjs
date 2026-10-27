@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 9b942984bd903fa6958b3785c462b619b56c01f2cae6357341d642af9b383abc).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 797a2fb446d42842b970709095332705bdaba3246625e94c8b13bb8ccb61c9cb).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -19,7 +19,7 @@ const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 function commands(ports) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
-    { cwd, encoding: 'utf8', shell: false, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }));
+    { cwd, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
   async function raw(cwd, args) {
     let response;
     try { response = await run('git', args, { cwd }); }

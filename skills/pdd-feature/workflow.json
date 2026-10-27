@@ -1,0 +1,4 @@
+{"version":2,"areas":[
+{"name":"solution","steps":["understand","visual"],"optional":["visual"],"gate":"approve"},
+{"name":"story","steps":["prompt-story","check","try"],"optional":["try"],"gate":"approve"},
+{"name":"build","steps":["build","verify"],"optional":[],"gate":"pr"}]}
