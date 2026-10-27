@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e73a8a654a618dad3e91e196333322ec66fc060175223c7667ed85d3e81d7a71).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 47ad74d55342c3ca7dce061d2c7780bf4186532501e33bfba7bd85f7bfced3f1).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -269,8 +269,9 @@ function addHints(row, root, visible) {
     const prompt = readPrompt(root, visible, step.entry_path);
     if (item.code === 'invalid-input') {
       const entry = prompt.interface?.entries?.find?.(candidate => candidate?.operation === step.operation);
-      const local = entry ? checkInput(step.input, entry.input_schema, index) : null;
-      if (local?.message) item.hint = local.message;
+      const local = entry ? checkInput(step.input, entry.input_schema, index).refusals : [];
+      const match = local.find(problem => problem.section === item.section) ?? local[0];
+      if (match) item.hint = match.message;
     } else if (item.code === 'interface-unapproved' && (row.draft || prompt.interface?.status === 'draft')) {
       item.message = DRAFT_SERVER_TEXT;
     } else if (item.code === 'interface-stale' && prompt.interface) item.hint = staleHint;
@@ -574,10 +575,27 @@ async function runBatch(context, cwd, words, options, setRelease) {
 // ---- pdd try ----
 
 // The app map for the Screen tab: --app-map, else app-map.json at the root, else app/app-map.json.
-function appMapFor(found, given, cwd, root) {
-  if (given === undefined) return ['app-map.json', 'app/app-map.json'].find(path => found.visible.has(path)) ?? null;
+// An app map is a Git-visible JSON object with schema_version prompt-runtime.app-map.v1 and a name (the engine's first checks).
+const APP_MAP_VERSION = 'prompt-runtime.app-map.v1';
+function appMapProblem(root, path) {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(root, path), 'utf8')); } catch { return 'it is not JSON'; }
+  if (!isObject(doc) || doc.schema_version !== APP_MAP_VERSION) return `its schema_version is not "${APP_MAP_VERSION}"`;
+  if (typeof doc.name !== 'string' || !doc.name) return 'it has no "name"';
+  return null;
+}
+
+function appMapFor(found, given, cwd, root, stderr) {
+  if (given === undefined) {
+    const path = ['app-map.json', 'app/app-map.json'].find(candidate => found.visible.has(candidate));
+    const problem = path ? appMapProblem(root, path) : null;
+    if (problem) line(stderr, `${path} is not an app map (${problem}), so pdd sends no app map.`);
+    return path && !problem ? path : null;
+  }
   const rel = relative(realpathSync(root), resolve(realpathSync(cwd), given)).split(sep).join('/');
   if (!found.visible.has(rel)) throw new Stop(2, `--app-map ${cleanText(given)} is not a Git-visible file in this repository.`);
+  const problem = appMapProblem(root, rel);
+  if (problem) throw new Stop(2, `--app-map ${cleanText(given)} is not an app map: ${problem}. An app map is a JSON file with "schema_version": "${APP_MAP_VERSION}".`);
   return rel;
 }
 
@@ -639,7 +657,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    const appMap = options['--stop'] ? null : appMapFor(found, options['--app-map'], cwd, root);
+    const appMap = options['--stop'] ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
     if (options['--stop']) {
@@ -668,8 +686,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
-      const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused'].includes(answer?.state)
-        || (answer?.state === 'passed' && ['stopped', 'stopping'].includes(answer.result?.session?.state));
+      // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
+      const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
+        || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
+      if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
+        throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
+      }
       if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
@@ -701,8 +723,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS);
     const link = tryLink(done.answer, origin);
     if (link) return await showTry(context, test, link, options, request.requestId);
-    if (done.unknownWhy || done.open || !done.answer || done.answer.state === 'unknown') {
-      throw new Stop(3, `The Try setup is not finished or its result is unknown. Run pdd try ${test.story} again later; it reuses a running Try.`);
+    if (done.answer?.state === 'unknown') {
+      delete repoState.tries[test.path];
+      store.saveRepo(root, repoState);
+      throw new Stop(3, `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd try ${test.story} to make a new Try.`);
+    }
+    if (done.unknownWhy || done.open || !done.answer) {
+      throw new Stop(3, `The Try setup is not finished yet. Run pdd try ${test.story} again later; it reads this Try first and makes no second one.`);
     }
     // A ready Try with a bad link stays recorded, so pdd try --stop can still end it; pdd never prints that link.
     if (done.answer.state === 'passed' && LIVE_SESSION.has(done.answer.result?.session?.state)) throw new Stop(3, refusedLink(done.answer, origin));
@@ -779,9 +806,11 @@ function appendStep(text, doc, step) {
   const want = { ...doc, steps: [...doc.steps, step] }, range = stepsArray(text);
   if (range) {
     const [start, end] = range, close = end - 1, before = text.slice(start + 1, close).trimEnd();
-    const lineStart = text.lastIndexOf('\n', close) + 1, indent = (/^[ \t]*/.exec(text.slice(lineStart))[0]) + '  ';
-    const body = JSON.stringify(step, null, 2).replace(/\n/g, `\n${indent}`);
-    const next = `${text.slice(0, start + 1)}${before}${before ? ',' : ''}\n${indent}${body}\n${text.slice(lineStart, close)}${text.slice(close)}`;
+    const lineStart = text.lastIndexOf('\n', close) + 1, closing = text.slice(lineStart, close);
+    // A "]" on its own line gets an indented step; a one-line array gets a one-line step.
+    const next = /^[ \t]*$/.test(closing)
+      ? `${text.slice(0, start + 1)}${before}${before ? ',' : ''}\n${closing}  ${JSON.stringify(step, null, 2).replace(/\n/g, `\n${closing}  `)}\n${closing}${text.slice(close)}`
+      : `${text.slice(0, start + 1)}${before}${before ? ', ' : ''}${JSON.stringify(step)}${text.slice(close)}`;
     try { if (isDeepStrictEqual(JSON.parse(next), want)) return next; } catch { /* fall back */ }
   }
   return `${JSON.stringify(want, null, 2)}\n`;
