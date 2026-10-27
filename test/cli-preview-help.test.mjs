@@ -32,13 +32,14 @@ test('launch help is local and preserves execution warnings for root and exact r
 
 test('actual public bin launch help works offline in empty consumer folder; unrelated invalid input remains finite',t=>{
  const cwd=mkdtempSync(join(tmpdir(),'pdd-preview-help-'));t.after(()=>rmSync(cwd,{recursive:true,force:true}));
+ const home=mkdtempSync(join(tmpdir(),'pdd-preview-home-'));t.after(()=>rmSync(home,{recursive:true,force:true}));
  const before=readdirSync(cwd);
  for(const words of [['--help'],['workflow','run','--help'],['workflow','resume','--help'],['workflow','attach','--help']]){
-  const result=spawnSync(process.execPath,[bin,...words],{cwd,env:{...process.env,HOME:cwd,PATH:''},encoding:'utf8',timeout:5000});
+  const result=spawnSync(process.execPath,[bin,...words],{cwd,env:{...process.env,HOME:home,PATH:''},encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stderr);assert.equal(result.stderr,'');assert.doesNotMatch(result.stdout,/PREVIEW|real workflow PR is not yet proven/);
   assert.equal(result.stdout.split('\n')[0],'PDD: prompt-driven development for your coding agent.');
  }
- const unknown=spawnSync(process.execPath,[bin,'not-a-command','--help'],{cwd,env:{...process.env,HOME:cwd,PATH:''},encoding:'utf8',timeout:5000});
+ const unknown=spawnSync(process.execPath,[bin,'not-a-command','--help'],{cwd,env:{...process.env,HOME:home,PATH:''},encoding:'utf8',timeout:5000});
  assert.equal(unknown.status,2);assert.equal(unknown.stdout,'');assert.match(unknown.stderr,/unsupported|unknown/i);
  assert.deepEqual(readdirSync(cwd),before);
 });

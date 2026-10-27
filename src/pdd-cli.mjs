@@ -1,9 +1,10 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d32cb11ce18ae710bb5bdd0e818317e5e61ed2d8ebaf26e973349bb6e3696b84).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8e5349a532faa8fcf0de227c1c86f76551eb7608fdc6acdcc5ab83c6cc72bb23).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadGuidance } from './guidance.mjs';
 import { launchNativeSession } from './native-session.mjs';
+import { renderSessionIntro } from './session-intro.mjs';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
@@ -81,11 +82,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } finally { if (progress) signalSource.off('SIGINT', interrupted); }
     }
     case 'session': {
-      let context;
-      try { context = loadGuidance({ packageRoot, cwd, workflows: true, workflowName: plan.workflowName }); }
-      catch { return guidanceError(stderr); }
-      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, context,
-        request: plan.operands.join(' '), stderr });
+      let message;
+      try { message = renderSessionIntro({ packageRoot, cwd, request: plan.operands.join(' '), workflowName: plan.workflowName }); }
+      catch { line(stderr, 'The PDD skills could not be read. Use a complete PDD package.');return 1; }
+      return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, message, stderr });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':

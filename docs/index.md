@@ -1,6 +1,6 @@
 # PDD Alpha documentation
 
-Start with the [README](../README.md). Before any Story or prompt authoring, have the actual agent conversation read the entire [Prompting guide](prompting-guide.md) and [PDD skill](../skills/pdd/SKILL.md).
+Start with the [README](../README.md). Before any Story or prompt authoring, have the actual agent conversation read the entire [Prompting guide](prompting-guide.md). The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) tells the agent to do this.
 
 - [Usage guide](USAGE.md): install from the `alpha` branch, sessions, workflow runs, approvals, known limits and troubleshooting.
 - [Local setup](setup.md): source and Node prerequisites.
@@ -10,4 +10,4 @@ Start with the [README](../README.md). Before any Story or prompt authoring, hav
 - [Evidence and checks](checks.md): what the results prove.
 - [Complete ticket-status example](../examples/ticket-status/README.md): prompt, Story, independent cases, implementation and native tests.
 
-The guide is canonical at `docs/prompting-guide.md`. Keep it complete and maintain links to that one file; do not ship a divergent guide inside the skill.
+The guide is canonical at `docs/prompting-guide.md`. Keep it complete and maintain links to that one file. `skills/pdd-prompting/guide.md` is a byte-for-byte copy for the skill; a test fails when the two differ, so copy the guide after each edit.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5e5d9ec77b120c7c35ae2a1eb82a29c8bd69cb2e6195c28b4f44c59dd0fba12c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: ba5306e0e576eab8288a78489d8af99164dd027b8f19b70ce3efaf2488d8f118).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -15,10 +15,10 @@ const routes = [
   ...BUNDLED_WORKFLOW_NAMES.map(name => ({ id: `workflow.${name}`, prefix: ['workflow', name], local: 'session', workflowName: name,
     operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],
-    forms: [form(`pdd workflow ${name} [--agent codex|claude] [request text]`, `Open a native conversation following the bundled ${name} recipe; default codex.`)] })),
+    forms: [form(`pdd workflow ${name} [--agent codex|claude] [request text]`, `Open your coding agent with the short PDD intro and the pdd-${name} skill; default codex.`)] })),
   { id: 'session', prefix: ['session'], local: 'session', operands: [{ name: 'request', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--agent', kind: 'value', choices: ['codex', 'claude'] }],
-    forms: [form('pdd session [--agent codex|claude] [request text]', 'Open an installed native agent with the full guide and manual recipes; default codex.')] },
+    forms: [form('pdd session [--agent codex|claude] [request text]', 'Open your coding agent with the short PDD intro; it loads the PDD skills when needed. Default codex.')] },
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
     form('pdd', 'Show local alpha commands.'), form('pdd --help', 'Show local alpha commands.'),
     form('pdd -h', 'Show local alpha commands.'), form('pdd help', 'Show local alpha commands.') ] },

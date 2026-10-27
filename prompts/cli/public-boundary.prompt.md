@@ -10,6 +10,8 @@ Keep one catalog authoritative for help/parser/completion. Parse before local re
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Source files implement these contracts; tests exercise observable behavior from the actual packed package.
 
-Named workflow shortcuts select exactly one bundled manual recipe and use the same ordinary native launcher. This is one conversation, not a managed or stage-separated runner, and no PR effect is automatic. Existing session still loads all bundled recipes.
+Named workflow shortcuts start the same short session intro and name the one matching workflow skill. This is one conversation, not a managed or stage-separated runner, and no PR effect is automatic. Session and shortcuts paste no guide, skill or recipe text: the agent loads the skills on demand.
+
+The package ships four skills in `skills/` (pdd-prompting, pdd-small-change, pdd-bug, pdd-feature). Each pdd command first keeps the person's home copies current through [skills install](skills-install.prompt.md): it writes only to `~/.agents/skills/` and `~/.claude/skills/`, never to the person's repo, and an install failure never stops the command.
 
 Workflow execution uses `pdd workflow run NAME ISSUE [--agent codex|claude]` and `pdd workflow resume RUN_ID [--decision approve|skip]`. DISTINCT local runner owns durable journals, saved agent/identity, human choices, handoff/test completion and real GitHub PR effects. CLI parses/dispatches and supplies existing guidance/native ports, never duplicates that policy. Resume without decision is inspect/reconcile/wait only. No status command, user-supplied native-argument passthrough, hosted engine or auth/provider gate. Direct shortcuts are one-conversation companions, not the runner.
