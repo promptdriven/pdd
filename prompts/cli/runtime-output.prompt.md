@@ -1,0 +1,46 @@
+# Runtime output
+
+Own `src/runtime-output.mjs`. It turns `pdd check` rows into the terminal table, the `--json` object and the exit code. It makes no call and writes no file.
+
+## Rows
+
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+
+- From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals`; calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
+- Seconds are rounded to 0.1.
+- Clean all server text: remove control characters, the token and server paths (`/home/…`, `/srv/…`, `/var/…`, `/tmp/…` and similar).
+
+## Exit code
+
+The first match from the top wins:
+
+| Code | When |
+|---|---|
+| 3 | A row is unknown, queued or running, the lint result is unknown, or Ctrl-C |
+| 5 | A row was not run (sign-in, gate, server busy at the timeout, no AI room) |
+| 4 | A row was refused (local preflight, lint or engine) |
+| 1 | A row failed |
+| 0 | All passed |
+
+## Text (stdout)
+
+1. Exit 3: the first line is `pdd check --read <batch>`.
+2. The table: `Story`, `Test`, `Result`, `Checks`, `Time`. Story = the story title. Result `not run` for `not_run`. Checks `n/m` or `-`. Time `21.0 s` or `-`.
+3. A block for each problem row, failed rows first:
+   - `FAILED  <title> (<test>)`, one line for each failed check `  AC1  result /totalCents  expected 899, got 900`, the row warnings, then `  Report: <url>   Next: show the person this check. Do not change the expected value yourself.`
+   - `REFUSED before sending (not sent, 0 AI calls)`, then for each row `  <test>  step N  <code>` and the message and hint lines.
+   - `REFUSED  <title> (<test>)`, then `  <code>  <section>  <message>`, the engine message when it adds detail, and the `pdd:` hint.
+   - `NOT RUN  <title> (<test>): <message> (<code>)`.
+   - `STILL RUNNING after N min: <title>. Do not send it again.`
+   - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.
+4. With `--details`: every check of each row, failed checks first.
+5. `Runtime check: X of Y stories passed. AI calls: N. Model asked for: M.` (skip the model part when it is not known).
+6. `Reports (anyone with a link can open it):` and one `  <story>  <url>` line for each row with a link.
+
+## JSON (stdout, `--json`)
+
+One object: `{batch, repo, exit_code, rows: [{story, title, test, state, checks, failed_checks, refusals, calls, seconds, requested_model, report_url, request_id}], warnings}`. Nothing else goes to stdout.
+
+## Dependencies
+
+Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.

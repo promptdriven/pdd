@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5a638c30bbb9fa1086857afaca3bd1f631e3196d62d0d9e05b698a31e848a63e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: c93eac4d3fa545a618c362573b8176058b87175232a016b5d006df2a338a4047).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -28,6 +28,19 @@ const routes = [
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd workflow list [--json]', 'List validated project and bundled workflow definitions.')] },
+  { id: 'check', prefix: ['check'], local: 'runtime-check', operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
+    options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
+      { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--fill-hash', kind: 'flag' },
+      { name: '--files', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
+    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends your Git files, then prints one table with report links.'),
+      form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
+      form('pdd check --files', 'List the files a check would send; no network.')] },
+  { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
+    options: [{ name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
+      { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }],
+    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--new] [--no-open]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours.'),
+      form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), operands: Object.freeze(route.operands.map(Object.freeze)),

@@ -16,3 +16,7 @@ For editable workflow execution, workflow.run NAME is a safe free workflow-name 
 ## Workflow runner help
 
 Describe workflow.run, workflow.resume and workflow.attach without preview labels. Keep their route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts.
+
+## Runtime routes
+
+Catalog `check` (local `runtime-check`) with the forms `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]`, `pdd check --read [BATCH] [--json]`, `pdd check --fill-hash` and `pdd check --files`, and `try` (local `runtime-try`) with the forms `pdd try [STORY] [--tab call|screen|terminal|world] [--new] [--no-open]` and `pdd try --stop [STORY]`. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and `--max-calls` from 1 to 100. `--request` (kind `uuid`) is hidden: no help form and no completion show it. These two routes are the one exception to the no-hosted-operation rule above: they call the PDD runtime through the [runtime client](runtime-client.prompt.md), and their help says that they use the person's gh login.

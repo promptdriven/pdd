@@ -15,3 +15,7 @@ Named workflow shortcuts start the same short session intro and name the one mat
 The package ships four skills in `skills/` (pdd-prompting, pdd-small-change, pdd-bug, pdd-feature). Each pdd command first keeps the person's home copies current through [skills install](skills-install.prompt.md): it writes only to `~/.agents/skills/`, `~/.claude/skills/` and, when set, `$CLAUDE_CONFIG_DIR/skills/`, never to the person's repo, and an install failure never stops the command.
 
 Workflow execution uses `pdd workflow run NAME ISSUE [--agent codex|claude]` and `pdd workflow resume RUN_ID [--decision approve|skip]`. DISTINCT local runner owns durable journals, saved agent/identity, human choices, handoff/test completion and real GitHub PR effects. CLI parses/dispatches and supplies existing guidance/native ports, never duplicates that policy. Resume without decision is inspect/reconcile/wait only. No status command, user-supplied native-argument passthrough, hosted engine or auth/provider gate. Direct shortcuts are one-conversation companions, not the runner.
+
+## PDD runtime
+
+This is the one exception to the no-service rules above. Only `pdd check` and `pdd try` call the PDD runtime, with the user's gh token ([runtime client](runtime-client.prompt.md)). The token comes from `gh auth token` and stays in memory: never in files, logs, argv, URLs or error text. They send the repo's Git-visible files (with secret names refused) and keep run state outside the repo. No other command calls a hosted service or reads a token.

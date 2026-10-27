@@ -1,0 +1,143 @@
+[
+ {
+  "source": "# Story\n\n## Acceptance Criteria\n\n1. A record is saved\n2. The record can be read\n",
+  "expected": [
+   "A record is saved",
+   "The record can be read"
+  ]
+ },
+ {
+  "source": "# Story\n\n## Acceptance\n1. A record is saved\n2. The record can be read\n",
+  "expected": [
+   "A record is saved",
+   "The record can be read"
+  ]
+ },
+ {
+  "source": "# Story\n\n## Acceptance criteria\n1. A record is saved\n2. The record can be read\n",
+  "expected": [
+   "A record is saved",
+   "The record can be read"
+  ]
+ },
+ {
+  "source": "# Story\n\n\n1. A record is saved\n2. The record can be read\n",
+  "expected": [
+   "A record is saved",
+   "The record can be read"
+  ]
+ },
+ {
+  "source": "# Story\n\n## Acceptance criteria\n1. A record is saved\n\n## Mapping\nSources are not criteria.\n\n2. The record can be read\n",
+  "expected": [
+   "A record is saved",
+   "The record can be read"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance Criteria\n1. Return Ada é雪.\n",
+  "expected": [
+   "Return Ada é雪."
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n1. Return Ada,\n   then inspect it.\n2) Keep the view.\n",
+  "expected": [
+   "Return Ada, then inspect it.",
+   "Keep the view."
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n- First bullet\n- Second bullet\n  continues here\n* Third\n\n## Notes\n- not a criterion\n",
+  "expected": [
+   "First bullet",
+   "Second bullet continues here",
+   "Third"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\nNo list here.\n",
+  "expected": []
+ },
+ {
+  "source": "# Story\nIntro 3. not first\n2. skipped\n1. First\n2. Second\n4. Stops\n",
+  "expected": [
+   "First",
+   "Second"
+  ]
+ },
+ {
+  "source": "# Story\n## acceptance CRITERIA   \n1. Upper heading\n",
+  "expected": [
+   "Upper heading"
+  ]
+ },
+ {
+  "source": "## Acceptance criteria\r\n1. Windows line\r\n2. Second\r\n",
+  "expected": [
+   "Windows line",
+   "Second"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n1. One\n# heading ends\n2. Two\n",
+  "expected": [
+   "One",
+   "Two"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n1.   Spaces   inside   kept\n2.\tTab start\n",
+  "expected": [
+   "Spaces   inside   kept",
+   "Tab start"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n1.No space\n1. Real\n",
+  "expected": [
+   "Real"
+  ]
+ },
+ {
+  "source": "",
+  "expected": []
+ },
+ {
+  "source": "# Story\n## Acceptance criteria\n-   spaced   bullet\twith\ttabs\n-\n- last",
+  "expected": [
+   "spaced bullet with tabs -",
+   "last"
+  ]
+ },
+ {
+  "source": "Text\n1. A\n2. B\n\n3. C\n",
+  "expected": [
+   "A",
+   "B",
+   "C"
+  ]
+ },
+ {
+  "source": "## Acceptance criteria\n10. ten\n1. one\n",
+  "expected": [
+   "one"
+  ]
+ },
+ {
+  "source": "# Story\n## Acceptance Criteria\n1. Line one still one\n2. two\u000bvt\n3. threenel\n",
+  "expected": [
+   "Line one still one",
+   "two vt",
+   "three nel"
+  ]
+ },
+ {
+  "source": "# S\n## Acceptance criteria\n\n- a\n\n  - nested\n- b\n",
+  "expected": [
+   "a",
+   "nested",
+   "b"
+  ]
+ }
+]

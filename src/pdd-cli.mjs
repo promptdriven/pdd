@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 700be60d929f819f98d89df578f85028f74525cc432f6bdf132ce91a6686e651).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c20a70633ff3f2de70b671f18152c340d04e558d6a2bcca2c987eb48755771ab).
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +79,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       catch { line(stderr, 'The PDD skills could not be read. Use a complete PDD package.');return 1; }
       return nativeSession({ agent: plan.options['--agent'] ?? 'codex', cwd, message, stderr });
     }
+    case 'runtime-check':
+    case 'runtime-try':
+      try {
+        const runtime = await import('./runtime-client.mjs');
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr });
+      } catch {
+        line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
+        return 3;
+      }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
       try {

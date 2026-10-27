@@ -34,3 +34,7 @@ While run/resume is active, handle SIGINT by printing the renderer's truthful in
 For resume, retain the already parsed UUID in the progress renderer before lookup so an early interruption can still name the exact saved-run commands. This is display state only; do not pass a generated run ID into runWorkflow.
 
 Supply closeHerdrRun from the stage adapter to the workflow runner so terminal runs can close their owned Herdr worktree workspace.
+
+## Runtime commands
+
+For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout and stderr. Return its exit code unchanged. Help for check and try stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.` to stderr and return 3, because checks may have been sent.

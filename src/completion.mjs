@@ -1,4 +1,4 @@
-// Generated from prompts/cli/completion.prompt.md (sha256: 511589c533b6eac84678e7582113b0960102d51307880a804291952d9578ed6a).
+// Generated from prompts/cli/completion.prompt.md (sha256: 5dffa2d5f990a5b7114605e473f640fff8e5b5330d1118f8ff3c54b672b9a937).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {
@@ -11,7 +11,8 @@ function candidateMaps() {
   const second = new Map();
   const third = new Map();
   const fourth = new Map();
-  for (const route of PUBLIC_COMMAND_ROUTES) {
+  for (const { options, ...rest } of PUBLIC_COMMAND_ROUTES) {
+    const route = { ...rest, options: options.filter(option => !option.hidden) };
     if (route.prefix[0]) first.add(route.prefix[0]);
     if (route.prefix.length > 1) add(second, route.prefix[0], route.prefix[1]);
     else {
