@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-run-records.prompt.md (sha256: 8f41eeba1d4b9e8b0caf1495ff2c40595e9c26808fa5dccd8f0413f8023ec2ac).
+// Generated from prompts/cli/workflow-run-records.prompt.md (sha256: fa8f8beb87f69ed5684e748dda9beb7891181973ea0ee61cf4bba99fdec4987f).
 import { promises as fs } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
@@ -131,11 +131,15 @@ const toEpoch = value => {
   if (typeof value !== 'string' || !value.trim()) return null;
   const parsed = Date.parse(value); return Number.isFinite(parsed) ? parsed : null;
 };
-function sessionMeta(text) {
+function sessionMeta(text, agent) {
   for (const line of text.split(/\r?\n/, 8)) {
     if (!line) continue;
     try {
       const row = JSON.parse(line), payload = row?.payload ?? row;
+      if (agent === 'claude' && ['user','assistant'].includes(row.type) && row.isSidechain !== true) {
+        const timestamp = toEpoch(row.timestamp);
+        if (sessionId.test(row.sessionId ?? '') && typeof row.cwd === 'string' && Number.isFinite(timestamp)) return {id:row.sessionId,cwd:row.cwd,timestamp};
+      }
       const meta = row?.session_meta ?? payload?.session_meta ?? payload;
       if (row?.type !== 'session_meta' && payload?.type !== 'session_meta' && !row?.session_meta && !payload?.session_meta) continue;
       const id = meta.id ?? meta.session_id, cwd = meta.cwd, timestamp = toEpoch(meta.timestamp ?? payload.timestamp ?? row.timestamp);
@@ -147,7 +151,7 @@ function sessionMeta(text) {
 async function sessionFiles(stage, ports = {}) {
   const io = fsOf(ports), home = ports.home ?? process.env.HOME ?? homedir();
   const root = stage.agent === 'codex' ? join(ports.codexHome ?? process.env.CODEX_HOME ?? join(home, '.codex'), 'sessions')
-    : join(ports.claudeHome ?? home, '.claude', 'projects', stage.root.replaceAll('/', '-'));
+    : join(ports.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(ports.claudeHome ?? home, '.claude'), 'projects', stage.root.replace(/[^a-zA-Z0-9]/g, '-'));
   const found = [];
   async function walk(dir, depth = 0) {
     if (depth > 20) return;
@@ -155,14 +159,14 @@ async function sessionFiles(stage, ports = {}) {
     for (const row of rows) {
       if (row.isSymbolicLink?.()) continue;
       const path = join(dir, row.name);
-      if (row.isDirectory?.()) await walk(path, depth + 1);
+      if (row.isDirectory?.() && stage.agent === 'codex') await walk(path, depth + 1);
       else if (row.isFile?.() && (stage.agent === 'codex' ? sessionFile.test(row.name) : row.name.endsWith('.jsonl'))) found.push(path);
     }
   }
   await walk(root);
   const matches = [];
   for (const path of found) {
-    let meta; try { meta = sessionMeta(await io.readFile(path, 'utf8')); } catch { continue; }
+    let meta; try { meta = sessionMeta(await io.readFile(path, 'utf8'), stage.agent); } catch { continue; }
     if (meta && meta.cwd === stage.root && meta.timestamp >= stage.startedAt && meta.timestamp <= stage.endedAt)
       matches.push({ agent: stage.agent, id: meta.id, source: 'session-file' });
   }
@@ -197,6 +201,6 @@ export async function runStatusFromState(state, extras = {}, ports = {}) {
   }
   return { v: 1, runId: state.runId, workflow: state.name ?? null, repo: state.repo ?? null, issue: state.issue ?? null,
     root: state.root ?? null, agent: state.agent ?? null, startedAt: state.startedAt ?? null, journalSeq: state.seq ?? 0, state: status, stage: current ? { id: current.id, index: state.index, total: state.definitions.length } : null, steps,
-    updatedAt: extras.now ?? null };
+    waitingFor: status === 'waiting' ? {decisions: state.waitingDecision?.decisions ?? (current?.kind === 'merge' ? [] : ['approve'])} : null, updatedAt: extras.now ?? null };
 }
 

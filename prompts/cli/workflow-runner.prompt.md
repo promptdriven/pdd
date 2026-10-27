@@ -93,3 +93,59 @@ Accept an optional onProgress(event) port for run/resume. It is observational on
 Events contain a detached, minimal view: event name, actual run ID, workflow, issue number, current stage ID/kind/optional flag and ordinal/count, worktree/branch, journal path, pending kind, latest completed stage ID, actual backend session/workspace when known, latest accepted handoff summary and absolute artifact/file paths, including the current proposal JSON and prompt/Story/case files even when a later report is the latest handoff, and saved PR URLs. Do not expose guide/context, credentials, native prompts or raw DTOs. Backend polling may notify often; the renderer deduplicates identities. A result event includes its state. No new journal event or disk status file is needed for presentation. Existing journal/index files remain the rediscovery authority after terminal loss.
 
 Only the current pending backend supplies agent location. Do not present a completed stage's closed workspace as the current live location during resume or at a gate.
+
+## Bound person decisions
+
+Export `applyWorkflowDecision(input, ports)` for the decide module. Under the
+existing assignment/run lock, read the complete validated journal, compare the
+current stage and positive journal seq, and revalidate saved input before any
+admission. Gates persist `waitingDecision:{stage,seq,at,decisions}`; `at` is epoch
+ms, seq includes that gate's durable record. Repeated inspection retains the
+same gate/time/seq. A new run saves startedAt for native session discovery.
+Only a settled human, optional or next-advance proposal gate admits decisions;
+active/recovery work and external merge waits do not. Skip needs an optional
+stage. Changes needs a completed proposal before this gate.
+
+Check historical decisions before current-gate checks: same id and exact
+payload/expected binding returns recorded without authorization or new effects;
+changed payload is bad_args. For a new id, call `ports.authorizeDecision` with
+the authoritative state and require `{ok:true,approvalRecord}`. Persist the
+binding and evidence as `decisions[]` and latest `approvalRecord` before advance.
+A crash after admission must never repeat the effect on retry.
+
+Approve/skip use existing foreground advancement, preserving artifact/issue and
+native validation. Changes preserves removed completion/proposal/acceptance in
+revisionHistory, clears downstream acceptance and optional choices, records the
+person's text in changes, and starts a fresh attempt of the most recent proposal
+stage. The prompt supplied to that stage includes the changes text. No published
+PR or accepted merge is rewound. Result recorded certifies admission, never stage
+completion; failed/uncertain advancement retains the recorded id and evidence.
+Area-chat composition may provide the same applyWorkflowDecision port and must
+honor all admission/evidence rules while starting one fresh next/revision chat.
+
+`readWorkflowDecision({runId,cwd},ports)` is the read-only selector for CLI adapters:
+validate assignment and journal, return ready with runId,stage,journalSeq,issue,
+repo,root for a current saved person gate; otherwise refuse without mutation.
+Its result supplies no authority: applyWorkflowDecision rechecks under lock.
+
+A stopped foreground run with a pending attempt also saves an approve-only
+recovery gate. A person can authorize reconciliation of that original attempt;
+the runner still refuses duplicate launch/PR effects and unresolved native work.
+This preserves legacy explicit recovery without bypassing evidence. Recovery
+validates original pending ancestry/artifacts rather than assuming its worktree
+still equals the pre-agent fingerprint. Recovery gates never offer changes/skip.
+Gate evidenceStage selects the current pending or most recent completed native
+stage's actual start/end window, so earlier chats cannot make later approval
+ambiguous; a missing historical time window fails chat verification closed.
+
+When the independently supplied14a workflow-run-records module is present, finish
+both ordinary and decide advancement by writing runStatusFromState phase exit
+through writeRunStatus under the same run lock; a newly saved decision gate must
+project waiting, not running. An admitted but uncertain advancement projects
+recovery_required. Projection failures never change authoritative journal results.
+
+A failed journal append prevents further records from that in-memory state and
+prevents final status projection from advertising its uncommitted sequence.
+Preserve the last complete status for inspection; never fill a journal gap.
+
+Shared applyWorkflowDecision runs within the same optional onProgress observation scope as run/resume, retaining stage transitions during foreground decision continuation.

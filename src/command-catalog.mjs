@@ -1,7 +1,14 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 8f469c3563e7bf60e3b79cb306e065554c19b8f55b682a1c6b06663525435468).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9fe560b50401cf51953092d0ddc34fd0937d1b992641815212cbb791a4866a38).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
+const decisionOptions = [{name:'--yes',kind:'flag'},{name:'--json',kind:'flag'}, {name:'--via',kind:'value',choices:['phone']}, ...['--phone','--approval'].map(name=>({name,kind:'value'}))];
 const routes = [
+  { id: 'workflow.decide', prefix: ['workflow', 'decide'], local: 'workflow-decide',
+    operands:[{name:'run-ref',type:'run-ref'}], options:[{name:'--decision',kind:'value',choices:['approve','changes','skip']},
+      {name:'--via',kind:'value',choices:['phone']},
+      ...['--text','--id','--expect-stage','--expect-seq','--phone','--approval'].map(name=>({name,kind:'value'})),
+      {name:'--yes',kind:'flag'},{name:'--json',kind:'flag'}],
+    forms:[form('pdd workflow decide ISSUE|RUN_ID --decision approve|changes|skip [--text TEXT] --id UUID --expect-stage STAGE --expect-seq N [--yes] [--via phone --phone PHONE_ID --approval TOKEN] [--json]', 'Apply one bound person decision and continue the saved workflow.')] },
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']}],
@@ -13,14 +20,14 @@ const routes = [
     operands:[{name:'run-ref',type:'run-ref'}],options:[],
     forms:[form('pdd workflow attach ISSUE|RUN_ID','Attach to the saved active background stage; issue numbers and short IDs are accepted.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands:[{name:'run-ref',type:'run-ref',optional:true}],options:[{name:'--yes',kind:'flag'}],
-    forms:[form('pdd workflow approve [ISSUE|RUN_ID] [--yes]','Approve one saved run after a real-terminal confirmation.')] },
+    operands:[{name:'run-ref',type:'run-ref',optional:true}],options:decisionOptions,
+    forms:[form('pdd workflow approve [ISSUE|RUN_ID] [--yes] [--via phone --phone PHONE_ID --approval TOKEN] [--json]','Approve one saved run after a real-terminal confirmation.')] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
-    operands:[{name:'run-ref',type:'run-ref'},{name:'request',type:'text',optional:true,repeat:true}],options:[],
-    forms:[form('pdd workflow changes ISSUE|RUN_ID [text]','Request changes; this release reports that changes arrive in the next release.')] },
+    operands:[{name:'run-ref',type:'run-ref'},{name:'request',type:'text',optional:true,repeat:true}],options:decisionOptions,
+    forms:[form('pdd workflow changes ISSUE|RUN_ID [text] [--via phone --phone PHONE_ID --approval TOKEN] [--json]','Request a fresh proposal revision with your feedback.')] },
   { id: 'workflow.skip', prefix: ['workflow', 'skip'], local: 'workflow-skip',
-    operands:[{name:'run-ref',type:'run-ref'}],options:[],
-    forms:[form('pdd workflow skip ISSUE|RUN_ID','Skip the current optional stage after confirmation.')] },
+    operands:[{name:'run-ref',type:'run-ref'}],options:decisionOptions,
+    forms:[form('pdd workflow skip ISSUE|RUN_ID [--via phone --phone PHONE_ID --approval TOKEN] [--json]','Skip the current optional stage after confirmation.')] },
   { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
     operands:[],options:[{name:'--all',kind:'flag'}],
     forms:[form('pdd workflow status [--all]','Show runs in this repository, or every waiting/running run on this machine.')] },

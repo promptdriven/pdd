@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: 19fb33093150212af182c10e08a39d992ea4a73d851ada3b00a2e166ca96ab86).
+// Generated from prompts/cli/workflow-stage-herdr.prompt.md (sha256: accf6f3d8f12d467aa14da855c9c3cb1181f84587386eb3f0800cbbf34720dfb).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -254,7 +254,7 @@ export async function runHerdrStage(input, ports = {}) {
     try {
       started = await command(rt, b.session, ['agent', 'start', b.agentName, '--kind', b.agent,
         '--pane', b.paneId, '--timeout', String(rt.startupMs),
-        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`] : ['--', '--dangerously-skip-permissions'])], cwd, rt.startupMs + 5000);
+        ...(b.agent === 'codex' ? ['--', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`, '-c', `shell_environment_policy.set={PDD_AGENT_SESSION=${JSON.stringify(`${b.runId}/${b.stageId}`)}}`] : ['--', '--dangerously-skip-permissions', '--settings', JSON.stringify({env:{PDD_AGENT_SESSION:`${b.runId}/${b.stageId}`}})])], cwd, rt.startupMs + 5000);
     } catch (error) {
       if (error.code !== 'agent_not_ready') throw error;
       const existing = await checkAgent(rt, b);

@@ -41,3 +41,13 @@ test('session-file evidence refuses zero and multiple matches with reasons', asy
   const many = await matchStageSessionFiles({ agent: 'codex', root: '/tmp/worktree', startedAt: 1000, endedAt: 2000 }, { home, codexHome: join(home, '.codex') });
   assert.equal(many.matches.length, 2); assert.match(many.reason, /2 session files/);
 });
+
+test('Claude reopen evidence uses native user records and its escaped project directory', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'pdd-claude-session-')); t.after(async () => execFileSync('rm', ['-rf', home]));
+  const root='/tmp/work.tree_5', sessions=join(home,'.claude','projects',root.replace(/[^a-zA-Z0-9]/g,'-'));
+  await mkdir(sessions,{recursive:true});
+  const id='123e4567-e89b-42d3-a456-426614174000';
+  await writeFile(join(sessions,`${id}.jsonl`),JSON.stringify({type:'user',sessionId:id,cwd:root,timestamp:new Date(1500).toISOString(),message:{role:'user',content:'Synthetic request'}})+'\n');
+  const found=await matchStageSessionFiles({agent:'claude',root,startedAt:1000,endedAt:2000},{home});
+  assert.deepEqual(found.matches,[{agent:'claude',id,source:'session-file'}]);
+});

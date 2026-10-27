@@ -33,12 +33,50 @@ In that shortcut, stages are followed in one conversation; the command does not 
 
 For local GitHub issue execution, use `pdd workflow run NAME ISSUE [--agent codex|claude]`, default Codex. NAME is a safe lowercase/digit name beginning with a letter, with single hyphens between nonempty groups, up to 64 characters. The definition loader selects and validates project overrides or bundled definitions; the CLI does not limit names to three built-ins. ISSUE is a positive number, owner/repo#number or HTTPS GitHub issue URL resolved against the current repository. Use the actual package entrypoint from your project. The runner assigns a separate issue worktree/branch for stage execution. This command can perform agent work, push branches and create real PRs.
 
-`pdd workflow resume RUN_ID [--decision approve|skip]` uses the saved UUIDv4 identity and its workflow snapshot, agent and issue worktree. Without a decision it inspects/reconciles or observes merge state and does not launch the next native stage or PR. Approval advances eligible work or applies to current human/optional work; skip is only for optional work. Merge waits inspect the actual saved PR and never merge. Exit 0 is completed, 2 waiting and 1 failed/recovery_required. Unknown native/PR outcomes never authorize blind relaunch/resend.
+`pdd workflow approve [ISSUE]` selects one waiting person gate in the current
+repository and asks a y/N question with the repository, issue and title. With
+several candidates it lists exact issue commands. `changes ISSUE "text"` requests
+a proposal revision; `skip ISSUE` applies only to an optional stage. All use the
+same durable decision seam as `workflow decide`; legacy `resume --decision`
+also goes through that seam. Terminal decisions require real stdin/stderr TTYs,
+including `--yes`. Agent-marked or non-TTY relays require verified native USER
+message evidence after the gate; a marker alone grants no authority.
 
-`pdd workflow attach RUN_ID` asks the runner to resolve the actual current active backend from the common-repository index. It attaches that live native terminal, not a new conversation. Attachment and stage acceptance/cleanup are mutually exclusive; new interaction invalidates earlier candidates. Archived stages produce finite information rather than a promise of a live pane. There is no agent override or arbitrary native flag passthrough.
+Saved-run commands accept N, #N, repo#N, owner/repo#N, GitHub issue URLs, unique
+8-character prefixes and full UUIDs. Bare numbers inside any checkout or linked
+worktree select only that Git common repository. Outside a repository, the machine
+index supplies matches; ambiguity is refused. Use owner/repo when repository names
+collide. `workflow status` lists this repository; `status --all` lists waiting or
+running runs across repositories. `watch [ISSUE]` shows one saved run.
+
+`pdd workflow resume [ISSUE]` inspects or reconciles the saved workflow snapshot,
+agent and worktree without starting a new stage. Merge waits inspect the actual
+saved PR and never merge. Plain runner outcomes exit 0 when completed, 2 waiting,
+and 1 for failure/recovery. Decision exit 0 means durable admission; inspect its
+message for the resulting gate or outcome. Unknown native/PR outcomes never
+authorize blind relaunch or resend.
+
+`pdd workflow attach ISSUE` asks the runner to resolve the actual current active backend from the common-repository index. It attaches that live native terminal, not a new conversation. Attachment and stage acceptance/cleanup are mutually exclusive; new interaction invalidates earlier candidates. Archived stages produce finite information rather than a promise of a live pane. There is no agent override or arbitrary native flag passthrough.
 
 The PDD controller remains foreground while issue stages use fresh native agents in owned background Herdr workspaces. Ready-before-submit, one durable prompt intent and the same agent's working-to-ready observation provide a candidate only. The runner validates the exact handoff, artifacts, revision and actual tests before acceptance and cleanup. Active/blocked backing panes still consume resources; completed accepted stages do not need permanent panes. There is no automatic progression after the controller exits. Explicit resume reconciles the saved original. See [workflow execution and recovery](workflows.md).
 
 `workflow list [--json]` uses the authoritative definition loader. JSON returns `{ "workflows": [{ "name": "feature", "source": "bundled" }], "default": null }` with actual validated entries and source `project` or `bundled`. A complete valid project definition overrides the matching bundled name; an invalid override or unavailable loader refuses, without a legacy Markdown fallback. Listing is local discovery, not native/GitHub work. Bash/Zsh completion consumes this local listing as data, filters safe names and does not evaluate returned text.
 
 Completion prints shell text to stdout; it does not modify shell configuration. Save or source it using your own shell's usual setup. The local native session command loads the full guide and bundled manual workflow context before Stories using the installed agent. The package provides local commands only. Unsupported operations must remain unsupported, with no hosted-service fallback.
+
+For an authenticated phone subprocess, the installed private client entrypoint
+composes its signed-ledger adapter with the public CLI:
+
+```js
+const clientAdapter = createPhoneLookupAdapter({ home, linkDir, signal });
+process.exitCode = await runPdd(process.argv.slice(2), { clientAdapter });
+```
+
+`createPhoneLookupAdapter` belongs to the private client's fleet/phone-lookup
+module; it acquires and verifies installed ledger authority for each call. The
+public package does not import it or discover a key file. Its `lookupPhone`
+method supplies the final phoneId, removed, publicKeyJwk and state fields. The
+plain public bin refuses phone_ledger_unavailable when not composed with this
+adapter. Link passes the signed token unchanged using `workflow decide` with
+`--via phone --phone PHONE_ID --approval TOKEN --json` and the explicit run,
+decision id, expected stage and sequence. No key in the token is used.

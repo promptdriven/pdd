@@ -1,5 +1,4 @@
-import { promises as fs } from 'node:fs';
-import { createInterface } from 'node:readline';
+// Contract: prompts/cli/workflow-shortcuts.prompt.md.
 import * as defaultRecords from './workflow-run-records.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -19,7 +18,12 @@ const issueRepo = value => {
 };
 const repoName = repo => typeof repo === 'string' ? repo.split('/').at(-1) : null;
 const issueRef = entry => entry?.repo && entry?.issue?.number ? `${entry.repo}#${entry.issue.number}` : `#${entry?.issue?.number ?? '?'}`;
-const issueLabel = entry => `${issueRef(entry)}${entry?.issue?.title ? ` "${clean(entry.issue.title)}"` : ''}`;
+const issueLabel = (entry, runs = []) => `${displayRef(entry, runs)}${entry?.issue?.title ? ` "${clean(entry.issue.title)}"` : ''}`;
+const displayRef = (entry, runs) => {
+  const name = repoName(entry.repo);
+  const collision = runs.some(run => repoName(run.repo) === name && run.repo !== entry.repo);
+  return `${collision ? entry.repo : name ?? '?'}#${entry.issue?.number ?? '?'}`;
+};
 const stateLabel = status => status?.state === 'completed' ? 'done'
   : status?.state === 'waiting' ? 'waiting for you'
   : status?.state === 'running' ? `working: ${status.stage?.id ?? 'unknown'}`
@@ -56,27 +60,35 @@ export async function discoverRuns({ cwd, all = false, records = defaultRecords,
 function matchesReference(run, ref, { repository, local } = {}) {
   if (!ref) return false;
   if (UUID.test(ref)) return run.runId?.toLowerCase() === ref.toLowerCase();
-  if (PREFIX.test(ref)) return run.runId?.toLowerCase().startsWith(ref.toLowerCase());
+  if (!/^#?[1-9][0-9]*$/.test(ref) && PREFIX.test(ref)) return run.runId?.toLowerCase().startsWith(ref.toLowerCase());
   const number = issueNumber(ref); if (!number || run.issue?.number !== number) return false;
   const wanted = issueRepo(ref);
   if (wanted) return sameRepo(run.repo, wanted);
   return local || !repository ? true : sameRepo(run.repo, repository);
 }
-function nextCommand(run, command, { repository } = {}) {
-  const ref = repository && sameRepo(run.repo, repository) ? String(run.issue?.number ?? '') : issueRef(run);
+function nextCommand(run, command, { repository, runs = [] } = {}) {
+  const ref = repository && sameRepo(run.repo, repository) ? String(run.issue?.number ?? '') : displayRef(run, runs);
   return `pdd workflow ${command}${ref ? ` ${ref}` : ''}`;
 }
 export async function resolveRun(ref, { cwd, records = defaultRecords, all = false, repository, waiting = false, fs: io } = {}) {
   const local = !all && await inRepository(cwd, { fs: io });
-  const runs = await discoverRuns({ cwd, all: all || !local, records, fs: io });
+  const qualified = !!ref && (UUID.test(ref) || issueRepo(ref) || (!/^#?[1-9][0-9]*$/.test(ref) && PREFIX.test(ref)));
+  let runs = await discoverRuns({ cwd, all: all || !local, records, fs: io });
+  if (local && qualified) {
+    const indexed = await discoverRuns({cwd, all:true, records, fs:io});
+    runs = [...new Map([...runs,...indexed].map(run=>[run.runId,run])).values()];
+  }
   let candidates = runs;
   const common = local ? await defaultRecords.gitCommonDir(cwd, { fs: io }) : null;
-  if (local && common) {
+  if (local && common && !qualified) {
     const scoped = candidates.filter(run => runInCommonDir(run, common));
-    if (scoped.length) candidates = scoped;
+    candidates = scoped;
   }
-  if (waiting) candidates = candidates.filter(run => run.state === 'waiting');
-  if (ref) candidates = candidates.filter(run => matchesReference(run, ref, { repository, local }));
+  if (waiting) candidates = candidates.filter(run => run.state === 'waiting' && (!run.waitingFor || run.waitingFor.decisions?.length));
+  if (ref) {
+    const matches = candidates.filter(run => matchesReference(run, ref, { repository, local }));
+    candidates = matches.length || !PREFIX.test(ref) ? matches : candidates.filter(run=>run.runId?.toLowerCase().startsWith(ref.toLowerCase()));
+  }
   if (!ref && !all && local && candidates.length) {
     // A command without an operand is scoped to the current checkout.
     candidates = candidates.filter(run => !repository || sameRepo(run.repo, repository));
@@ -86,33 +98,18 @@ export async function resolveRun(ref, { cwd, records = defaultRecords, all = fal
 }
 export function formatAmbiguous(runs, command) {
   const lines = [`More than one saved run matches. Choose one:`];
-  for (const run of runs) lines.push(`  ${issueLabel(run)} — ${nextCommand(run, command)}`);
+  for (const run of runs) lines.push(`  ${issueLabel(run, runs)} — ${nextCommand(run, command, {runs})}`);
   return lines.join('\n');
 }
 export function formatStatus(runs, { repository, all = false } = {}) {
+  if (all) runs = runs.filter(run=>['waiting','running'].includes(run.state));
   if (!runs.length) return 'No saved workflow runs.';
   return runs.map(run => {
     const state = stateLabel(run), stage = run.stage?.id ? ` · stage ${run.stage.id}` : '';
     let next = '';
-    if (state === 'waiting for you') next = ` · next: ${nextCommand(run, 'approve', { repository })}`;
-    else if (state.startsWith('working:')) next = ` · next: ${nextCommand(run, 'watch', { repository })}`;
-    else if (state === 'failed' || state === 'recovery_required') next = ` · next: ${nextCommand(run, 'resume', { repository })}`;
-    return `${issueLabel(run)} · ${run.workflow ?? 'unknown'} · ${state}${stage}${next}`;
+    if (state === 'waiting for you') next = ` · next: ${nextCommand(run, run.waitingFor?.decisions?.length === 0 ? 'resume' : 'approve', { repository, runs })}`;
+    else if (state.startsWith('working:')) next = ` · next: ${nextCommand(run, 'watch', { repository, runs })}`;
+    else if (state === 'failed' || state === 'recovery_required') next = ` · next: ${nextCommand(run, 'resume', { repository, runs })}`;
+    return `${issueLabel(run, runs)} · ${run.workflow ?? 'unknown'} · ${state}${stage}${next}`;
   }).join('\n');
-}
-async function answer(input, output, prompt) {
-  if (typeof input === 'function') { output.write(prompt); return String(await input(prompt)); }
-  const rl = createInterface({ input, output, terminal: true });
-  try { return await new Promise(resolve => rl.question(prompt, resolve)); } finally { rl.close(); }
-}
-export async function requireDecisionTerminal({ stdin = process.stdin, stdinIsTTY, env = process.env, yes = false, input, stdout, stderr, action, run, records, cwd } = {}) {
-  const tty = stdinIsTTY ?? Boolean(stdin?.isTTY);
-  // A person at a terminal must answer here. An agent relay is allowed to
-  // continue without a TTY only after decideWorkflow proves its USER message.
-  if (!tty && !env.PDD_AGENT_SESSION) { stderr.write('Decision commands require a real TTY; scripts cannot approve or skip runs.\n'); return false; }
-  if (!yes && tty) {
-    const reply = (await answer(input, stdout, `${action[0].toUpperCase()}${action.slice(1)} the plan for ${issueLabel(run)}? (y/N) `)).trim().toLowerCase();
-    if (reply !== 'y' && reply !== 'yes') { stdout.write('No decision recorded.\n'); return false; }
-  }
-  return true;
 }

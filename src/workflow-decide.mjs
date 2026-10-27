@@ -1,44 +1,60 @@
-// Shared decision seam for terminal shortcuts, authenticated Link and area chats.
-// The public selectors resolve the run and current gate; this module owns the
-// common admission shape so another caller cannot bypass the same evidence hook.
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const validStage = value => typeof value === 'string' && /^(?=.{1,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
-function evidenceStage(run, expectStage) {
-  const rows = Array.isArray(run?.steps) ? run.steps : [];
-  const row = rows.find(step => step.id === expectStage && step.agent && Number.isFinite(step.startedAt) && Number.isFinite(step.endedAt))
-    ?? [...rows].reverse().find(step => step.state === 'done' && step.agent && Number.isFinite(step.startedAt) && Number.isFinite(step.endedAt));
-  return { agent: row?.agent ?? run?.agent, root: run?.root, startedAt: row?.startedAt ?? run?.startedAt, endedAt: row?.endedAt ?? run?.updatedAt };
+// Contract: prompts/cli/workflow-decide.prompt.md.
+import {verifyPhoneApproval} from './phone-approval.mjs';
+import {createInterface} from 'node:readline/promises';
+const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const STAGE=/^(?=.{1,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const validText=value=>typeof value==='string'&&[...value].length>=1&&[...value].length<=4000&&!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/u.test(value);
+export function validDecisionInput(i) {
+  return i&&UUID.test(i.runId??'')&&UUID.test(i.decisionId??'')&&['approve','skip','changes'].includes(i.decision)
+    &&STAGE.test(i.expectStage??'')&&Number.isSafeInteger(i.expectSeq)&&i.expectSeq>0
+    &&(i.decision==='changes'?validText(i.text):i.text===undefined)
+    &&(i.yes===undefined||typeof i.yes==='boolean')
+    &&(i.via===undefined?i.phoneId===undefined&&i.approval===undefined:i.via==='phone'&&typeof i.phoneId==='string'&&i.phoneId.length>0&&typeof i.approval==='string'&&i.approval.length>0);
 }
-async function checkAgentEvidence(input, ports) {
-  let checker = ports.readApprovalEvidence ?? ports.approvalEvidence;
-  if (typeof checker !== 'function') {
-    try { checker = (await import('./approval-evidence.mjs')).readApprovalEvidence; } catch { checker = null; }
+async function terminalQuestion(question,stdin,stderr) {
+  const rl=createInterface({input:stdin,output:stderr});
+  try{return /^(?:y|yes)$/i.test((await rl.question(question)).trim());}finally{rl.close();}
+}
+const clean=value=>String(value??'').replace(/[\x00-\x1f\x7f-\x9f]/g,' ');
+async function authorize(input,state,ports) {
+  const refused=(code,message)=>({ok:false,code,message});
+  const now=(ports.now??Date.now)();
+  if(input.via==='phone') {
+    return verifyPhoneApproval({token:input.approval,phoneId:input.phoneId,runId:input.runId,stage:input.expectStage,
+      decision:input.decision,expectSeq:input.expectSeq,...(input.text!==undefined?{text:input.text}:{}),
+      usedNonces:(state.decisions??[]).filter(d=>d.approvalRecord?.kind==='phone').map(d=>d.approvalRecord.nonce)},
+      {lookupPhone:ports.lookupPhone===undefined&&typeof ports.clientAdapter?.lookupPhone==='function'?ports.clientAdapter.lookupPhone.bind(ports.clientAdapter):ports.lookupPhone,now:ports.now});
   }
-  if (typeof checker !== 'function') return { ok: false, code: 'approval_evidence_unavailable', message: 'Approval evidence is unavailable for this agent session.' };
-  let answer;
+  if(ports.authorizeDecision) {
+    const evidence=await ports.authorizeDecision({input,state});
+    return evidence?.kind==='phone'&&evidence.authenticated===true
+      ?{ok:true,approvalRecord:{...evidence,at:now}}
+      :refused('person_required','An authenticated phone tap is required.');
+  }
+  const env=ports.env??process.env,stdin=ports.stdin??process.stdin,stderr=ports.stderr??process.stderr;
+  if(!env.PDD_AGENT_SESSION&&stdin.isTTY===true&&stderr.isTTY===true) {
+    const verb={approve:'Approve the plan for',changes:'Request changes for',skip:'Skip the optional step for'}[input.decision];
+    const question=`${verb} ${clean(state.repo)}#${state.issue?.number??'?'} "${clean(state.issue?.title)}"? (y/N) `;
+    const accepted=input.yes===true||await (ports.confirm??(q=>terminalQuestion(q,stdin,stderr)))(question);
+    return accepted===true?{ok:true,approvalRecord:{kind:'terminal',at:now}}:refused('person_required','Decision declined; the run is unchanged.');
+  }
+  let read=ports.readApprovalEvidence;
+  if(!read)try{read=(await import('./approval-evidence.mjs')).readApprovalEvidence;}catch{}
+  if(typeof read!=='function')return refused('approval_evidence_unavailable','A terminal confirmation, authenticated phone tap or verified user chat message is required; chat evidence verification is unavailable.');
+  const evidence=await read({stage:state.waitingDecision?.evidenceStage??{agent:state.agent,root:state.root,startedAt:undefined,endedAt:undefined},gateAskedAt:state.waitingDecision?.at,decision:input.decision},ports);
+  if(evidence?.ok!==true)return refused('person_required',clean(evidence?.message||'No user message after the gate could be verified.'));
+  return {ok:true,approvalRecord:{kind:'chat',agent:evidence.agent,sessionId:evidence.sessionId,userMessage:evidence.userMessage,userMessageAt:evidence.userMessageAt,at:now}};
+}
+export async function decideWorkflow(input,ports={}) {
+  const i=structuredClone(input??{});
+  const base={runId:UUID.test(i.runId??'')?i.runId:null,decisionId:UUID.test(i.decisionId??'')?i.decisionId:null,
+    decision:['approve','skip','changes'].includes(i.decision)?i.decision:null,stage:null,journalSeq:null,controller:null};
+  const fail=(code,state='refused')=>({...base,state,code,exitCode:code==='bad_args'?2:1,message:`${state}: ${code??'decision could not be confirmed'}.`});
+  if(!validDecisionInput(i))return fail('bad_args');
   try {
-    answer = await checker({ stage: evidenceStage(ports.run, input.expectStage), gateAskedAt: ports.run?.gateAskedAt ?? ports.run?.updatedAt ?? Date.now(), decision: input.decision }, ports);
-  } catch { return { ok: false, code: 'approval_evidence_unavailable', message: 'Approval evidence is unavailable for this agent session.' }; }
-  if (answer === true) return { ok: true };
-  if (answer?.ok === true) return answer;
-  return { ok: false, code: answer?.code ?? 'approval_evidence_unavailable', message: answer?.message ?? 'Approval requires a USER message after the current gate.' };
-}
-export async function decideWorkflow(input = {}, ports = {}) {
-  const { runId, decision, decisionId, expectStage, expectSeq, cwd, packageRoot, text, yes } = input;
-  let approvalRecord;
-  if (!UUID.test(runId ?? '') || !['approve', 'changes', 'skip'].includes(decision) || !UUID.test(decisionId ?? '')
-    || !validStage(expectStage) || !Number.isSafeInteger(expectSeq) || expectSeq < 1 || typeof cwd !== 'string' || typeof packageRoot !== 'string'
-    || (yes !== undefined && typeof yes !== 'boolean') || (decision !== 'changes' && text !== undefined))
-    return { exitCode: 2, state: 'refused', code: 'bad_args', runId: runId ?? null, decisionId: decisionId ?? null, decision: decision ?? null, stage: expectStage ?? null, journalSeq: expectSeq ?? null, controller: null, message: 'Decision binding is invalid.' };
-  if (decision === 'changes' && (typeof text !== 'string' || [...text].length < 1 || [...text].length > 4000 || /[\x00-\x08\x0b-\x1f\x7f-\x9f]/u.test(text)))
-    return { exitCode: 2, state: 'refused', code: 'bad_args', runId, decisionId, decision, stage: expectStage, journalSeq: expectSeq, controller: null, message: 'The changes text is invalid.' };
-  if (ports.env?.PDD_AGENT_SESSION) {
-    const evidence = await checkAgentEvidence(input, ports);
-    if (!evidence.ok) return { exitCode: 1, state: 'refused', code: evidence.code, runId, decisionId, decision, stage: expectStage, journalSeq: expectSeq, controller: null, message: evidence.message };
-    if (evidence.sessionId || evidence.userMessage || evidence.userMessageAt) approvalRecord = { kind: 'chat', agent: evidence.agent, sessionId: evidence.sessionId, userMessage: evidence.userMessage, userMessageAt: evidence.userMessageAt, at: Date.now() };
-  }
-  if (decision === 'changes') return { exitCode: 0, state: 'recorded', code: 'unsupported', runId, decisionId, decision, stage: expectStage, journalSeq: expectSeq, controller: null, message: 'Request changes comes in the next release', ...(approvalRecord ? { approvalRecord } : {}) };
-  const runner = ports.runner ?? await import('./workflow-runner.mjs');
-  const result = await runner.resumeWorkflow({ runId, cwd, packageRoot, decision }, ports.runnerPorts ?? ports);
-  return { ...result, state: result.state === 'completed' ? 'started' : result.state, code: result.state === 'waiting' ? 'run_not_waiting' : 'started', decisionId, decision, stage: expectStage, journalSeq: expectSeq, controller: null, ...(approvalRecord ? { approvalRecord } : {}) };
+    const runner=ports.workflowRunner??await import('./workflow-runner.mjs');
+    if(typeof runner.applyWorkflowDecision!=='function')return fail('unsupported');
+    const answer=await runner.applyWorkflowDecision(i,{...ports,authorizeDecision:({state})=>authorize(i,state,ports)});
+    return {...base,...answer};
+  }catch{return fail(null,'failed');}
 }

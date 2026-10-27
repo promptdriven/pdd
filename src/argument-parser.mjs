@@ -1,4 +1,5 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 0d9cf0f8f240e494eb34dfc8bba92b1aa147be9f019bb7d449bd9426cbb6c605).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: f9040e216dfe5c379e8b89aaf6ea470b47656c553314ccb0844a85b6ddce645c).
+import {validDecisionInput} from './workflow-decide.mjs';
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -28,7 +29,7 @@ function parseRoute(route, words) {
       if (option.kind === 'flag') options[word] = true;
       else {
         const value = words[++index];
-        if (!option.choices?.includes(value)) fail();
+        if (typeof value !== 'string' || value.startsWith('--') || option.choices && !option.choices.includes(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -45,6 +46,11 @@ function parseRoute(route, words) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
+  if (['workflow-approve','workflow-changes','workflow-skip'].includes(route.local) && ['--via','--phone','--approval'].some(k=>options[k]!==undefined)
+    && !(options['--via']==='phone' && options['--phone'] && options['--approval'])) fail();
+  if (route.local === 'workflow-decide' && (!/^[1-9][0-9]*$/.test(options['--expect-seq']??'')
+    || !validDecisionInput({runId:'00000000-0000-4000-8000-000000000000',decisionId:options['--id'],decision:options['--decision'],
+      expectStage:options['--expect-stage'],expectSeq:Number(options['--expect-seq']),text:options['--text'],via:options['--via'],phoneId:options['--phone'],approval:options['--approval']}))) fail();
   return Object.freeze({ commandId: route.id, local: route.local, ...(route.workflowName ? { workflowName: route.workflowName } : {}),
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }
