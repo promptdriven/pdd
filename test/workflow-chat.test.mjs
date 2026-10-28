@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
 
 const temp = t => { const path = realpathSync(mkdtempSync(join(tmpdir(), "pdd-chat 'q' "))); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
 // A fake native CLI that prints its argv and the marker the chat gets.
-const nativeScript = `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION??null,config:process.env.CLAUDE_CONFIG_DIR??process.env.CODEX_HOME??null}));\n`;
+const nativeScript = `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION??null,config:process.env.CLAUDE_CONFIG_DIR??process.env.CODEX_HOME??null}));process.exitCode=Number(process.env.PDD_FIXTURE_EXIT??0);\n`;
 
 test('the shell line gives the native CLI the whole first message as one argument, with full access and the person config folder', t => {
   const root = temp(t), bin = join(root, 'bin'), cwd = join(root, 'work tree "x"');
@@ -31,17 +31,38 @@ test('the shell line gives the native CLI the whole first message as one argumen
   assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume '${id}' --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
 });
 
+test('PIPE1: native launch preserves more than 64 KiB of guidance and zero/nonzero exit status', t => {
+  const root = temp(t), bin = join(root, 'bin'), file = join(root, 'large-start.md'); mkdirSync(bin);
+  const message = 'Use the pdd-bug skill.\n' + 'x'.repeat(85_000);
+  writeFileSync(file, message);
+  for (const [agent, status] of [['codex', 0], ['claude', 7]]) {
+    writeFileSync(join(bin, agent), nativeScript, { mode: 0o755 });
+    const command = chatCommand({ agent, cwd: root, messageFile: file, sessionId: '11111111-1111-4111-8111-111111111111', configDir: root });
+    const r = spawnSync('/bin/sh', ['-c', command], { cwd: root, env: { PATH: `${bin}:/usr/bin:/bin`, PDD_FIXTURE_EXIT: String(status) }, encoding: 'utf8' });
+    assert.equal(r.status, status, r.stderr); assert.ok(Buffer.byteLength(r.stdout) > 65_536);
+    const captured = JSON.parse(r.stdout);
+    assert.equal(captured.argv.at(-1), message); assert.equal(captured.marker, '1'); assert.equal(captured.config, root);
+    assert.ok(captured.argv.includes(agent === 'codex' ? '--dangerously-bypass-approvals-and-sandbox' : '--dangerously-skip-permissions'));
+  }
+});
+
 test('the real Herdr transport always targets session pdd and reports Herdr JSON errors by code', async t => {
   const root = temp(t), bin = join(root, 'bin'), log = join(root, 'calls.jsonl');
+  const padding = 'x'.repeat(1024 * 1024), errorMessage = 'tab missing not found: ' + padding;
   mkdirSync(bin);
   writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(args)+'\\n');
-if(args.includes('missing')){process.stderr.write(JSON.stringify({error:{code:'tab_not_found',message:'tab missing not found'}}));process.exit(1);}
-process.stdout.write(args.includes('run')?'':JSON.stringify({result:{ok:true}}));\n`, { mode: 0o755 });
+if(args.includes('missing')){process.stderr.write(JSON.stringify({error:{code:'tab_not_found',message:${JSON.stringify(errorMessage)}}}));process.exitCode=1;}
+else process.stdout.write(args.includes('run')?'':JSON.stringify({result:{ok:true,padding:${JSON.stringify(padding)}}}));\n`, { mode: 0o755 });
   const path = process.env.PATH; process.env.PATH = `${bin}:${path}`; t.after(() => { process.env.PATH = path; });
   const herdr = herdrCommand();
-  assert.deepEqual(await herdr(['tab', 'get', 'w1:t1']), { result: { ok: true } });
+  assert.deepEqual(await herdr(['tab', 'get', 'w1:t1']), { result: { ok: true, padding } });
   assert.deepEqual(await herdr(['pane', 'run', 'w1:p1', 'claude']), {});
-  await assert.rejects(herdr(['tab', 'get', 'missing']), error => error.code === 'tab_not_found');
+  await assert.rejects(herdr(['tab', 'get', 'missing']), error => error.code === 'tab_not_found' && error.message === errorMessage);
+  const failed = spawnSync(join(bin, 'herdr'), ['--session', 'pdd', 'missing'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(failed.status, 1);
+  assert.ok(Buffer.byteLength(failed.stderr) > 65_536);
+  assert.equal(Buffer.byteLength(failed.stderr), Buffer.byteLength(JSON.stringify({ error: { code: 'tab_not_found', message: errorMessage } })));
+  assert.equal(JSON.parse(failed.stderr).error.message, errorMessage);
   for (const args of readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse)) assert.deepEqual(args.slice(0, 2), ['--session', 'pdd']);
 });
 
