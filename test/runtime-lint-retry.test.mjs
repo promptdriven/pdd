@@ -26,7 +26,8 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} retries a co
   assert.equal(r.code,0,r.ports.stderr.text+r.ports.stdout.text);
   const lints=r.fake.posts.filter(p=>p.command==='lint');assert.equal(lints.length,2);
   assert.notEqual(lints[0].request.requestId,lints[1].request.requestId);assert.ok(lints[0].tar.equals(lints[1].tar));
-  for(const p of lints) assert.equal(p.request.complete,mode==='lint'?true:undefined);
+  assert.deepEqual(lints[1].request,{...lints[0].request,requestId:lints[1].request.requestId},'retry keeps every original lint option');
+  if(mode!=='lint') for(const p of lints) assert.equal(Object.hasOwn(p.request,'complete'),false);
   assert.match(r.ports.stderr.text,/The server is busy\. Waiting for a lint slot/);
   assert.doesNotMatch(r.ports.stderr.text+r.ports.stdout.text,/lint result is unknown/);
   const saved=r.setup.state;
@@ -39,6 +40,7 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} retries a co
 for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} exhausts three busy attempts as not-run, never unknown`,async t=>{
   const r=await invoke(t,mode,(e,f)=>({status:200,json:queuedOut(f,e.request.requestId)}));
   assert.equal(r.code,5,r.ports.stderr.text+r.ports.stdout.text);
+  if(mode==='check') assert.equal(JSON.parse(r.ports.stdout.text).rows[0].calls,0,'confirmed busy lint leaves a positively unsent zero-call check');
   assert.equal(r.fake.posts.length,3);assert.ok(r.fake.posts.every(p=>p.command==='lint'));
   assert.equal(new Set(r.fake.posts.map(p=>p.request.requestId)).size,3);
   assert.match(r.ports.stderr.text+r.ports.stdout.text,/server.*busy/i);
