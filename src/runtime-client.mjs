@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ccaa35da49a76ef7a114179acee08751a178161e0f58f3f67f35a0a4608f1ba0).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9705cb34f68a6e633f6cbdd68167b21505d84ac28c11b6b9079a27b38d668b83).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -160,6 +160,7 @@ class Runtime {
     return this.send(path, { method: 'POST', body: form }, this.ports.postMs);
   }
   get(id) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, GET_MS); }
+  reopen(id) { return this.send(`/v1/try/${id}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, this.ports.postMs); }
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
@@ -254,7 +255,7 @@ function select(found, words, root) {
 }
 
 const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
-  request_ids: [], report_url: null, checks: null, failed_checks: [], all_checks: [] }));
+  request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
 // Lint verdict for each test: the prompts it reaches must be approved or a current draft, and not refused. A draft marks the row.
 function judgeLint(answer, rows, root, visible, secrets = []) {
@@ -345,7 +346,7 @@ async function postJob(context, path, command, request, row) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar);
   const verdict = judgePost(reply, id, command, context.secrets);
@@ -358,7 +359,7 @@ async function sendCheck(context, row) {
   const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row);
   row.retry_at = null;
-  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', note: { code: null, message: 'Stopped before sending.' } });
+  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
@@ -425,7 +426,7 @@ async function checkBatch(context, rows) {
   const lint = await runLint(context);
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
-  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, ...extra }); };
+  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', ...extra }); };
   if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
   if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note }); return; }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
@@ -597,12 +598,13 @@ async function runRead(context, batchWord) {
   Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [],
+    ...(!row.request_ids?.length && ['not_run', 'refused', 'ready'].includes(row.state) ? { calls: 0, phase: 'local' } : {}) }));
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.
   for (const row of rows) if (['ready', 'sending', 'waiting'].includes(row.state)) {
     if (row.request_ids.length) row.state = 'unknown';
-    else Object.assign(row, { state: 'not_run', note: { code: null, message: 'pdd stopped before sending this check.' } });
+    else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
   if (context.lint?.unknown) {
     const id = context.lint.request_ids?.at(-1), read = id ? judgeGet(await context.runtime.get(id), id, 'lint') : { kind: 'missing' };
@@ -750,10 +752,33 @@ function refusedLink(answer, origin) {
 
 const otherNote = count => count ? `(${count} ${count === 1 ? 'is' : 'are'} not prompt, story or test files; run \`pdd check --files\` to see them)` : '';
 
-// A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
+// Paused sessions require an explicit owner reopen; only running sessions have a ready link.
 const LIVE_SESSION = new Set(['running', 'paused']);
 function tryLink(answer, origin) {
-  return answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) ? validLink(answer.result?.url, origin, 'try') : null;
+  return answer?.state === 'passed' && answer.result?.session?.state === 'running' ? validLink(answer.result?.url, origin, 'try') : null;
+}
+
+async function reopenTry(context, record, test) {
+  const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
+  const again = `pdd try ${target}`;
+  if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
+  const reply = await context.runtime.reopen(record.id);
+  const blocked = blockingAnswer(reply);
+  if (blocked) throw new Stop(5, blocked);
+  if (reply.status === 401) throw new Stop(5, 'Run gh auth login');
+  if (gateText(reply)) throw new Stop(5, 'The runtime opens soon.');
+  if (!reply.lost && ![200, 202].includes(reply.status)) {
+    const reason = cleanText(reply.json?.error?.message, context.secrets) || `HTTP ${reply.status}`;
+    throw new Stop(reply.status === 429 ? 5 : 3, `This Try could not reopen: ${reason} Read the same Try again with: ${again}`);
+  }
+  if (!reply.lost && !sameJob(reply.json, record.id, 'try')) throw new Stop(3, 'The reopen answer has another request ID or command. Read the same Try again later.');
+  const initial = reply.json;
+  if (tryLink(initial, context.origin)) return initial;
+  const done = await readUntil(context, record.id, 'try', answer => answer.result?.session?.state === 'running'
+    || ['failed', 'refused', 'unknown'].includes(answer.state)
+    || (answer.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state)), TRY_MS);
+  if (done.answer?.state === 'passed' && done.answer.result?.session?.state === 'running') return done.answer;
+  throw new Stop(3, `Reopening this Try was not confirmed. Read the same Try again with: ${again}`);
 }
 
 async function stopTry(context, record) {
@@ -798,18 +823,23 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
-      const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
       // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
-      if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
+      if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
+      }
+      if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
+        if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
+        answer = await reopenTry(context, record, test); link = tryLink(answer, origin);
       }
       if (link && !options['--new']) {
         if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
         context.seedTest.storyPath = record.storyPath ?? test.storyPath;
-        return await showTry(context, test, link, options, record.id);
+        return await showTry(context, test, link, options, record.id, true);
       }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
@@ -923,8 +953,9 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId) {
-  const { ports } = context, ends = `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
+async function showTry(context, test, link, options, tryId, reused = false) {
+  const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
+    : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
   else {
     line(ports.stdout, `Try link for "${test.title}": ${link}`);
