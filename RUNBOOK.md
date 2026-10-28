@@ -291,6 +291,9 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
+  The runtime cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
+  `background-color` for a fill, `aria-current="true"` for a chosen button, and `display:block` on each `<li>` for a
+  list with no bullets.
 - **A screen from a mockup** (`"source": "mockup"`, `"operation": null`, `"format": "svg"`, `"result_pointer": null`):
   the screen prompt declares the screen and its callbacks in one code line, for example
   `@Composable fun MenuScreen(state: MenuState, onAdd: (String, String) -> Unit): Unit`. Its one operation gets
