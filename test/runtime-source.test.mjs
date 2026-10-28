@@ -169,6 +169,82 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
   assert.match(ports.stdout.text, /added to tests\/place-order\.json as step saved-scoped/);
 });
 
+test('SOURCE11: Try saves to its selected test when a Story has several tests, including a reopened Try', async t => {
+  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const original = readFileSync(join(setup.repo, ORDER), 'utf8');
+  write(setup.repo, selected, original);
+  const saved = load(setup.repo, selected);
+  saved.steps = [saved.steps[0]]; saved.steps[0].step_id = 'saved-selected';
+  let savedCases = [{ id: 'initial-case', path: ORDER, story_path: STORY, test: saved }];
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    if (entry.url.endsWith('/tests')) return { status: 200, json: { tests: savedCases } };
+    if (entry.method === 'GET' && entry.url.startsWith('/v1/runs/')) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
+    return { status: 404, json: {} };
+  });
+  const run = async () => {
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+    assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
+    return ports.stdout.text;
+  };
+  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected/);
+  savedCases = [...savedCases, { id: 'selected-case', path: ORDER, story_path: STORY, test: saved }];
+  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected-2/);
+  assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
+  assert.deepEqual(load(setup.repo, selected).steps.slice(-2).map(step => step.step_id), ['saved-selected', 'saved-selected-2']);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+});
+
+test('SOURCE13: reopening preserves the original Story identity after the selected test is reassigned', async t => {
+  const setup = harbor(t), selected = 'tests/z-place-order.json';
+  const original = readFileSync(join(setup.repo, ORDER), 'utf8');
+  write(setup.repo, selected, original);
+  const saved = load(setup.repo, selected);
+  let savedCases = [];
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    if (entry.url.endsWith('/tests')) return { status: 200, json: { tests: savedCases } };
+    if (entry.method === 'GET' && entry.url.startsWith('/v1/runs/')) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
+    return { status: 404, json: {} };
+  });
+  const run = async () => {
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+    assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
+    return ports.stdout.text;
+  };
+  await run();
+  json(setup.repo, selected, load(setup.repo, 'tests/unknown-item.json'));
+  savedCases = [{ id: 'original-story', story_path: STORY, test: saved }];
+  assert.match(await run(), /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+  assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
+  assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+});
+
+test('SOURCE12: a removed or reassigned Try seed is never replaced by another test for the Story', async t => {
+  for (const change of ['remove', 'reassign']) {
+    const setup = harbor(t), selected = 'tests/z-place-order.json';
+    const original = readFileSync(join(setup.repo, ORDER), 'utf8');
+    write(setup.repo, selected, original);
+    const saved = load(setup.repo, selected);
+    const fake = await fakeRuntime(t, (entry, f) => {
+      if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+      if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+      if (entry.url.endsWith('/tests')) {
+        if (change === 'remove') fs.unlinkSync(join(setup.repo, selected));
+        else json(setup.repo, selected, { ...saved, story_path: 'user_stories/unknown-item.md' });
+        return { status: 200, json: { tests: [{ id: change, story_path: STORY, test: saved }] } };
+      }
+      return { status: 404, json: {} };
+    });
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+    assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
+    assert.match(ports.stdout.text, /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+    assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
+  }
+});
+
 // A changed include list must rebuild the graph, rather than stamp old bytes with a new manifest.
 test('SOURCE7: capture retries changed selection metadata and refuses a payload that never becomes stable', t => {
   const setup = harbor(t);

@@ -523,10 +523,11 @@ test('status --all lists every run on this machine across repositories, person-w
     const out = await runStatus(input, a.ports);
     assert.equal(out.exitCode, 0, out.message);
     const lines = out.message.split('\n');
-    assert.equal(lines.length, 3, out.message);
+    assert.equal(lines.length, 4, out.message);
     assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:00$/);
     assert.match(lines[1], /^example\/project#17 · bug · story · agent working on reproduce · Oct 27, 17:01$/);
-    assert.equal(lines[2], 'Open one: pdd workflow open example/project#17');
+    assert.equal(lines[2], 'Review without resuming: pdd workflow view example/project#17');
+    assert.equal(lines[3], 'Open one: pdd workflow open example/project#17');
   }
   await cancelRun({ ref: '17', cwd: b.source }, b.ports);
   const hidden = await runStatus({ all: true, cwd: outside }, a.ports);
@@ -536,6 +537,7 @@ test('status --all lists every run on this machine across repositories, person-w
   const json = JSON.parse((await runStatus({ all: true, json: true, cancelled: true, cwd: outside }, a.ports)).message);
   assert.deepEqual(json.runs.map(run => [run.workflow, run.group, run.words]), [['small-change', 'waiting', 'waiting for you: approve the plan'], ['bug', 'cancelled', 'cancelled']]);
   assert.equal(json.runs[0].ref, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.ok(json.runs[0].runDir);
+  assert.equal(json.runs[0].viewCommand, 'pdd workflow view example/project#17');
   // Inside a repository, plain status stays that repository's runs.
   assert.doesNotMatch((await runStatus({ cwd: a.source }, a.ports)).message, /· bug ·/);
 });

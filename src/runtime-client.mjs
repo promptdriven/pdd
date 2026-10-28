@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d80fb6c125bbb3ab30341009840eff39b8014f2c657ddd6e50892ffcfc34f813).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c8cb5add8c0b35e5d990e1a8f4eeadd21c27980ef3140442084ebfd5a9028083).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -160,6 +160,7 @@ class Runtime {
     return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
   get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
+  reopen(id) { return this.send(`/v1/try/${id}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, this.ports.postMs); }
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
@@ -255,7 +256,7 @@ function select(found, words, root) {
 }
 
 const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
-  request_ids: [], report_url: null, checks: null, failed_checks: [], all_checks: [] }));
+  request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
 // Lint verdict for each test: the prompts it reaches must be approved or a current draft, and not refused. A draft marks the row.
 function judgeLint(answer, rows, root, visible, secrets = []) {
@@ -346,7 +347,7 @@ async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
@@ -359,7 +360,7 @@ async function sendCheck(context, row) {
   const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row);
   row.retry_at = null;
-  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', note: { code: null, message: 'Stopped before sending.' } });
+  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
@@ -567,7 +568,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   saveBatch(context);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
-  const lint = await runLint(context);
+  const lint = await runLint(context, true);
   if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer, program = answer?.result?.report?.program;
@@ -576,9 +577,19 @@ async function runLintOnly(context, cwd, words, setRelease) {
   if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
     throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
   }
+  const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
+  for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
+    const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
+    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
+      section: cleanText(item.at ?? item.section, context.secrets) || null,
+      message: cleanText(item.message, context.secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
+      severity: cleanText(item.severity, context.secrets) || 'error', pointer: cleanText(item.pointer, context.secrets) || null,
+      source: cleanText(item.source, context.secrets) || null });
+  }
   for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
-    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
-      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null });
+    const problem = { code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
+    if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
   }
   const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
   for (const [row, problem] of verdicts) {
@@ -587,6 +598,13 @@ async function runLintOnly(context, cwd, words, setRelease) {
     if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
   }
   if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  for (const item of Array.isArray(answer?.result?.tests) ? answer.result.tests.filter(isObject) : []) {
+    const row = rows.find(row => row.test === item.path);
+    if (!row || item.verdict !== 'refused') continue;
+    const own = problems.filter(p => p.path === row.test && p.severity !== 'warning');
+    Object.assign(row, { state: 'refused', refusals: own.length ? own : row.refusals.length ? row.refusals
+      : [{ code: 'lint-refused', section: 'lint', message: `${row.test} was refused by complete lint.` }] });
+  }
   for (const row of rows) if (row.state === 'ready') row.state = 'passed';
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
@@ -833,10 +851,33 @@ function refusedLink(answer, origin) {
 
 const otherNote = count => count ? `(${count} ${count === 1 ? 'is' : 'are'} not prompt, story or test files; run \`pdd check --files\` to see them)` : '';
 
-// A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
+// Paused sessions require an explicit owner reopen; only running sessions have a ready link.
 const LIVE_SESSION = new Set(['running', 'paused']);
 function tryLink(answer, origin) {
-  return answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) ? validLink(answer.result?.url, origin, 'try') : null;
+  return answer?.state === 'passed' && answer.result?.session?.state === 'running' ? validLink(answer.result?.url, origin, 'try') : null;
+}
+
+async function reopenTry(context, record, test) {
+  const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
+  const again = `pdd try ${target}`;
+  if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
+  const reply = await context.runtime.reopen(record.id);
+  const blocked = blockingAnswer(reply);
+  if (blocked) throw new Stop(5, blocked);
+  if (reply.status === 401) throw new Stop(5, 'Run gh auth login');
+  if (gateText(reply)) throw new Stop(5, 'The runtime opens soon.');
+  if (!reply.lost && ![200, 202].includes(reply.status)) {
+    const reason = cleanText(reply.json?.error?.message, context.secrets) || `HTTP ${reply.status}`;
+    throw new Stop(reply.status === 429 ? 5 : 3, `This Try could not reopen: ${reason} Read the same Try again with: ${again}`);
+  }
+  if (!reply.lost && !sameJob(reply.json, record.id, 'try')) throw new Stop(3, 'The reopen answer has another request ID or command. Read the same Try again later.');
+  const initial = reply.json;
+  if (tryLink(initial, context.origin)) return initial;
+  const done = await readUntil(context, record.id, 'try', answer => answer.result?.session?.state === 'running'
+    || ['failed', 'refused', 'unknown'].includes(answer.state)
+    || (answer.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state)), TRY_MS);
+  if (done.answer?.state === 'passed' && done.answer.result?.session?.state === 'running') return done.answer;
+  throw new Stop(3, `Reopening this Try was not confirmed. Read the same Try again with: ${again}`);
 }
 
 async function stopTry(context, record) {
@@ -866,7 +907,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible });
+    Object.assign(context, { root, store, origin, visible: found.visible, seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
     const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
@@ -881,15 +922,24 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
-      const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
       // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
-      if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
+      if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
+      if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
+        if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
+        answer = await reopenTry(context, record, test); link = tryLink(answer, origin);
+      }
+      if (link && !options['--new']) {
+        if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
+        context.seedTest.storyPath = record.storyPath ?? test.storyPath;
+        return await showTry(context, test, link, options, record.id, true);
+      }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
@@ -904,7 +954,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (row.state !== 'ready') return printTryProblem(context, row);
     const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, ...(appMap ? { app_map: appMap } : {}),
       tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
+    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin } } });
     store.posted(context.folder, request.requestId);
     if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
@@ -1003,8 +1053,9 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId) {
-  const { ports } = context, ends = `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
+async function showTry(context, test, link, options, tryId, reused = false) {
+  const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
+    : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
   else {
     line(ports.stdout, `Try link for "${test.title}": ${link}`);
@@ -1067,11 +1118,11 @@ const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json
 const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
 
 // One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
-function addSavedCase(root, saved) {
-  try { return addSavedCaseSafely(realpathSync(root), saved); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+function addSavedCase(root, saved, seedTest) {
+  try { return addSavedCaseSafely(realpathSync(root), saved, seedTest); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
 }
 
-function addSavedCaseSafely(root, saved) {
+function addSavedCaseSafely(root, saved, seedTest) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
   if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
@@ -1079,7 +1130,10 @@ function addSavedCaseSafely(root, saved) {
   if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
     return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
   }
-  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const seededStory = seedTest?.storyPath === story;
+  const target = seededStory ? found.tests.find(item => item.path === seedTest.path && item.storyPath === story && item.doc)
+    : found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  if (seededStory && !target) return `not added: the original test ${cleanText(seedTest.path)} is missing or no longer belongs to ${cleanText(story)}. Restore it before importing the case.`;
   if (!target) {
     // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
     const folder = statOrNull(join(root, 'tests'));
@@ -1131,7 +1185,7 @@ async function collectSavedTests(context, tryId) {
   for (const saved of reply.json.tests) {
     const key = typeof saved?.id === 'string' ? saved.id : null;
     if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved);
+    const said = addSavedCase(root, saved, context.seedTest);
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
     line(ports.stdout, said);

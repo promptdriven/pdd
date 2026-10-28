@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: f1c642aa36c4210c2a8b5ae3a6ed625d4b77042ad8d5fd915d57d9fe605fd9e2).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: c9bd0cb10a9cb80fa1aa0fb43423971312c56977bb6515dddc0c5ea600b31f4b).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -149,11 +149,23 @@ function registrations(output) {
 
 async function externalWorktrees(ctx, c) {
   const primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
-  if (!primary?.worktree || primary.bare) fail();
-  const original = await context(primary.worktree, c);
-  if (original.sourceRoot !== primary.worktree || original.commonDir !== ctx.commonDir
-    || !sameRepo(original.repository, ctx.repository)) fail();
-  const path = join(dirname(original.sourceRoot), basename(original.sourceRoot) + '.pdd-worktrees');
+  if (!primary?.worktree) fail();
+  let anchor;
+  if (primary.bare) {
+    anchor = await canonicalDirectory(primary.worktree);
+    const bare = (await c.git(anchor, ['rev-parse', '--is-bare-repository'])).trim();
+    const gitDir = (await c.git(anchor, ['rev-parse', '--absolute-git-dir'])).trim();
+    const commonDir = (await c.git(anchor, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+    const repository = originRepo((await c.git(anchor, ['remote', 'get-url', 'origin'])).trim());
+    if (bare !== 'true' || gitDir !== anchor || commonDir !== anchor || anchor !== ctx.commonDir
+      || !sameRepo(repository, ctx.repository)) fail();
+  } else {
+    const original = await context(primary.worktree, c);
+    if (original.sourceRoot !== primary.worktree || original.commonDir !== ctx.commonDir
+      || !sameRepo(original.repository, ctx.repository)) fail();
+    anchor = original.sourceRoot;
+  }
+  const path = join(dirname(anchor), basename(anchor) + '.pdd-worktrees');
   if (path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
   return path;
 }
@@ -201,6 +213,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
     if (!sameRepo(ctx.repository, repository)) return result('conflict', 'The requested repository does not match this checkout origin.');
     const p = locations(ctx.commonDir, runId, issueNumber);
     if (await exists(p.run)) {
+      saved = true;
       const a = await ownedRecord(ctx, runId, c);
       if (!sameRepo(a.repository, repository) || a.issueNumber !== issueNumber || a.workflowName !== workflowName || a.baseRef !== baseRef)
         return result('conflict', 'This run already names a different issue, workflow or base.');
@@ -237,7 +250,7 @@ export async function allocateIssueWorktree(input, ports = {}) {
   } catch {
     return result('recovery_required', saved
       ? 'Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work.'
-      : 'Cannot establish repository or allocation metadata identity. No new worktree is confirmed.');
+      : 'Cannot establish repository or allocation metadata identity. No allocation record or issue claim was saved. No new worktree is confirmed.');
   }
 }
 

@@ -75,6 +75,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
+"$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
 pdd --version   # prints 0.1.7
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
@@ -92,6 +93,8 @@ Important:
 
 The `main` branch of this repository and PyPI have the older Python `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
+Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+
 See all of them:
 
 ```sh
@@ -99,7 +102,7 @@ which -a pdd
 pdd --version   # PDD Alpha prints 0.1.7
 ```
 
-Remove the old one with the tool that installed it:
+If you choose to remove the Python installation, use the tool that installed it:
 
 ```sh
 uv tool uninstall pdd-cli     # if you used uv
@@ -114,6 +117,16 @@ If you want to keep the old one, call PDD Alpha by its full path:
 ```sh
 "$(npm prefix -g)/bin/pdd" --version
 ```
+
+Activating an environment later, for example `conda activate pdd`, can reorder PATH and shadow Alpha again. Activate the environment first, then prepend the directory containing Alpha’s `pdd` command and clear the shell cache:
+
+```sh
+conda activate pdd
+export PATH="$(npm prefix -g)/bin:$PATH"
+hash -r
+```
+
+Use the absolute Node-plus-Alpha command printed by the diagnostic when the environment selects a different Node installation or Alpha is running from a source checkout.
 
 The agents that PDD starts always get the full path of PDD Alpha. They are not affected by your PATH. Only the commands that you type are.
 
@@ -360,7 +373,7 @@ For extra files, add `pdd-source.json` at the repository root:
 {"include": ["docs/shared-policy.md", "data/menu.json"]}
 ```
 
-`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file.
+`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file that launched the Try, even when a Story has several test files. Reopening that Try keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
 
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing
@@ -378,7 +391,7 @@ In a terminal, `pdd check` waits until every check ends. When an agent runs it (
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
 
-Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls. With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It requests complete diagnostics (`complete: true`), uses 0 AI calls and shows the problems the server reports, including each schema pointer and Story/test diagnostic. A selected test refused by complete lint is refused even when its prompt admission passed. The preliminary lint before Check or Try keeps its ordinary admission request. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd check --files` and `pdd check --fill-hash` send nothing. Those checks are not a server lint pass. See [Offline review and Runtime boundaries](runtime-boundaries.md). With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
@@ -394,6 +407,8 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The runtime address is set in one place in pdd. You do not need to set it.
+
+A native factory returning installed owners or process/cleanup ports is not a JSON Runtime operation. Keep its public native contract and mark an unavailable JSON binding incomplete; do not invent an adapter or a successful startup result. See [Native factories and JSON operations](runtime-boundaries.md#native-factories-and-json-operations).
 
 ### 7.1 Approve a prompt
 
@@ -411,7 +426,7 @@ pdd shows the prompt's runtime interface in plain words: each input, result and 
 
 ### 7.2 Try a Story
 
-`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`.
+`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`. If an idle Try is paused, run `pdd try STORY` again: pdd asks the server to reopen that same Try and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
 
 In your terminal, `pdd try` keeps waiting while the page is open:
 

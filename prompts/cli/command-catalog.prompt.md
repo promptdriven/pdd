@@ -15,6 +15,7 @@ Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`, workflow.open `workflow open ISSUE`.
+- workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Try links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
 
