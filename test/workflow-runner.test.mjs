@@ -1806,3 +1806,18 @@ test('PRBODY5: when GitHub refuses the PR, done names the reason and the fix, an
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.prs.length, 1); assert.equal(f.pushes.length, 1, 'no second push');
 });
+
+test('PRBODY7: failures and report links inside authored details or auto-folded output survive summarization', async t => {
+  for (const style of ['details', 'fence', 'details-with-notes']) {
+    const { f, run } = await smallChangeAtVerify(t);
+    const failure = 'Critical hidden vector failed ✗', url = 'https://rt.example.test/r/hidden-vector';
+    const log = Array.from({ length: 3000 }, (_, i) => i === 2500 ? failure : i === 2501 ? `Report: ${url}` : `ok ${i} - a long successful verification output line`).join('\n');
+    const block = style.startsWith('details') ? `<details><summary>Failed output</summary>\n\n${log}\n</details>` : `\`\`\`text\n${log}\n\`\`\``;
+    const verify = `# Verify\n\n## Output\n\n${block}\n${style.endsWith('notes') ? '\n## Notes\n' + 'A long supplementary note with successful verification details.\n'.repeat(2000) : ''}`;
+    writeFileSync(join(run.runDir, 'verify.md'), verify);
+    await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'verification recorded', cwd: run.root }, f.agentPorts()));
+    const body = f.prs[0].body;
+    assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.includes(url), style);
+    assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
+  }
+});

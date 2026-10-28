@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cbaab5dd64991a33d4596685a64f79400d3ea7cf109885ce546e9b02c7a2626f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8958580af958c50b3b1313132484c1dd5c703e411f359b5f45a5004d990316d0).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -436,22 +436,25 @@ const reportsFailure = line => /✗|\bfail(?:s|ed|ing)?\b/i.test(line);
 // verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
 // still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
 // a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
-function verifyFit(text, room) {
+function verifyFit(text, room, env) {
   const full = verifyBody(text);
   if (characters(full) <= room) return full;
   const note = what => `_The full verify report has ${characters(text).toLocaleString('en-US')} characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: ${what}. The PR author has the full report: verify.md in the run folder._`;
-  const lines = [];
+  const lines = [], hiddenEvidence = new Set();
   let depth = 0, summary = null;
   for (const line of full.split('\n')) {
     const opens = (line.match(/<details\b/gi) ?? []).length, closes = (line.match(/<\/details>/gi) ?? []).length;
     if (!depth && !opens) { lines.push(line); continue; }
+    if (reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line)) hiddenEvidence.add(line.replace(/<\/?(?:details|summary)\b[^>]*>/gi, ''));
+    for (const reference of reportLinks(line, env)) hiddenEvidence.add(reference);
     summary ??= /<summary>(.*?)<\/summary>/i.exec(line)?.[1].trim() || null;
     depth = Math.max(0, depth + opens - closes);
     if (!depth) { lines.push(`- ${summary ?? 'Details'}: not shown here.`); summary = null; }
   }
+  if (hiddenEvidence.size) lines.push('', 'Evidence from the blocks not shown:', '', ...hiddenEvidence);
   const short = note('the long blocks are not shown');
   if (characters(lines.join('\n')) + characters(short) + 2 <= room) return `${lines.join('\n')}\n\n${short}`;
-  const reserve = characters(note('its first 000000 lines; 000000 more lines are not shown, and 000000 of them report a failure (the first 000000 are listed below)')) + 64;
+  const reserve = characters(note('its first 000000 lines; 000000 more lines are not shown, and 000000 of them report a failure (the first 000000 are listed below); 000000 report references are listed and 000000 are not shown')) + 256;
   const failRoom = Math.max(0, Math.min(8000, Math.floor((room - reserve) / 4))), keepRoom = Math.max(0, room - reserve - failRoom);
   let used = 0, at = 0, fence = null;
   for (; at < lines.length; at++) {
@@ -462,11 +465,18 @@ function verifyFit(text, room) {
     if (mark) fence = !fence ? mark : lines[at].trim().startsWith(fence) ? null : fence;
   }
   const kept = [...lines.slice(0, at), ...(fence ? [fence] : [])], failing = lines.slice(at).filter(line => reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line));
-  const listed = [];
+  const references = [...new Set(lines.slice(at).flatMap(line => reportLinks(line, env)))];
+  const listed = [], linked = [];
   let left = room - reserve - used - 40;
   for (const line of failing) { if (characters(line) + 1 > left) break; listed.push(line); left -= characters(line) + 1; }
-  const what = `its first ${at} lines; ${lines.length - at} more lines are not shown, and ${failing.length} of them report${failing.length === 1 ? 's' : ''} a failure${listed.length < failing.length ? listed.length ? ` (the first ${listed.length} are listed below)` : ' (they do not fit here)' : ''}`;
-  return [...kept, ...(listed.length ? ['', 'Lines that report a failure, from the part not shown:', '', '```text', ...listed, '```'] : []), '', note(what)].join('\n');
+  const alreadyShown = [...kept, ...listed].join('\n');
+  const remainingRefs = references.filter(line => {
+    const url = line.match(/https?:\/\/[^\s)<>\]"';]+/)?.[0];
+    return !url || !alreadyShown.includes(url);
+  });
+  for (const line of remainingRefs) { if (characters(line) + 1 > left) break; linked.push(line); left -= characters(line) + 1; }
+  const what = `its first ${at} lines; ${lines.length - at} more lines are not shown, and ${failing.length} of them report${failing.length === 1 ? 's' : ''} a failure${listed.length < failing.length ? listed.length ? ` (the first ${listed.length} are listed below)` : ' (they do not fit here)' : ''}${remainingRefs.length ? `; ${linked.length} report references are listed and ${remainingRefs.length - linked.length} are not shown` : ''}`;
+  return [...kept, ...(listed.length ? ['', 'Lines that report a failure, from the part not shown:', '', '```text', ...listed, '```'] : []), ...(linked.length ? ['', 'Report references from the part not shown:', '', ...linked] : []), '', note(what)].join('\n');
 }
 
 function prBody(run, area, env, drafts = [], tests = true) {
@@ -503,7 +513,7 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
-  return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body(''))));
+  return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body('')), env));
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.

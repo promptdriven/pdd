@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 25e4e47047d6a5a4eaead0e56eb475822273d604190b7014a5038287d49c7f22).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: b07dbb564fefe8169e6be5c96c178d68e1858dea4ff3baccd010b6d06492d21d).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
@@ -18,12 +18,20 @@ const parseJson = value => { try { return JSON.parse(value); } catch { fail('wor
 const outcome = (state, message, pr = null) => ({ state, pr, message });
 // GitHub refuses a PR description over 65,536 characters, counted as Unicode code points (0.1.7 tester: 105,489).
 const PR_BODY_LIMIT = 65_536, characters = value => [...value].length;
+const prCause = value => {
+  const hidden = String(value ?? '')
+    .replace(/(["'])(?:file:\/\/|[A-Za-z]:[\\/]|\\\\|\/)[^\r\n]*?\1/gi, '<local path>')
+    .replace(/\bfile:\/\/[^\s"'<>)]*/gi, '<local path>')
+    .replace(/(?:\b[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])[^\s"'<>)]*/g, '<local path>')
+    .replace(/(?<![\w.:/\\-])\/(?!\/)[^\s"'<>)]*/g, '<local path>');
+  return causeText(hidden);
+};
 // gh's error line, cleaned of tokens: gh may print "Creating pull request for …" first.
-const ghLine = stderr => { const lines = String(stderr).split(/\r?\n/).map(line => causeText(line)).filter(Boolean);
+const ghLine = stderr => { const lines = String(stderr).split(/\r?\n/).map(line => prCause(line)).filter(Boolean);
   return lines.find(line => /GraphQL:|error|fail|HTTP \d{3}|denied|refused|not found/i.test(line)) ?? lines.at(-1) ?? ''; };
 // GitHub's own refusal of the create, as gh prints it: "GraphQL: <reason> (createPullRequest)". Then no PR exists.
 function refusal(stderr) {
-  const reason = causeText(/GraphQL: (.+?) \(createPullRequest\)/.exec(String(stderr))?.[1] ?? '');
+  const reason = prCause(/GraphQL: (.+?) \(createPullRequest\)/.exec(String(stderr))?.[1] ?? '');
   if (!reason) return null;
   return /Body is too long/i.test(reason)
     ? 'GitHub refused to open the PR: its description is too long (GitHub\'s limit is 65,536 characters). The branch is pushed; no PR was opened. Make the PR description shorter, then try again.'

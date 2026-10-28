@@ -518,3 +518,24 @@ test('PRBODY3: other GitHub refusals keep GitHub\'s reason; a lost create stays 
   assert.match(lost.message, /^PR creation is unconfirmed \(gh: Post "https:\/\/api\.github\.com\/graphql": read: connection reset by peer/);
   assert.ok(!lost.message.includes(token), lost.message);
 });
+
+test('PRBODY6: known refusals and uncertain gh diagnostics redact private paths before bounding', async t => {
+  for (const [stderr, state, reason] of [
+    ['GraphQL: Could not read /home/alice/private-client/verify.md (createPullRequest)', 'rejected', 'Could not read'],
+    ['error: failed to open /Users/alice/private-client/verify.md', 'recovery_required', 'failed to open'],
+    ['error: failed to open /Volumes/private-client/report.md', 'recovery_required', 'failed to open'],
+    ['GraphQL: Could not read /data/private-client/report.md (createPullRequest)', 'rejected', 'Could not read'],
+    [String.raw`error: failed to open C:\Users\alice\private-report.md`, 'recovery_required', 'failed to open'],
+    ['error: failed to open file:///home/alice/private-report.md', 'recovery_required', 'failed to open'],
+    ['error: failed to open "/Volumes/Client Files/private-report.md"', 'recovery_required', 'failed to open'],
+    [String.raw`error: failed to open "C:\Client Files\private-report.md"`, 'recovery_required', 'failed to open'],
+    [String.raw`error: failed to open \\server\private-share\report.md`, 'recovery_required', 'failed to open']
+  ]) {
+    const f = await fixture(t), intent = await f.prepare();
+    f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined;
+    const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+    assert.equal(result.state, state); assert.ok(result.message.includes(reason));
+    assert.doesNotMatch(result.message, /alice|private-client|private-report|private-share|\/home\/|\/Users\//);
+    assert.match(result.message, /<local path>/);
+  }
+});
