@@ -205,7 +205,7 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.equal(result.code, 1, result.err);
   const lines = result.out.split('\n');
   const at = lines.indexOf('FAILED  Place a coffee order (tests/place-order.json)');
-  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: the AC1 check expects 899, but the AC1 text says 900.']);
+  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
   assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
   assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
     ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
