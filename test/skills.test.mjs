@@ -360,7 +360,7 @@ test('SKILLS22: for a page or a screen, visual writes the app map, and the perso
 
 // Wrong (2048 test, 0.1.7): 30 tests in a row of one AI call each, and a check refused for its AI-call budget, because
 // the steps pointed only to RUNBOOK §2–§4. The writing step says it once; no other file of the skill repeats it.
-const POINTERS = '- Also read the RUNBOOK sections that fit: §6 a CLI, §7 a prompt that calls another, §9 money and dates, §13 a page or screen. For tests: §8 check paths, §10 the AI-call budget (over it, a test is refused at 0 calls), §18 ONE call for a whole move list, never 30 in a row.';
+const POINTERS = '- Also read the RUNBOOK sections that fit: §6 CLI, §7 prompt calls, §9 money/dates, §13 screens; §8 check paths, §10 budgets (over cap: 0 calls). §18: one step = one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.';
 test('SKILLS23: the step that writes prompts and tests points to the RUNBOOK sections that fit, once', () => {
   for (const [name, writer] of [['pdd-feature', 'prompt-story'], ['pdd-bug', 'prompt-story'], ['pdd-small-change', 'change']]) {
     assert.equal(read(`${name}/steps/${writer}.md`).split('\n').filter(line => line === POINTERS).length, 1, `${name}/${writer}`);

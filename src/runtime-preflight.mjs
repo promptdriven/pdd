@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4eb5498687d769e4add98a9ed3ec31f0cfdb55d2b01ea0d54113846a8e65bcac).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 25d5f4318cd479dc6631189e7cd5211a8eb3123f8590507e2e46d64e5aee7656).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -379,30 +379,71 @@ function numbersIn(text) {
   return numbers;
 }
 
-// Issue 19: a number in a check that is not in its criterion's text.
-export function numberWarnings(doc) {
+const REVIEW_FILE = 'pdd-numeric-reviews.json';
+const REVIEW_KEYS = ['test_path','test_sha256','step_id','criterion_id','target','path','value','reason'];
+function validNumericReview(row) {
+  return isObject(row) && Object.keys(row).length === REVIEW_KEYS.length && REVIEW_KEYS.every(key => Object.hasOwn(row,key))
+    && ['test_path','step_id','criterion_id','target','path','test_sha256','reason'].every(key => typeof row[key] === 'string')
+    && row.test_path.endsWith('.json') && !row.test_path.startsWith('/') && posix.normalize(row.test_path) === row.test_path
+    && !row.test_path.split('/').includes('..') && /^[a-f0-9]{64}$/i.test(row.test_sha256)
+    && !!row.step_id.trim() && !!row.criterion_id.trim() && ['result','error'].includes(row.target)
+    && (row.path === '' || row.path.startsWith('/')) && Number.isFinite(row.value)
+    && !!row.reason.trim() && row.reason.length <= 1000 && !/[\r\n]/.test(row.reason);
+}
+function numericReviews(root, found, warnings) {
+  const path = join(root, REVIEW_FILE), stat = statOf(path);
+  if (!stat) return [];
+  const ignore = () => { warnings.push(`Warning: ${REVIEW_FILE} is invalid, unreadable or not a Git-visible regular file; its numeric reviews are ignored.`); return []; };
+  if (!found.visible.has(REVIEW_FILE) || !stat.isFile() || stat.isSymbolicLink() || stat.size > 16n * 1024n) return ignore();
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const actual = fstatSync(fd);
+    if (!actual.isFile() || actual.size > 16 * 1024) return ignore();
+    const source = readFileSync(fd,'utf8');
+    if (Buffer.byteLength(source) > 16 * 1024) return ignore();
+    const data = JSON.parse(source);
+    if (!isObject(data) || Object.keys(data).length !== 2 || data.schema_version !== 'pdd.numeric-reviews.v1'
+      || !Array.isArray(data.reviews) || data.reviews.length > 100 || !data.reviews.every(validNumericReview)) return ignore();
+    return data.reviews;
+  } catch { return ignore(); } finally { if (fd !== undefined) closeSync(fd); }
+}
+const quantityWords = text => String(text ?? '').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+const aggregateWords = new Set(['total','combined','cumulative','aggregate','sum','cap','limit','budget']);
+
+// A number can be a component of the criterion's quantity, rather than a typo.
+export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
   const texts = new Map((Array.isArray(doc?.criteria) ? doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
+  const steps = Array.isArray(doc?.steps) ? doc.steps : [], allChecks = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []);
   const warnings = new Set();
-  for (const step of Array.isArray(doc?.steps) ? doc.steps : []) for (const check of Array.isArray(step?.checks) ? step.checks : []) {
-    if (!isObject(check) || typeof texts.get(check.criterion_id) !== 'string') continue;
-    // Call counts, world values and counts are often not numbers of the criterion text (real-user issue 9).
-    if (['calls', 'world'].includes(check.target)) continue;
+  for (const [stepIndex,step] of steps.entries()) for (const [checkIndex,check] of (Array.isArray(step?.checks) ? step.checks : []).entries()) {
+    const text = texts.get(check?.criterion_id);
+    if (!isObject(check) || typeof text !== 'string' || !['result','error'].includes(check.target)) continue;
     const values = check.op === 'one_of' && Array.isArray(check.value) ? check.value : check.op === 'equals' ? [check.value] : [];
-    const found = numbersIn(texts.get(check.criterion_id));
+    const found = numbersIn(text), leaf = quantityWords(String(check.path ?? '').split('/').at(-1));
+    const sameQuantity = leaf.some(word => aggregateWords.has(word)) && quantityWords(text).some(word => aggregateWords.has(word));
+    const members = /\bacross\b([\s\S]*)/i.exec(text)?.[1] ?? '';
+    const namedComponent = !sameQuantity && /\b(?:combined|cumulative|total|aggregate|sum|across)\b/i.test(text)
+      && quantityWords(check.path).some(word => word.length > 2 && quantityWords(members).includes(word));
     for (const value of values) {
       if (typeof value !== 'number' || !found.length || found.some(item => item.value === value)) continue;
-      const closest = found.reduce((best, item) => Math.abs(item.value - value) < Math.abs(best.value - value) ? item : best);
-      // Only a near miss (within 10%) looks like a typo; a far number (0 calls vs status 409) measures something else.
-      if (Math.abs(closest.value - value) > 0.1 * Math.max(Math.abs(closest.value), Math.abs(value))) continue;
-      warnings.add(`Warning: the ${check.criterion_id} check expects ${value}, but the ${check.criterion_id} text says ${closest.text}.`);
+      const closest = found.reduce((best,item) => Math.abs(item.value-value) < Math.abs(best.value-value) ? item : best);
+      if (Math.abs(closest.value-value) > 0.1 * Math.max(Math.abs(closest.value),Math.abs(value))) continue;
+      const companion = allChecks.some(peer => isObject(peer) && peer !== check && peer.criterion_id === check.criterion_id
+        && peer.target === check.target && peer.path !== check.path && peer.op === 'equals' && peer.value === closest.value);
+      if (namedComponent || (!sameQuantity && companion)) continue;
+      if (reviews.some(row => validNumericReview(row) && row.test_path === testPath && row.test_sha256.toLowerCase() === testSha
+        && row.step_id === step.step_id && row.criterion_id === check.criterion_id && row.target === check.target && row.path === check.path && row.value === value)) continue;
+      const location = `${testPath ?? 'test'} steps[${stepIndex}].checks[${checkIndex}] (${check.target} ${check.path})`;
+      warnings.add(`Warning: possible numeric mismatch at ${location}: expected ${value}; ${doc.story_path ?? 'criterion text'} ${check.criterion_id} contains ${closest.text}. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in ${REVIEW_FILE} if needed (RUNBOOK §4).`);
     }
   }
   return [...warnings];
 }
 
 const stepCount = doc => Array.isArray(doc?.steps) ? doc.steps.length : 0;
-// Steps with saved data or prompt calls cost 2 to 3 AI calls each (real-projects report): 4 per step, 6 to 100.
-export const defaultMaxCalls = doc => Math.min(100, Math.max(6, stepCount(doc) * 4));
+// Leave room for the whole call graph; the budget is a ceiling, not a charge.
+export const defaultMaxCalls = doc => Math.min(1000, Math.max(18, stepCount(doc) * 12));
 
 function firstDifference(testTexts, storyTexts) {
   const left = [...storyTexts];
@@ -502,9 +543,10 @@ function checkTest(root, found, test, prompts) {
 // Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
 export function preflight({ root, found, selected }) {
   const prompts = new Map(), warnings = [];
+  const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
     const refused = checkTest(root, found, test, prompts);
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
@@ -550,7 +592,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
 const SECRET_NAME = /^(?:\.env.*|auth\.json|credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.npmrc|\.netrc|\.git-credentials|\.pypirc|.+\.(?:pem|key|p12|pfx|keystore|tfstate|tfvars))$/;
 const SECRET_PART = new Set(['secrets', '.ssh', '.codex', '.terraform', '.aws']);
 export const isSecretPath = path => SECRET_NAME.test(basename(path)) || path.split('/').some(part => SECRET_PART.has(part))
-  || /(?:^|\/)\.docker\/config\.json$/.test(path);
+  || /(?:^|\/)\.docker\/config\.json$/.test(path)
+  || /(?:^|\/)(?:\.pdd\/agents\.json|\.config\/pdd\/agents\.json)$/i.test(path);
 
 function octal(header, offset, length, value) { header.write(`${value.toString(8).padStart(length - 1, '0')}\0`, offset, length, 'latin1'); }
 function tarHeader(name, size, type) {

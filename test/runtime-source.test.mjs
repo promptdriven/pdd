@@ -488,3 +488,5 @@ test('SOURCE14: summary emphasis attributes preserve boundaries; ambiguous marku
     });
   }
 });
+
+test('SOURCE named agent launchers and env cannot be uploaded by includes or dependency links',t=>{for(const method of ['include','dependency']){const setup=harbor(t);json(setup.repo,'.pdd/agents.json',{agents:[{name:'Work',kind:'codex',command:'codex',env:{SECRET_TOKEN:'fixture-never-send'}}]});if(method==='include')json(setup.repo,'pdd-source.json',{include:['.pdd/agents.json']});else prompt(setup.repo,PLACE,'# Entry\n## Dependencies\n[Private agents](../.pdd/agents.json)');assert.throws(()=>captureSource(setup.repo,{tests:[ORDER]}),e=>/name looks like a secret/.test(e.message)&&!e.message.includes('fixture-never-send'));}});

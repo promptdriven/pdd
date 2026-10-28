@@ -1,4 +1,4 @@
-// Generated from prompts/cli/completion.prompt.md (sha256: 53f354c5d1a63720fcfa438c2c2d54d8345afd5067091454f48b0b37ff4ef6de).
+// Generated from prompts/cli/completion.prompt.md (sha256: 87889cfcf98de7338d5ec37ae6b12b84feacff7aac2f284a39a376e8c4740171).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {
@@ -47,7 +47,7 @@ export function renderCompletion(shell) {
   if (shell !== 'bash' && shell !== 'zsh') throw new TypeError('Choose bash or zsh.');
   const maps = candidateMaps();
   const valueChoices = new Map();
-  for(const route of PUBLIC_COMMAND_ROUTES) for(const option of route.options) if(option.choices) valueChoices.set(option.name,option.choices);
+  for(const route of PUBLIC_COMMAND_ROUTES) for(const option of route.options) if(option.choices) valueChoices.set(`${route.prefix[0]}:${option.name}`,option.choices);
   const bashValues = [...valueChoices].map(([name,values])=>`    ${name}) COMPREPLY=( $(compgen -W '${quoteWords(values)}' -- "$current") ); return ;;`).join('\n');
   const zshValues = [...valueChoices].map(([name,values])=>`    ${name}) choices=(${quoteWords(values)}); _describe "PDD option" choices; return ;;`).join('\n');
   const secondCases = [...maps.second].map(([key, values]) => `      ${key}) choices='${quoteWords(values)}' ;;`).join('\n');
@@ -58,7 +58,7 @@ export function renderCompletion(shell) {
       '# Bash completion for pdd',
       '_pdd_complete() {',
       '  local current="${COMP_WORDS[COMP_CWORD]}" choices',
-      '  case "${COMP_WORDS[COMP_CWORD-1]}" in', bashValues, '  esac',
+      '  case "${COMP_WORDS[1]}:${COMP_WORDS[COMP_CWORD-1]}" in', bashValues, '  esac',
       '  if [[ $COMP_CWORD == 3 && ${COMP_WORDS[1]} == workflow && ${COMP_WORDS[2]} == run ]]; then',
       `    choices="$(${definitionNames})"`,
       '    COMPREPLY=( $(compgen -W "$choices" -- "$current") ); return',
@@ -83,7 +83,7 @@ export function renderCompletion(shell) {
     '#compdef pdd',
     '_pdd() {',
     '  local -a choices',
-    '  case "${words[CURRENT-1]}" in', zshValues, '  esac',
+    '  case "${words[2]}:${words[CURRENT-1]}" in', zshValues, '  esac',
     '  if [[ $CURRENT == 4 && $words[2] == workflow && $words[3] == run ]]; then',
     `    local names="$(${definitionNames})"`,
     '    choices=(${=names}); _describe "PDD workflow" choices; return',

@@ -91,6 +91,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
       await exec('git', ['update-ref', to.replace('refs/heads/', 'refs/remotes/origin/'), sha], { cwd: opts.cwd });
       return { stdout: '' };
     }
+    if (file === 'git' && args[0] === 'ls-remote') {
+      // The remote branch as the last push left it (pushes keep the remote-tracking branch current).
+      const ref = args.at(-1), local = await exec('git', ['rev-parse', '--verify', '--quiet', ref.replace('refs/heads/', 'refs/remotes/origin/')], { cwd: opts.cwd }).catch(() => ({ stdout: '' }));
+      return local.stdout.trim() ? { stdout: `${local.stdout.trim()}\t${ref}\n` } : { stdout: '', code: 2 };
+    }
     if (file === 'git' && args[0] === 'fetch') {
       f.fetches++;
       const branch = args[2].replace(/^refs\/heads\//, '').split(':')[0];
@@ -101,6 +106,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     if (file !== 'gh') return exec(file, args, { ...opts, encoding: 'utf8' });
     if (args[0] === 'repo' && args[1] === 'view') return { stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/example/project' }) };
     if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.' }) };
+    if (args[0] === 'pr' && args[1] === 'create' && f.createError) { const stderr = f.createError; f.createError = null; return { stdout: '', stderr, code: 1 }; }
     if (args[0] === 'pr' && args[1] === 'create') {
       const value = flag => args[args.indexOf(flag) + 1];
       const number = 23 + f.prs.length;
@@ -1679,4 +1685,139 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
   const code=await approveRun({ref:'17',cwd:f.source},f.ports);
   assert.equal(code.exitCode,0,code.message);assert.equal(refreshed,true);
   assert.equal(f.git(run.root,'rev-parse','HEAD'),newest,'PR2 uses the newly fetched base');
+});
+
+// Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
+test('GREG2442-1: newest compatible verify evidence replaces 7/8 with 17/17; unknown stays unknown', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const old = Array.from({ length: 8 }, (_, i) => `Runtime check (story-${i}): ${i === 7 ? 'unknown · 0' : '✓ 1'} of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
+  f.tick(); await stepDone({ step: 'check', summary: old, cwd: run.root }, f.agentPorts());
+  let data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 7); assert.deepEqual(data.failing, []); assert.deepEqual(data.unknown, ['story-7']);
+  const newer = Array.from({ length: 17 }, (_, i) => `Runtime check (story-${i}): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
+  f.tick(); await stepDone({ step: 'verify', summary: newer, cwd: run.root }, f.agentPorts());
+  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 17); assert.equal(data.total, 17); assert.deepEqual(data.failing, []);
+});
+
+test('GREG2442-2: changed uncommitted source invalidates pass evidence, byte-identical content restores it', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
+  writeFileSync(file, 'export const value = 999;\n');
+  let out = await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports);
+  let data = JSON.parse(out.message).runs[0].stories;
+  assert.equal(data.pass, 0); assert.deepEqual(data.failing, []); assert.ok(data.unknown.length);
+  writeFileSync(file, original);
+  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 1);
+});
+
+test('GREG2442-3: saved check JSON records only source-verified evidence and preserves all workflow/publication state', async t => {
+  const { recordEvidence } = await import('../src/workflow-runner.mjs');
+  assert.equal(typeof recordEvidence, 'function');
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { f, run } = await featureAtTryGate(t);
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.equal(f.prs.length, 1); const prBody = f.prs[0].body;
+  const fixtureRoot = join(packageRoot, 'test/fixtures/harbor');
+  const { cpSync } = await import('node:fs');
+  for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(fixtureRoot, dir), join(run.root, dir), { recursive: true });
+  const rows = ['tests/place-order.json', 'tests/unknown-item.json'].map(test => ({ test, story: test.split('/').at(-1).replace('.json', ''), state: 'passed',
+    criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0,
+    summary_line: `Runtime check (${test.split('/').at(-1).replace('.json', '')}): ✓ 1 of 1 criterion · 1/1 checks · 0 AI calls` }));
+  const source = captureSource(run.root, { tests: rows.map(r => r.test), appMap: null });
+  const file = join(f.base, 'evidence.json'), doc = { repo: run.root, source_sha256: source.sha256, rows, batch: 'older-byte-identical-receipt' };
+  writeFileSync(file, JSON.stringify(doc));
+  const before = f.record(), gitBefore = f.git(run.root, 'status', '--porcelain'), heads = f.git(run.root, 'rev-parse', 'HEAD');
+  const noExternal = { ...f.ports, herdr: async () => assert.fail('Herdr'), execFile: async (cmd, args, opts) => {
+    assert.equal(cmd, 'git'); assert.ok(['rev-parse', 'ls-files'].includes(args[0]), args.join(' ')); return exec(cmd, args, { ...opts, encoding: 'utf8' });
+  } };
+  f.tick(); const result = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal);
+  assert.equal(result.exitCode, 0, result.message);
+  const after = f.record();
+  for (const key of ['done', 'state', 'gate', 'question', 'decisions', 'chats', 'pr']) assert.deepEqual(after[key], before[key], key);
+  assert.equal(f.prs.length, 1); assert.equal(f.prs[0].body, prBody);
+  assert.equal(after.evidence.length, 1); assert.equal(after.evidence[0].receipt.batch, doc.batch);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), heads); assert.equal(f.git(run.root, 'status', '--porcelain'), gitBefore);
+  const data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 2); assert.equal(data.total, 2);
+  for (const mutate of [d => { d.rows[0].state = 'unknown'; }, d => { d.rows[0].story = 'invented'; }, d => { delete d.source_sha256; }, d => { d.repo = f.source; }]) {
+    const invalid = structuredClone(doc); mutate(invalid); writeFileSync(file, JSON.stringify(invalid));
+    const beforeBad = readFileSync(join(run.runDir, 'status.json'), 'utf8');
+    assert.notEqual((await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal)).exitCode, 0);
+    assert.equal(readFileSync(join(run.runDir, 'status.json'), 'utf8'), beforeBad);
+  }
+  writeFileSync(file, JSON.stringify(doc));
+  writeFileSync(join(run.root, 'user_stories/place-order.md'), 'changed');
+  const unchanged = readFileSync(join(run.runDir, 'status.json'), 'utf8');
+  const stale = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal);
+  assert.notEqual(stale.exitCode, 0); assert.match(stale.message, /source/i);
+  assert.equal(readFileSync(join(run.runDir, 'status.json'), 'utf8'), unchanged);
+});
+
+
+test('GREG2442-4: later stale-source verify cannot override compatible older results', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
+  writeFileSync(file, 'export const value = 999;\n');
+  f.tick(); await stepDone({ step: 'verify', summary: 'Runtime check: ✗ 0 of 2 criteria', cwd: run.root }, f.agentPorts());
+  writeFileSync(file, original);
+  const data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 1); assert.deepEqual(data.failing, []);
+});
+
+// Wrong (0.1.7 tester, #2518): verify.md went whole into the PR body (105,489 characters) and GitHub refused it.
+async function smallChangeAtVerify(t) {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts());
+  return { f, run };
+}
+test('PRBODY4: a huge verify.md keeps the PR body under 60,000 characters with its results, its failures and a note', async t => {
+  const { f, run } = await smallChangeAtVerify(t);
+  const log = Array.from({ length: 3000 }, (_, i) => `ok ${i} - case ${i} passed in 3 ms`).join('\n');
+  const notes = Array.from({ length: 2000 }, (_, i) => i === 1500 ? 'Case 1500: expected 4, got 5 ✗ (failed)' : `Note ${i}: the value is still two, as the Story says.`).join('\n');
+  const verify = `✗ 1 vectors fail\n\n## Vectors\n\n| case | expected | code | result |\n|---|---|---|---|\n| 1 | 2 | 2 | same |\n| 1500 | 4 | 5 | different ✗ |\n\n## Formal check\nProved (bounded): 0..999.\n\n## Output\n\n\`\`\`text\n${log}\n\`\`\`\n\n## Notes\n\n${notes}\n`;
+  assert.ok([...verify].length > 105_000);
+  writeFileSync(join(run.runDir, 'verify.md'), verify);
+  await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'one case fails', cwd: run.root }, f.agentPorts()));
+  const body = f.prs[0].body;
+  assert.ok([...body].length <= 60_000, String([...body].length));
+  assert.equal(body.split('\n')[0], '✗ 1 vectors fail');
+  for (const kept of ['| 1500 | 4 | 5 | different ✗ |', 'Proved (bounded): 0..999.', '- Output (3000 lines): not shown here.', 'Case 1500: expected 4, got 5 ✗ (failed)'])
+    assert.ok(body.includes(kept), kept);
+  assert.match(body, /_The full verify report has \d{3},\d{3} characters, more than a PR description can hold \(GitHub's limit is 65,536\)\. This is a summary: its first \d+ lines; \d+ more lines are not shown, and 1 of them reports a failure\. The PR author has the full report: verify\.md in the run folder\._/);
+});
+
+test('PRBODY5: when GitHub refuses the PR, done names the reason and the fix, and the next done opens it without a second push', async t => {
+  const { f, run } = await smallChangeAtVerify(t);
+  writeFileSync(join(run.runDir, 'verify.md'), '| case | result |\n|---|---|\n| 1 | same |\n');
+  f.createError = 'pull request create failed: GraphQL: Body is too long (maximum is 65536 characters) (createPullRequest)\n';
+  const refused = await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'all cases pass', cwd: run.root }, f.agentPorts()));
+  assert.equal(refused.exitCode, 1);
+  assert.match(refused.message, /The PR did not open: GitHub refused to open the PR: its description is too long \(GitHub's limit is 65,536 characters\)\. The branch is pushed; no PR was opened\. Make the PR description shorter, then run done formal again\./);
+  assert.doesNotMatch(refused.message, /unconfirmed/);
+  assert.equal(f.pushes.length, 1); assert.equal(f.prs.length, 0);
+  f.tick();
+  const opened = await stepDone({ step: 'formal', summary: 'formal done', cwd: run.root }, f.agentPorts());
+  assert.equal(opened.exitCode, 0, opened.message);
+  assert.equal(f.prs.length, 1); assert.equal(f.pushes.length, 1, 'no second push');
+});
+
+test('PRBODY7: failures and report links inside authored details or auto-folded output survive summarization', async t => {
+  for (const style of ['details', 'fence', 'details-with-notes']) {
+    const { f, run } = await smallChangeAtVerify(t);
+    const failure = 'Critical hidden vector failed ✗', url = 'https://rt.example.test/r/hidden-vector';
+    const log = Array.from({ length: 3000 }, (_, i) => i === 2500 ? failure : i === 2501 ? `Report: ${url}` : `ok ${i} - a long successful verification output line`).join('\n');
+    const block = style.startsWith('details') ? `<details><summary>Failed output</summary>\n\n${log}\n</details>` : `\`\`\`text\n${log}\n\`\`\``;
+    const verify = `# Verify\n\n## Output\n\n${block}\n${style.endsWith('notes') ? '\n## Notes\n' + 'A long supplementary note with successful verification details.\n'.repeat(2000) : ''}`;
+    writeFileSync(join(run.runDir, 'verify.md'), verify);
+    await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'verification recorded', cwd: run.root }, f.agentPorts()));
+    const body = f.prs[0].body;
+    assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
+    assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
+  }
 });

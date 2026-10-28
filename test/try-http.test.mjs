@@ -17,14 +17,15 @@ async function serving(t, entries, result, work, extra = {}) {
     if (!entry.json) return { status: 200, json: f.jobs.get(entry.url.split('/').at(-1)) };
     seen.push(entry.json);
     const program = typeof result === 'function' ? result(entry.json.input) : result;
-    const view = { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: program, report: { result: program } }), session_id: 'session' };
+    const view = { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: program, report: { result: program, remaining_calls: extra.callUsage?.remaining } }), session_id: 'session' };
+    if (extra.callUsage) view.usage.calls = extra.callUsage.calls;
     f.jobs.set(entry.json.requestId, view);
     return { status: 200, json: view };
   });
   const ports = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra).ports;
   ports.serve = async server => { const address = server.address(); if (extra.advertisedPort) server.address = () => ({ ...address, port: extra.advertisedPort }); return work(address.port, seen, ports); };
   const context = { root: setup.repo, ports, store: { dir: setup.state }, identity: { login: 'octo' }, origin: fake.origin,
-    runtime: { send: async () => ({ status: 200, json: { entries, app_map: extra.appMap ?? false } }) } };
+    runtime: { send: async () => ({ status: 200, json: { entries, app_map: extra.appMap ?? false, calls: extra.modelCalls } }) } };
   assert.equal(await openServe(context, {}, 'session', { '--serve': '0' }), 0);
   return { seen, ports };
 }
@@ -94,4 +95,26 @@ test('RELEASE7: port80 accepts default-port Host/Origin and still rejects cross-
     for (const headers of [{host:'evil.example'},{host:'127.0.0.1',origin:'http://evil.example'},{host:'127.0.0.1:81'}]) assert.equal((await raw(port,'/health',headers)).status,403);
     assert.equal(seen.length,4);
   }, {advertisedPort:80});
+});
+
+
+test('hcli-4: HTTP usage headers preserve program status/body and expose local zero-call errors', async t => {
+  await serving(t, [route('GET', '/books')], { status: 201, headers: { 'x-program': 'kept', 'x-pdd-ai-calls': '999' }, body: 'program bytes\n' }, async (port, seen, ports) => {
+    assert.match(ports.stderr.text, /Try AI usage:.*0 used.*40 remaining.*cap 40/);
+    const result = await raw(port, '/books');
+    assert.equal(result.status, 201); assert.equal(result.body, 'program bytes\n'); assert.equal(result.headers['x-program'], 'kept');
+    assert.equal(result.headers['x-pdd-ai-calls'], '2'); assert.equal(result.headers['x-pdd-try-used'], '2');
+    assert.equal(result.headers['x-pdd-try-remaining'], '38'); assert.equal(result.headers['x-pdd-try-cap'], '40');
+    const miss = await raw(port, '/absent'); assert.equal(miss.status, 404); assert.equal(miss.headers['x-pdd-ai-calls'], '0');
+    assert.equal(miss.headers['x-pdd-try-remaining'], '38'); assert.equal(miss.headers['x-pdd-usage-source'], 'last-known');
+    assert.equal(seen.length, 1);
+  }, { modelCalls: { cap: 40, remaining: 40 }, callUsage: { calls: 2, remaining: 38 } });
+});
+
+test('hcli-4: missing or malformed usage remains unknown, including a real zero remaining allowance', async () => {
+  const { tryUsage, tryUsageHeaders } = await import('../src/runtime-output.mjs');
+  assert.equal(typeof tryUsage, 'function');
+  assert.deepEqual(tryUsage({}), { calls: 'unknown', remaining: 'unknown', cap: 'unknown', used: 'unknown' });
+  assert.equal(tryUsageHeaders(tryUsage({ usage: { calls: '2' }, result: { report: { remaining_calls: -1 } } }))['x-pdd-ai-calls'], 'unknown');
+  assert.deepEqual(tryUsage({ usage: { calls: 2 }, result: { report: { remaining_calls: 0 } } }, { cap: 40 }), { calls: 2, remaining: 0, cap: 40, used: 40 });
 });

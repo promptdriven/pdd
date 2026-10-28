@@ -476,3 +476,66 @@ test('real local Git proves absent remote branch, recovers one original publicat
   assert.equal(await readFile(bodyFile, 'utf8'), body);
   assert.equal((await git('status', '--porcelain=v1')).stdout, '');
 });
+
+// Wrong (0.1.7 tester, #2518): a 105,489-character body was pushed, GitHub refused it, and pdd said only "unconfirmed".
+test('PRBODY1: a body over 65,536 characters (code points, marker included) is refused before any push', async t => {
+  const f = await fixture(t), intent = await f.prepare(), marker = `<!-- ${intent.marker} -->\n`;
+  // "é" is one character but two UTF-8 bytes: GitHub counts characters.
+  const sized = n => 'é'.repeat(n - [...marker].length - 1) + '\n' + marker;
+  await writeFile(f.bodyFile, sized(65_537)); f.calls.length = 0;
+  const refused = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  assert.equal(refused.state, 'failed'); assert.equal(effects(f.calls).length, 0);
+  assert.equal(refused.message, 'The PR description has 65,537 characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.');
+  await writeFile(f.bodyFile, sized(65_536));
+  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'open');
+});
+
+test('PRBODY2: GitHub\'s own refusal after the push names the cause and the fix; the retry creates without a second push', async t => {
+  const f = await fixture(t), intent = await f.prepare(); f.calls.length = 0;
+  const kinds = () => effects(f.calls).map(call => call.args[0] === 'push' ? 'push' : 'create');
+  // gh's exact stderr from the real run.
+  const stderr = 'pull request create failed: GraphQL: Body is too long (maximum is 65536 characters) (createPullRequest)\n';
+  f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined;
+  const refused = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  assert.equal(refused.state, 'rejected'); assert.equal(refused.pr, null);
+  assert.equal(refused.message, 'GitHub refused to open the PR: its description is too long (GitHub\'s limit is 65,536 characters). The branch is pushed; no PR was opened. Make the PR description shorter, then try again.');
+  assert.deepEqual(kinds(), ['push', 'create']);
+  f.state.intercept = null; f.calls.length = 0;
+  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'open');
+  assert.deepEqual(kinds(), ['create']);
+});
+
+test('PRBODY3: other GitHub refusals keep GitHub\'s reason; a lost create stays unconfirmed with gh\'s line, cleaned of tokens', async t => {
+  const f = await fixture(t), intent = await f.prepare(), token = `ghp_${'x'.repeat(36)}`;
+  const failCreate = stderr => { f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined; };
+  failCreate('Creating pull request for topic/feature into main in Acme/Project\n\npull request create failed: GraphQL: No commits between main and topic/feature (createPullRequest)\n');
+  const other = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  assert.equal(other.state, 'rejected');
+  assert.equal(other.message, 'GitHub refused to open the PR: No commits between main and topic/feature. The branch is pushed; no PR was opened. Fix what GitHub names, then try again.');
+  failCreate(`Creating pull request for topic/feature into main in Acme/Project\nPost "https://api.github.com/graphql": read: connection reset by peer (Authorization: token ${token})\n`);
+  const lost = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  assert.equal(lost.state, 'recovery_required');
+  assert.match(lost.message, /^PR creation is unconfirmed \(gh: Post "https:\/\/api\.github\.com\/graphql": read: connection reset by peer/);
+  assert.ok(!lost.message.includes(token), lost.message);
+});
+
+test('PRBODY6: known refusals and uncertain gh diagnostics redact private paths before bounding', async t => {
+  for (const [stderr, state, reason] of [
+    ['GraphQL: Could not read /home/alice/private-client/verify.md (createPullRequest)', 'rejected', 'Could not read'],
+    ['error: failed to open /Users/alice/private-client/verify.md', 'recovery_required', 'failed to open'],
+    ['error: failed to open /Volumes/private-client/report.md', 'recovery_required', 'failed to open'],
+    ['GraphQL: Could not read /data/private-client/report.md (createPullRequest)', 'rejected', 'Could not read'],
+    [String.raw`error: failed to open C:\Users\alice\private-report.md`, 'recovery_required', 'failed to open'],
+    ['error: failed to open file:///home/alice/private-report.md', 'recovery_required', 'failed to open'],
+    ['error: failed to open "/Volumes/Client Files/private-report.md"', 'recovery_required', 'failed to open'],
+    [String.raw`error: failed to open "C:\Client Files\private-report.md"`, 'recovery_required', 'failed to open'],
+    [String.raw`error: failed to open \\server\private-share\report.md`, 'recovery_required', 'failed to open']
+  ]) {
+    const f = await fixture(t), intent = await f.prepare();
+    f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined;
+    const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+    assert.equal(result.state, state); assert.ok(result.message.includes(reason));
+    assert.doesNotMatch(result.message, /alice|private-client|private-report|private-share|\/home\/|\/Users\//);
+    assert.match(result.message, /<local path>/);
+  }
+});
