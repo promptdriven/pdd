@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 15aa659c2881fc63c9070a0fa763cc7a3dbbab34490b589bd321965f121f3d00).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5a37d4d170eca227164eba3df5daa98dfe9632cb6c41922e9eb0189ee0502926).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -41,10 +41,11 @@ const routes = [
     forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
   { id: 'check', prefix: ['check'], local: 'runtime-check', operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
-      { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--fill-hash', kind: 'flag' },
+      { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
     forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links.'),
       form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
       form('pdd check --lint [STORY...] [--json]', 'Run only the PDD runtime lint (0 AI calls) on selected Stories and their dependencies and print every problem it finds; sends no checks.')] },

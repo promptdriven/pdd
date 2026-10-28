@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fd45d21bc0dcc6c13486d985348875333755f720cfe189b0b8bb5c1acc0c88c6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 26a61a080c2230f8e2f55b2ab7915edc5ed51abdf593b10f9bd76c0a4b8d8c46).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -82,7 +82,7 @@ export function jsonRow(row) {
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
+    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry,
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
@@ -110,16 +110,16 @@ export function summaryLine(rows, story = null) {
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
-  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state));
+  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state) && !row.busy);
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
-    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : 'unknown ·';
+    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());

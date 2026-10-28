@@ -4,7 +4,7 @@ Own `src/runtime-output.mjs`. It turns `pdd check` rows into the terminal table,
 
 ## Rows
 
-A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a busy-only summary `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
 - Seconds are rounded to 0.1.
