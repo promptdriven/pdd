@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 15aa659c2881fc63c9070a0fa763cc7a3dbbab34490b589bd321965f121f3d00).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 10e99bb7334dcb9655ec58f1eed1b4a376a025fd343cf9a4c86b9e11b02cc785).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -53,11 +53,11 @@ const routes = [
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
       { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
-      { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 },
+      { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 999999 },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form('pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. In a terminal it waits and adds each test saved on the Try page to the story\'s test file.'),
-      form('pdd try [STORY] --cli [--shell] [--new]', 'Run your program in your terminal through a Try session; prints a PATH line, or opens a shell with --shell.'),
-      form('pdd try [STORY] --serve [PORT] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
+    forms: [form('pdd try [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. In a terminal it waits and adds each test saved on the Try page to the story\'s test file.'),
+      form('pdd try [STORY] --cli [--shell] [--max-calls N] [--new]', 'Run your program in your terminal through a Try session; prints a PATH line, or opens a shell with --shell.'),
+      form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],

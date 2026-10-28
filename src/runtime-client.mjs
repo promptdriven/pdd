@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48d3f4a98e34c0db8c743ad34968667af3bb75b33da4939a7e847faa986f3988).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: f40272bdbdffdf638c3e7a17a33af83ead0ca2d6df4425891efb7df88b7feb88).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -919,6 +919,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    const rawBudget = options['--max-calls'];
+    if (rawBudget !== undefined && (!(typeof rawBudget === 'number' || typeof rawBudget === 'string' && /^[1-9][0-9]{0,5}$/.test(rawBudget))
+      || !Number.isSafeInteger(Number(rawBudget)) || Number(rawBudget) < 1 || Number(rawBudget) > 999999)) throw new Stop(2, '--max-calls must be a whole number from 1 to 999999; the runtime enforces its session maximum.');
+    const requestedBudget = rawBudget === undefined ? null : Number(rawBudget);
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
@@ -926,7 +930,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
-    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
+    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
@@ -947,14 +951,17 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
-      if ((options['--cli'] || options['--serve']) && record.login && record.login !== identity.login) throw new Stop(125, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-      if ((options['--cli'] || options['--serve']) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
+      if ((context.doorMode || requestedBudget !== null) && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if ((context.doorMode || requestedBudget !== null) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
+      if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
+      if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The runtime did not confirm this Try’s current budget. No budget change or reopen was sent.');
+      if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This runtime does not support raising this Try’s budget yet. The same Try and saved data are kept.');
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
       // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
@@ -980,7 +987,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (link && !options['--new']) {
         if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
         context.seedTest.storyPath = record.storyPath ?? test.storyPath;
-        return await showTry(context, test, link, options, record.id, true);
+        return await showTry(context, test, link, options, record.id, true, answer?.result?.session);
       }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
@@ -997,7 +1004,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
       return printTryProblem(context, row);
     }
-    const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, ...(appMap ? { app_map: appMap } : {}),
+    const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 160, ...(appMap ? { app_map: appMap } : {}),
       tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
     store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);
@@ -1015,7 +1022,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const done = ENDED.has(verdict.answer.state) ? { answer: verdict.answer }
       : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS);
     const link = tryLink(done.answer, origin);
-    if (link) return await showTry(context, test, link, options, request.requestId);
+    if (link) {
+      const cap = done.answer?.result?.session?.max_calls;
+      if (Number.isSafeInteger(cap) && cap !== request.max_calls) throw new Stop(5, `The runtime confirmed a budget of ${cap} calls instead of the requested ${request.max_calls}. This Try is kept; its saved data was not reset.`);
+      if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The runtime did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
+      return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
+    }
     if (done.answer?.state === 'unknown') {
       delete repoState.tries[test.path];
       store.saveRepo(root, repoState);
@@ -1105,7 +1117,12 @@ function printTryProblem(context, row) {
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId, reused = false) {
+async function showTry(context, test, link, options, tryId, reused = false, session) {
+  const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
+    && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
+    ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
+    : 'The runtime did not report this Try’s budget.';
+  line(options['--cli'] || options['--serve'] ? context.ports.stderr : context.ports.stdout, budget);
   if (options['--cli'] || options['--serve']) {
     const doors = await import('./try-doors.mjs');
     return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);

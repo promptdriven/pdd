@@ -224,7 +224,9 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
-- `pdd check` gives each test 4 calls for each step, at least 6 and at most 100. To give more, use `--max-calls N`.
+- `pdd check` gives each test 12 calls for each step, at least 18 and at most 100. Override it with `--max-calls N` within the runtime maximum.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a Check or Try. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- A new `pdd try` requests a session budget of 160 calls. `pdd try STORY --max-calls 240` chooses a different ceiling. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
   prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.

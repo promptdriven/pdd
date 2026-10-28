@@ -239,9 +239,9 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.
-test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may name a model', async t => {
+test('RUNTIME-RULES3: default max_calls is 12 per step (18 to 100), and a step may name a model', async t => {
   const steps = count => ({ steps: Array.from({ length: count }, () => ({})) });
-  assert.deepEqual([1, 2, 3, 30].map(count => defaultMaxCalls(steps(count))), [6, 8, 12, 100]);
+  assert.deepEqual([1, 2, 3, 30].map(count => defaultMaxCalls(steps(count))), [18, 24, 36, 100]);
   const { repo, home } = harbor(t), file = join(repo, 'tests/place-order.json'), doc = readJson(file);
   doc.steps[0].model = 'gpt-6.1-sol'; doc.steps[0].input.items[0].quantity = 0; writeJson(file, doc);
   const named = await check(repo, home, ['place-order']);

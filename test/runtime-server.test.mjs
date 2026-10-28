@@ -37,7 +37,7 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual(Object.keys(lint.request).sort(), ['requestId', 'source_sha256']);
   assert.deepEqual(checks.map(post => post.request.scenario).sort(), ['tests/place-order.json', 'tests/unknown-item.json']);
   for (const post of fake.posts) { assert.equal(post.request.source_sha256, sha(post.tar)); assert.ok(post.tar.equals(lint.tar)); }
-  assert.deepEqual(checks.map(post => post.request.max_calls), [6, 6]);
+  assert.deepEqual(checks.map(post => post.request.max_calls), [18, 18]);
   assert.equal(new Set(fake.posts.map(post => post.request.requestId)).size, 3);
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
   assert.match(result.err, /^Lint passed\. Sent 2 checks at \d\d:\d\d:\d\d: 6 files, \d+ KB \(1 is not prompt, story or test files; run `pdd check --files` to see them\)\.$/m);
@@ -673,8 +673,8 @@ test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses
   const all = await check(setup, fake, []);
   assert.equal(all.code, 0);
   const lines = all.err.split('\n');
-  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') >= 0, all.err);
-  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 12).') < lines.findIndex(text => text.startsWith('Lint passed')));
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 36).') >= 0, all.err);
+  assert.ok(lines.indexOf('Checking all 2 stories: about 2 AI calls (at most 36).') < lines.findIndex(text => text.startsWith('Lint passed')));
   const one = await check(setup, fake, ['place-order']);
   assert.doesNotMatch(one.err, /Checking all/);
 });

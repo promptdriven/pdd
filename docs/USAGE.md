@@ -387,6 +387,8 @@ pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```
 
+The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 100 per test. `pdd check STORY --max-calls N` overrides that ceiling. A new `pdd try STORY` requests 160 calls; use `pdd try STORY --max-calls 240` for more room. Try shows the runtime-confirmed total and remaining calls, and reusing a Try without a budget option keeps its current ceiling. The runtime enforces its supported maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
+
 In a terminal, `pdd check` waits until every check ends. When an agent runs it (no terminal), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`; the checks keep running on the server. `--timeout MIN` (1 to 120 minutes) sets the limit in both cases. While checks run, pdd prints one line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Press Ctrl-C to stop waiting, and run `pdd check --read` to see the results.
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
