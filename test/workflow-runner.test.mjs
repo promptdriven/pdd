@@ -926,6 +926,18 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
 });
 
+// pdd check prints only the Story's own line when there is one Story (0.1.7): PR 1 lifts it and status counts it.
+test('0.1.7: a summary with only one named Runtime check line lifts that line into PR 1', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (unread-filter): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
+    'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
+});
+
 test('0.1.6: one named Story gets no total line; its line is the total', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (move-tiles): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());

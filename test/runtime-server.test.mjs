@@ -219,7 +219,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check: running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
@@ -564,7 +564,7 @@ test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary li
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 0, result.err + result.out);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed \(DRAFT\) +1\/1/m);
-  assert.match(result.out, /^Runtime check \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
+  assert.match(result.out, /^Runtime check \(place-order\) \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
   assert.match(result.out, /^ {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {2}\(DRAFT\)$/m);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.draft, true); assert.equal(json.json.rows[0].draft, true);
@@ -689,7 +689,17 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
   assert.equal(json.json.summary_line, 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
   const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);
   assert.ok(draft.out.split('\n').includes('Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
-  assert.ok(draft.out.split('\n').includes('Runtime check (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
+});
+
+// Wrong: one Story prints its line twice, once with its name and once as the overall line (round-2 tester, Oct 27).
+test('RUNTIME-STORYLINE2: one Story prints only its own Runtime check line; two Stories add the overall line', async t => {
+  const fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
+  const one = await check(draftRepo(t), fake, ['place-order']);
+  assert.deepEqual(one.out.split('\n').filter(text => text.startsWith('Runtime check')),
+    ['Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']);
+  const two = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), []);
+  assert.deepEqual(two.out.split('\n').filter(text => text.startsWith('Runtime check')), ['Runtime check (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
+    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
 });
 
 // Wrong: when the server retires an address it answers "update required", and an old pdd shows a failure table or retries (0.1.6).

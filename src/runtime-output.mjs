@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: e980c1ab74696eadd03f183b974809bab45ce4e8f554d5384ae553f9d88d9709).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 137cb2121af770edf4413d32f94ca560f09b67daaaac0d036e38d1df7c69f25d).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -143,7 +143,9 @@ function localRefusals(rows) {
 export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
-  out.push(...table(rows), ...storyLines(rows).map(([, text]) => text), summaryLine(rows));
+  // One Story: its own line is the result; the overall line comes only with two or more Stories.
+  const perStory = storyLines(rows).map(([, text]) => text);
+  out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   for (const row of rows.filter(row => row.state === 'failed')) {
     out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).map(check => `  ${checkLine(check, secrets)}`),
       ...(row.warnings ?? []).map(text => `  ${text}`),
