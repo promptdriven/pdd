@@ -513,5 +513,7 @@ When the Story has an app map, open `http://127.0.0.1:8080/` for the actual Scre
 click **Open the app**; opening and taps use the same Try budget and saved data. Loading the page alone uses
 no AI call. The Screen reuses the hosted renderer, styles and declared click/form/key targets. It keeps an action
 ID before sending and reads that same ID after a lost reply or reload; it never sends the action twice. Unknown
-outcomes block new taps until recovered. Screen-only Stories need no named HTTP route. An app map reserves
+outcomes block new taps until recovered. Screen-only Stories need no named HTTP route; startup says **Screen only (no named HTTP routes)**.
+If a saved Try has no app map, use the printed `--new --app-map PATH` command to start one with the selected map.
+A Story with neither an app map nor named routes gets a plain message describing both options. An app map reserves
 GET/HEAD `/` and `/__pdd/screen/`; move conflicting named routes. Credentials stay in pdd, outside the page.

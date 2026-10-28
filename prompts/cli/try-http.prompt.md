@@ -42,7 +42,14 @@ app/open and act resources beneath local /__pdd/screen/. Never forward a browser
 URL, engine token or arbitrary resource path. The remote trusted shell and shared hosted renderer own drawing
 and events. The browser communicates only with localhost; pdd adds its own owner credentials upstream.
 GET / only reads the Screen shell; the explicit Open the app action spends the existing runtime budget.
-App-map Stories may have zero HTTP entries. Reserve GET/HEAD / and every /__pdd/screen/ path when a Screen
+App-map Stories may have zero HTTP entries. For that case open the same listener and explicitly say
+"Screen only (no named HTTP routes)." Do not ask the person to add an HTTP route to use the Screen.
+Only authenticated pinned metadata grants Screen capability; a locally detected map is not remote admission.
+If neither capability exists and a local app map was selected, explain that this saved Try has no Screen map
+and give the exact pdd try STORY --serve PORT --new recovery (including --app-map with the selected map path relative to the invocation directory, safely shell-quoted).
+Do not silently stop, replace or reset the saved session. If neither capability exists and no map was selected,
+say the Story has neither a Screen app map nor named HTTP routes; explain both valid ways to provide one.
+Reserve GET/HEAD / and every /__pdd/screen/ path when a Screen
 exists; conflicting named routes refuse startup. Without an app map, keep ordinary named-route behavior.
 Screen requests share all local origin, body, pending-limit and cancellation guards. Forward UTF-8 trusted
 assets and JSON with bounded responses (16 MiB), no redirects, no cookies or CORS headers, no caching, nosniff,

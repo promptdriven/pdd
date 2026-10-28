@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 51688250b6ed843e34d032ee0ea5000af08e2f81a9e71397d3fd0060c66a851d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a895603b87b4709450732374d640f17d888fb0ff3b12de288e406d1fb8093b29).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -805,7 +805,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible });
+    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd) });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') {
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');

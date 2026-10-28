@@ -1,10 +1,12 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: a5c5ccd439f4327fd84d32d55713b2b5d5a7894d0ad69f6fe0ff78bd7811f728).
+// Generated from prompts/cli/try-http.prompt.md (sha256: d1d975861c12f019f6fd67ff725353579457c1f1e1463613131107da1eccd28d).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
+import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
 import { runDoorCall } from './runtime-client.mjs';
 
 const problem = (status, message) => Object.assign(new Error(message), { httpStatus: status });
+const shellWord = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'content-length']);
 function primitive(values, schema) {
@@ -119,7 +121,13 @@ export async function openServe(context, test, sessionId, options) {
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));
   const hasScreen = model.json.app_map === true;
   if (hasScreen && routes.some(e => ['GET', 'HEAD'].includes(e.route.method) && e.route.path === '/' || e.route.path.startsWith(SCREEN_PREFIX))) throw problem(502, 'This app map reserves GET/HEAD / and /__pdd/screen/; its HTTP routes conflict with the Screen.');
-  if (!routes.length && !hasScreen) throw problem(502, 'This Story has no named HTTP routes. Add an input schema title such as HTTP GET /api/books (RUNBOOK §6).');
+  if (!routes.length && !hasScreen) {
+    if (context.appMap) {
+      const command = ['pdd', 'try', test.story, '--serve', String(options['--serve'] ?? 8080), '--new', '--app-map', relative(context.cwd ?? root, join(root, context.appMap))].map(shellWord).join(' ');
+      throw problem(502, `This saved Try has no Screen app map. Start a new Try with the selected app map: ${command}`);
+    }
+    throw problem(502, 'This Story has neither a Screen app map nor named HTTP routes. Add an app map (RUNBOOK §13), or name an HTTP route such as HTTP GET /api/books in input_schema.title (RUNBOOK §19).');
+  }
   const keys = new Set();
   for (const entry of routes) {
     const key = `${entry.route.method} ${entry.route.path.replace(/:[A-Za-z][A-Za-z0-9_]*/g, ':param')}`;
@@ -182,7 +190,7 @@ export async function openServe(context, test, sessionId, options) {
   const stop = () => { stopped = true; server.close(); server.closeIdleConnections(); server.closeAllConnections(); };
   context.signal?.addEventListener('abort', stop, { once: true });
   const port = server.address().port;
-  ports.stdout.write(`Try is serving at http://127.0.0.1:${port}\n${routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n')}\nCtrl-C closes this server. The Try session keeps its saved data.\n`);
+  ports.stdout.write(`Try is serving at http://127.0.0.1:${port}\n${routes.length ? routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n') : '  Screen only (no named HTTP routes).'}\nCtrl-C closes this server. The Try session keeps its saved data.\n`);
   if (hasScreen) ports.stdout.write(`Screen: http://127.0.0.1:${port}/\n`);
   try {
     if (ports.serve) { await ports.serve(server); return 0; }
