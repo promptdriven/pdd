@@ -389,7 +389,7 @@ In a terminal, `pdd check` waits until every check ends. When an agent runs it (
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
 
-Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls.
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows the problems the server reports. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd check --files` and `pdd check --fill-hash` send nothing. Those checks are not a server lint pass. See [Offline review and Runtime boundaries](runtime-boundaries.md).
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
@@ -405,6 +405,8 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The runtime address is set in one place in pdd. You do not need to set it.
+
+A native factory returning installed owners or process/cleanup ports is not a JSON Runtime operation. Keep its public native contract and mark an unavailable JSON binding incomplete; do not invent an adapter or a successful startup result. See [Native factories and JSON operations](runtime-boundaries.md#native-factories-and-json-operations).
 
 ### 7.1 Approve a prompt
 
@@ -422,7 +424,7 @@ pdd shows the prompt's runtime interface in plain words: each input, result and 
 
 ### 7.2 Try a Story
 
-`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`.
+`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`. If an idle Try is paused, run `pdd try STORY` again: pdd asks the server to reopen that same Try and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
 
 In your terminal, `pdd try` keeps waiting while the page is open:
 
