@@ -81,7 +81,7 @@ const RULES = [
   ['P1 version', 'invalid-document', (r, doc) => { doc.schema_version = 'prompt-runtime.program-scenario.v2'; }],
   ['P2 no story', 'pdd-no-story', (r, doc) => { delete doc.story_path; }],
   ['P2 story missing', 'story-missing', (r, doc) => { doc.story_path = 'user_stories/gone.md'; }],
-  ['P3 scope', 'pdd-partial-test', (r, doc) => { doc.criteria_scope = ['ac-1']; }],
+  ['P3 invalid scope', 'invalid-criteria-scope', (r, doc) => { doc.criteria_scope = []; }],
   ['P3 exemptions', 'pdd-partial-test', (r, doc) => { doc.check_exemptions = [{ criterion_id: 'AC1', reason: 'out-of-scope', detail: 'x' }]; }],
   ['P4 no criteria', 'story-criteria-missing', r => writeFileSync(join(r, 'user_stories/place-order.md'), '# Place a coffee order\n\nNo list.\n')],
   ['P5 mismatch', 'story-criterion-mismatch', (r, doc) => { doc.criteria[1].text = 'The order keeps the name.'; }],

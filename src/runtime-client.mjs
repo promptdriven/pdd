@@ -1,4 +1,6 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48d3f4a98e34c0db8c743ad34968667af3bb75b33da4939a7e847faa986f3988).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c0bfc8a0a27ac4734682c323b55f265a927685d503b0dfb80687894f363cccd7).
+import { loadAgentDefinitions } from './agent-config.mjs';
+import { collectAgentSavedCases } from './agent-case-collector.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -50,7 +52,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -842,6 +844,15 @@ function appMapFor(found, given, cwd, root, stderr) {
 
 function oneTest(found, words, root) {
   const selected = select(found, words, root);
+  if (selected.length > 1 && new Set(selected.map(t => t.storyPath)).size === 1) {
+    const unscoped = selected.filter(t => !Array.isArray(t.doc?.criteria_scope));
+    if (unscoped.length === 1) return unscoped[0];
+    if (!unscoped.length) {
+      const widest = Math.max(...selected.map(t => t.doc.criteria_scope.length));
+      const candidates = selected.filter(t => t.doc.criteria_scope.length === widest);
+      if (candidates.length === 1) return candidates[0];
+    }
+  }
   if (selected.length !== 1) throw new Stop(2, ['pdd try needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
   return selected[0];
 }
@@ -914,11 +925,14 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
 }
 
+const agentWanted = (ports, options) => !options['--no-wait'] && !options['--cli'] && !options['--serve'] && ports.agentBridge !== false && (ports.interactive || options['--agent'] !== undefined);
+
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
@@ -931,6 +945,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    if (agentWanted(ports, options)) {
+      try { context.agentDefinitions = loadAgentDefinitions({cwd:root,env:ports.env}); }
+      catch (error) { throw new Stop(2,error.message); }
+      if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
+      if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
+    }
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
@@ -947,8 +967,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
-      if ((options['--cli'] || options['--serve']) && record.login && record.login !== identity.login) throw new Stop(125, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-      if ((options['--cli'] || options['--serve']) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
+      if ((options['--cli'] || options['--serve'] || agentWanted(ports, options)) && record.login && record.login !== identity.login) throw new Stop(options['--cli'] || options['--serve'] ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if ((options['--cli'] || options['--serve'] || agentWanted(ports, options)) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -962,7 +982,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && options['--serve'] && !options['--new']) {
+      if (live && (options['--serve'] || agentWanted(ports, options)) && !options['--new']) {
         let matches = false;
         try {
           const hashes = record.prompt_hashes;
@@ -971,7 +991,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
             && Object.entries(hashes).every(([path, expected]) => found.visible.has(path)
               && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === expected);
         } catch { /* A removed prompt cannot match the uploaded source. */ }
-        if (!matches) throw new Stop(125, 'A prompt changed or this Try has no source record. Run pdd try STORY --serve --new.');
+        if (!matches) throw new Stop(options['--serve'] ? 125 : 4, `A prompt changed or this Try has no source record. Run pdd try STORY${options['--serve'] ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
@@ -1112,16 +1132,31 @@ async function showTry(context, test, link, options, tryId, reused = false) {
   }
   const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
     : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
-  if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
-  else {
-    line(ports.stdout, `Try link for "${test.title}": ${link}`);
-    line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
-  }
-  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story);
-  return 0;
+  let bridge = null, answers = null;
+  try {
+    if (agentWanted(ports, options)) {
+      const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
+      context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
+      try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }
+      catch (error) { throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
+    }
+    if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
+    else {
+      line(ports.stdout, `Try link for "${test.title}": ${link}`);
+      line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
+      if (bridge) line(ports.stdout, `Owner agent chat link (private; do not share): ${bridge.url}`);
+    }
+    if (!bridge) { await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story); return 0; }
+    answers = ports.interactive ? lineReader(ports.stdin) : null;
+    context.onAgentChatClose = () => answers?.close();
+    return await bridge.run(async () => {
+      const tests = await collectSavedTests(context, tryId, answers), approvals = await collectApprovals(context, tryId, test.story, answers);
+      return tests !== 'ended' && approvals !== 'ended';
+    });
+  } finally { answers?.close(); await bridge?.close(); }
 }
 
-// ---- Save as test: cases saved on the Try page become steps of the story's test file ----
+// ---- Legacy CLI-door append importer; page saves use the independent case collector ----
 
 const slug = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
@@ -1234,21 +1269,8 @@ function addSavedCaseSafely(root, saved, seedTest) {
 }
 
 // Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
-async function collectSavedTests(context, tryId) {
-  const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
-  const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
-  if ([401, 403, 410].includes(reply.status)) return 'ended';
-  if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
-  const done = store.read(path) ?? {};
-  for (const saved of reply.json.tests) {
-    const key = typeof saved?.id === 'string' ? saved.id : null;
-    if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved, context.seedTest);
-    done[key] = { at: new Date(ports.now()).toISOString(), result: said };
-    store.write(path, done);
-    line(ports.stdout, said);
-  }
-  return 'ok';
+async function collectSavedTests(context, tryId, answers = null) {
+  return collectAgentSavedCases(context, tryId, { answers, timeoutMs: GET_MS });
 }
 
 // Approval requests from the Try page (#9): only a person's y in this terminal approves; the page gets done or declined.
@@ -1288,7 +1310,7 @@ async function watchSavedTests(context, tryId, wait, story) {
   let polls = 0, told = false, tests = 'ok', approvals = 'ok';
   try {
     for (;;) {
-      if (tests !== 'missing') tests = await collectSavedTests(context, tryId);
+      if (tests !== 'missing') tests = await collectSavedTests(context, tryId, answers);
       if (tests === 'missing' && wait && !told) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
       if (approvals !== 'missing') approvals = await collectApprovals(context, tryId, story, answers);
       if (tests === 'ended' || approvals === 'ended' || !wait || context.interrupted) return;

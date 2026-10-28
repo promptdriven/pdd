@@ -50,7 +50,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | `pdd check --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews a Try map |
 | `pdd check --lint [STORY...] [--json]` | The server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd approve PROMPT` | Show the prompt's runtime interface in plain words and its text changes since the last approved version, then ask y/n. On `y`, set it to `approved` and fill its hash. For a person at a terminal only |
-| `pdd try [STORY] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait]` | Make a Try link and open it in your browser. It ends in 24 hours. In a terminal, it waits: it adds each case saved on the Try page to the Story's test file, and asks y/n when you click Approve on the page |
+| `pdd try [STORY] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Make a Try link and open it in your browser. It ends in 24 hours. `--agent NAME` chooses a configured display name (quote spaces), or codex, claude or gemini. In a terminal, it waits: it imports each saved case into a separate scoped test, asks y/N before a new Story rule, and asks y/n for prompt approval |
 | `pdd try --stop [STORY]` | Stop the open Try link of a Story |
 
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
@@ -62,6 +62,8 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 - The runtime address is set in one place in pdd. You do not need to set it.
 
 See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, `pdd check --help` and `pdd try --help` for the options, and `RUNBOOK.md` for the file formats.
+
+The Try page's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the Try budget. Older pages keep manual Fill fields and Run.
 
 ## Used by the agent
 
