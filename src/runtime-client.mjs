@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 031a14d81248d8463982627e14b1ea19b758da4ae72b7cc7ce4e8921fb7906d0).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e9d9f7a2590c458ec2c5f90d5435889f336312d619d55893194862f2c23066a5).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,7 +9,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, tryUsage, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -354,10 +354,10 @@ function addHints(row, root, visible) {
 }
 
 function applyAnswer(row, answer, context) {
-  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets });
+  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [] });
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha, provider: view.provider,
+    server_seconds: view.server_seconds, time_limit: view.time_limit, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
   if (wait !== null) markBusy(context, row, wait);
@@ -1119,6 +1119,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The runtime did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
       return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
     }
+    if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
     if (done.answer?.state === 'unknown') {
       delete repoState.tries[test.path];
       store.saveRepo(root, repoState);
@@ -1202,7 +1203,7 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
 }
 
 function printTryProblem(context, row) {
-  if (context.doorMode) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || `The Try could not start (${row.state}).`);
+  if (context.doorMode) throw new Stop(125, row.time_limit ? `${row.time_limit.message} ${row.time_limit.fix}` : row.refusals?.map(r => r.message || r.code).join('; ') || `The Try could not start (${row.state}).`);
   const exitCode = exitCodeFor([row]);
   context.ports.stdout.write(renderText({ rows: [row], exitCode, secrets: context.secrets, recovery: `pdd try ${row.story}` }));
   return exitCode;
@@ -1455,7 +1456,9 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     if (answer && ENDED.has(answer.state)) {
       store.write(join(store.folder('tries'), `${id}.json`), answer);
       if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
+        const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
         const why = answer.result?.refusals?.[0];
+        if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
         throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
       }
       return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report.input_world, world: answer.result.report.world };

@@ -8,6 +8,7 @@ The rules for prompts are in `guide.md`. Use them for this review.
 - Trace one normal case and one important edge case to their results.
 - Look for missing inputs, rules that conflict, unclear defaults or empty values, and text that describes the code instead of the behavior.
 - Check each expected result against the Story and the prompt, not against the code.
+- Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
 - If a rule is not decided, ask the person. Do not copy what the code returns.
 - Write which Story criteria have test cases and which do not.
 

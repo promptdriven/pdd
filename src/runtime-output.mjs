@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 142719d396e2f927a670f8b1ed1f29a8d9d3a061d96903d5e83fb375c3b3fb05).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: f3779a19883ae98b60bb06aea69c686e825ff8e8d8125ad93fe78b517333d264).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -38,9 +38,43 @@ const scrub = (value, secrets) => typeof value === 'string' ? secrets.reduce((te
   : Array.isArray(value) ? value.map(item => scrub(item, secrets))
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrub(item, secrets)])) : value;
 
+// A server step deadline is execution evidence, separate from a polling deadline or a queue wait.
+export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
+  const report = answer?.result?.report, candidates = [];
+  const add = (refusal, index, step) => { if (refusal && typeof refusal === 'object') candidates.push({ refusal, index, step }); };
+  const refusals = Array.isArray(answer?.result?.refusals) ? answer.result.refusals : [];
+  for (const refusal of refusals) add(refusal);
+  add(report?.refusal);
+  for (const sample of Array.isArray(report?.samples) ? report.samples : []) {
+    add(sample?.refusal);
+    for (const [index, step] of (Array.isArray(sample?.steps) ? sample.steps : []).entries()) add(step?.refusal, index, step?.step_id);
+  }
+  for (const { refusal, index, step } of candidates) {
+    const cause = refusal.failure_cause ?? {}, details = refusal.details ?? {};
+    const text = [cause.detail, refusal.engine_message, refusal.message].filter(value => typeof value === 'string').join(' ');
+    const typed = cause.kind === 'step_timeout';
+    if (!typed && !(refusal.code === 'graph-provider-failure' && (cause.kind === 'timeout' || /\b(?:timeout|timed[ -]out|time[ -]limit|deadline[ -]exceeded)\b/i.test(text)))) continue;
+    const explicit = [refusal.timeout_seconds, refusal.limit_seconds, details.timeout_seconds, details.limit_seconds, cause.timeout_seconds]
+      .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 86400);
+    const duration = /(?:after|timeout[=:]?|limit(?: of)?)\s*(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m)\b/i.exec(text);
+    const parsed = duration ? Number(duration[1]) * (/^m/i.test(duration[2]) ? 60 : 1) : null;
+    const seconds = explicit ?? (parsed > 0 && parsed <= 86400 ? parsed : typed ? 600 : 180);
+    const companions = refusals.filter(item => item?.code === refusal.code);
+    const section = refusal.section ?? refusal.at ?? (companions.length === 1 ? companions[0].section ?? companions[0].at : '');
+    const at = index ?? refusal.step_index ?? Number(/(?:^|\.)steps\[(\d+)\]/.exec(section)?.[1] ?? -1);
+    const name = [refusal.step_id, details.step_id, refusal.step_name, step, Number.isInteger(at) && steps[at]?.step_id]
+      .find(value => typeof value === 'string' && value.trim());
+    const label = cleanText(name || 'unnamed step', secrets).slice(0, 200), minutes = Number((seconds / 60).toFixed(3));
+    return { code: cleanText(refusal.code || 'step_timeout', secrets), step: label, minutes,
+      message: `Step ${label} took more than ${minutes} minutes and was stopped.`,
+      fix: 'Make the step smaller, for example split 30 moves into 3 steps of 10.' };
+  }
+  return null;
+}
+
 // The parts of a server answer that pdd shows.
-export function projectAnswer(answer, { origin, secrets = [] } = {}) {
-  const result = answer?.result ?? null, report = result?.report ?? null;
+export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [] } = {}) {
+  const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []).map(check => ({
     criterion_id: cleanField(check?.criterion_id, secrets), target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
@@ -60,13 +94,13 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
   return {
-    state: answer?.state, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
+    state: time_limit ? 'unknown' : answer?.state, time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
     calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
-    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
+    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider: time_limit ? null : provider,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
@@ -82,8 +116,8 @@ export function jsonRow(row) {
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry,
-    reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
+    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
+    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, sourceSha256 = null, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
@@ -192,8 +226,12 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
     out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
-  for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
+  for (const row of rows.filter(row => row.state === 'unknown' && !row.provider && !row.time_limit)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
+  }
+  for (const row of rows.filter(row => row.time_limit)) {
+    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, `  ${row.time_limit.fix}`,
+      ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,

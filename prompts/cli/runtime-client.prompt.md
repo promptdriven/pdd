@@ -212,3 +212,7 @@ one-shot saved-test collection. An older runtime with no bridge gets a plain com
 and the ordinary Try behavior. Other relay errors fail plainly, without a new Try or program call.
 The injected `agentBridge` port may replace bridge setup in tests; production loads the generic
 module. No user configuration, model, global agent settings or login is changed.
+
+## Display a server step time limit
+
+Use [runtime output step time limits](runtime-output.prompt.md#step-time-limits) for check answers, saved GET-only reads, Try setup refusals and terminal/HTTP door call refusals. Supply authored step IDs when available. Print its step name, reported minutes, stopped message and small-step advice instead of a failed expectation. Preserve unknown execution, IDs, calls and report links; never replay it automatically. A Try setup time refusal must be displayed before the generic unknown-setup path and must not claim zero AI calls when the receipt says otherwise. Door failures, including CLI/HTTP Try setup, keep wrapper exit125 and the same specific timeout guidance and known usage. The hosted Try page's own runtime action UI remains server-owned.
