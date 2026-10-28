@@ -1817,7 +1817,7 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     writeFileSync(join(run.runDir, 'verify.md'), verify);
     await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'verification recorded', cwd: run.root }, f.agentPorts()));
     const body = f.prs[0].body;
-    assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.includes(url), style);
+    assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
 });
