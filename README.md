@@ -106,7 +106,7 @@ PDD works with the versions of these tools that you have. It is tested on macOS 
 > [!WARNING]
 > **Agents run with full access.** In a workflow run, Codex and Claude Code do not stop to ask for approval. They can change files and run commands as your user. Use PDD only where you accept this.
 
-- **Update:** run the `npx skills add` and `npm install` lines again. Do not run `npm install -g pdd`, because that is a different package.
+- **Update:** run `npm install -g github:promptdriven/pdd#alpha` and `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y`, then start a new chat. `pdd --version` says when your skills are older. Do not run `npm install -g pdd`, because that is a different package.
 - **Another pdd on PATH:** run `"$(npm prefix -g)/bin/pdd" setup` to see which executable and version your PATH selects. Use the absolute Alpha command it prints, or activate your environment (such as conda) first, then prepend Alpha’s bin directory to PATH. Setup keeps other installations.
 - **Your own workflow:** copy a skill folder as `pdd-NAME` into `.agents/skills` or `.claude/skills`, then edit it. See [Workflows](docs/workflows.md#make-your-own-workflow).
 - **This is an alpha.** Read the [known limits](docs/USAGE.md), and [report problems](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c3d7cbdc3f3463606490cf8153639003f3ed389307e434ff93cb9e8880fdbf69).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 83676e372e6e57d59b7b0ae36e06b23565ae154b69b60c07958bc23b8adc2aec).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -8,7 +8,7 @@ import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
-import { setupSkills } from './skills-install.mjs';
+import { findSkills, setupSkills } from './skills-install.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { causeText } from './runtime-output.mjs';
 
@@ -18,6 +18,8 @@ const line = (stream, text) => stream.write(`${text}\n`);
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
+// npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
+const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd#alpha${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
@@ -57,7 +59,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, metadata.version);return 0;
+        line(stdout, metadata.version);
+        try {
+          for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
+            if (result.found && result.stale === 'older') line(stderr, staleLine(result, metadata.version, cwd));
+        } catch { /* The skills check never changes --version. */ }
+        return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
     case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
@@ -90,8 +97,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
         if (result.found && result.stale) {
           const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
-          const scope = [join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(result.found) ? '-p' : '-g';
-          line(stdout, `PDD skills in ${result.found} ${result.stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills update ${scope}`);
+          line(stdout, staleLine(result, version, cwd));
         } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
         else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
         if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }

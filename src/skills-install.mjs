@@ -1,4 +1,4 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: b47581febbaa427092bcf680f2c02a30f88bd9613860125a6675e5592fb1c36b).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 538c5f40ed59f7061e094a071f97d8b7a5bf31d1e180dbe6a3b3b777adc56dc4).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -45,14 +45,25 @@ function copySkill(source, parent, name, version, sum) {
   return dest;
 }
 
-// How a found skill folder compares with the package: 'older' (its pdd marker has an older version), 'differs' (other
-// files, or a marker of the same version with another digest), or null (the same, newer, or pdd cannot read it).
+// The `pdd-skills: VERSION` line in the SKILL.md frontmatter, or null. Copies from before 0.1.9 have none.
+function skillVersion(dir) {
+  try { return readFileSync(join(dir, 'SKILL.md'), 'utf8').match(/^---\n([\s\S]*?)\n---/)?.[1].match(/^\s*pdd-skills:\s*["']?(\d[\d.]*)/m)?.[1] ?? null; }
+  catch { return null; }
+}
+
+// How a found skill folder compares with the package: 'older' (its pdd marker or version line is older, or it has no
+// version line), 'differs' (other files of the same version, or a marker of the same version with another digest), or null
+// (the same files, newer, or pdd cannot read it).
 function foundState(dir, version, sum) {
   let text;
   try { text = readFileSync(join(dir, MARKER), 'utf8'); }
   catch {
-    // No marker: an npx skills copy or the person's own. Compare the files.
-    try { return digest(dir) === sum ? null : 'differs'; } catch { return null; }
+    // No marker: an npx skills copy or the person's own. Compare the files first, then the version line.
+    try {
+      if (digest(dir) === sum) return null;
+      const line = skillVersion(dir), order = line ? compareVersions(line, version) : -1;
+      return order < 0 ? 'older' : order === 0 ? 'differs' : null;
+    } catch { return null; }
   }
   let marker;
   try { marker = JSON.parse(text); } catch { return 'differs'; }
@@ -62,23 +73,27 @@ function foundState(dir, version, sum) {
 
 const hasSkill = (folder, name) => { try { return statSync(join(folder, name, 'SKILL.md')).isFile(); } catch { return false; } };
 
+// The first read folder with all five skills (a symlinked skill folder, from npx skills add, counts) and how it compares.
+function findIn(read, skills, version) {
+  const found = read.find(folder => skills.every(({ name }) => hasSkill(folder, name))) ?? null;
+  // Found skills that are not this package's: setup never touches them, but says so (0.1.6 tester).
+  const states = found ? skills.map(({ name, digest: sum }) => foundState(join(found, name), version, sum)).filter(Boolean) : [];
+  return { found, stale: !states.length ? null : states.every(state => state === 'older') ? 'older' : 'differs' };
+}
+
 function setupAgent({ agent, read, root }, skills, version) {
   const result = { agent, root, found: null, stale: null, installed: [], updated: [] };
   try {
     for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'update') result.updated.push(copySkill(source, root, name, version, sum));
-    // A symlinked skill folder (npx skills add) counts as found.
-    result.found = read.find(folder => skills.every(({ name }) => hasSkill(folder, name))) ?? null;
-    // Found skills that are not this package's: setup never touches them, but says so (0.1.6 tester).
-    const states = result.found ? skills.map(({ name, digest: sum }) => foundState(join(result.found, name), version, sum)).filter(Boolean) : [];
-    if (states.length) result.stale = states.every(state => state === 'older') ? 'older' : 'differs';
+    Object.assign(result, findIn(read, skills, version));
     if (!result.found) for (const { name, source, digest: sum } of skills)
       if (copyState(join(root, name), version, sum) === 'missing') result.installed.push(copySkill(source, root, name, version, sum));
   } catch (error) { result.error = error; }
   return result;
 }
 
-export function setupSkills({ packageRoot, cwd, home, claudeConfigDir }) {
+function layout({ packageRoot, cwd, home, claudeConfigDir }) {
   const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
   const skills = PDD_SKILL_NAMES.map(name => ({ name, source: join(packageRoot, 'skills', name) }))
     .map(skill => ({ ...skill, digest: digest(skill.source) }));
@@ -88,5 +103,16 @@ export function setupSkills({ packageRoot, cwd, home, claudeConfigDir }) {
     { agent: 'Codex', root: join(home, '.agents/skills'), read: [join(cwd, '.agents/skills'), join(home, '.agents/skills')] },
     { agent: 'Claude', root: claudeRoot, read: [join(cwd, '.claude/skills'), claudeRoot] },
   ];
+  return { version, skills, agents };
+}
+
+export function setupSkills(options) {
+  const { version, skills, agents } = layout(options);
   return agents.map(agent => setupAgent(agent, skills, version));
+}
+
+// The same find and stale check with no writes, for pdd --version.
+export function findSkills(options) {
+  const { version, skills, agents } = layout(options);
+  return agents.map(({ agent, read }) => ({ agent, ...findIn(read, skills, version) }));
 }
