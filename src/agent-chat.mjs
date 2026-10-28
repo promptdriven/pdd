@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: e3759eb230b4157db009c09ed8504c0062583cc1fefffd1d3529c43012faa540).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 8fa26c0a042dfbdd26e911f742b31953d51e57f003321b7306d32bc34b3ac7c5).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
@@ -38,7 +38,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd try again.`);
  remember(choice);
- const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save'].includes(x)):[];
+ const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save','run'].includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
  const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
@@ -54,7 +54,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   const agent=agents.find(a=>a.id===message.agent),name=agent?.name??'Your agent',turn=guide.prepare(message);let result,asked=false;
   if(turn.fast)result=turn.fast;
   else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),context:turn.context});}
+  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(turn.fast)write(context,'PDD checked the run against the local test cases.');
   else write(context,result.error||!ready(agent)?`${name} could not answer: ${result.error?.message??result.say}`:`${name} answered.${result.fill?' It proposed input for the form.':''}`);
