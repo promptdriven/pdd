@@ -75,7 +75,7 @@ function partsOf(source) {
     } else {
       const text = token.startsWith('<![CDATA[') ? token.slice(9, -3) : decode(token);
       if (!stack.length && text.trim()) throw Error('text outside SVG root');
-      for (const node of stack) if (node.tag === 'text' && !node.hidden) node.text += text;
+      if (!stack.at(-1)?.hidden) for (const node of stack) if (node.tag === 'text' && !node.hidden) node.text += text;
     }
   }
   if (stack.length || roots !== 1 || tokens.join('') !== source) throw Error('malformed SVG');

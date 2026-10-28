@@ -92,6 +92,59 @@ test('installed browser renders reference transforms/entities/repeated numbers a
     page = `<!doctype html><style>body{margin:0}#status text{fill:transparent}</style>${svg}`;
     const report = await compare(); assert.equal(report.rows.find(row => row.part === '“READY”').status, 'hidden');
   });
+  await t.test('applied clipping cannot silently pass required text on either side', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), svg));
+    page = `<!doctype html><style>body{margin:0}#status text{clip-path:inset(100%)}</style>${svg}`;
+    await assert.rejects(compare(), /unsupported.*clip|clip.*unsupported/i);
+    const clipped = svg.replace('<text x="10" y="28">READY', '<text style="clip-path:inset(100%)" x="10" y="28">READY');
+    assert.notEqual(clipped, svg);
+    writeFileSync(join(input.cwd, input.drawingPath), clipped); page = `<!doctype html><style>body{margin:0}</style>${svg}`;
+    await assert.rejects(compare(), /unsupported.*clip|clip.*unsupported/i);
+    writeFileSync(join(input.cwd, input.drawingPath), svg);
+  });
+  await t.test('transparent primitive ids fail while transparent structural regions with painted descendants pass', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), svg));
+    const special = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><g id="region" fill="transparent"><rect id="box" x="20" y="20" width="120" height="80" fill="red"/><text x="20" y="160" fill="black">READY</text></g></svg>';
+    writeFileSync(join(input.cwd, input.drawingPath), special); page = `<!doctype html><style>body{margin:0}</style>${special}`;
+    assert.equal((await compare()).passed, true);
+    page = `<!doctype html><style>body{margin:0}#box{fill:transparent;stroke:none}</style>${special}`;
+    const report = await compare(); assert.equal(report.passed, false); assert.equal(report.rows.find(row => row.part === '#box').status, 'hidden');
+    writeFileSync(join(input.cwd, input.drawingPath), special.replace('fill="red"', 'fill="transparent"'));
+    const excluded = await compare(); assert.ok(!excluded.rows.some(row => row.part === '#box')); assert.equal(excluded.passed, true);
+    writeFileSync(join(input.cwd, input.drawingPath), svg);
+  });
+  await t.test('empty transparent HTML box cannot satisfy a painted id; visible structural children can', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), svg));
+    const special = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><rect id="box" x="20" y="20" width="120" height="80"/><text x="20" y="160">READY</text></svg>';
+    writeFileSync(join(input.cwd, input.drawingPath), special);
+    const html = content => `<!doctype html><style>body{margin:0}#box{position:absolute;left:20px;top:20px;width:120px;height:80px}#label{position:absolute;left:20px;top:145px}</style><div id="box">${content}</div><span id="label">READY</span>`;
+    page = html('');
+    const hidden = await compare(); assert.equal(hidden.passed, false); assert.equal(hidden.rows.find(row => row.part === '#box').status, 'hidden'); assert.equal(hidden.rows.find(row => row.part === '“READY”').status, 'pass');
+    page = html('<span>Visible child</span>');
+    const visible = await compare(); assert.equal(visible.passed, true, JSON.stringify(visible.rows));
+    page = html('<span style="opacity:0">Invisible child</span>');
+    assert.equal((await compare()).rows.find(row => row.part === '#box').status, 'hidden');
+  });
+  await t.test('visible text joins around hidden descendants without hidden words or wrong geometry', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), svg));
+    for (const content of ['Visible<tspan style="display:none">SECRET</tspan>', 'Vis<tspan style="display:none">SECRET</tspan>ible', 'Vis<tspan style="visibility:hidden">SECRET</tspan>ible']) {
+      const special = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><text x="20" y="60">${content}</text></svg>`;
+      writeFileSync(join(input.cwd, input.drawingPath), special); page = `<!doctype html><style>body{margin:0}</style>${special}`;
+      const report = await compare(); assert.equal(report.passed, true, JSON.stringify(report.rows)); assert.deepEqual(report.rows.map(row => row.part), ['“Visible”']);
+    }
+    writeFileSync(join(input.cwd, input.drawingPath), svg);
+  });
+  await t.test('quoted local fragment paint resources stay safe while external resources fail', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), svg));
+    for (const resource of ['url(#paint)', "url('#paint')", 'url(&quot;#paint&quot;)']) {
+      const special = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><defs><linearGradient id="paint"><stop stop-color="red"/></linearGradient><clipPath id="unused"><rect width="50" height="50"/></clipPath></defs><rect id="box" x="20" y="20" width="120" height="80" fill="${resource}"/></svg>`;
+      writeFileSync(join(input.cwd, input.drawingPath), special); page = `<!doctype html><style>body{margin:0}</style>${special}`;
+      assert.equal((await compare()).passed, true, resource);
+      writeFileSync(join(input.cwd, input.drawingPath), special.replace('#paint', 'https://example.test/a.svg#paint'));
+      await assert.rejects(compare(), /external|unsupported/i);
+    }
+    writeFileSync(join(input.cwd, input.drawingPath), svg);
+  });
   await t.test('separate text nodes in one element are distinct visible occurrences', async () => {
     writeFileSync(join(input.cwd, input.drawingPath), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><text x="20" y="60">2</text><text x="20" y="90">2</text></svg>');
     page = '<!doctype html><div style="position:absolute;left:20px;top:40px;line-height:30px">2<br>2</div>';

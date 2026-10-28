@@ -61,6 +61,22 @@ test('static CSS hiding and shortcut reference links do not require hidden label
   assert.match(lintSvgLayouts(setup)[0], /unsupported SVG stylesheet selector/);
 });
 
+test('hidden descendants never contribute to visible lint labels', t => {
+  for (const content of ['Visible<tspan style="display:none">SECRET</tspan>', 'Vis<tspan visibility="hidden">SECRET</tspan>ible', 'Vis<tspan opacity="0"><tspan>SECRET</tspan></tspan>ible']) {
+    assert.deepEqual(lintSvgLayouts(drawing(t, '![drawing](game.ui.svg)\nVisible', `<svg><text>${content}</text></svg>`)), [], content);
+  }
+});
+
+test('local fragment paint resources accept CSS quotes while external resources warn', t => {
+  for (const resource of ['url(#paint)', "url('#paint')", 'url(&quot;#paint&quot;)']) {
+    const source = `<svg><defs><linearGradient id="paint"><stop stop-color="red"/></linearGradient></defs><rect fill="${resource}"/></svg>`;
+    const setup = drawing(t, '![drawing](game.ui.svg)', source);
+    assert.deepEqual(lintSvgLayouts(setup), [], resource);
+    writeFileSync(join(setup.root, 'game.ui.svg'), source.replace('#paint', 'https://example.test/paint.svg#paint'));
+    assert.match(lintSvgLayouts(setup)[0], /external SVG resources/);
+  }
+});
+
 test('public local lint includes no-interface/no-test Git-visible prompts, no auth/network/state', async t => {
   const setup = harbor(t, repo => { mkdirSync(join(repo, 'views')); cpSync(join(fixtures, 'game.ui.svg'), join(repo, 'views/game.ui.svg')); writeFileSync(join(repo, 'views/game.prompt.md'), '![Layout](game.ui.svg)'); });
   const stdout = sink(), stderr = sink();

@@ -137,21 +137,64 @@ function snapshot(reference) {
   while (walker.nextNode()) { tokenIds.set(walker.currentNode, `text:${textNodes.length}`); textNodes.push(walker.currentNode); }
   const excluded = el => !!el.closest('title,desc,defs,metadata,script,style,noscript,template');
   const transparent = color => color === 'none' || color === 'transparent' || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?\s*\)$/.test(color) || /\/\s*0(?:\.0+)?\s*\)$/.test(color);
+  let unsupported;
+  const painted = (color, opacity) => {
+    if (transparent(color) || Number(opacity) === 0) return false;
+    if (!color.startsWith('url(')) return true;
+    const fragment = /^url\(["']?#([^"')]+)["']?\)$/.exec(color), paint = fragment && document.getElementById(fragment[1]);
+    if (paint && ['linearGradient', 'radialGradient'].includes(paint.localName)) {
+      if (paint.hasAttribute('href') || paint.hasAttribute('xlink:href')) { unsupported = 'Unsupported SVG paint inheritance; visible paint cannot be established.'; return false; }
+      return [...paint.querySelectorAll('stop')].some(stop => { const style = getComputedStyle(stop); return !transparent(style.stopColor) && Number(style.stopOpacity) > 0; });
+    }
+    unsupported = 'Unsupported SVG paint resource; visible paint cannot be established.';
+    return false;
+  };
+  const htmlPaint = el => {
+    const style = getComputedStyle(el);
+    return !transparent(style.backgroundColor) || ['Top', 'Right', 'Bottom', 'Left'].some(side => !['none', 'hidden'].includes(style[`border${side}Style`]) && parseFloat(style[`border${side}Width`]) > 0 && !transparent(style[`border${side}Color`]))
+      || !['none', 'hidden'].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0 && !transparent(style.outlineColor)
+      || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!el.value && !transparent(style.color));
+  };
   const visible = (el, box, kind) => {
     if (!(box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight)) return false;
+    const intersection = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(innerWidth, box.right), bottom: Math.min(innerHeight, box.bottom) }, effects = [];
     for (let parent = el; parent; parent = parent.parentElement) {
       const style = getComputedStyle(parent);
       if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
+      if (style.clipPath !== 'none' || !['auto', 'rect(auto, auto, auto, auto)'].includes(style.clip) || style.maskImage !== 'none' || style.filter !== 'none') effects.push(parent);
       if (parent !== el && /(hidden|clip|scroll|auto)/.test(`${style.overflowX} ${style.overflowY}`)) {
         const clip = parent.getBoundingClientRect();
-        if (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom) return false;
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowX)) { intersection.left = Math.max(intersection.left, clip.left + parent.clientLeft); intersection.right = Math.min(intersection.right, clip.left + parent.clientLeft + parent.clientWidth); }
+        if (/(hidden|clip|scroll|auto)/.test(style.overflowY)) { intersection.top = Math.max(intersection.top, clip.top + parent.clientTop); intersection.bottom = Math.min(intersection.bottom, clip.top + parent.clientTop + parent.clientHeight); }
+        if (intersection.right <= intersection.left || intersection.bottom <= intersection.top) return false;
       }
     }
+    if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
     const style = getComputedStyle(el);
-    if (kind === 'text') {
-      if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
-        if ((transparent(style.fill) || Number(style.fillOpacity) === 0) && (transparent(style.stroke) || Number(style.strokeOpacity) === 0)) return false;
-      } else if (transparent(style.color)) return false;
+    if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
+      if (kind === 'text' || ['text', 'tspan', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line'].includes(el.localName)) {
+        if (!(el.localName !== 'line' && painted(style.fill, style.fillOpacity)) && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
+      } else {
+        // A transparent group is a usable region only through its rendered children.
+        return [...el.querySelectorAll('text,rect,circle,ellipse,path,polygon,polyline,line')].some(child => !excluded(child) && visible(child, child.getBoundingClientRect(), child.localName === 'text' ? 'text' : 'id'));
+      }
+    } else if (kind === 'text') {
+      if (transparent(style.color)) return false;
+    } else if (kind === 'id') {
+      if (htmlPaint(el)) return true;
+      const intersects = child => child.right > box.left && child.left < box.right && child.bottom > box.top && child.top < box.bottom;
+      for (const node of textNodes) {
+        if (!el.contains(node) || !normalize(node.textContent) || excluded(node.parentElement)) continue;
+        const range = document.createRange(); range.selectNodeContents(node); const bounds = range.getBoundingClientRect();
+        if (intersects(bounds) && visible(node.parentElement, bounds, 'text')) return true;
+      }
+      for (const child of el.querySelectorAll('*')) {
+        if (excluded(child)) continue;
+        const bounds = child.getBoundingClientRect();
+        if (intersects(bounds) && (child.namespaceURI === 'http://www.w3.org/2000/svg' ? visible(child, bounds, 'id') : htmlPaint(child) && visible(child, bounds, 'surface'))) return true;
+      }
+      if (style.backgroundImage !== 'none' || style.boxShadow !== 'none' || ['img', 'canvas', 'video'].includes(el.localName)) unsupported = 'Unsupported HTML image or shadow paint; visible parts cannot be established.';
+      return false;
     }
     return true;
   };
@@ -166,6 +209,13 @@ function snapshot(reference) {
     const el = node.parentElement, range = document.createRange(); range.selectNodeContents(node);
     return [node, { value: normalize(node.textContent), box: range.getBoundingClientRect(), visible: !!el && !excluded(el) && !(reference && el.closest('[data-context-only="true"],.context-only')) && visible(el, range.getBoundingClientRect(), 'text') }];
   }));
+  const renderedText = node => {
+    if (node.nodeType === Node.TEXT_NODE) return textInfo.get(node)?.visible ? node.textContent : '';
+    if (node.nodeType !== Node.ELEMENT_NODE || excluded(node)) return '';
+    if (node.localName === 'br') return '\n';
+    const text = [...node.childNodes].map(renderedText).join('');
+    return node.namespaceURI !== 'http://www.w3.org/2000/svg' && /^(block|flex|grid|table|list-item)/.test(getComputedStyle(node).display) ? `\n${text}\n` : text;
+  };
   const referenceIds = new Set();
   for (const el of elements) {
     const metadata = excluded(el);
@@ -181,11 +231,16 @@ function snapshot(reference) {
     if (metadata) continue;
     if (reference && el.localName !== 'text') continue;
     const content = textNodes.filter(node => el.contains(node) && textInfo.get(node).value);
-    const value = normalize(reference ? content.filter(node => textInfo.get(node).visible).map(node => node.textContent).join('') : ['input', 'textarea'].includes(el.localName) ? el.value : el.localName === 'select' ? el.selectedOptions[0]?.textContent || '' : el.innerText ?? el.textContent);
+    const rendered = content.filter(node => textInfo.get(node).visible);
+    const control = ['input', 'textarea', 'select'].includes(el.localName);
+    const value = normalize(control ? el.localName === 'select' ? el.selectedOptions[0]?.textContent || '' : el.value : renderedText(el));
     if (!value) continue;
-    const part = item(el, 'text', value);
-    if (['input', 'textarea', 'select'].includes(el.localName)) part.tokens = [`control:${part.node}`];
-    else if (!reference && content.some(node => !textInfo.get(node).visible && value.includes(textInfo.get(node).value))) part.visible = false;
+    const boxes = rendered.map(node => textInfo.get(node).box);
+    const bounds = boxes.length ? { left: Math.min(...boxes.map(box => box.left)), top: Math.min(...boxes.map(box => box.top)), right: Math.max(...boxes.map(box => box.right)), bottom: Math.max(...boxes.map(box => box.bottom)) } : null;
+    if (bounds) Object.assign(bounds, { x: bounds.left, y: bounds.top, width: bounds.right - bounds.left, height: bounds.bottom - bounds.top });
+    const part = item(el, 'text', value, control ? undefined : bounds);
+    if (control) part.tokens = [`control:${part.node}`];
+    else part.tokens = rendered.map(node => tokenIds.get(node));
     if (!reference || part.visible) parts.push(part);
   }
   if (!reference) for (const node of textNodes) {
@@ -195,6 +250,7 @@ function snapshot(reference) {
     part.ancestors = [part.node, ...part.ancestors]; part.node = tokenIds.get(node); part.tokens = [part.node]; part.region = el.closest('[id]')?.id || null;
     parts.push(part);
   }
+  if (unsupported) return { error: unsupported };
   return { parts: parts.filter(part => reference || part.kind !== 'text' || !parts.some(other => other !== part && other.kind === 'text' && other.value === part.value && (!part.visible || other.visible) && other.ancestors.includes(part.node))) };
 }
 
