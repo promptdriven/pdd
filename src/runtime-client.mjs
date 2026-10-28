@@ -446,7 +446,7 @@ async function checkBatch(context, rows) {
   context.lint.unknown = false;
   const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, ...extra }); };
   if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
-  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note }); return; }
+  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, sendable, context.root, context.visible, context.secrets) : null;
   if (!verdicts) {
