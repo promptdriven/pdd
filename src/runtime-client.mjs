@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b1e2c24778ba5ac29569c28bba9c9fe582b8443534b1828cccc59b6c51b2813a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cd9b36f073a1096fb7af29d63b9cd316e6eb2e1b7baa64b7db0da17364dd91ff).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -21,6 +21,8 @@ const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 // The same engine: the full sha or a prefix of it with at least 7 hex digits.
 const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
 const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
+// An agent (no terminal) waits at most 8 min, below the usual 10-minute limit of its shell tool; a person has no limit.
+const AGENT_WAIT_MIN = 8;
 // Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for 5 min.
 const LOST_READ_MS = 300_000;
 
@@ -466,6 +468,7 @@ async function checkBatch(context, rows) {
     saveBatch(context);
   }
   const stoppedEarly = context.interrupted || !!context.readStop;
+  context.timedOut = !stoppedEarly && toSend.some(row => OPEN_STATES.has(row.state));
   for (const row of toSend) {
     if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full',
       message: stoppedEarly ? 'pdd stopped while the runtime was busy.' : 'The runtime stayed busy until the timeout.' } });
@@ -497,7 +500,9 @@ function printResult(context, rows, extra = {}) {
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, warnings, details: context.details, timeoutMin: context.timeoutMin,
     interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
-  if (exitCode === 3 && context.batch) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
+  // At the time limit the jobs keep running on the server.
+  if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd check --read ${context.batch}`
+    : `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   return exitCode;
 }
 
@@ -655,8 +660,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  // No time limit unless --timeout MIN (Serhan: no timeouts).
-  context.timeoutMin = options['--timeout'] === undefined ? null : Number(options['--timeout']);
+  // A person has no time limit (Serhan: no timeouts); an agent has 8 min; --timeout MIN overrides both.
+  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);

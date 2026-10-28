@@ -226,7 +226,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
 });
 
 // Wrong: pdd gives up on a slow check after 10 min, or waits in silence (Serhan: no timeouts).
-test('RUNTIME-WAIT1: with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
+test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
   const setup = harbor(t), sent = new Map();
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
   let clock;
@@ -236,7 +236,7 @@ test('RUNTIME-WAIT1: with no --timeout pdd waits until every row ends and prints
     const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
     return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
   });
-  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
   clock = made.clock;
   const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
   const err = made.ports.stderr.text, out = made.ports.stdout.text;
@@ -252,8 +252,10 @@ test('RUNTIME-WAIT1: with no --timeout pdd waits until every row ends and prints
   assert.doesNotMatch(out, /STILL RUNNING/);
   assert.match(out, /^2 of 2 stories passed\./m);
   const one = await check(harbor(t), await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry)),
-    ['place-order'], { '--timeout': '1' });
-  assert.deepEqual(one.err.split('\n').filter(text => text.startsWith('Still running')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s']);
+    ['place-order'], { '--timeout': '1' }, { interactive: true });
+  assert.equal(one.code, 3);
+  assert.deepEqual(one.err.split('\n').filter(text => text.startsWith('Still running')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
+    `Still running. Read the results later with: pdd check --read ${one.batch}`]);
 });
 
 // Wrong: with no time limit Ctrl-C loses the batch, or a waiting check is said to have hit a timeout.
@@ -267,7 +269,7 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
     if (clock.now >= Date.parse('2026-10-27T16:39:47Z')) clock.interrupt?.();
     return { status: 200, json: f.check(entry.url.split('/').at(-1), done ? 'passed' : 'running') };
   });
-  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
   clock = made.clock;
   const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
   const out = made.ports.stdout.text, batch = /pdd check --read (\S+)/.exec(made.ports.stderr.text)[1];
@@ -280,6 +282,41 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   done = true;
   const read = await check(setup, fake, [batch], { '--read': true });
   assert.match(read.out, /^Place a coffee order +tests\/place-order\.json +passed/m);
+});
+
+// Wrong: an agent's shell tool cuts pdd off at its own 10-minute limit before pdd prints anything (owner, Oct 27).
+test('RUNTIME-WAIT4: with no terminal pdd waits at most 8 min, prints the table and the read line, and exits 3; --timeout overrides', async t => {
+  const setup = harbor(t);
+  let clock;
+  const sent = new Map(), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, clock.now);
+    if (entry.method !== 'GET') return f.normal(entry);
+    const id = entry.url.split('/').at(-1);
+    return { status: 200, json: f.check(id, clock.now - sent.get(id) < 12 * 60_000 ? 'running' : 'passed') };
+  });
+  const run = async (options, extra) => {
+    const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
+    clock = made.clock;
+    const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
+    return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd check --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
+  };
+  const agent = await run({}, { interactive: false });
+  assert.equal(agent.code, 3, agent.err + agent.out);
+  assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.match(agent.out, /^STILL RUNNING after 8 min: Place a coffee order\. Do not send it again\.$/m);
+  const err = agent.err.trimEnd().split('\n');
+  assert.equal(err.filter(text => text.startsWith('Still running:')).length, 15);
+  assert.equal(err.at(-1), `Still running. Read the results later with: pdd check --read ${agent.batch}`);
+  assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 8);
+  const longer = await run({ '--timeout': '20' }, { interactive: false });
+  assert.equal(longer.code, 0, longer.err + longer.out);
+  assert.doesNotMatch(longer.err, /Read the results later/);
+  const person = await run({}, { interactive: true });
+  assert.equal(person.code, 0, person.err + person.out);
+  const short = await run({ '--timeout': '1' }, { interactive: true });
+  assert.equal(short.code, 3);
+  assert.match(short.out, /^STILL RUNNING after 1 min: /m);
 });
 
 // Wrong: a 429 with no Retry-After header is retried at once, again and again (it must wait 5 s).
@@ -448,11 +485,11 @@ test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 
 });
 
 // Wrong: with no time limit, a check whose job never shows up on the server is read forever.
-test('RUNTIME-WAIT2: with no --timeout a lost POST answer is read for 5 min, then the row is unknown', async t => {
+test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read for 5 min, then the row is unknown', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
-  const result = await check(setup, fake, ['place-order']);
+  const result = await check(setup, fake, ['place-order'], {}, { interactive: true });
   assert.equal(result.code, 3);
   assert.ok(fake.gets.length >= 149 && fake.gets.length <= 150, String(fake.gets.length));
   assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the run may have executed\. Its result is unknown\.\n {2}The answer to the request was lost\.$/m);
