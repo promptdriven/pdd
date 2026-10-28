@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 921de86a6368a9d9eaa5e0ac1eefaad2475558bfe245e23e06f5035edfe8a514).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9ecc482c65efe0e208068095e096eeecc4033aaf837c71dcf85bece9a51a47a1).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -55,11 +55,11 @@ const routes = [
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
     forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
-    options: [{ name: '--agent', kind: 'value', choices: ['codex','claude','gemini'] }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
+    options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
       { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 999999 },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form('pdd try [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent codex|claude|gemini]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. It stays running to connect your own agent; --agent selects it and --no-wait skips the bridge. In a terminal it adds each test saved on the Try page to the story\'s test file.'),
+    forms: [form('pdd try [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. It stays running to connect your own agent; --agent selects a configured agent by name or a default Codex, Claude or Gemini, and --no-wait skips the bridge. In a terminal it adds each test saved on the Try page to the story\'s test file.'),
       form('pdd try [STORY] --cli [--shell] [--max-calls N] [--new]', 'Run your program in your terminal through a Try session; prints a PATH line, or opens a shell with --shell.'),
       form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),
