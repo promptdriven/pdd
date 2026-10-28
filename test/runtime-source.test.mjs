@@ -377,3 +377,38 @@ test('SOURCE13: literal HTML section examples cannot hide required dependency fi
     }
   }
 });
+
+
+test('SOURCE14: summary emphasis attributes preserve boundaries; ambiguous markup cannot hide dependencies', async t => {
+  for (const [summary, boundary] of [
+    ['<strong title="a>b">Required rules</strong>', true],
+    ["<em title='a>b'><b>Required interface reference</b></em>", true],
+    ['<unknown>Required rules</unknown>', false],
+    ['<scr<script>ipt>Required rules', false],
+    ['<strong title="unterminated>Required rules</strong>', false],
+    ['<strong = >Required rules</strong>', false],
+    ['<strong title=>Required rules</strong>', false],
+    ['<strong / invalid>Required rules</strong>', false],
+    ['<strong "orphan">Required rules</strong>', false],
+  ]) {
+    await t.test(summary, async t => {
+      const setup = harbor(t), { repo } = setup;
+      prompt(repo, PLACE, [
+        '# Entry', '## Dependencies',
+        `<details><summary>${summary}</summary>`,
+        '- [Declared file](../docs/required.md)', '</details>',
+      ].join('\n'));
+      const { ports } = offline(setup);
+      const code = await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports);
+      assert.equal(code, boundary ? 0 : 4, ports.stderr.text);
+      if (boundary) {
+        const captured = captureSource(repo, { tests: [ORDER] });
+        assert.deepEqual(names(captured.tar), [PLACE, ORDER, STORY].sort());
+        assert.equal(captured.bytes, [PLACE, ORDER, STORY].reduce((sum, path) => sum + readFileSync(join(repo, path)).length, 0));
+      } else {
+        assert.match(ports.stderr.text, /not a Git-visible file/);
+        assert.ok(ports.stderr.text.includes('docs/required.md'), ports.stderr.text);
+      }
+    });
+  }
+});

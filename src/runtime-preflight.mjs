@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 17e5cdbca2209004792c5370fa6ff46178322471f64bd3e4d558fbe76ee0d944).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4eb5498687d769e4add98a9ed3ec31f0cfdb55d2b01ea0d54113846a8e65bcac).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -682,6 +682,22 @@ function markdownSectionText(text) {
   return parts.join('') + text.slice(copied);
 }
 
+// Read only a section name, never rewritten HTML. Ambiguous markup retains context.
+function markdownSectionTitle(text) {
+  const tokens = /<\/(strong|em|b|i)\s*>|<(strong|em|b|i)(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*>|[^<>]+/giy;
+  const parts = [], tags = [];
+  let consumed = 0;
+  for (let match; (match = tokens.exec(text));) {
+    if (match[1]) {
+      if (tags.pop() !== match[1].toLowerCase()) return null;
+    } else if (match[2]) tags.push(match[2].toLowerCase());
+    else parts.push(match[0]);
+    consumed = tokens.lastIndex;
+  }
+  if (consumed !== text.length || tags.length) return null;
+  return parts.join('').replace(/\s+/g, ' ').trim();
+}
+
 function markdownContext(text) {
   const prose = text.replace(INTERFACE, ''), definitions = new Map();
   for (const match of prose.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
@@ -695,8 +711,8 @@ function markdownContext(text) {
   // Legacy prompts use collapsible rule/reference sections instead of Markdown headings.
   // Keep collapsible dependency context; only an explicitly named new section ends it.
   for (const match of markdownSectionText(dependencies).matchAll(/^ {0,3}<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/gim)) {
-    const title = match[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-    if (/^(?:(?:required )?(?:module )?rules|(?:required )?interface reference|decision path)(?:\s*:|$)/i.test(title)) {
+    const title = markdownSectionTitle(match[1]);
+    if (title !== null && /^(?:(?:required )?(?:module )?rules|(?:required )?interface reference|decision path)(?:\s*:|$)/i.test(title)) {
       dependencies = dependencies.slice(0, match.index);
       break;
     }
