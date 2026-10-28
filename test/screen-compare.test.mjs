@@ -178,3 +178,66 @@ test('installed browser renders reference transforms/entities/repeated numbers a
     assert.equal(code, 1, stderr.text); const report = JSON.parse(stdout.text); assert.equal(report.exit_code, 1); assert.equal(report.passed, false);
   });
 });
+
+test('public CLI requires effective text paint and literal displayed control labels', { skip: !chrome, timeout: 180000 }, async t => {
+  const source = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><text id="label" x="20" y="160">READY</text></svg>';
+  const input = setup(t, source);
+  let page = '';
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  const check = async (markup, style = '') => {
+    page = `<style>body{margin:0}#label{position:absolute;left:20px;top:145px;font:16px serif;width:90px;height:22px;padding:0;border:0;${style}}</style>${markup}`;
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['check', '--screen', url, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    return { code, stdout: stdout.text, stderr: stderr.text, report: stdout.text ? JSON.parse(stdout.text) : null };
+  };
+  for (const [name, markup] of [
+    ['ordinary span', '<span id="label">READY</span>'],
+    ...['text', 'search', 'tel', 'url', 'email', 'submit', 'button', 'reset'].map(type => [type, `<input id="label" type="${type}" value="READY">`]),
+    ['textarea current value', '<textarea id="label">OLD</textarea><script>document.querySelector("textarea").value="READY"</script>'],
+    ['select option label', '<select id="label"><option label="READY" selected>WRONG</option></select>'],
+  ]) await t.test(`${name} keeps its literal visible label`, async () => {
+    const result = await check(markup); assert.equal(result.code, 0, result.stderr || result.stdout); assert.equal(result.report.passed, true);
+  });
+  for (const markup of ['<span id="label">READY</span>', '<input id="label" value="READY">', '<textarea id="label">READY</textarea>', '<select id="label"><option>READY</option></select>']) await t.test(`transparent effective fill hides text in ${markup.split(/[ >]/)[0]}`, async () => {
+    const result = await check(markup, '-webkit-text-fill-color:transparent');
+    assert.equal(result.code, 1, result.stderr || result.stdout); assert.equal(result.report.rows.find(row => row.kind === 'text').status, 'hidden');
+    if (markup.startsWith('<span')) assert.equal(result.report.rows.find(row => row.kind === 'id').status, 'hidden');
+  });
+  await t.test('effective fill can paint text despite transparent color', async () => {
+    const result = await check('<span id="label">READY</span>', 'color:transparent;-webkit-text-fill-color:black'); assert.equal(result.code, 0, result.stderr || result.stdout);
+  });
+  for (const type of ['password', 'checkbox', 'radio', 'color', 'range', 'image', 'file', 'hidden']) await t.test(`${type} stored value is not a literal label`, async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), source));
+    const value = type === 'color' ? '#123456' : type === 'range' ? '42' : 'READY';
+    writeFileSync(join(input.cwd, input.drawingPath), source.replace('READY', value));
+    const result = await check(`<input id="label" type="${type}" value="${value}">`);
+    assert.equal(result.code, 1, result.stderr || result.stdout); assert.equal(result.report.rows.find(row => row.kind === 'text').status, 'missing');
+    if (['password', 'checkbox', 'radio'].includes(type)) assert.equal(result.report.rows.find(row => row.kind === 'id').status, 'pass');
+  });
+  await t.test('ordinary numeric input keeps its literal value', async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), source));
+    writeFileSync(join(input.cwd, input.drawingPath), source.replace('READY', '42'));
+    const result = await check('<input id="label" type="number" value="42">'); assert.equal(result.code, 0, result.stderr || result.stdout);
+  });
+  for (const [type, value] of [['date', '2026-10-28'], ['month', '2026-10'], ['week', '2026-W44'], ['time', '12:34'], ['datetime-local', '2026-10-28T12:34']]) await t.test(`${type} native formatting remains explicitly unproved`, async t => {
+    t.after(() => writeFileSync(join(input.cwd, input.drawingPath), source));
+    writeFileSync(join(input.cwd, input.drawingPath), source.replace('READY', value));
+    const result = await check(`<input id="label" type="${type}" value="${value}">`);
+    assert.equal(result.code, 5, result.stderr || result.stdout); assert.match(result.stderr, /unsupported.*format|format.*unsupported/i);
+    writeFileSync(join(input.cwd, input.drawingPath), source);
+  });
+  for (const style of ['-webkit-text-security:disc', '-webkit-text-fill-color:transparent;-webkit-text-stroke:1px black', '-webkit-text-fill-color:transparent;text-shadow:0 0 1px black']) await t.test(`unsupported glyph rendering cannot manufacture a literal match: ${style}`, async () => {
+    const result = await check('<span id="label">READY</span>', style); assert.equal(result.code, 5, result.stderr || result.stdout); assert.match(result.stderr, /unsupported.*text|text.*unsupported/i);
+  });
+  await t.test('private and stale control content never leaks into reports or supplies labels', async () => {
+    const secret = 'PRIVATE_INPUT_VALUE_7301';
+    const result = await check(`<input id="label" type="password" value="${secret}">`);
+    assert.equal(result.code, 1); assert.ok(!`${result.stdout}${result.stderr}`.includes(secret));
+    for (const markup of ['<textarea id="label">READY</textarea><script>document.querySelector("textarea").value="WRONG"</script>', '<select id="label"><option>READY</option><option selected>WRONG</option></select>', '<button id="label" value="READY">WRONG</button>']) {
+      const wrong = await check(markup); assert.equal(wrong.code, 1, wrong.stderr || wrong.stdout); assert.equal(wrong.report.rows.find(row => row.kind === 'text').status, 'missing');
+    }
+  });
+});

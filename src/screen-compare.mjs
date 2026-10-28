@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: af3f7051b3f76e5c95a995b2e6653fadf7483e7ebd62189c84020d183eb8ead3).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: 5f7b0e511a246cb4678c9553d66ed893c3e1c19cf6d967bf7fc5395400dc1ada).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -149,11 +149,29 @@ function snapshot(reference) {
     unsupported = 'Unsupported SVG paint resource; visible paint cannot be established.';
     return false;
   };
+  const textPaint = style => {
+    if (style.webkitTextSecurity && style.webkitTextSecurity !== 'none' || parseFloat(style.webkitTextStrokeWidth) > 0 || style.textShadow !== 'none') {
+      unsupported = 'Unsupported text masking, stroke or shadow; literal visible text cannot be established.';
+      return false;
+    }
+    return !transparent(style.webkitTextFillColor || style.color);
+  };
+  // Read values only for controls whose value is literally rendered as text.
+  const controlValue = el => {
+    if (el.localName === 'textarea') return el.value;
+    if (el.localName === 'select') return el.selectedOptions[0]?.label || '';
+    if (el.localName !== 'input') return '';
+    if (['date', 'month', 'week', 'time', 'datetime-local'].includes(el.type)) {
+      if (visible(el, el.getBoundingClientRect(), 'surface')) unsupported = 'Unsupported native control formatting; literal visible text cannot be established.';
+      return '';
+    }
+    return ['text', 'search', 'tel', 'url', 'email', 'number', 'button', 'submit', 'reset'].includes(el.type) ? el.value : '';
+  };
   const htmlPaint = el => {
     const style = getComputedStyle(el);
     return !transparent(style.backgroundColor) || ['Top', 'Right', 'Bottom', 'Left'].some(side => !['none', 'hidden'].includes(style[`border${side}Style`]) && parseFloat(style[`border${side}Width`]) > 0 && !transparent(style[`border${side}Color`]))
       || !['none', 'hidden'].includes(style.outlineStyle) && parseFloat(style.outlineWidth) > 0 && !transparent(style.outlineColor)
-      || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!el.value && !transparent(style.color));
+      || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!controlValue(el) && textPaint(style));
   };
   const visible = (el, box, kind) => {
     if (!(box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight)) return false;
@@ -171,6 +189,7 @@ function snapshot(reference) {
     }
     if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
     const style = getComputedStyle(el);
+    if ((kind === 'text' || ['text', 'tspan'].includes(el.localName)) && !textPaint(style)) return false;
     if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
       if (kind === 'text' || ['text', 'tspan', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line'].includes(el.localName)) {
         if (!(el.localName !== 'line' && painted(style.fill, style.fillOpacity)) && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
@@ -178,8 +197,6 @@ function snapshot(reference) {
         // A transparent group is a usable region only through its rendered children.
         return [...el.querySelectorAll('text,rect,circle,ellipse,path,polygon,polyline,line')].some(child => !excluded(child) && visible(child, child.getBoundingClientRect(), child.localName === 'text' ? 'text' : 'id'));
       }
-    } else if (kind === 'text') {
-      if (transparent(style.color)) return false;
     } else if (kind === 'id') {
       if (htmlPaint(el)) return true;
       const intersects = child => child.right > box.left && child.left < box.right && child.bottom > box.top && child.top < box.bottom;
@@ -207,11 +224,11 @@ function snapshot(reference) {
   };
   const textInfo = new Map(textNodes.map(node => {
     const el = node.parentElement, range = document.createRange(); range.selectNodeContents(node);
-    return [node, { value: normalize(node.textContent), box: range.getBoundingClientRect(), visible: !!el && !excluded(el) && !(reference && el.closest('[data-context-only="true"],.context-only')) && visible(el, range.getBoundingClientRect(), 'text') }];
+    return [node, { value: normalize(node.textContent), box: range.getBoundingClientRect(), visible: !!el && !excluded(el) && !el.closest('textarea,select,option') && !(reference && el.closest('[data-context-only="true"],.context-only')) && visible(el, range.getBoundingClientRect(), 'text') }];
   }));
   const renderedText = node => {
     if (node.nodeType === Node.TEXT_NODE) return textInfo.get(node)?.visible ? node.textContent : '';
-    if (node.nodeType !== Node.ELEMENT_NODE || excluded(node)) return '';
+    if (node.nodeType !== Node.ELEMENT_NODE || excluded(node) || ['textarea', 'select', 'option'].includes(node.localName)) return '';
     if (node.localName === 'br') return '\n';
     const text = [...node.childNodes].map(renderedText).join('');
     return node.namespaceURI !== 'http://www.w3.org/2000/svg' && /^(block|flex|grid|table|list-item)/.test(getComputedStyle(node).display) ? `\n${text}\n` : text;
@@ -233,7 +250,7 @@ function snapshot(reference) {
     const content = textNodes.filter(node => el.contains(node) && textInfo.get(node).value);
     const rendered = content.filter(node => textInfo.get(node).visible);
     const control = ['input', 'textarea', 'select'].includes(el.localName);
-    const value = normalize(control ? el.localName === 'select' ? el.selectedOptions[0]?.textContent || '' : el.value : renderedText(el));
+    const value = normalize(control ? controlValue(el) : renderedText(el));
     if (!value) continue;
     const boxes = rendered.map(node => textInfo.get(node).box);
     const bounds = boxes.length ? { left: Math.min(...boxes.map(box => box.left)), top: Math.min(...boxes.map(box => box.top)), right: Math.max(...boxes.map(box => box.right)), bottom: Math.max(...boxes.map(box => box.bottom)) } : null;
