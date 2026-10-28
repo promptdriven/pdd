@@ -7,6 +7,5 @@ Start with the [README](../README.md).
 - [RUNBOOK.md](../RUNBOOK.md): what the agent does for `pdd check` and `pdd try`.
 - [CLI reference](cli.md): every command, and how to run from a source checkout.
 - [Prompting guide](prompting-guide.md): the method. The [pdd-prompting skill](../skills/pdd-prompting/SKILL.md) has the same text in `guide.md`.
-- [Example project](../examples/ticket-status/README.md): a prompt, a Story, test cases, code and tests.
 
 The guide's source is `docs/prompting-guide.md`. A test keeps `skills/pdd-prompting/guide.md` the same. Link to the guide. Do not copy its rules into other files.

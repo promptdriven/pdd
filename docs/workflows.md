@@ -145,12 +145,6 @@ pdd does not run tests. The agents do.
 
 Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
 
-The [ticket-status example](../examples/ticket-status/README.md) shows a full prompt, Story, test cases, code and tests. Run its tests from the repository root:
-
-```sh
-node --test examples/ticket-status/test/status.test.mjs
-```
-
 <a id="make-your-own-workflow"></a>
 
 ## Make your own workflow

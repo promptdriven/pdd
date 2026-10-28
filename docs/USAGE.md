@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.6 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.7 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -75,7 +75,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.6
+pdd --version   # prints 0.1.7
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -96,7 +96,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.6
+pdd --version   # PDD Alpha prints 0.1.7
 ```
 
 Remove the old one with the tool that installed it:
@@ -134,7 +134,7 @@ Where the skills go:
 | You run | Codex gets them in | Claude Code gets them in |
 |---|---|---|
 | `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project |
-| `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/` |
+| `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 | `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 
 `pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. pdd never copies the skills into your repo.
@@ -195,6 +195,7 @@ In a chat, the work stays in your folder: no worktree and no automatic PR. To tu
 - Use a clone of a GitHub repository that you can push to. The `origin` remote must point to it.
 - The issue must be in that same repository. It must be an issue, not a PR.
 - Run `git fetch origin` first. PDD starts the new branch from your last fetch of `origin`'s default branch (for example `origin/main`). PDD does not fetch for you.
+- If the default branch on GitHub changed, also run `git remote set-head origin -a`, so Git knows the new one.
 - The project needs a way to test the change. The agents find and run the project's tests.
 - Your own checkout can have uncommitted work. PDD does not touch it.
 
@@ -503,7 +504,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.6` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.7` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -515,6 +516,7 @@ This is an alpha. These limits are known today:
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
 | The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
+| `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
