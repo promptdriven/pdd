@@ -209,6 +209,10 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
   When one step's worst case is bigger than `--max-calls` (at most 100), the runtime refuses the whole test before it
   starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
+- **A Try page allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
+  opens: refused at 0 calls. A screen prompt that calls another prompt with a high `max_calls` hits this fast
+  (`game` → `board` with `max_calls: 30` is 61 per tap). Keep the screen prompt's chain small: one call with a whole
+  list (section 18), not many calls.
 - **Check small first.** A schema refusal costs 0 AI calls. A wrong check path costs the full run: one cost 34 calls.
   - In a new project, check the story with the fewest steps first. Check the others only after it passes.
   - Start a new test with few steps: often one step for each criterion is enough. Add more cases after it passes.
@@ -327,6 +331,8 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   other buttons of that screen by `name` too (`name="show-all"`). The field that gets `/event/target` must be a plain
   `{"type": "string"}`: a stricter schema (`minLength`, `pattern`) is refused as `template-reference-schema`.
 - Each tap costs the handler's AI calls plus 1 to draw the screen. In Harbor, opening cost 1 and a tap cost 2 to 3.
+- A tap's worst case is the handler's worst case (section 10) plus 1 to draw. A Try page allows 40 for each tap.
+  A screen or handler whose prompt's worst case is over 40 never opens (refused at 0 calls). Keep the chain small.
 
 A full, small app map (a book list with 2 filter buttons; one screen from an operation):
 ```json
