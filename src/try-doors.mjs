@@ -1,8 +1,8 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 7b40a482de26bf79af5a90824c3eb412bf4801b8f8a32148c5ccdd74dbda8a9b).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: b42664022db320fcbb75e16769678cc1abf680de8883f47885b6bc3913c99914).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readPrompt } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
@@ -79,7 +79,7 @@ export async function openCli(context, test, sessionId, options) {
   if (existsSync(descriptorPath) && read(descriptorPath).promptHash !== hash(prompt.text)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
   const ghPath = (ports.env.PATH || process.env.PATH || '').split(':').map(folder => join(folder, 'gh')).find(path => { try { accessSync(path, constants.X_OK); return (lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) && !readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1'); } catch { return false; } });
   const descriptor = { version: 1, root, sessionId, origin, login: identity.login, prompt: step.entry_path, operation: step.operation,
-    ghPath: ghPath ? realpathSync(ghPath) : null, promptHashes: record.prompt_hashes, name, inputSchema: entry.input_schema, originalPath: test.path, storyPath: test.doc.story_path, criteria: test.doc.criteria,
+    ghPath: ghPath ? resolve(ghPath) : null, promptHashes: record.prompt_hashes, name, inputSchema: entry.input_schema, originalPath: test.path, storyPath: test.doc.story_path, criteria: test.doc.criteria,
     criterion: step.checks[0]?.criterion_id, storyHash: hash(readFileSync(join(root, test.doc.story_path))),
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
   writePrivate(descriptorPath, descriptor);
@@ -117,12 +117,11 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     if (d.version !== 1 || !d.sessionId || !d.root || realpathSync(d.root) !== d.root) fail('The Try session record is invalid. Run pdd try STORY --cli again.');
     const last = invalidate(d, descriptorPath), input = { argv };
     if (Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(d.root, path))) !== expected)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
-    if (!ports.stdin.isTTY) {
+    if (d.inputSchema.properties?.stdin && !ports.stdin.isTTY) {
       const parts = []; let bytes = 0;
       for await (const chunk of ports.stdin) { const part = Buffer.from(chunk); bytes += part.length; if (bytes > 1024 * 1024) fail('Piped stdin exceeds 1 MiB.'); parts.push(part); }
       const value = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts));
-      if (d.inputSchema.properties?.stdin) input.stdin = value;
-      else if (value.length) fail('This CLI prompt does not declare stdin. Add an optional string stdin input (RUNBOOK §6).');
+      input.stdin = value;
     } else if (d.inputSchema.required?.includes('stdin')) input.stdin = '';
     const answer = await runDoorCall(d, input, { ...ports, ghPath: d.ghPath, env: { ...ports.env, PDD_STATE_DIR: d.stateDir } });
     const result = answer.result;

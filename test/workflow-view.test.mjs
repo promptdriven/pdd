@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, symlinkSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,7 +9,7 @@ import { proseSha256 } from '../src/runtime-preflight.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'pdd-view ')); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-view '))); t.after(() => rmSync(root, { recursive: true, force: true }));
   const repo = join(root, 'project'), home = join(root, 'home'); mkdirSync(repo); mkdirSync(home);
   const git = (...args) => { const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   git('init', '-q', '-b', 'main'); git('config', 'user.name', 'Local view proof'); git('config', 'user.email', 'test@example.invalid');
@@ -85,4 +85,20 @@ test('VIEW5: an area waiting on its PR shows PR review/merge as the pending huma
   const r = f.cli('workflow', 'view', '2442');
   assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /Pending:.*review.*merge.*PR/i);
   assert.doesNotMatch(r.stdout, /current area still needs to finish/);
+});
+
+
+test('RELEASE5: ancestor aliases show artifacts and notes; redirected notes are explicitly unavailable', t => {
+  const f = fixture(t), alias = join(f.root, 'alias'); symlinkSync(f.root, alias);
+  f.run.root = join(alias, 'project'); f.run.commonDir = join(f.run.root, '.git'); f.run.runDir = join(f.run.commonDir, 'pdd/runs/2442'); f.save();
+  const view = f.cli('workflow', 'view', '2442'); assert.equal(view.status, 0, view.stderr);
+  assert.match(view.stdout, /Prompt status: prompts\/greet.prompt.md — draft/);
+  assert.match(view.stdout, /Gate note: .*verify.md/);
+  assert.doesNotMatch(view.stdout, /unavailable/);
+  const outside = join(f.root, 'outside'); mkdirSync(outside); writeFileSync(join(outside, 'private.md'), 'must not read');
+  const redirected = join(f.repo, '.git', 'redirected-notes'); symlinkSync(outside, redirected);
+  f.run.runDir = redirected; f.save();
+  const blocked = f.cli('workflow', 'view', '2442');
+  assert.match(blocked.stdout, /Gate notes unavailable/);
+  assert.doesNotMatch(blocked.stdout, /private.md/);
 });

@@ -13,7 +13,7 @@ not stop or reset the remote Try. Unknown route/method returns 404 without an AI
 suppressing the response body; a GET fallback receives GET in its method input. Paths decode UTF-8 parameters once; malformed escapes return 400.
 
 Reject an unexpected Host, any non-same-origin Origin and Sec-Fetch-Site cross-site before reading a body or
-spending a call. Do not enable CORS. This prevents a remote page or DNS rebinding from spending the owner's
+spending a call. For port 80, bare 127.0.0.1 and localhost Hosts and their http Origins are the same origin as the explicit :80 forms; other ports require their actual port. Do not enable CORS. This prevents a remote page or DNS rebinding from spending the owner's
 budget through localhost. Named API requests with a nonempty browser Sec-Fetch-Dest are refused403 before
 dispatch: images, stylesheets, scripts and navigations must never spend AI calls from model markup. Curl and
 fetch/XHR have absent or empty destinations and continue normally. Require origin-form request targets, bound bodies to 1 MiB UTF-8 and concurrent

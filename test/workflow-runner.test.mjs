@@ -93,8 +93,9 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (file === 'git' && args[0] === 'fetch') {
       f.fetches++;
-      const merged = f.prs.find(pr => f.mergedNumbers.includes(pr.number) && pr.baseRefName === args[2]);
-      if (merged) await exec('git', ['update-ref', `refs/remotes/origin/${args[2]}`, merged.headRefOid], { cwd: opts.cwd });
+      const branch = args[2].replace(/^refs\/heads\//, '').split(':')[0];
+      const merged = f.prs.find(pr => f.mergedNumbers.includes(pr.number) && pr.baseRefName === branch);
+      if (merged) await exec('git', ['update-ref', `refs/remotes/origin/${branch}`, merged.headRefOid], { cwd: opts.cwd });
       return { stdout: '' };
     }
     if (file !== 'gh') return exec(file, args, { ...opts, encoding: 'utf8' });
@@ -1640,4 +1641,42 @@ test('CHATFAIL9: a missing tab after an unconfirmed launch preserves the origina
   assert.equal(after.chats[0].startUnconfirmed, true); assert.equal(after.state, 'waiting');
   assert.equal(after.root, before.root); assert.equal(after.baseSha, before.baseSha);
   assert.equal(f.herdr.tabs.length, tabs); assert.equal(pane.commands.length, 1);
+});
+
+
+test('RELEASE10: confirmed gone unconfirmed tab/agent offers a fresh start without losing the run', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if(args[0]==='pane'&&args[1]==='run') throw closedChannel(); return healthy(args); };
+  assert.equal((await f.run()).exitCode,1);
+  const before=f.record(),chat=before.chats[0];
+  f.herdr.tabs=f.herdr.tabs.filter(tab=>tab.tab_id!==chat.tabId);
+  f.herdr.panes=f.herdr.panes.filter(pane=>pane.pane_id!==chat.paneId);
+  f.ports.herdr=healthy;const tabs=f.herdr.tabs.length;
+  const offered=await openRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(offered.exitCode,1);assert.match(offered.message,/pdd workflow open 17/);
+  const cleared=f.record();assert.equal(cleared.chats.length,0);assert.equal(cleared.abandonedChats[0].paneId,chat.paneId);
+  assert.equal(cleared.root,before.root);assert.equal(cleared.baseSha,before.baseSha);assert.equal(cleared.state,'waiting');
+  assert.equal(f.herdr.tabs.length,tabs,'first open offers but never dispatches');
+  assert.equal((await openRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const after=f.record();assert.equal(after.chats.length,1);assert.equal(after.abandonedChats.length,1);
+  assert.notEqual(after.chats[0].paneId,chat.paneId);assert.equal(after.root,before.root);
+  assert.equal(f.herdr.paneOf(after.chats[0]).commands.length,1);
+});
+
+test('RELEASE11: PR2 refreshes its selected remote base with an explicit tracking refspec', async t => {
+  const base='feature/checkout';const {f,run}=await featureToPr1(t,undefined,base);
+  f.mergedNumbers.push(23);
+  f.git(run.root,'commit','--allow-empty','-qm','Remote base advanced after PR1');
+  const newest=f.git(run.root,'rev-parse','HEAD'),tracking='refs/remotes/origin/'+base;
+  const expected='refs/heads/'+base+':'+tracking,original=f.ports.execFile;let refreshed=false;
+  f.ports.execFile=async(file,args,opts)=>{
+    if(file==='git'&&args[0]==='fetch'&&args[2].includes(base)){
+      if(args[2]===expected){f.git(f.source,'update-ref',tracking,newest);refreshed=true;}
+      return {stdout:''};
+    }
+    return original(file,args,opts);
+  };
+  const code=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(code.exitCode,0,code.message);assert.equal(refreshed,true);
+  assert.equal(f.git(run.root,'rev-parse','HEAD'),newest,'PR2 uses the newly fetched base');
 });

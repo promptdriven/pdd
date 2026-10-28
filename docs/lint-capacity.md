@@ -23,7 +23,7 @@ No check or Try was sent, and check calls are zero. Queue time, backoff and lint
 the same wait budget. Check and explicit lint print a saved batch to read with
 `pdd check --read BATCH`; this reads the original lint without posting anything.
 
-A later read replaces pending or obsolete unknown wording with the saved lint result. It
+A later read replaces pending or unknown wording with the saved lint result. It
 shows a reached prompt refusal when one exists. Even if lint finishes successfully, the
 check stays not run: reading cannot start a check or claim it passed. Start a fresh Check
 explicitly when ready. A global lint refusal still names its diagnostics. Lost or mismatched

@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, writeFile, rm, readdir, lstat, symlink, mkdir, link } from 'node:fs/promises';
+import { mkdtemp, realpath, readFile, writeFile, rm, readdir, lstat, symlink, mkdir, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { allocateIssueWorktree, lookupIssueWorktree, releaseIssueClaim } from '../src/workflow-worktree.mjs';
 
 const execute = promisify(execFile);
 async function fixture(t) {
-  const temp = await mkdtemp(join(tmpdir(), 'pdd-worktrees-')), cwd = join(temp, 'project');
+  const temp = await realpath(await mkdtemp(join(tmpdir(), 'pdd-worktrees-'))), cwd = join(temp, 'project');
   await mkdir(cwd); t.after(() => rm(temp, { recursive: true, force: true }));
   const gitAt = (path, ...args) => execute('git', args, { cwd: path, encoding: 'utf8' });
   const git = (...args) => gitAt(cwd, ...args);

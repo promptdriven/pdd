@@ -22,7 +22,7 @@ async function serving(t, entries, result, work, extra = {}) {
     return { status: 200, json: view };
   });
   const ports = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra).ports;
-  ports.serve = async server => work(server.address().port, seen, ports);
+  ports.serve = async server => { const address = server.address(); if (extra.advertisedPort) server.address = () => ({ ...address, port: extra.advertisedPort }); return work(address.port, seen, ports); };
   const context = { root: setup.repo, ports, store: { dir: setup.state }, identity: { login: 'octo' }, origin: fake.origin,
     runtime: { send: async () => ({ status: 200, json: { entries, app_map: extra.appMap ?? false } }) } };
   assert.equal(await openServe(context, {}, 'session', { '--serve': '0' }), 0);
@@ -83,4 +83,15 @@ test('HTTP door with Screen: named API works through fetch/curl, never through m
     assert.equal((await raw(port, '/api/books', { 'sec-fetch-dest': 'empty' })).status, 200);
     assert.equal(seen.length, 1);
   }, { appMap: true });
+});
+
+
+test('RELEASE7: port80 accepts default-port Host/Origin and still rejects cross-origin requests', async t => {
+  await serving(t, [route('GET','/health')], {status:200,body:'healthy'}, async (port,seen) => {
+    for (const host of ['127.0.0.1','localhost','127.0.0.1:80','localhost:80']) {
+      assert.equal((await raw(port,'/health',{host,origin:'http://'+host})).status,200,host);
+    }
+    for (const headers of [{host:'evil.example'},{host:'127.0.0.1',origin:'http://evil.example'},{host:'127.0.0.1:81'}]) assert.equal((await raw(port,'/health',headers)).status,403);
+    assert.equal(seen.length,4);
+  }, {advertisedPort:80});
 });

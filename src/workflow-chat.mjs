@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: c486893fb84cf532869ff4fedf4310545402efbbd68787306c59f3ab3af78e9d).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b19ba100609dbae1953738d5f57c427afa3be17be39e067676a898e88e394336).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync } from 'node:fs';
@@ -125,7 +125,11 @@ export async function openChat({ run, chat }, ports = {}) {
   try { await herdr(['tab', 'get', chat.tabId]); }
   catch (error) {
     if (error.code !== 'tab_not_found') throw error;
-    if (chat.startUnconfirmed) throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
+    if (chat.startUnconfirmed) {
+      const observed = await chatSession(chat, ports);
+      if (!observed.alive && ['agent_not_found', 'pane_not_found'].includes(observed.code)) return { restartAvailable: true };
+      throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
+    }
     const created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']);
     if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
     chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id;

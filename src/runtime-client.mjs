@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e267bab56a23b23296f914b0097ec76404affebcabdc64c6fad789edee53dd24).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48d3f4a98e34c0db8c743ad34968667af3bb75b33da4939a7e847faa986f3988).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -34,9 +34,9 @@ const clock = ms => new Date(ms).toTimeString().slice(0, 8);
 
 
 // A virtual program named gh must not shadow the real sign-in tool on the printed PATH.
-function authExecutable(env) {
-  for (const folder of (env.PATH || process.env.PATH || '').split(':')) {
-    const path = join(folder, 'gh');
+function authExecutable(env, preferred) {
+  const candidates = [...(preferred ? [preferred] : []), ...(env.PATH || process.env.PATH || '').split(':').map(folder => join(folder, 'gh'))];
+  for (const path of candidates) {
     try {
       const stat = lstatSync(path);
       if (!stat.isFile() && !stat.isSymbolicLink()) continue;
@@ -44,14 +44,18 @@ function authExecutable(env) {
       return realpathSync(path);
     } catch { /* try the next PATH directory */ }
   }
-  return 'gh';
+  return null;
 }
 
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
     env, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
-    gh: ports.gh ?? (args => spawnSync(ports.ghPath || authExecutable(env), args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
+    gh: ports.gh ?? (args => {
+      const executable = authExecutable(env, ports.ghPath);
+      return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
+        : { status: null, error: { code: 'ENOENT' } };
+    }),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
     interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
@@ -957,6 +961,17 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
+      }
+      if (live && options['--serve'] && !options['--new']) {
+        let matches = false;
+        try {
+          const hashes = record.prompt_hashes;
+          matches = isObject(hashes) && Object.keys(hashes).length > 0
+            && test.doc.steps.every(step => typeof hashes[step.entry_path] === 'string')
+            && Object.entries(hashes).every(([path, expected]) => found.visible.has(path)
+              && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === expected);
+        } catch { /* A removed prompt cannot match the uploaded source. */ }
+        if (!matches) throw new Stop(125, 'A prompt changed or this Try has no source record. Run pdd try STORY --serve --new.');
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));

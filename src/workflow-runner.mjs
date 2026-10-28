@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bfa245e82759a878399ed4a36eede913fa026fdcdf0b658bc2d10db89f53fc88).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6b220dd7d78b7b1ba2b8341929b5c8c3c8a1371e12c9342ec98c7c3327181c80).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -212,7 +212,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   const variable = homeVariable(agent), configDir = p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
   const explicitBase = base !== undefined;
-  const badBase = () => fail('Use --base with a branch name, for example round3/workflow-base.');
+  const badBase = () => fail('Use --base with a branch name, for example feature/checkout.');
   if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
   const context = await gitContext(cwd, p);
   if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
@@ -545,7 +545,12 @@ async function codeBranch(run, area, p) {
   const pr1 = prOf(run, area.name), name = `${pr1.branch}-code`;
   const state = await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts);
   if (!['open', 'merged'].includes(state.state)) throw Error(`PR 1 is ${state.state}, so pdd cannot tell where the code branch should start.`);
-  const fetch = async ref => { try { await p.execFile('git', ['fetch', 'origin', ref], { cwd: run.root }); } catch { /* A stale ref only makes the PR base older. */ } };
+  const fetch = async ref => {
+    try {
+      const reply = await p.execFile('git', ['fetch', 'origin', `refs/heads/${ref}:refs/remotes/origin/${ref}`], { cwd: run.root });
+      if (reply.code !== undefined && reply.code !== 0) throw Error('fetch rejected');
+    } catch { throw Error(`Could not fetch ${ref} from origin. No code branch was created; try again when the remote branch is available.`); }
+  };
   if (state.state === 'merged') {
     await fetch(run.baseBranch);
     await git(p, run.root, 'switch', '-q', '-c', name, `refs/remotes/origin/${run.baseBranch}`);
@@ -900,6 +905,13 @@ export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   try {
     if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
     const opened = await openChat({ run, chat }, p);
+    if (opened.restartAvailable) {
+      run.abandonedChats = [...(run.abandonedChats ?? []), { ...chat, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
+      run.chats = run.chats.filter(item => item !== chat);
+      const message = `The saved tab and agent are gone. The stale start was cleared; the run and worktree are kept. Run pdd workflow open ${run.number} to start the ${chat.area} chat again.`;
+      recordChatFailure(run, { code: 'chat_start_reset', message }, 'open', p);
+      return fail(message);
+    }
     clearChatFailure(run);
     writeRun(run, p);
     const where = `Herdr session pdd, tab "${chat.label}"`;

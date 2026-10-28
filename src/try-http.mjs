@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: d1d975861c12f019f6fd67ff725353579457c1f1e1463613131107da1eccd28d).
+// Generated from prompts/cli/try-http.prompt.md (sha256: cc13f3dcc0f41a3d531c00fa5c9380ea8a0c745a566eac3922b4ee46da96b9af).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -140,7 +140,9 @@ export async function openServe(context, test, sessionId, options) {
     const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`pdd try: ${cleanText(message)}\n`); } else res.destroy(); };
     try {
       const port = server.address()?.port, acceptedHost = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-      if (!acceptedHost.has(req.headers.host) || (req.headers.origin && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') throw problem(403, 'This local Try accepts requests only from its own origin.');
+      if (port === 80) { acceptedHost.add('127.0.0.1'); acceptedHost.add('localhost'); }
+      const acceptedOrigin = new Set([...acceptedHost].map(host => `http://${host}`));
+      if (!acceptedHost.has(req.headers.host) || (req.headers.origin && !acceptedOrigin.has(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') throw problem(403, 'This local Try accepts requests only from its own origin.');
       if (!req.url.startsWith('/') || req.url.startsWith('//') || req.url.includes('\\')) throw problem(400, 'Use a local absolute request path.');
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
       const resource = hasScreen ? screenResource(url, req.method) : null;

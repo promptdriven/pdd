@@ -515,7 +515,7 @@ recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the 
 route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
 one method and path. Supported methods are GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS. Use literal path
 segments or `:id` parameters declared as string input fields (directly or under a `params` object). Duplicate
-method/path patterns are refused. The existing `http.prompt` simulation binding still handles outbound resource
+method/path patterns are refused. The `http.prompt` simulation binding handles outbound resource
 calls inside a graph; a route title only selects an existing admitted entry.
 
 For a query entry, an optional string input `read` receives `?read=false` as `{"read":"false"}`. Declared

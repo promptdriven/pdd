@@ -7,7 +7,7 @@ streams and saved session identity. Do not interpret commands, execute a project
 if there are multiple distinct CLI entries. Both input and result schemas carry the cli convention. A safe program
 name comes from the prompt's first H1 (optionally backticked): letters/digits/dot/underscore/hyphen, starting with
 a letter, up to 64 characters; pdd, node, gh and git are reserved because putting their shims first on PATH would shadow pdd’s own tools. Record schema, original test and Story criteria privately using
-the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a Node shebang. Never traverse a symlink
+the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a POSIX shell shebang that execs the absolute Node executable. Never traverse a symlink
 or overwrite a file not marked as a PDD Try launcher. Ignore .pdd/try/ via the repository's local Git exclude file
 so future source captures contain no adapters or evidence. No token or browser capability enters the launcher.
 
@@ -15,9 +15,7 @@ Print its absolute path, one POSIX-safe `export PATH=…:"$PATH"` line, and dist
 argv steps. Every shell word in an example is quoted safely. Default returns immediately. --shell launches the
 user's bash or zsh (otherwise /bin/sh) with the PATH and inherited terminal, waits, and returns its status.
 
-`runShim(descriptorPath, argv, ports={})` loads the private descriptor and passes argv unchanged. If stdin is
-piped, read at most 1 MiB as UTF-8. Forward a nonempty pipe as stdin only if declared by the input schema;
-otherwise refuse with a plain explanation. A declared stdin receives even an empty pipe. Terminal stdin is
+`runShim(descriptorPath, argv, ports={})` loads the private descriptor and passes argv unchanged. Read stdin only when the input schema declares a stdin property. Otherwise do not open, iterate or consume the stream, even when piped or never closed, so an enclosing shell read loop retains its input. For declared piped stdin, read at most 1 MiB as UTF-8; forward even an empty pipe. Terminal stdin is
 omitted unless required, when it is an empty string. --help is passed to the prompt like any argv. Authenticate
 and invoke through runDoorCall. Require stdout/stderr strings and integer exit_code in 0..255 except 125.
 Print streams byte-for-byte and return that exit code. Reserve 125 for wrapper failures: stderr starts with
@@ -41,8 +39,7 @@ Print the target file and new step name. No model call is needed.
 
 Launcher execution must work inside projects declaring CommonJS or ESM. Use an absolute Node executable and
 syntax-neutral dynamic import rather than relying on extensionless-file module detection. The launcher must
-not resolve its own program name as Node or gh: capture the original absolute GitHub CLI path when opening a
-Try and use it for later authentication. Refuse reserved dependency names case-insensitively before writing a launcher.
+not resolve its own program name as Node or gh: capture the absolute PATH entry for the GitHub CLI when opening a Try, preserving its stable symlink rather than its versioned target. Use it for later authentication. If a saved executable is gone, resolve gh from PATH again while skipping PDD launchers; never authenticate through a project launcher. Refuse reserved dependency names case-insensitively before writing a launcher.
 
 A reused Try retains its uploaded prompt bytes. Before overwriting a launcher or making a command, compare
 local entry prompt bytes with the original private descriptor (and with the prompt hashes captured at session

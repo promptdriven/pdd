@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, statSync, symlinkSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, statSync, symlinkSync, readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { runTry } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { proseSha256, fillHashes } from '../src/runtime-preflight.mjs';
 
 function clip(t, stdin = true) {
   return harbor(t, root => {
@@ -147,15 +147,18 @@ test('doors: budget refusal and unknown outcome leave no stale output eligible f
   assert.equal(JSON.parse(readFileSync(join(setup.repo, 'tests/place-order.json'))).steps.length, 1);
 });
 
-test('doors: unsupported nonempty stdin is refused before dispatch; --shell gets the PATH', async t => {
+test('RELEASE3: undeclared stdin is untouched; --shell gets the PATH', async t => {
   const setup = clip(t, false), ready = await opened(t, setup, { '--shell': true });
   // The shell launch is injected below, so this test checks startup without a real interactive shell.
   assert.equal(ready.code, 0, ready.ports.stderr.text);
   const { runShim } = await import('../src/try-doors.mjs');
-  const io = ready.makePorts({ stdin: Readable.from(['data']) });
-  assert.equal(await runShim(ready.descriptor, [], io), 125);
-  assert.match(io.stderr.text, /does not declare stdin/);
-  assert.equal(ready.fake.jsonPosts.length, 0);
+  const input = Readable.from(['amount one\n', 'amount two\n']);
+  const io = ready.makePorts({ stdin: input });
+  assert.equal(await runShim(ready.descriptor, [], io), 0, io.stderr.text);
+  assert.equal(input.readableDidRead, false);
+  assert.deepEqual(ready.fake.jsonPosts[0].json.input, { argv: [] });
+  const neverClosing = ready.makePorts({ stdin: { isTTY: false, [Symbol.asyncIterator]() { throw Error('must not touch an undeclared stream'); } } });
+  assert.equal(await runShim(ready.descriptor, ['again'], neverClosing), 0, neverClosing.stderr.text);
 });
 
 test('doors: real launcher executes from CommonJS project', async t => {
@@ -234,4 +237,91 @@ test('doors: a queued lint ending refused prints the confirmed reason and sends 
   assert.equal(ports.stdout.text, '');
   assert.equal(ports.stderr.text, `pdd try: ${message}\n`);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});
+
+
+test('RELEASE2: reused HTTP Try refuses changed or missing source records before model/listener', async t => {
+  for (const mode of ['changed', 'missing-record', 'missing-file']) {
+    const setup = clip(t), ready = await opened(t, setup);
+    assert.equal(ready.code, 0, ready.ports.stderr.text);
+    if (mode === 'changed') { writeFileSync(join(setup.repo, PLACE), readFileSync(join(setup.repo, PLACE), 'utf8').replace('Print each', 'Show each')); fillHashes({root:setup.repo}); }
+    else if (mode === 'missing-file') {
+      const descriptor = JSON.parse(readFileSync(ready.descriptor));
+      const file = descriptor.repoState, data = JSON.parse(readFileSync(file));
+      data.tries['tests/place-order.json'].prompt_hashes['prompts/removed.prompt.md'] = 'a'.repeat(64);
+      writeFileSync(file, JSON.stringify(data));
+    } else {
+      const file = JSON.parse(readFileSync(ready.descriptor)).repoState, data = JSON.parse(readFileSync(file));
+      delete data.tries['tests/place-order.json'].prompt_hashes; writeFileSync(file, JSON.stringify(data));
+    }
+    const reads = ready.fake.gets.length;
+    const io = ready.makePorts({ serve: () => assert.fail('changed source cannot start a listener') });
+    assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--serve': '0' } }, io), 125);
+    assert.match(io.stderr.text, /--new/);
+    assert.equal(ready.fake.posts.length, 2, 'no replacement Try/lint');
+    assert.ok(ready.fake.gets.slice(reads).every(r => !r.url.endsWith('/model')), 'refuse before metadata');
+  }
+});
+
+test('RELEASE6: preserve the stable gh symlink and recover a removed saved executable safely', async t => {
+  const setup = clip(t), ready = await opened(t, setup), dir = join(setup.sandbox, 'tools'); mkdirSync(dir);
+  const target = join(dir, 'gh-v2'), stable = join(dir, 'gh');
+  writeFileSync(target, '#!/bin/sh\ncase "$1 $2" in\n"auth token") printf "%s\\n" "'+TOKEN+'";;\n"api user") printf "%s\\n" "octo 4242";;\n*) exit 91;;\nesac\n', {mode:0o755});
+  symlinkSync('gh-v2', stable);
+  const env = { ...ready.ports.env, PATH: dir+':'+(process.env.PATH || '') };
+  assert.equal(await runTry({cwd:setup.repo,words:['place-order'],options:{'--cli':true}},ready.makePorts({env})),0);
+  const descriptor = JSON.parse(readFileSync(ready.descriptor));
+  assert.equal(descriptor.ghPath, stable, 'do not pin the versioned executable behind a package-manager symlink');
+  descriptor.ghPath = join(dir, 'removed-gh-v1'); writeFileSync(ready.descriptor, JSON.stringify(descriptor));
+  const {runShim} = await import('../src/try-doors.mjs');
+  const io = ready.makePorts({gh:undefined,env});
+  assert.equal(await runShim(ready.descriptor,['upgraded'],io),0,io.stderr.text);
+  assert.deepEqual(ready.fake.jsonPosts.at(-1).json.input, {argv:['upgraded'],stdin:''});
+});
+
+test('RELEASE2: changed source cannot reopen a paused HTTP Try', async t => {
+  const setup=clip(t),ready=await opened(t,setup);
+  const file=join(setup.repo,PLACE);writeFileSync(file,readFileSync(file,'utf8').replace('Print each','Show each'));fillHashes({root:setup.repo});
+  const id=JSON.parse(readFileSync(ready.descriptor)).sessionId;let reopened=0;
+  const fetch=async(url,init)=>{
+    const path=new URL(url).pathname;
+    if(path==='/v1/runs/'+id)return new Response(JSON.stringify(ready.fake.tryJob(id,undefined,'paused')),{status:200});
+    if(path.endsWith('/reopen')){reopened++;return new Response(JSON.stringify(ready.fake.tryJob(id)),{status:200});}
+    return globalThis.fetch(url,init);
+  };
+  const io=ready.makePorts({fetch,serve:()=>assert.fail('changed source cannot serve')});
+  assert.equal(await runTry({cwd:setup.repo,words:['place-order'],options:{'--serve':'0'}},io),125);
+  assert.match(io.stderr.text,/--new/);assert.equal(reopened,0,'source identity checked before any reopen POST');
+});
+
+test('RELEASE6: missing gh target with only a PDD launcher on PATH fails closed before dispatch', async t => {
+  const setup=clip(t),ready=await opened(t,setup),dir=join(setup.sandbox,'unsafe-bin');mkdirSync(dir);
+  const marker=join(dir,'was-executed');
+  writeFileSync(join(dir,'gh'),'#!/bin/sh\n# PDD Try launcher v1\nprintf executed > "'+marker+'"\nprintf "'+TOKEN+'\\n"\n',{mode:0o755});
+  const descriptor=JSON.parse(readFileSync(ready.descriptor));descriptor.ghPath=join(dir,'removed-gh');writeFileSync(ready.descriptor,JSON.stringify(descriptor));
+  const {runShim}=await import('../src/try-doors.mjs');
+  const io=ready.makePorts({gh:undefined,env:{...ready.ports.env,PATH:dir}});
+  assert.equal(await runShim(ready.descriptor,['safe'],io),125);
+  assert.equal(readdirSync(dir).includes('was-executed'),false,'never execute a rejected launcher');
+  assert.equal(ready.fake.jsonPosts.length,0);
+});
+
+test('RELEASE3: the actual launcher leaves a shell read loop input open for its next command', async t => {
+  const {spawn}=await import('node:child_process');
+  const setup=clip(t,false),ready=await opened(t,setup),tools=join(setup.sandbox,'loop-tools');mkdirSync(tools);
+  writeFileSync(join(tools,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
+  const descriptor=JSON.parse(readFileSync(ready.descriptor));descriptor.ghPath=join(tools,'gh');writeFileSync(ready.descriptor,JSON.stringify(descriptor));
+  const shim=join(setup.repo,'.pdd/try/bin/paperclip');
+  const outcome=await new Promise((done,reject)=>{
+    const child=spawn('/bin/sh',['-c','while IFS= read -r a; do "$1" "$a" || exit; done','loop',shim],{env:{...process.env,PATH:tools+':'+process.env.PATH},stdio:['pipe','pipe','pipe']});
+    let stdout='',stderr='',continued=false;
+    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('The first command waited for the enclosing input pipe to close'));},15000);
+    child.on('error',reject);child.stdin.on('error',reject);
+    child.stdout.on('data',chunk=>{stdout+=chunk;if(!continued&&stdout==='first\n'){continued=true;child.stdin.end('second\n');}});
+    child.stderr.on('data',chunk=>stderr+=chunk);
+    child.on('close',code=>{clearTimeout(timer);done({code,stdout,stderr,continued});});
+    child.stdin.write('first\n'); // Deliberately keep the pipe open until the first command returns.
+  });
+  assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'',continued:true});
+  assert.deepEqual(ready.fake.jsonPosts.map(p=>p.json.input),[{argv:['first']},{argv:['second']}]);
 });

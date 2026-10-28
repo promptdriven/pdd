@@ -43,4 +43,4 @@ existing work and sends no new check.
 For a submitted run, keep the server's accounting result. If it reports unknown usage or
 incomplete accounting, a raw `provider_calls: 0` does not prove zero cost. Keep the run's call
 ceiling reserved until complete evidence resolves it; do not resubmit the same run to obtain a
-number. Share its report with the runtime team.
+number. Share its report with the PDD team.

@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: 64e2ac304bd01419d24c7a11d5cf0b224533e0cb6af0a5c26166369ecf27f396).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: ea3d251036d237b1e2869a0ea4039b931800f4b086f685f178db232f628a10ce).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { resolveRun } from './workflow-runs.mjs';
@@ -15,11 +15,16 @@ function localPath(root, path) {
   if (typeof path !== 'string' || !path || isAbsolute(path) || path.includes('\\') || path.split('/').some(p => p === '..' || !p) || /[\x00-\x1f]/.test(path)) return null;
   return resolve(root, path);
 }
-function fileInfo(path) {
-  try { return realpathSync(path) === path && lstatSync(path).isFile() ? lstatSync(path) : null; } catch { return null; }
+function fileInfo(root, path, directory = false) {
+  try {
+    const rel = relative(root, path), expected = localPath(realpathSync(root), rel);
+    if (!expected || realpathSync(path) !== expected) return null;
+    const stat = lstatSync(path);
+    return (directory ? stat.isDirectory() : stat.isFile()) ? stat : null;
+  } catch { return null; }
 }
 function readArtifact(root, path) {
-  const file = localPath(root, path), stat = file && fileInfo(file);
+  const file = localPath(root, path), stat = file && fileInfo(root, file);
   if (!stat || stat.size > 1048576 || isSecretPath(path)) return null;
   try { return readFileSync(file, 'utf8'); } catch { return null; }
 }
@@ -74,8 +79,10 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   }
   const gateFiles = [];
   try {
-    if (realpathSync(run.runDir) === resolve(run.runDir)) for (const path of readdirSync(run.runDir).filter(path => path.endsWith('.md')).sort()) {
-      const file = join(run.runDir, path); gateFiles.push(`  Gate note: ${pathToFileURL(file).href}${fileInfo(file) ? '' : ' (unavailable)'}`);
+    const gateRoot = resolve(run.commonDir ?? root);
+    if (!fileInfo(gateRoot, run.runDir, true)) throw Error('Gate note folder unavailable');
+    for (const path of readdirSync(run.runDir).filter(path => path.endsWith('.md')).sort()) {
+      const file = join(run.runDir, path); gateFiles.push(`  Gate note: ${pathToFileURL(file).href}${fileInfo(gateRoot, file) ? '' : ' (unavailable)'}`);
     }
   } catch { gateFiles.push('  Gate notes unavailable.'); }
   const summaries = Object.values(run.done ?? {}).map(item => String(item?.summary ?? ''));
@@ -105,6 +112,6 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     'Review links show current files; recorded approvals do not certify later edits.',
     ...(changed === null ? ['Changes since the base are unavailable; listing available authored files.'] : []),
     ...(listed === null ? ['Worktree file inspection unavailable.'] : []), 'Gate files:',
-    ...[...files].sort(([a], [b]) => a.localeCompare(b)).map(([file, { role }]) => `  ${role}: ${pathToFileURL(file).href}${fileInfo(file) ? '' : ' (unavailable)'}`), ...gateFiles];
+    ...[...files].sort(([a], [b]) => a.localeCompare(b)).map(([file, { role }]) => `  ${role}: ${pathToFileURL(file).href}${fileInfo(root, file) ? '' : ' (unavailable)'}`), ...gateFiles];
   return { exitCode: 0, message: lines.join('\n') };
 }

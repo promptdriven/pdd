@@ -1,6 +1,6 @@
 ---
 name: pdd-feature
-description: PDD feature workflow. Use when a person asks for a PDD feature. Write the prompt, Story and tests (PR 1), then the code (PR 2) if asked.
+description: PDD feature workflow. Use when the person asks for a new feature or new behavior in a PDD project. Write the prompt, Story and tests (PR 1), then the code (PR 2) if asked.
 ---
 
 # PDD feature
@@ -28,5 +28,3 @@ One chat per area. Briefs: `steps/`. `?` = optional.
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
 - When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
 - When the person approves in their own words, run `<pdd> workflow approve N`. Never approve for them.
-
-To try a CLI, run `pdd try <story> --cli`, then run the command.

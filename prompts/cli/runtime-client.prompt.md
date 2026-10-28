@@ -150,8 +150,8 @@ original test even when another test covers the same Story. It must never create
 
 For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd try:`
 and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files
-and the login. Refuse using a different local prompt against an existing door; --new stops the old session first.
-Door calls can provide a captured absolute gh executable path so a project shim named gh does not shadow sign-in.
+and the login. Before showing or opening a reused --serve door, compare every recorded uploaded prompt hash with the local files; missing hashes, removed files or changed bytes refuse with a --new hint before model metadata, a listener or a call. CLI doors apply the same source-identity rule. --new stops the old session first.
+Door calls can provide a captured absolute gh executable path so a project shim named gh does not shadow sign-in. Preserve a stable PATH symlink when recording it; if that saved executable is gone, look up gh again using the launcher-safe PATH search.
 A cancelled door call stops polling promptly and reports an unknown result if dispatch may have occurred. Never
 resend it. Forward cancellation to polling waits so closing a local HTTP server cannot hang for the call deadline.
 A door's lint can finish refused before producing a program report (for example lint-queue-timeout with
