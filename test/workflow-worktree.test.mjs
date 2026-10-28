@@ -33,6 +33,62 @@ const readOnly = calls => calls.every(c => ['rev-parse', 'remote', 'symbolic-ref
   || c.args[0] === 'worktree' && c.args[1] === 'list');
 const metadata = (f, runId) => join(f.common, 'pdd', 'worktree-assignments', 'runs', runId + '.json');
 
+async function layoutFixture(t, layout) {
+  const f = await fixture(t);
+  let primary = f.cwd, common = f.common, cwd = f.cwd;
+  if (layout === 'linked-bare') {
+    primary = join(f.temp, 'project.git');
+    await f.git('clone', '--bare', f.cwd, primary);
+    await f.gitAt(primary, 'remote', 'set-url', 'origin', 'https://github.com/Acme/Project.git');
+    common = primary;
+  }
+  if (layout !== 'normal') {
+    cwd = join(f.temp, 'linked');
+    await f.gitAt(primary, 'worktree', 'add', '-b', 'linked-base', cwd, 'main');
+  }
+  return { ...f, primary, common, cwd };
+}
+
+for (const layout of ['normal', 'linked-normal', 'linked-bare']) {
+  test(`BARE1: ${layout} allocates and reconciles against its verified common repository`, async t => {
+    const f = await layoutFixture(t, layout), input = f.input(2488, { cwd: f.cwd });
+    const before = (await f.gitAt(f.cwd, 'status', '--porcelain=v1', '-z')).stdout;
+    const allocated = await allocateIssueWorktree(input, f.ports);
+    assert.equal(allocated.state, 'ready', allocated.message);
+    const a = allocated.assignment;
+    assert.equal(a.commonDir, f.common); assert.equal(a.sourceRoot, f.cwd);
+    assert.equal(dirname(a.worktreePath), join(dirname(f.primary), basename(f.primary) + '.pdd-worktrees'));
+    assert.equal(a.gitDir, join(f.common, 'worktrees', basename(a.worktreePath)));
+    assert.equal((await f.gitAt(f.cwd, 'status', '--porcelain=v1', '-z')).stdout, before);
+    assert.equal((await f.gitAt(f.primary, 'rev-parse', '--is-bare-repository')).stdout.trim(), String(layout === 'linked-bare'));
+    f.calls.length = 0;
+    assert.deepEqual((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).assignment, a);
+    assert.deepEqual((await lookupIssueWorktree({ cwd: a.worktreePath, runId: input.runId }, f.ports)).assignment, a);
+    assert.deepEqual((await allocateIssueWorktree(input, f.ports)).assignment, a);
+    assert.equal((await allocateIssueWorktree(f.input(2488, { cwd: a.worktreePath }), f.ports)).state, 'conflict');
+    assert.equal(adds(f.calls).length, 0); assert(readOnly(f.calls));
+    await f.gitAt(f.cwd, 'remote', 'set-url', 'origin', 'https://github.com/Other/Project.git');
+    assert.equal((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, f.ports)).state, 'recovery_required');
+    assert.equal((await allocateIssueWorktree(input, f.ports)).state, 'conflict');
+    assert.equal(adds(f.calls).length, 0);
+  });
+}
+
+test('BARE2: pre-intent refusals leave no claim or allocation record and permit a corrected request', async t => {
+  const f = await layoutFixture(t, 'linked-bare');
+  const wrongOrigin = f.input(2490, { cwd: f.cwd, repository: 'Other/Project' });
+  assert.equal((await allocateIssueWorktree(wrongOrigin, f.ports)).state, 'conflict');
+  const input = f.input(2490, { cwd: f.cwd, baseRef: 'missing-base' });
+  const refused = await allocateIssueWorktree(input, f.ports);
+  assert.equal(refused.state, 'recovery_required');
+  assert.match(refused.message, /No allocation record or issue claim was saved/);
+  assert.equal(adds(f.calls).length, 0);
+  for (const request of [wrongOrigin, input]) await assert.rejects(lstat(metadata(f, request.runId)), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(f.common, 'pdd/worktree-assignments/issues/2490.json')), { code: 'ENOENT' });
+  const corrected = await allocateIssueWorktree({ ...input, baseRef: 'main' }, f.ports);
+  assert.equal(corrected.state, 'ready', corrected.message);
+});
+
 async function snapshot(path) {
   const entries = [];
   for (const name of (await readdir(path)).sort()) {
@@ -189,7 +245,10 @@ test('partial intent or missing issue claim is retained and never repaired or ad
   const runFile = metadata(f, input.runId), issueFile = join(dirname(dirname(runFile)), 'issues', '16.json');
   await rm(issueFile); // Test simulates interrupted/missing durable claim; helper never deletes it.
   f.calls.length = 0;
-  assert.equal((await allocateIssueWorktree(input, ports)).state, 'recovery_required');
+  const resumed = await allocateIssueWorktree(input, ports);
+  assert.equal(resumed.state, 'recovery_required');
+  assert.match(resumed.message, /Preserve the saved run/);
+  assert.doesNotMatch(resumed.message, /No allocation record or issue claim was saved/);
   await assert.rejects(lstat(issueFile), { code: 'ENOENT' }); assert.equal(adds(f.calls).length, 0);
   await writeFile(runFile, '{partial');
   assert.equal((await lookupIssueWorktree({ cwd: f.cwd, runId: input.runId }, ports)).state, 'recovery_required');
