@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4d3530be9e2b8615b0e7d920117b989c2a37cc01cb7357d013e5e36af130ce66).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: e8271c0086162d68def4bb607b46555dc2dbd8ee6a5036a6501160d92ae8c478).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -17,6 +17,7 @@ const skillCount = folders => `${folders.length} PDD skill${folders.length === 1
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
+  'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
@@ -56,7 +57,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stdout, metadata.version);return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
     case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
-    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': {
+    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
+      if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');

@@ -125,7 +125,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
-  assert.match(result.out, /Warning: the AC1 check expects 899, but the AC1 text says 900\./);
+  assert.match(result.out, /Warning: possible numeric mismatch.*899.*AC1.*900\./);
   const prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
@@ -239,9 +239,9 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.
-test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may name a model', async t => {
+test('RUNTIME-RULES3: default max_calls is 12 per step (18 to 100), and a step may name a model', async t => {
   const steps = count => ({ steps: Array.from({ length: count }, () => ({})) });
-  assert.deepEqual([1, 2, 3, 30].map(count => defaultMaxCalls(steps(count))), [6, 8, 12, 100]);
+  assert.deepEqual([1, 2, 3, 30].map(count => defaultMaxCalls(steps(count))), [18, 24, 36, 100]);
   const { repo, home } = harbor(t), file = join(repo, 'tests/place-order.json'), doc = readJson(file);
   doc.steps[0].model = 'gpt-6.1-sol'; doc.steps[0].input.items[0].quantity = 0; writeJson(file, doc);
   const named = await check(repo, home, ['place-order']);
@@ -371,7 +371,9 @@ test('RUNTIME-SCHEMA4: the number warning skips calls and world targets and coun
       { criterion_id: 'AC1', target: 'world', path: '/books/length', op: 'equals', value: 3 },
       { criterion_id: 'AC1', target: 'result', path: '/items', op: 'count', value: 2 },
       { criterion_id: 'AC1', target: 'result', path: '/status', op: 'equals', value: 400 }] }] };
-  assert.deepEqual(numberWarnings(doc), ['Warning: the AC1 check expects 400, but the AC1 text says 409.']);
+  const warnings = numberWarnings(doc);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /possible numeric mismatch.*result \/status.*400.*AC1.*409\./);
 });
 
 // Wrong: the number warning fires when the check measures something else than the number in the text (lead, Oct 27: 8 false warnings).
@@ -381,8 +383,9 @@ test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number
   assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0), []);
   assert.deepEqual(warn('A duplicate title is refused with 409 and nothing is saved.', 0, { target: 'calls', path: '/resources/store' }), []);
   assert.deepEqual(warn('The shelf shows 2 of 5 books.', 3), []);
-  assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 899),
-    ['Warning: the AC1 check expects 899, but the AC1 text says 900.']);
+  const warnings = warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 899);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /possible numeric mismatch.*899.*AC1.*900\./);
   assert.deepEqual(warn('An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', 900), []);
   assert.deepEqual(warn('No number here.', 5), []);
 });
@@ -436,4 +439,3 @@ test('RUNTIME-STORIES1: PLAN.md, README.md and story files with no acceptance cr
   assert.deepEqual(found.stories.map(story => story.path).sort(), ['user_stories/place-order.md', 'user_stories/refund.md', 'user_stories/unknown-item.md']);
   assert.deepEqual(found.warnings, ['Warning: user_stories/refund.md has no test.']);
 });
-

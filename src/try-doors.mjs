@@ -1,11 +1,11 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: b42664022db320fcbb75e16769678cc1abf680de8883f47885b6bc3913c99914).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: acac1bbbd7addae207e406a73620e52d8692a772f024ddb38d817d178a0c9197).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readPrompt } from './runtime-preflight.mjs';
-import { cleanText } from './runtime-output.mjs';
+import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCase } from './runtime-client.mjs';
 
 const WRAPPER_EXIT = 125;
@@ -78,7 +78,11 @@ export async function openCli(context, test, sessionId, options) {
   const descriptorPath = join(store.folder('tries'), `${sessionId}.door.json`);
   if (existsSync(descriptorPath) && read(descriptorPath).promptHash !== hash(prompt.text)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
   const ghPath = (ports.env.PATH || process.env.PATH || '').split(':').map(folder => join(folder, 'gh')).find(path => { try { accessSync(path, constants.X_OK); return (lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) && !readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1'); } catch { return false; } });
-  const descriptor = { version: 1, root, sessionId, origin, login: identity.login, prompt: step.entry_path, operation: step.operation,
+  let metadata;
+  try { const reply = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000); if (reply.status === 200) metadata = reply.json; } catch { /* Accounting cannot block an otherwise usable CLI. */ }
+  const usage = tryUsage(metadata);
+  ports.stderr.write(`${tryUsageLine(usage)}\n`);
+  const descriptor = { callCap: usage.cap, version: 1, root, sessionId, origin, login: identity.login, prompt: step.entry_path, operation: step.operation,
     ghPath: ghPath ? resolve(ghPath) : null, promptHashes: record.prompt_hashes, name, inputSchema: entry.input_schema, originalPath: test.path, storyPath: test.doc.story_path, criteria: test.doc.criteria,
     criterion: step.checks[0]?.criterion_id, storyHash: hash(readFileSync(join(root, test.doc.story_path))),
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
@@ -128,11 +132,12 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     if (typeof result.stdout !== 'string' || typeof result.stderr !== 'string' || !Number.isInteger(result.exit_code) || result.exit_code < 0 || result.exit_code > 255 || result.exit_code === WRAPPER_EXIT) fail('The prompt must return stdout, stderr and an exit_code from 0–255 except reserved code 125.');
     writePrivate(last, { state: 'confirmed', id: answer.id, input, result, inputWorld: answer.inputWorld, world: answer.world });
     ports.stdout.write(result.stdout); ports.stderr.write(result.stderr);
+    ports.stderr.write(`${result.stderr && !result.stderr.endsWith('\n') ? '\n' : ''}${tryUsageLine(answer.usage, { command: true })}\n`);
     return result.exit_code;
   } catch (e) {
     const reason = e.code === 'ENOENT' ? 'No Try session is available. Run pdd try STORY --cli again.'
       : e instanceof TypeError && /encoded data/.test(e.message) ? 'Piped stdin must be UTF-8 text.' : cleanText(e.message || 'The command could not run.');
-    ports.stderr.write(`pdd try: ${reason}\n`); return WRAPPER_EXIT;
+    ports.stderr.write(`pdd try: ${reason}\n${tryUsageLine(e.tryUsage ?? tryUsage({}), { command: true })}\n`); return WRAPPER_EXIT;
   }
 }
 

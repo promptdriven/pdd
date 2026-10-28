@@ -1,8 +1,8 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: cc13f3dcc0f41a3d531c00fa5c9380ea8a0c745a566eac3922b4ee46da96b9af).
+// Generated from prompts/cli/try-http.prompt.md (sha256: 6e6b7b799ed85662eab8846c4628693d1a6ce4971a5c4921b931a97123304c91).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
-import { cleanText } from './runtime-output.mjs';
+import { cleanText, tryUsage, tryUsageHeaders, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall } from './runtime-client.mjs';
 
 const problem = (status, message) => Object.assign(new Error(message), { httpStatus: status });
@@ -134,10 +134,13 @@ export async function openServe(context, test, sessionId, options) {
     if (keys.has(key)) throw problem(502, 'This Try has overlapping HTTP route labels; name each method/path once.');
     keys.add(key);
   }
+  let latestUsage = tryUsage(model.json);
+  const callCap = latestUsage.cap;
+  (ports.stderr ?? process.stderr).write(`${tryUsageLine(latestUsage)}\n`);
   let tail = Promise.resolve(), pending = 0, stopped = false;
   const server = createServer(async (req, res) => {
-    let counted = false;
-    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`pdd try: ${cleanText(message)}\n`); } else res.destroy(); };
+    let counted = false, usage = { ...latestUsage, calls: 0 }, usageSource = 'last-known';
+    const reply = (status, message) => { if (!res.headersSent) { res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(`pdd try: ${cleanText(message)}\n`); } else res.destroy(); };
     try {
       const port = server.address()?.port, acceptedHost = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
       if (port === 80) { acceptedHost.add('127.0.0.1'); acceptedHost.add('localhost'); }
@@ -176,15 +179,18 @@ export async function openServe(context, test, sessionId, options) {
       const input = inputFor(selected, req, url, params, text, selected.route.method);
       const work = tail.then(async () => {
         if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
-        return runDoorCall({ root, origin, login: identity.login, sessionId, prompt: selected.entry_path, operation: selected.operation }, input,
+        return runDoorCall({ root, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
           { ...ports, signal: context.signal });
       });
       tail = work.catch(() => {});
-      const result = responseFor((await work).result);
+      usage = tryUsage({}, { cap: callCap }); usageSource = 'runtime';
+      const answer = await work;
+      usage = answer.usage; latestUsage = usage;
+      const result = responseFor(answer.result);
       const body = req.method === 'HEAD' || [204, 304].includes(result.status) ? '' : result.body;
       const headers = { ...result.headers, ...(![204, 304].includes(result.status) ? { 'content-length': Buffer.byteLength(req.method === 'HEAD' ? result.body : body) } : {}) };
-      res.writeHead(result.status, headers); res.end(body);
-    } catch (error) { req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.'); }
+      res.writeHead(result.status, { ...headers, ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(body);
+    } catch (error) { if (error.tryUsage) { usage = error.tryUsage; latestUsage = usage; usageSource = 'runtime'; } req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.'); }
     finally { if (counted) pending--; }
   });
   server.requestTimeout = 30_000; server.headersTimeout = 15_000;
