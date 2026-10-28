@@ -4,9 +4,9 @@ Own `src/runtime-output.mjs`. It turns `pdd check` rows into the terminal table,
 
 ## Rows
 
-A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
-- From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals`; calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
+- From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
 - Seconds are rounded to 0.1.
 - Expected and got values that fit on one line print as JSON on the check line, so strings are quoted and escaped (`"Sam\n"` differs from `"Sam"`). They fit when no string has a line break before its end and each JSON is at most 80 characters.
 - Other values (round-2 tester: a CLI's stdout lost its line breaks and was cut near the difference) print as a block under the check line: `    expected:` and `    got:`, each followed by its lines, 6 spaces in. A string shows its own lines with no quotes, and `(ends with a line break)` when it ends with one; any other value shows as JSON with 2-space indents. pdd never cuts inside a line. A value shows at most 20 lines: from line 1, or from 2 lines before the first line where two strings differ when that line is later. Lines left out are named: `… N lines before` above, `… N more lines in the report` below. Each line loses control characters and the token but keeps its spaces.
@@ -32,7 +32,7 @@ The first match from the top wins:
 4. A block for each problem row, failed rows first:
    - `FAILED  <title> (<test>)`, one line for each failed check `  AC1  result /totalCents  expected 899, got 900` (or the check line `  AC1  result /stdout` and its block), the row warnings, then `  Report: <url>   Next: show the person this check. Do not change the expected value yourself.`
    - `REFUSED before sending (not sent, 0 AI calls)`, then for each row `  <test>  step N  <code>` and the message and hint lines.
-   - `REFUSED  <title> (<test>)`, then `  <code>  <section>  <message>`, the engine message when it adds detail, and the `pdd:` hint.
+   - `REFUSED  <title> (<test>)`, then for each refusal with a `reason`: `  <code>: <reason>`, `  Where: <where>` when there is one, and `  Fix: <fix>`; when `cause` is `ai-service` the last line is `  Your test is fine. Run it again.` in place of the fix. A refusal with no `reason` (the live server before #379) keeps `  <code>  <section>  <message>` and the engine message when it adds detail. Both end with the `pdd:` hint when there is one.
    - `NOT RUN  <title> (<test>): <message> (<code>)`.
    - `STILL RUNNING after <limit>: <title>. Do not send it again.` at the time limit; the limit is `90 s` for the agent default, else `N min` (after Ctrl-C: `STILL RUNNING when pdd stopped reading: …`; in `--read`, or with no known limit: `STILL RUNNING: …`)
    - `UNKNOWN  <title>: the run may have executed. Its result is unknown.` and the server's reason.

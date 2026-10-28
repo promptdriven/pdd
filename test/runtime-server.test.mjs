@@ -559,6 +559,37 @@ test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is ne
   assert.match(lines[second + 47], /^ {2}Report: http/);
 });
 
+// Refusal items as prompt-runtime #379 sends them (not live yet): plain reason, fix, file, at, where, cause, and message = reason + fix.
+const PLAIN_REFUSALS = [
+  { code: 'unknown-criterion', reason: 'The test names a criterion that the Story does not have.', fix: 'Use AC1, AC2 or AC3, as the Story lists them.',
+    file: 'tests/place-order.json', at: 'steps[0].checks[1]', where: 'tests/place-order.json steps[0].checks[1]', cause: 'test',
+    message: 'The test names a criterion that the Story does not have. Use AC1, AC2 or AC3, as the Story lists them.' },
+  { code: 'graph-uncertain-child-dispatch', reason: 'The AI service did not answer one call.', fix: 'Run the check again.', file: null, at: null, where: null,
+    cause: 'ai-service', message: 'The AI service did not answer one call. Run the check again.' }];
+
+// Wrong: a refused check shows only a code, or calls an AI service failure a problem in the test (round-2 report text, Oct 27).
+test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and fix; ai-service says the test is fine; old answers keep their text', async t => {
+  const setup = harbor(t);
+  const refusing = refusals => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], refusals) } : f.normal(entry));
+  const plain = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order']);
+  assert.equal(plain.code, 4, plain.err + plain.out);
+  const lines = plain.out.split('\n'), at = lines.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
+  assert.deepEqual(lines.slice(at + 1, at + 6), ['  unknown-criterion: The test names a criterion that the Story does not have.',
+    '  Where: tests/place-order.json steps[0].checks[1]', '  Fix: Use AC1, AC2 or AC3, as the Story lists them.',
+    '  graph-uncertain-child-dispatch: The AI service did not answer one call.', '  Your test is fine. Run it again.']);
+  const json = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order'], { '--json': true });
+  assert.deepEqual(json.json.rows[0].refusals.map(item => [item.code, item.reason, item.where, item.fix, item.cause]), [
+    ['unknown-criterion', PLAIN_REFUSALS[0].reason, PLAIN_REFUSALS[0].where, PLAIN_REFUSALS[0].fix, 'test'],
+    ['graph-uncertain-child-dispatch', PLAIN_REFUSALS[1].reason, null, PLAIN_REFUSALS[1].fix, 'ai-service']]);
+  const { where, ...noWhere } = PLAIN_REFUSALS[0];
+  const placed = await check(setup, await refusing([noWhere]), ['place-order']);
+  assert.match(placed.out, /^ {2}Where: tests\/place-order\.json steps\[0\]\.checks\[1\]$/m);
+  const old = await check(setup, await refusing([{ code: 'unknown-criterion', section: 'steps[0].checks[1]', message: 'unknown-criterion', engine_message: 'criterion AC9 is not in the story' }]), ['place-order']);
+  const before = old.out.split('\n'), from = before.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
+  assert.deepEqual(before.slice(from + 1, from + 3), ['  unknown-criterion  steps[0].checks[1]  unknown-criterion', '  engine: criterion AC9 is not in the story']);
+  assert.doesNotMatch(old.out, /Where:|Fix:|Your test is fine/);
+});
+
 // Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);

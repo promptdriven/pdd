@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c614dda25700e8b20f28c23b96475f91c10e50a5a3e117a9cd7cd9646cc74ace).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: f90902b73ef91d080770005c4e685e0a0ea4547f8b0c5f812fc943efcf1a853e).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -899,9 +899,9 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
   const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
     reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
-    fix: text(item.fix) }));
+    fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
   const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
-  const why = items.map(item => item.reason ? `${item.code}: ${item.reason}` : item.code).join('; '), fix = items.find(item => item.fix)?.fix;
+  const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
   const again = `run pdd try ${test.story} --new.`;
   line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
   line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`

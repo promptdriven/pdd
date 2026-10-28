@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: bcc9597d9a083285f7a5101f265503a6e108b2b1ef138df5f7259ca693a7eaca).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: fd45d21bc0dcc6c13486d985348875333755f720cfe189b0b8bb5c1acc0c88c6).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -45,9 +45,13 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []).map(check => ({
     criterion_id: cleanField(check?.criterion_id, secrets), target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
     expected: scrub(check?.expected, secrets), actual: scrub(check?.actual, secrets), passed: check?.passed === true }));
+  // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => ({
     code: cleanText(item?.code, secrets) || 'unknown', section: cleanText(item?.section, secrets) || null,
-    message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null }));
+    message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null,
+    reason: cleanText(item?.reason, secrets) || null, fix: cleanText(item?.fix, secrets) || null,
+    where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
+    cause: cleanText(item?.cause, secrets) || null }));
   const usage = answer?.usage ?? {};
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
@@ -75,7 +79,8 @@ const sentRow = row => row.phase === 'server';
 export function jsonRow(row) {
   return { story: row.story, title: row.title, test: row.test, state: row.state, checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
-      message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
+      message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
+      where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
@@ -143,9 +148,12 @@ function checkLines(check, secrets) {
     ...(typeof value === 'string' && value.endsWith('\n') ? ['    (ends with a line break)'] : [])];
   return [head, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
 }
+// With a plain reason (#379): the reason, where and the fix; an AI service failure is not a problem in the test.
 function refusalLines(item) {
-  const lines = [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
-  if (item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
+  const lines = item.reason ? [`  ${item.code}: ${item.reason}`, ...(item.where ? [`  Where: ${item.where}`] : []),
+    ...(item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
+    : [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
+  if (!item.reason && item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
   if (item.hint) lines.push(`  ${item.hint}`);
   return lines;
 }

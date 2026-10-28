@@ -439,6 +439,11 @@ test('RUNTIME-TRY21: a refused Try setup says what was refused, why and the fix,
     reason: 'the field id gets /event/target but has a minLength', fix: 'Make id a plain {"type": "string"} in prompts/place_order.prompt.md.' }])), ['place-order']);
   assert.deepEqual(told.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (template-reference-schema: the field id gets /event/target but has a minLength).',
     'Make id a plain {"type": "string"} in prompts/place_order.prompt.md. Then run pdd try place-order --new.']);
+  const placed = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'ambiguous-handler', reason: 'two button handlers on the screen list match by value and by name',
+    fix: 'Match all buttons of the screen list by name.', file: 'app-map.json', at: '/screens/0/handlers/1', where: 'app-map.json /screens/0/handlers/1', cause: 'prompt',
+    message: 'two button handlers on the screen list match by value and by name. Match all buttons of the screen list by name.' }])), ['place-order']);
+  assert.deepEqual(placed.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (ambiguous-handler: two button handlers on the screen list match by value and by name; at app-map.json /screens/0/handlers/1).',
+    'Match all buttons of the screen list by name. Then run pdd try place-order --new.']);
   const plain = harbor(t), posted = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 422, json: { error: { code: 'invalid-seed', message: 'The seed is not a test file.' } } } : trying()(entry, f));
   const seed = await tryStory(plain, posted, ['place-order']);
