@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a74edf676f4cc2a2f79e8fd956e34b11e1a4dd37f923170454bc15a4f93d9143).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ed2e9a9f6dad5c1f87a24cd30c41e678c0e21cdc2aa4ffe6169440e31432b55b).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1049,7 +1049,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    if (!options['--no-wait'] && !options['--cli'] && !options['--serve'] && ports.agentBridge !== false) {
+    context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
+      && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
+    if (context.agentConnection) {
       try { context.agentDefinitions = loadAgentDefinitions({cwd:root,env:ports.env}); }
       catch (error) { throw new Stop(2,error.message); }
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
@@ -1071,7 +1073,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
-      const needsOwner = context.doorMode || requestedBudget !== null || (!options['--no-wait'] && ports.agentBridge !== false);
+      const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
       if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
@@ -1091,7 +1093,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && (options['--serve'] || (!options['--cli'] && !options['--no-wait'] && ports.agentBridge !== false)) && !options['--new']) {
+      if (live && (options['--serve'] || context.agentConnection) && !options['--new']) {
         let matches = false;
         try {
           const hashes = record.prompt_hashes;
@@ -1255,7 +1257,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
     : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   let bridge = null, answers = null;
   try {
-    if (!options['--no-wait'] && ports.agentBridge !== false) {
+    if (context.agentConnection) {
       const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
       context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
       try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }

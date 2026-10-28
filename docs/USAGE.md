@@ -387,7 +387,7 @@ pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```
 
-The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 100 per test. `pdd check STORY --max-calls N` overrides that ceiling. A new `pdd try STORY` requests 160 calls; use `pdd try STORY --max-calls 240` for more room. Try shows the runtime-confirmed total and remaining calls, and reusing a Try without a budget option keeps its current ceiling. The runtime enforces its supported maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
+The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 100 per test. `pdd check STORY --max-calls N` overrides that ceiling. A new `pdd try STORY` requests 160 calls; use `pdd try STORY --max-calls 240` when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new --max-calls 240` replaces it with fresh saved data. Try shows the runtime-confirmed total and remaining calls, and reusing a Try without a budget option keeps its current ceiling. The runtime enforces its supported maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
 
 In a terminal, `pdd check` waits until every check ends. When an agent runs it (no terminal), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`; the checks keep running on the server. `--timeout MIN` (1 to 120 minutes) sets the limit in both cases. While checks run, pdd prints one line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Press Ctrl-C to stop waiting, and run `pdd check --read` to see the results.
 
@@ -603,7 +603,7 @@ if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.
 
 ## Ask your agent on the Try page
 
-Run `pdd try STORY` in your project folder and keep pdd running. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
+Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
 
 ```sh
 pdd try my-story
@@ -622,7 +622,7 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 }
 ```
 
-Use `pdd try my-story --agent "Codex (work5)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. A repo can provide `.pdd/agents.json`; when the user file exists, it wins instead of merging the repo list. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+Use `pdd try my-story --agent "Codex (work5)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
 
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 

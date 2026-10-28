@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9ecc482c65efe0e208068095e096eeecc4033aaf837c71dcf85bece9a51a47a1).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 17d9f33d68cd141696674453f0a415ad412e300f610495beb9585450053d4437).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -59,7 +59,7 @@ const routes = [
       { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 999999 },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],
-    forms: [form('pdd try [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. It stays running to connect your own agent; --agent selects a configured agent by name or a default Codex, Claude or Gemini, and --no-wait skips the bridge. In a terminal it adds each test saved on the Try page to the story\'s test file.'),
+    forms: [form('pdd try [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]', 'Make a Try link on the PDD runtime with your gh login and open it in your browser; it ends in 24 hours. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved on the Try page to the story\'s test file.'),
       form('pdd try [STORY] --cli [--shell] [--max-calls N] [--new]', 'Run your program in your terminal through a Try session; prints a PATH line, or opens a shell with --shell.'),
       form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),

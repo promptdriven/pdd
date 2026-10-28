@@ -247,7 +247,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
 - `pdd check` gives each test 12 calls for each step, at least 18 and at most 100. Override it with `--max-calls N` within the runtime maximum.
 - **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a Check or Try. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
-- A new `pdd try` requests a session budget of 160 calls. `pdd try STORY --max-calls 240` chooses a different ceiling. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
+- A new `pdd try` requests a session budget of 160 calls. `pdd try STORY --max-calls 240` chooses a different ceiling when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new` starts fresh saved data. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
   prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.
@@ -325,15 +325,15 @@ prints a progress line on stderr for each step. It ends with:
   An action that fails with `session-action-failed` at 0 AI calls means the calls ran out: run `pdd try --new <story>`.
 - In a Try, the same input again is answered from the cache, at 0 AI calls. An error answer is not cached.
 - A Try pauses after 15 minutes with no clicks. `pdd try <story>` reopens it at 0 AI calls. It does not send changed
-  files or a new app map: for that, run `pdd try <story> --new`.
+  files or a new app map: for that, run `pdd try <story> --new`. Connecting Ask your agent or a CLI/HTTP door requires matching uploaded prompts; if a prompt changed, start a fresh Try with `--new`.
 
 **Save as test.** Only the person saves a case. Never save one yourself. pdd adds each saved case as a new step to the
 story's test file and prints `added to tests/<file> as step <id>`. It makes a new file only when the story has none.
 - The Try page may say "Save this file in your project as `tests/<name>.json`" and warn about unchecked criteria.
   Ignore that. Do not make a second file: `pdd try` adds the case to the story's test file.
-- In a person's terminal, `pdd try` keeps waiting and adds saved cases as they come.
+- With terminal stdout, `pdd try` connects Ask your agent, keeps waiting and adds saved cases as they come. `--no-wait` skips the connection.
 - When you (an agent) run `pdd try`, it reads the saved cases once and returns, so it never blocks you. After the person
-  says "I saved some cases", run `pdd try <story>` again to add them.
+  says "I saved some cases", run `pdd try <story>` again to add them. An explicit `--agent NAME` connects even without a terminal and waits until Ctrl-C. Keep its private owner chat link out of shared messages.
 Then make sure that every criterion still has a check, and run `pdd check <story>`.
 
 ## 13. Give your app a screen (app map)
