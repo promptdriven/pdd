@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: acac1bbbd7addae207e406a73620e52d8692a772f024ddb38d817d178a0c9197).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: ca0368b1914e9d2df57622288a041ff34ca8fb6e6f70d140d644868ecc4a3078).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -127,7 +127,10 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
       const value = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts));
       input.stdin = value;
     } else if (d.inputSchema.required?.includes('stdin')) input.stdin = '';
-    const answer = await runDoorCall(d, input, { ...ports, ghPath: d.ghPath, env: { ...ports.env, PDD_STATE_DIR: d.stateDir } });
+    // A person at a terminal sees that a slow command still runs; a pipe or an agent gets only the program's output.
+    const note = ports.stderr.isTTY ? setTimeout(() => ports.stderr.write(`pdd try: running ${d.name ?? 'the command'} on the Try…\n`), 2000) : null;
+    let answer;
+    try { answer = await runDoorCall(d, input, { ...ports, ghPath: d.ghPath, env: { ...ports.env, PDD_STATE_DIR: d.stateDir } }); } finally { clearTimeout(note); }
     const result = answer.result;
     if (typeof result.stdout !== 'string' || typeof result.stderr !== 'string' || !Number.isInteger(result.exit_code) || result.exit_code < 0 || result.exit_code > 255 || result.exit_code === WRAPPER_EXIT) fail('The prompt must return stdout, stderr and an exit_code from 0–255 except reserved code 125.');
     writePrivate(last, { state: 'confirmed', id: answer.id, input, result, inputWorld: answer.inputWorld, world: answer.world });

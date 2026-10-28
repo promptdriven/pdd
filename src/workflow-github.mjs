@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 99f315b5e6626a7aa356fae966f1590839f39ac3ac1c6215602b46a37e5dfd3e).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 6a809f6ec0df34b454aaccc3eaddf662a1457c4040431e7435329b21a8acffd1).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
@@ -24,15 +24,16 @@ function dependencies(ports = {}) {
     try { result = await run(file, args, { cwd }); }
     catch (error) {
       if (!Number.isInteger(error?.code) || error.code === 0) fail('workflow_github_command_unavailable');
-      result = { code: error.code, stdout: error.stdout ?? '' };
+      result = { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
     }
     if (!result || typeof result.stdout !== 'string'
       || result.code !== undefined && !Number.isInteger(result.code)) fail('workflow_github_command_invalid');
-    return { code: result.code ?? 0, stdout: result.stdout };
+    return { code: result.code ?? 0, stdout: result.stdout, stderr: typeof result.stderr === 'string' ? result.stderr : '' };
   }
   async function command(cwd, file, args) {
     const result = await raw(cwd, file, args);
-    if (result.code !== 0) fail('workflow_github_command_failed');
+    // The tool's own error text rides along as detail, so the caller can name the real reason.
+    if (result.code !== 0) throw Object.assign(new Error('workflow_github_command_failed'), { code: 'workflow_github_command_failed', detail: result.stderr });
     return result.stdout;
   }
   return { raw, command, readFile: ports.readFile ?? ((file, encoding) => readFile(file,

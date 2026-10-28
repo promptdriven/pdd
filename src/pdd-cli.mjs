@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: e8271c0086162d68def4bb607b46555dc2dbd8ee6a5036a6501160d92ae8c478).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c3d7cbdc3f3463606490cf8153639003f3ed389307e434ff93cb9e8880fdbf69).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -10,9 +10,12 @@ import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { setupSkills } from './skills-install.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
+import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
+// The real reason of an unexpected error, after the fixed safe line.
+const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 const RUNNER_ROUTES = {
@@ -63,13 +66,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
-      } catch {
-        line(stderr, 'The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.');
+      } catch (error) {
+        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
       }
     }
@@ -79,7 +82,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await viewRun({ ref: plan.operands[0], cwd });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
-      } catch { line(stderr, 'The saved run could not be read. Check pdd workflow status.'); return 1; }
+      } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
     }
     case 'setup': {
       let code = 0;
@@ -104,8 +107,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runtime = await import('./runtime-client.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr });
-      } catch {
-        line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
+      } catch (error) {
+        line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.${reason(error)}`);
         return 3;
       }
     case 'prompt-approve': {

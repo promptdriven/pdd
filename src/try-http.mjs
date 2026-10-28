@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 6e6b7b799ed85662eab8846c4628693d1a6ce4971a5c4921b931a97123304c91).
+// Generated from prompts/cli/try-http.prompt.md (sha256: 8f40a8c43907b5c2b0495c64482f0388b53fa14154c126cca16d31de61a6667e).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -177,6 +177,9 @@ export async function openServe(context, test, sessionId, options) {
       pending++; counted = true;
       const text = await requestText(req);
       const input = inputFor(selected, req, url, params, text, selected.route.method);
+      // One line per request in the pdd window, like a local server log: the call can take many seconds.
+      const label = `${req.method} ${url.pathname}`, sentAt = Date.now();
+      ports.stderr.write(`${label}: running on the Try…\n`);
       const work = tail.then(async () => {
         if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
         return runDoorCall({ root, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
@@ -190,11 +193,21 @@ export async function openServe(context, test, sessionId, options) {
       const body = req.method === 'HEAD' || [204, 304].includes(result.status) ? '' : result.body;
       const headers = { ...result.headers, ...(![204, 304].includes(result.status) ? { 'content-length': Buffer.byteLength(req.method === 'HEAD' ? result.body : body) } : {}) };
       res.writeHead(result.status, { ...headers, ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(body);
-    } catch (error) { if (error.tryUsage) { usage = error.tryUsage; latestUsage = usage; usageSource = 'runtime'; } req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.'); }
+      ports.stderr.write(`${label}: ${result.status} in ${Math.round((Date.now() - sentAt) / 1000)} s\n`);
+    } catch (error) {
+      if (error.tryUsage) { usage = error.tryUsage; latestUsage = usage; usageSource = 'runtime'; }
+      req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.');
+      ports.stderr.write(`${req.method} ${req.url.split('?')[0]}: ${error.httpStatus || 502} ${cleanText(error.message || 'The runtime could not confirm this request.')}\n`);
+    }
     finally { if (counted) pending--; }
   });
   server.requestTimeout = 30_000; server.headersTimeout = 15_000;
-  await new Promise((done, reject) => { server.once('error', reject); server.listen(Number(options['--serve'] ?? 8080), '127.0.0.1', done); });
+  const wanted = Number(options['--serve'] ?? 8080);
+  await new Promise((done, reject) => { server.once('error', reject); server.listen(wanted, '127.0.0.1', done); }).catch(error => {
+    if (error.code === 'EADDRINUSE') throw problem(502, `port ${wanted} is in use by another program. Stop it, or run pdd try ${test.story} --serve ${wanted === 65535 ? wanted - 1 : wanted + 1}.`);
+    if (error.code === 'EACCES') throw problem(502, `port ${wanted} needs extra rights on this computer. Run pdd try ${test.story} --serve 8080.`);
+    throw error;
+  });
   const stop = () => { stopped = true; server.close(); server.closeIdleConnections(); server.closeAllConnections(); };
   context.signal?.addEventListener('abort', stop, { once: true });
   const port = server.address().port;

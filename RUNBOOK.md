@@ -278,6 +278,9 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 In a person's terminal, `pdd check` waits until every check ends and prints `Still running: …` every 30 s. In an
 agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd check --read` about every
 minute, doing other work in between, until every Story has a result. Never send the same check again.
+Before `pdd check` or `pdd try`, tell the person in one line what you run and that it can take a few minutes. pdd prints
+a progress line on stderr before each slow step (lint, upload, the queue, the Try setup). When it fails, it says what
+failed, the real reason and what to do next: pass that line on as it is.
 
 | Exit | Result | What to do |
 |---|---|---|
@@ -309,8 +312,9 @@ minute, doing other work in between, until every Story has a result. Never send 
 
 ## 12. `pdd try` and Save as test
 
-`pdd try place-order` makes a Try link and opens it in the browser. Opening costs 0 AI calls. pdd prints:
-`Try link for "Place a coffee order" is open in your browser. It ends in 24 hours, or with: pdd try --stop place-order`
+`pdd try place-order` makes a Try link and opens it in the browser. Opening costs 0 AI calls. While it works (about a minute), pdd
+prints a progress line on stderr for each step. It ends with:
+`Try ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order`
 - A draft prompt can be tried. The person tries it before they approve. Show the Try link only to the person.
   Never write it into a file, PR, issue or shared channel: anyone with the link can use it.
 - Ask the person: "Did it do what you expect?" Wait for the answer before you open PR 1. If the person is not at this

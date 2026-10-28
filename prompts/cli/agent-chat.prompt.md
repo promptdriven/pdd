@@ -51,6 +51,14 @@ owner `/agent/disconnect` for this bridge only, using a separate bounded request
 A disconnected relay must not stop the Try itself. A server restart loses ephemeral chat and requires
 an explicit `pdd try` reconnect. Provider credentials and token values never leave the local process.
 
+## Terminal lines
+
+The owner watches the terminal where `pdd try` runs. Serhan, Oct 28: the page said only "The agent could not answer safely", and the terminal said nothing. Write every line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style:
+- Before discovery: `Connecting your agent to the Try page…`.
+- When connected: `Ask your agent is connected (<Name>). Keep this window open for Ask your agent; Ctrl-C disconnects the chat and keeps the Try open.`
+- For each message: `<Name> is answering a question from the Try page…`, then `<Name> answered.` (plus ` It proposed input for the form.` with a fill), or `<Name> could not answer: <the adapter's message>`.
+- A failed model read or connect names its reason: the network cause, else the server's message, else the HTTP status.
+
 ## Dependencies
 
 - [Agent adapters](agent-adapters.prompt.md): required generation/runtime context for discovery, secret
