@@ -612,6 +612,8 @@ pdd try my-story --agent claude
 
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
+If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
+
 Chat uses your agent account's allowance. The runtime relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent cannot run the Try action or edit the project.
 
 Closing pdd or pressing Ctrl-C disconnects chat and leaves the Try open. `pdd try STORY --no-wait` opens an ordinary Try link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Try links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
