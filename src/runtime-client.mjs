@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ed2e9a9f6dad5c1f87a24cd30c41e678c0e21cdc2aa4ffe6169440e31432b55b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7d93bd32423bc1c92fe5414fead19cfc549b70d357ed505f3ff357f183643e61).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1027,6 +1027,7 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
 }
 
+
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
@@ -1404,6 +1405,7 @@ async function collectSavedTests(context, tryId) {
     const said = addSavedCase(root, saved, context.seedTest);
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
+    try { context.onAgentCaseSaved?.({ id: key, name: saved.name, story_path: saved.story_path ?? saved.test?.story_path, result: said }); } catch {}
     line(ports.stdout, said);
   }
   return 'ok';
