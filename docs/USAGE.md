@@ -338,11 +338,24 @@ Each issue gets its own branch, worktree and Herdr tab. You can start several ru
 
 The PDD runtime runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd check` sends your prompts, Stories and tests there and checks each answer against its test. `pdd try` makes a link where a person can use the prompt by hand.
 
-Both commands sign in with your GitHub login (`gh auth status`). They send every file that Git shows (tracked and new, not ignored), at most 10 MB, and refuse secret file names. pdd keeps run state in `~/.pdd/runtime`, never in your repo.
+Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; secret names, symlinks and non-regular files are refused. Unrelated source files are not sent. pdd keeps run state in `~/.pdd/runtime`, never in your repo.
+
+The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links or backtick file paths in each prompt's `## Dependencies`. Markdown context may declare its own Dependencies. Paths in links are relative to their declaring file; repository-root spellings also work when Git names them. A linked fragment includes the whole file. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
+
+Try includes a valid default `app-map.json` (else `app/app-map.json`), including screen, router, handler and after-operation prompts and stylesheets. Check and lint use no app map. To preview a Try with a custom map, run `pdd check --files place-order --app-map app/custom-map.json` before `pdd try place-order --app-map app/custom-map.json`.
+
+For extra files, add `pdd-source.json` at the repository root:
+
+```json
+{"include": ["docs/shared-policy.md", "data/menu.json"]}
+```
+
+`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file.
 
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing
-pdd check --files         # list the files a check would send; sends nothing
+pdd check --files         # exact upload manifest and byte sizes for all Stories; offline
+pdd check --files place-order  # preview only this Story; offline
 pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story

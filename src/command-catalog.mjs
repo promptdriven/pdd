@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 60b9b51d94c4c12069ae0a835816e336dc5bd43b2c8ea4b95025c0c3aba7771b).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5efc44e829d1c73072f5e01eaaca3b9637b0a7e4c7aada957178adbedb2476ba).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -39,12 +39,12 @@ const routes = [
   { id: 'check', prefix: ['check'], local: 'runtime-check', operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--fill-hash', kind: 'flag' },
-      { name: '--files', kind: 'flag' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends your Git files, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links.'),
+      { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
+    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links.'),
       form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
-      form('pdd check --files', 'List the files a check would send; no network.'),
-      form('pdd check --lint [STORY...] [--json]', 'Run only the PDD runtime lint (0 AI calls) on your Git files and print every problem it finds; sends no checks.')] },
+      form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
+      form('pdd check --lint [STORY...] [--json]', 'Run only the PDD runtime lint (0 AI calls) on selected Stories and their dependencies and print every problem it finds; sends no checks.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
     forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],

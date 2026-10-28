@@ -1,8 +1,8 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 9c4166b90bdb9abfb4c60626ccfa191c26f5ec7f172e1d535ec61fb04b7d6747).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f6d51a3528d1eedb9c67c10da2f7fda0a7bdee92902297c452907105a7eaaef4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
@@ -593,42 +593,210 @@ export function tarFiles(entries) {
 
 export const formatSize = bytes => bytes < 1024 ? `${bytes} bytes` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 
-function captureOnce(root) {
-  const names = gitFiles(root), files = [], problems = [];
-  for (const path of names) {
-    const stat = statOf(join(root, path));
-    if (!stat) continue;
-    if (isSecretPath(path)) problems.push(`${path}: the name looks like a secret. pdd never sends it. Remove it from Git or add it to .gitignore.`);
-    else if (stat.isSymbolicLink()) problems.push(`${path}: a symbolic link. pdd sends only regular files.`);
-    else if (stat.isDirectory()) problems.push(`${path}: a submodule or folder. pdd sends only regular files.`);
-    else if (!stat.isFile()) problems.push(`${path}: not a regular file. pdd sends only regular files.`);
-    else files.push({ path, stat, size: Number(stat.size) });
+// Selection is metadata, not a rewritten project: every archive name remains authored in the repo.
+const SOURCE_CONFIG = 'pdd-source.json';
+const sameStat = (a, b) => a && b && a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+const unstableSource = Symbol('unstable source');
+const sourceProblem = (from, path, reason) => new PreflightError(4, `${from}: ${path}${reason.startsWith(':') ? '' : ' '}${reason}`);
+
+function sourcePath(raw, from) {
+  if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
+    || raw.split('/').includes('..')) throw sourceProblem(from, String(raw), 'must be a repository-relative file path with no traversal.');
+  const path = posix.normalize(raw);
+  if (path === '.' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
+  return path;
+}
+
+// Markdown links are relative to their owner; repo-root spellings also work when Git names them.
+function contextPath(raw, from, visible) {
+  if (!raw || raw.startsWith('#') || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(raw)) return null;
+  let target;
+  try { target = decodeURIComponent(raw.split('#')[0]); }
+  catch { throw sourceProblem(from, raw, 'is not a valid local context path.'); }
+  if (!target) return null;
+  if (target.startsWith('/') || target.includes('\\')) throw sourceProblem(from, raw, 'must stay inside this repository.');
+  const relative = posix.normalize(posix.join(posix.dirname(from), target));
+  const path = visible.has(relative) ? relative : visible.has(target.replace(/^\.\//, '')) ? target.replace(/^\.\//, '') : relative;
+  return sourcePath(path, from);
+}
+
+// Return local destinations without treating link labels or reference definitions as file paths.
+function markdownLinks(text, definitions, imagesOnly = false) {
+  const paths = [];
+  for (const match of text.matchAll(/(!?)\[[^\]\n]*\]\([ \t]*/g)) {
+    if (imagesOnly && !match[1]) continue;
+    let index = match.index + match[0].length, path = '', depth = 0;
+    if (text[index] === '<') {
+      const end = text.indexOf('>', index + 1);
+      if (end >= 0) paths.push(text.slice(index + 1, end));
+      continue;
+    }
+    for (; index < text.length; index++) {
+      const char = text[index];
+      if (char === '\\' && index + 1 < text.length) { path += text[++index]; continue; }
+      if (/\s/.test(char) || (char === ')' && depth === 0)) break;
+      if (char === '(') depth++;
+      if (char === ')') depth--;
+      path += char;
+    }
+    if (path) paths.push(path);
   }
-  if (problems.length) throw new PreflightError(4, ['pdd refused to send these files:', ...problems.slice(0, 20).map(text => `  ${text}`),
-    ...(problems.length > 20 ? [`  and ${problems.length - 20} more.`] : [])].join('\n'));
+  for (const match of text.matchAll(/(!?)\[([^\]\n]+)\](?:\[([^\]\n]*)\])?/g)) {
+    if (imagesOnly && !match[1]) continue;
+    const following = text[match.index + match[0].length];
+    if (following === '(' || following === ':') continue;
+    const target = definitions.get((match[3] || match[2]).trim().replace(/\s+/g, ' ').toLowerCase());
+    if (target) paths.push(target);
+  }
+  return paths;
+}
+
+function markdownContext(text) {
+  const prose = text.replace(INTERFACE, ''), definitions = new Map();
+  for (const match of prose.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
+    const id = match[1].trim().replace(/\s+/g, ' ').toLowerCase();
+    if (!definitions.has(id)) definitions.set(id, match[2] ?? match[3]);
+  }
+  const heading = /^##[ \t]+Dependencies[ \t]*\r?$/im.exec(prose);
+  const rest = heading ? prose.slice(heading.index + heading[0].length) : '';
+  const end = /^#{1,2}[ \t]+/m.exec(rest);
+  const dependencies = end ? rest.slice(0, end.index) : rest;
+  const paths = [...markdownLinks(dependencies, definitions), ...markdownLinks(prose, definitions, true)];
+  for (const match of dependencies.matchAll(/`([^`\n]+)`/g)) {
+    const path = match[1];
+    if (path.includes('/') || /\.(?:md|txt|json|svg|css|csv|ya?ml|toml|xml|html|ui\.svg)$/i.test(path)) paths.push(path);
+  }
+  return paths;
+}
+
+function sourceLimit(files) {
   const total = files.reduce((sum, file) => sum + file.size, 0);
   if (files.length > LIMITS.files || total > LIMITS.bytes) {
     const largest = [...files].sort((a, b) => b.size - a.size).slice(0, 5).map(file => `  ${file.path}  ${formatSize(file.size)}`);
     throw new PreflightError(4, [`The repository is too big to send: ${files.length} files, ${formatSize(total)}. The limit is ${LIMITS.files} files and 10 MB.`,
       'The largest files:', ...largest].join('\n'));
   }
-  let entries;
-  try { entries = files.map(file => ({ path: file.path, bytes: readFileSync(join(root, file.path)) })); }
-  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-  const tar = tarFiles(entries);
-  if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-  const same = isDeepStrictEqual(gitFiles(root), names) && files.every((file, index) => {
-    const after = statOf(join(root, file.path));
-    return after && after.ino === file.stat.ino && after.size === file.stat.size && after.mtimeNs === file.stat.mtimeNs
-      && entries[index].bytes.length === file.size;
-  });
-  return same ? { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total } : null;
+  return total;
 }
 
-// One source capture for a batch. Throws PreflightError (exit 4 refused, exit 5 not stable).
-export function captureSource(root, { attempts = 3 } = {}) {
+function captureOnce(root, { tests, appMap = null }) {
+  const names = gitFiles(root), visible = new Set(names), snapshots = new Map(), payload = new Map(), queue = [], visited = new Set();
+  function inspect(path, from) {
+    if (snapshots.has(path)) return snapshots.get(path);
+    if (!visible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
+    if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
+      if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
+    }
+    const stat = statOf(join(root, path));
+    if (!stat) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
+    if (stat.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
+    if (!stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
+    const file = { path, stat, size: Number(stat.size) };
+    snapshots.set(path, file);
+    return file;
+  }
+  function bytes(file) {
+    if (file.bytes) return file.bytes;
+    sourceLimit([...payload.values()]);
+    let fd;
+    try {
+      fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
+      file.bytes = readFileSync(fd);
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) throw unstableSource;
+      return file.bytes;
+    } catch (error) {
+      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw unstableSource;
+      throw error;
+    } finally { if (fd !== undefined) closeSync(fd); }
+  }
+  function add(raw, from, role = 'context') {
+    const path = sourcePath(raw, from), file = inspect(path, from);
+    if (!payload.has(path)) payload.set(path, file);
+    queue.push({ path, role });
+  }
+  const addStrings = (values, from, role) => { if (Array.isArray(values)) for (const path of values) if (typeof path === 'string') add(path, from, role); };
+  try {
+    if (visible.has(SOURCE_CONFIG)) {
+      const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
+      if (config.size > LIMITS.test) throw sourceProblem(SOURCE_CONFIG, '', 'must be at most 1 MiB.');
+      let doc;
+      try { doc = JSON.parse(bytes(config).toString('utf8')); } catch (error) {
+        if (error === unstableSource) throw error;
+        throw sourceProblem(SOURCE_CONFIG, '', 'must be valid JSON with only an include array.');
+      }
+      if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
+      for (const path of doc.include) add(path, SOURCE_CONFIG);
+    }
+    const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
+    for (const path of selected) add(path, 'Selected test', 'test');
+    if (appMap) add(appMap, 'App map', 'app-map');
+    for (let index = 0; index < queue.length; index++) {
+      const { path, role } = queue[index], key = `${path}\0${role}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      const file = payload.get(path);
+      if (role === 'test' || role === 'app-map' || path.endsWith('.prompt.md') || path.endsWith('.md')) {
+        const text = bytes(file).toString('utf8');
+        if (role === 'test') {
+          let doc;
+          try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
+          if (!isObject(doc)) continue;
+          if (typeof doc.story_path === 'string') add(doc.story_path, path, 'story');
+          addStrings(doc.entry_paths, path);
+          for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
+          for (const item of Array.isArray(doc.context) ? doc.context : []) {
+            if (typeof item?.prompt_path === 'string') add(item.prompt_path, path);
+            addStrings(item?.paths, path);
+          }
+        } else if (role === 'app-map') {
+          let map;
+          try { map = JSON.parse(text); } catch { throw sourceProblem(path, '', 'must be valid app-map JSON.'); }
+          const walk = value => {
+            if (Array.isArray(value)) { for (const item of value) walk(item); return; }
+            if (!isObject(value)) return;
+            if (typeof value.prompt_path === 'string') add(value.prompt_path, path);
+            addStrings(value.stylesheets, path);
+            for (const key of ['screens', 'router', 'routes', 'handlers', 'handler', 'after']) walk(value[key]);
+          };
+          walk(map);
+        } else {
+          for (const raw of markdownContext(text)) { const context = contextPath(raw, path, visible); if (context) add(context, path); }
+          if (path.endsWith('.prompt.md')) {
+            for (const block of interfaceBlocks(text)) {
+              let doc;
+              try { doc = JSON.parse(block[1]); } catch { continue; }
+              for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') add(call.target, path);
+            }
+          }
+        }
+      }
+    }
+    const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
+    const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
+    const tar = tarFiles(entries);
+    if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
+    const same = isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
+      const after = inspectParentsAndStat(root, file.path);
+      return sameStat(file.stat, after);
+    });
+    return same ? { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total } : null;
+  } catch (error) { if (error === unstableSource) return null; throw error; }
+}
+
+function inspectParentsAndStat(root, path) {
+  const parts = path.split('/');
+  for (let i = 1; i < parts.length; i++) if (statOf(join(root, ...parts.slice(0, i)))?.isSymbolicLink()) return null;
+  return statOf(join(root, path));
+}
+
+// Rebuild the selection on each attempt, including metadata and newly declared dependencies.
+export function captureSource(root, { attempts = 3, ...selection } = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const captured = captureOnce(root);
+    const captured = captureOnce(root, selection);
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);

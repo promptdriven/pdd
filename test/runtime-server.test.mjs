@@ -18,7 +18,7 @@ const batchFile = (setup, batch) => JSON.parse(readFileSync(join(setup.state, 'b
 
 // Wrong: checks go one by one, before lint, or with different sources (RESULT.md issue 13, spec 7.3-7.4).
 test('RUNTIME-SERVER1: one lint, then every check is sent before the first answer, with one source_sha256', async t => {
-  const setup = harbor(t);
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'pdd-source.json'), JSON.stringify({ include: ['README.md'] })));
   let release, held = 0;
   const allSent = new Promise(done => { release = done; });
   const fake = await fakeRuntime(t, async (entry, f) => {
@@ -798,7 +798,10 @@ test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every
 
 // Wrong: --lint hides not-invited, update-required or no room behind a problem list, or sends files with secrets.
 test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option rules', async t => {
-  const setup = harbor(t, repo => writeFileSync(join(repo, 'deploy.pem'), 'x'));
+  const setup = harbor(t, repo => {
+    writeFileSync(join(repo, 'deploy.pem'), 'x');
+    writeFileSync(join(repo, 'pdd-source.json'), JSON.stringify({ include: ['deploy.pem'] }));
+  });
   const quiet = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const secret = await check(setup, quiet, [], { '--lint': true });
   assert.equal(secret.code, 4); assert.match(secret.err, /deploy\.pem: the name looks like a secret/); assert.equal(quiet.posts.length, 0);

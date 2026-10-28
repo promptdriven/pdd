@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f90902b73ef91d080770005c4e685e0a0ea4547f8b0c5f812fc943efcf1a853e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e2cbb434cce13447ad999d56a4ce91a61e8cd21e601ef064d074672bfe002770).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -507,11 +507,14 @@ function printResult(context, rows, extra = {}) {
   return exitCode;
 }
 
-function runFiles(root, ports) {
-  const capture = captureSource(root), found = findTests({ root });
+function runFiles(cwd, words, options, ports) {
+  const { root, found, normalized } = localSetup(cwd, words);
+  const tests = select(found, normalized, root).map(test => test.path);
+  const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+  const capture = captureSource(root, { tests, appMap });
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
-  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${formatSize(file.size)}`);
-  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)}. ${other.length} of them are not prompt, story or test files.`);
+  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
+  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
   return 0;
 }
 
@@ -519,9 +522,10 @@ function runFiles(root, ports) {
 // Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
-  const rows = select(found, normalized, root).map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
+  const selected = select(found, normalized, root);
+  const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
-  const capture = captureSource(root), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null }), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
     secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
   context.folder = context.store.folder('batches', batch);
@@ -639,13 +643,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   let release = () => {};
   try {
     const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])));
-    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
-      || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request'].includes(modes[0]) && words.length)
+      || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
-    if (modes[0] === '--files') return runFiles(root, ports);
+    if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
     if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
@@ -671,7 +675,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = captureSource(root);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -782,7 +786,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     Object.assign(context, { root, store, origin, visible: found.visible });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });

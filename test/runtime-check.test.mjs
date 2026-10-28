@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureSource, defaultMaxCalls, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
+import { captureSource, defaultMaxCalls, gitFiles, isSecretPath, numberWarnings, proseSha256, storyCriteria, tarFiles } from '../src/runtime-preflight.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 
@@ -156,19 +156,20 @@ test('RUNTIME-CAPTURE1: capture refuses secrets, links and size limits, and make
   const { repo, home } = harbor(t);
   const first = captureSource(repo), second = captureSource(repo);
   assert.ok(first.tar.equals(second.tar)); assert.equal(first.sha256, second.sha256);
-  assert.deepEqual(first.files.map(file => file.path), ['README.md', 'prompts/place_order.prompt.md', 'tests/place-order.json',
+  assert.deepEqual(first.files.map(file => file.path), ['prompts/place_order.prompt.md', 'tests/place-order.json',
     'tests/unknown-item.json', 'user_stories/place-order.md', 'user_stories/unknown-item.md']);
   const listed = await check(repo, home, [], { '--files': true });
-  assert.equal(listed.code, 0); assert.match(listed.out, /^6 files, \d+ KB\. 1 of them are not prompt, story or test files\.$/m);
+  assert.equal(listed.code, 0); assert.match(listed.out, /^5 files, \d+ KB \(\d+ bytes\)\. 0 of them are not prompt, story or test files\.$/m);
   for (const [name, setup, pattern] of [
     ['secret', r => writeFileSync(join(r, '.env.local'), 'TOKEN=x\n'), /\.env\.local: the name looks like a secret/],
     ['secret folder', r => { mkdirSync(join(r, 'config/secrets'), { recursive: true }); writeFileSync(join(r, 'config/secrets/a.txt'), 'x'); }, /config\/secrets\/a\.txt/],
     ['symlink', r => symlinkSync('README.md', join(r, 'link.md')), /link\.md: a symbolic link/],
-    ['size', r => writeFileSync(join(r, 'big.bin'), Buffer.alloc(10_485_761)), /too big to send: 7 files, 10\.0 MB[\s\S]*big\.bin/],
-    ['count', r => { mkdirSync(join(r, 'many')); for (let i = 0; i < 10_000; i += 1) writeFileSync(join(r, 'many', `${i}.txt`), ''); }, /too big to send: 10006 files/],
+    ['size', r => writeFileSync(join(r, 'big.bin'), Buffer.alloc(10_485_761)), /too big to send: \d+ files, 10\.0 MB[\s\S]*big\.bin/],
+    ['count', r => { mkdirSync(join(r, 'many')); for (let i = 0; i < 10_000; i += 1) writeFileSync(join(r, 'many', `${i}.txt`), ''); }, /too big to send: 1000\d files/],
   ]) {
     const copy = harbor(t);
     setup(copy.repo);
+    writeJson(join(copy.repo, 'pdd-source.json'), { include: gitFiles(copy.repo).filter(path => path !== 'README.md' && !first.files.some(file => file.path === path)) });
     const result = await check(copy.repo, copy.home, ['place-order'], {});
     assert.equal(result.code, 4, name); assert.match(result.err, pattern, name); assert.deepEqual(result.calls, { fetch: 0, gh: 0 }, name);
     assert.equal((await check(copy.repo, copy.home, [], { '--files': true })).code, 4, name);
@@ -211,11 +212,12 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
   for (const args of [['check', '--max-calls', '0'], ['check', '--max-calls', '101'], ['check', '--timeout', 'x'], ['try', '--tab', 'phone'],
-    ['check', '--request', 'nope'], ['check', '--fill-hash', '--json'], ['check', '--files', 'place-order'], ['check', '--read', 'a', 'b'],
+    ['check', '--request', 'nope'], ['check', '--fill-hash', '--json'], ['check', '--files', '--json'], ['check', '--read', 'a', 'b'],
     ['try', '--stop', '--new'], ['try', 'a', 'b']]) {
     const result = pdd(...args);
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`); assert.equal(result.stdout, '', args.join(' '));
   }
+  assert.equal(pdd('check', '--files', 'place-order').status, 0);
   const filled = pdd('check', '--fill-hash');
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
@@ -281,6 +283,7 @@ test('RUNTIME-CAPTURE3: the secret-name filter covers common credential files', 
   }
   const { repo, home } = harbor(t);
   writeFileSync(join(repo, 'deploy.pem'), 'x');
+  writeJson(join(repo, 'pdd-source.json'), { include: ['deploy.pem'] });
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4); assert.match(result.err, /deploy\.pem: the name looks like a secret/); assert.deepEqual(result.calls, { fetch: 0, gh: 0 });
 });
