@@ -520,7 +520,7 @@ async function runLint(context, complete = false) {
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? AUTH_TEXT : 'The runtime opens soon.' } };
-      tick(`Still checking the files: ${waitWord(answer, read)}`);
+      if (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state)) tick(`Still checking the files: ${waitWord(answer, read)}`);
     }
     if (!lost && answer?.state === 'refused') {
       const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
@@ -960,11 +960,11 @@ async function readUntil(context, id, command, isDone, ms, label) {
   let last = null;
   for (;;) {
     const read = judgeGet(await context.runtime.get(id), id, command);
-    if (label) tick(`${label}: ${waitWord(last ?? (read.kind === 'state' ? read.answer : null), read)}`);
     if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
     else if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     else if (read.kind === 'blocked') throw new Stop(5, read.message);
+    if (label) tick(`${label}: ${waitWord(last, read)}`);
     if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }

@@ -72,4 +72,4 @@ Use authenticated owner model calls.cap/remaining at startup and print the short
 Usage normalization/formatting/header names are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
 
 ## Progress in the pdd window
-Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Try…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests are not logged. A busy port stops startup with `pdd try: port N is in use by another program. Stop it, or run pdd try <story> --serve <N+1>.` (exit 125).
+Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Try…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd try: port N is in use by another program. Stop it, or run pdd try <story> --serve <N+1>.` (exit 125).

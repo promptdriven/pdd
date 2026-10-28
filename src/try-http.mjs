@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 8f40a8c43907b5c2b0495c64482f0388b53fa14154c126cca16d31de61a6667e).
+// Generated from prompts/cli/try-http.prompt.md (sha256: 6fa9fea29ab24253c75ffc220e61cb83ea8360ed15132d51af2b9d5d175a8628).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { join, relative } from 'node:path';
 import { checkInput } from './runtime-preflight.mjs';
@@ -179,7 +179,7 @@ export async function openServe(context, test, sessionId, options) {
       const input = inputFor(selected, req, url, params, text, selected.route.method);
       // One line per request in the pdd window, like a local server log: the call can take many seconds.
       const label = `${req.method} ${url.pathname}`, sentAt = Date.now();
-      ports.stderr.write(`${label}: running on the Try…\n`);
+      ports.stderr?.write(`${label}: running on the Try…\n`);
       const work = tail.then(async () => {
         if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
         return runDoorCall({ root, origin, login: identity.login, sessionId, callCap, prompt: selected.entry_path, operation: selected.operation }, input,
@@ -193,11 +193,11 @@ export async function openServe(context, test, sessionId, options) {
       const body = req.method === 'HEAD' || [204, 304].includes(result.status) ? '' : result.body;
       const headers = { ...result.headers, ...(![204, 304].includes(result.status) ? { 'content-length': Buffer.byteLength(req.method === 'HEAD' ? result.body : body) } : {}) };
       res.writeHead(result.status, { ...headers, ...tryUsageHeaders(usage), 'x-pdd-usage-source': usageSource }); res.end(body);
-      ports.stderr.write(`${label}: ${result.status} in ${Math.round((Date.now() - sentAt) / 1000)} s\n`);
+      ports.stderr?.write(`${label}: ${result.status} in ${Math.round((Date.now() - sentAt) / 1000)} s\n`);
     } catch (error) {
       if (error.tryUsage) { usage = error.tryUsage; latestUsage = usage; usageSource = 'runtime'; }
       req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.');
-      ports.stderr.write(`${req.method} ${req.url.split('?')[0]}: ${error.httpStatus || 502} ${cleanText(error.message || 'The runtime could not confirm this request.')}\n`);
+      ports.stderr?.write(`${req.method} ${req.url.split('?')[0]}: ${error.httpStatus || 502} ${cleanText(error.message || 'The runtime could not confirm this request.')}\n`);
     }
     finally { if (counted) pending--; }
   });
