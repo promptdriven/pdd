@@ -235,7 +235,7 @@ The areas of the three workflows (you act at the **bold** ones):
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
 
-**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can answer, for example:
+**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve 42`, or tell me what to change." You can answer, for example:
 
 - "Make it one Story."
 - "Split part 5."

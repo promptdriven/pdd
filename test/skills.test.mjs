@@ -19,8 +19,9 @@ const AREAS = {
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 // 0.1.7: the size that counts is what one agent loads. The main chat loads SKILL.md; each subagent loads one step file
-// and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules.
-const SKILL_LIMIT = 3072, STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1536 };
+// and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules
+// (1.6 KB since the round-2 cli test: a CLI has one program prompt).
+const SKILL_LIMIT = 3072, STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
@@ -135,7 +136,7 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
 test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd try, and small-change checks before verify', () => {
   const prompting = read('pdd-prompting/SKILL.md');
   assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
-  assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
+  assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` on every Story of that prompt, as [^\n]*RUNBOOK\.md says, before verify\./);
 });
 
 // Wrong (0.1.3): the steps repeat RUNBOOK section 17 (two homes for one method), or the runbook copy lacks it.
@@ -197,7 +198,8 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
 test('SKILLS12: with no prompt yet, prompt-story writes the smallest prompt for the issue only and keeps PR 1 small', () => {
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
-    assert.match(step, /SMALLEST prompt that owns only the issue's behavior \(one function or one endpoint\), not the whole module/, name);
+    // RUNBOOK §2 and §6: a command-line program has one program prompt.
+    assert.match(step, /SMALLEST prompt that owns only the issue's behavior \(one function or one endpoint; a CLI has one program prompt\), not the whole module/, name);
     assert.match(step, /cases only for the issue's criteria/, name);
     assert.match(step, /PR 1 holds only[^\n]*under about 200 lines/, name);
     assert.ok(read(`${name}/SKILL.md`).includes('"adopt PDD for this module"'), name);
@@ -241,7 +243,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const check = read(`${name}/steps/check.md`);
     assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
-    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Runtime check \(<story>\): …` line/ : /put only pdd check's `Runtime check` line\(s\) and the report link\(s\) in your `done` summary/, name);
+    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Runtime check \(<story>\): …` line/ : /Then put pdd check's `Runtime check` line\(s\) and the report link\(s\)\./, name);
   }
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd check`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
@@ -335,7 +337,8 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
     assert.ok(read(`${name}/steps/prompt-story.md`).includes(" Runtime tests are not the repo's unit tests; the code area adds those"), name);
     const skill = read(`${name}/SKILL.md`);
     assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
-    assert.ok(skill.includes(`"Reply 'I approve' to go on, or tell me what to change."`), name);
+    // 0.1.7: the person may be in a terminal; `pdd workflow changes N "I approve"` then tells them to run approve.
+    assert.ok(skill.includes(`End with: "Reply 'I approve' here or run \`pdd workflow approve N\`, or tell me what to change."`), name);
   }
 });
 
@@ -425,4 +428,41 @@ test('SKILLS29: skills name "the `Runtime check` line(s)", never a bare `Runtime
   for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
     assert.equal(readFileSync(file, 'utf8').includes('`Runtime check:`'), false, file);
   assert.match(read('pdd-bug/steps/reproduce.md'), /put its `Runtime check` line\(s\) and the report link\(s\) in your `done` summary as the "before" report/);
+});
+
+// Wrong (round-2 cli tester, 0.1.7): bug PR 1 had no verdict and no "before ✗ → after ✓" line, though they are the main
+// promise of the bug flow. The check step starts its summary with both, so pdd can put them on top of PR 1.
+test('SKILLS30: the bug check summary starts with the verdict line and the before → after line', () => {
+  assert.ok(read('pdd-bug/steps/check.md').includes('Start your `done` summary with two lines for the top of PR 1: the verdict line of RUNBOOK §14 for the "before" result, then `Before ✗ 0 of 1 criteria <report URL> → after ✓ 5 of 5 criteria <report URL>` with the real results (`Before: no prompt` when none existed).'));
+});
+
+// Wrong (round-2 cli tester, 0.1.7): the check step sent prompt-story's check again (15 AI calls) and skipped the other
+// Story of the changed prompt.
+test('SKILLS31: check every Story whose prompt changed, and read a result again instead of sending the same check', () => {
+  const again = 'Never send the same check on the same files again: to see its result, run `pdd check --read`.';
+  for (const file of ['pdd-feature/steps/check.md', 'pdd-bug/steps/check.md', 'pdd-small-change/steps/change.md']) assert.ok(read(file).includes(again), file);
+  assert.ok(read('pdd-bug/steps/check.md').includes('Check every Story whose prompt changed, not only the bug\'s Story.'));
+  assert.match(read('pdd-feature/steps/check.md'), /Run `pdd check` ONCE with no Story name, so all Stories are checked together\./);
+});
+
+// Wrong (round-2 cli tester, 0.1.7): in the terminal chat, "Report" and "PR 1" were words with no address.
+test('SKILLS32: every workflow writes each link as its full URL', () => {
+  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).includes('- Write each link as its full URL (`https://…`), never as a linked word.'), name);
+});
+
+// Wrong (round-2 cli tester, 0.1.7): the skills and the RUNBOOK named two test paths. pdd and the skills use tests/<story>.json.
+test('SKILLS33: skills name tests/<story>.json, never a tests/runtime/ folder', () => {
+  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
+    assert.equal(/\btests?\/runtime\//.test(readFileSync(file, 'utf8')), false, file);
+  for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md', 'pdd-small-change/steps/change.md']) assert.ok(read(file).includes('`tests/<story>.json`'), file);
+});
+
+// Wrong (round-2 cli tester, 0.1.7): PR 2 showed 100 lines of shell script before the two tables.
+test('SKILLS34: verify.md puts the tables first and the commands last in a closed <details> block', () => {
+  const last = 'Put the exact commands and long output last, in a closed `<details>` block.';
+  for (const name of Object.keys(AREAS)) {
+    assert.ok(read(`${name}/steps/verify.md`).includes(last), name);
+    assert.match(read(`${name}/steps/formal.md`), /Add `## Formal check` to verify.md after the tables, before the `<details>` block/, name);
+  }
+  for (const name of ['pdd-bug', 'pdd-feature']) assert.ok(read(`${name}/steps/verify.md`).includes('Put the tables first, after a `✗ N vectors fail` line if cases fail.'), name);
 });
