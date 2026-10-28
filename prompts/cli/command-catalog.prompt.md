@@ -29,7 +29,11 @@ Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.promp
 
 Catalog `check` (local `runtime-check`) with the forms `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it waits for every check, with no limit in a terminal and at most 90 s for an agent, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd check --read [BATCH] [--json]`, `pdd check --fill-hash`, `pdd check --files [STORY...] [--app-map PATH]` and `pdd check --lint [STORY...] [--json]` (help: it runs only the runtime lint and sends no checks), and `try` (local `runtime-try`) with the forms `pdd try [STORY] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait]` (`--app-map` is an option of kind `text`) and `pdd try --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and `--max-calls` from 1 to 100. `--request` (kind `uuid`) is hidden: no help form and no completion show it. These two routes are the one exception to the no-hosted-operation rule above: they call the PDD runtime through the [runtime client](runtime-client.prompt.md), and their help says that they use the person's gh login.
 
+Check also catalogs `--retry` as a text option with form `pdd check --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
+
 Try also catalogs flags --cli, --shell and --save-last and optional-integer --serve (1..65535, default 8080).
 Help forms: `pdd try [STORY] --cli [--shell] [--new]`, `pdd try [STORY] --serve [PORT] [--new]`,
 `pdd try --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
 into its original test. --shell compatibility and mode conflicts belong to runtime-client.
+
+`pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.

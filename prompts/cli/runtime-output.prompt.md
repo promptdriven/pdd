@@ -4,7 +4,7 @@ Own `src/runtime-output.mjs`. It turns `pdd check` rows into the terminal table,
 
 ## Rows
 
-A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a busy-only summary `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
 - Seconds are rounded to 0.1.
@@ -48,3 +48,8 @@ One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title,
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.
+
+Saved check JSON includes source_sha256 (full captured upload hash, null when no capture) so workflow evidence can verify it against the exact selected source.
+
+## Try usage
+Export tryUsage(answer, {cap}={}), tryUsageLine(usage, {command=false}={}) and tryUsageHeaders(usage). Normalize only nonnegative safe-integer counts; absent/malformed counts are unknown, never invented zero. Owner model calls.cap/remaining, session.max_calls/remaining_calls and call usage.calls/report.remaining_calls are the existing server fields. Derive cumulative used only from valid cap and remaining <=cap; this is the Try session allowance, not a machine/account/tester allowance. Format a short startup/session line and per-command line that distinguishes this command's calls, session used, remaining and cap, with unknowns explicit. HTTP header names are x-pdd-ai-calls, x-pdd-try-used, x-pdd-try-remaining and x-pdd-try-cap; values are decimal integers or unknown. These headers are owned metadata and cannot come from program result headers.

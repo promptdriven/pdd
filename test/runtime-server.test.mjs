@@ -205,7 +205,7 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.equal(result.code, 1, result.err);
   const lines = result.out.split('\n');
   const at = lines.indexOf('FAILED  Place a coffee order (tests/place-order.json)');
-  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: the AC1 check expects 899, but the AC1 text says 900.']);
+  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
   assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
   assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
     ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
@@ -276,7 +276,7 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   assert.equal(code, 3, out);
   assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
   assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
-  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: pdd stopped while the runtime was busy\. \(server-full\)$/m);
+  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: The runtime stayed busy\. No checks ran for this attempt\. Retry this batch later\. \(check-busy\)$/m);
   assert.equal(made.ports.stderr.text.split('\n').filter(text => text.startsWith('Still running')).length, 23);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8')).timeout_min, null);
   done = true;
@@ -896,4 +896,24 @@ test('T3-5 complete lint retains canonical schema pointers and selected test ref
   assert.equal(bad.json.rows[0].refusals[0].code,'story-criterion-mismatch');
   const unrelated=await check(setup,fake,['unknown-item'],{'--lint':true,'--json':true});
   assert.equal(unrelated.code,0);assert.equal(unrelated.json.lint_state,'passed');assert.equal(unrelated.json.problems.length,1);
+});
+
+test('hcli-2: saved-data and nested prompt calls contribute to the estimate without changing caps', async t => {
+  const setup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    const file = join(repo, PLACE), text = readFileSync(file, 'utf8'), iface = JSON.parse(text.match(/```json\s*([\s\S]*?)```/)[1]);
+    const schema = { type: 'object', properties: {}, required: [], additionalProperties: false };
+    iface.status = 'draft'; iface.resources = [{ name: 'store', kind: 'key-value', access: 'write', operations: ['load','save'].map(name => ({ name, access: name === 'load' ? 'read' : 'write', arguments_schema: schema, result_schema: schema })) }];
+    const shared = { ...iface, resources: [ { ...iface.resources[0], operations: [iface.resources[0].operations[0]] } ], calls: [] };
+    iface.calls = [{ operation: 'lookup', target: 'prompts/shared.prompt.md', target_operation: 'place_order', max_calls: 2 }];
+    const prompt = value => text.replace(/```json\s*[\s\S]*?```/, '```json\n' + JSON.stringify(value) + '\n```');
+    writeFileSync(file, prompt(iface)); writeFileSync(join(repo, 'prompts/shared.prompt.md'), prompt(shared));
+  });
+  const fill = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'check', '--fill-hash'], { cwd: setup.repo, encoding: 'utf8' }); assert.equal(fill.status, 0, fill.stderr);
+  const fake = await fakeRuntime(t, (e, f) => f.normal(e));
+  const result = await check(setup, fake, [], { '--max-calls': '32' });
+  assert.equal(result.code, 0, result.out + result.err);
+  // Entry1 + store(load,save)2 + target(1+load1)*max_calls2 =7.
+  assert.match(result.err, /about 7 AI calls \(at most 32\)/);
+  assert.equal(fake.posts.find(p => p.command === 'check').request.max_calls, 32);
 });

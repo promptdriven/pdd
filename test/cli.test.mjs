@@ -15,7 +15,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -143,4 +143,15 @@ test('ALPHA8: runner argument failures and invalid replies are finite without a 
   }
   let calls = 0;
   assert.equal(await runPdd(['workflow','open','7'], { stdout: capture(), stderr: capture(), workflowRunner: { openRun: async () => { calls++; throw Error('possible effect'); } } }), 1); assert.equal(calls, 1);
+});
+
+
+test('workflow evidence routes required saved summary file without progressing steps', async () => {
+  const stdout = capture(), stderr = capture(); let input;
+  const runner = { recordEvidence: async args => { input = args; return { exitCode: 0, message: 'Recorded saved evidence.' }; } };
+  assert.equal(await runPdd(['workflow','evidence','17','--summary','/tmp/check.json'], { workflowRunner: runner, cwd: '/chosen', stdout, stderr }), 0);
+  assert.equal(input.ref, '17'); assert.equal(input.summaryFile, '/tmp/check.json');
+  input = null;
+  assert.equal(await runPdd(['workflow','evidence','17'], { workflowRunner: runner, stdout, stderr }), 2);
+  assert.equal(input, null);
 });

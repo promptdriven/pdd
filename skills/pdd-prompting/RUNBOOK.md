@@ -127,6 +127,25 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
 - Never change a test to make it pass. Fix the prompt. If you think an expected value is wrong, tell the person.
 
+**Possible numeric mismatches.** pdd checks nearby numeric literals as typo advice, not as a verdict. It uses the
+result path and companion checks to distinguish a component from a total. The warning names the test, step/check,
+result path and Story criterion. Confirm that both quantities agree with the Story and prompt; retain a correct
+expected value. Calls, world assertions and count checks do not get this advice.
+
+For a reviewed difference that remains ambiguous, record a rationale in the Git-visible repository-root file
+`pdd-numeric-reviews.json`. This acknowledges only that advisory; it changes no test or Runtime assertion:
+```json
+{"schema_version":"pdd.numeric-reviews.v1","reviews":[
+  {"test_path":"tests/budget.json","test_sha256":"<current test SHA-256>","step_id":"usage","criterion_id":"AC8",
+   "target":"result","path":"/derived_usage","value":95,"reason":"This is component usage; the criterion states the combined cap."}
+]}
+```
+Get the full test hash with `shasum -a 256 tests/budget.json`. Every identity field must match, including current
+test bytes, step, criterion, target, path and value. The reason must be nonblank and one line (at most 1000 characters).
+A changed test invalidates its review. The file allows at most 100 reviews and 16 KiB; invalid metadata warns and
+suppresses nothing. It is local authoring metadata and is not automatically uploaded. Exact criterion-text checks
+and all Runtime checks stay in force.
+
 ## 5. Saved data
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
@@ -245,7 +264,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
 `pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
-Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Never import pdd's source.
+Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
@@ -268,9 +287,9 @@ minute, doing other work in between, until every Story has a result. Never send 
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
-- pdd warns "the AC1 check expects 0, but the AC1 text says 409" when a value is not in the criterion text. For counts,
-  status codes and exit codes, this warning is often false. Do not change a check for it. The warning "N of the M
-  files sent are not prompt, story or test files" is normal in an app repo.
+- A `possible numeric mismatch` is advisory. Confirm the quantities against the Story and prompt; retain a correct
+  expected value. Section 4 explains scoped review rationales. The count of files sent that are not prompt, Story
+  or test files is an informational note.
 
 | Refusal | Usual cause | Fix |
 |---|---|---|
@@ -505,7 +524,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 
 ## 19. Use a Try from your terminal or curl
 
-`pdd try STORY --cli` prints a shim path and a PATH line. Copy the PATH line, then run the program normally.
+`pdd try STORY --cli` prints a shim path and a PATH line. Startup and every command show a Try AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
 `pdd try --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
@@ -580,3 +599,5 @@ provide stylesheet rules. External URLs are removed; retained URL attributes mus
 scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
+
+The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
