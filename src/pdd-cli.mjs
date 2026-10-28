@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7849dd4bc44ccb0989dd6643eed3818a98267be78407c51efed4c1fcd116b73a).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4d3530be9e2b8615b0e7d920117b989c2a37cc01cb7357d013e5e36af130ce66).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -70,6 +70,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, 'The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.');
         return 1;
       }
+    }
+    case 'workflow-view': {
+      try {
+        const { viewRun } = await import('./workflow-view.mjs');
+        const result = await viewRun({ ref: plan.operands[0], cwd });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch { line(stderr, 'The saved run could not be read. Check pdd workflow status.'); return 1; }
     }
     case 'setup': {
       let code = 0;

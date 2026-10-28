@@ -1,0 +1,16 @@
+# Inspect a run without starting work
+
+Own `src/workflow-view.mjs`, exporting `viewRun({ref, cwd}, ports={})` with the runner result shape `{exitCode, message}`. Resolve the same issue references as [run records](workflow-runs.prompt.md). Return exit 1 with its selection diagnostic when no unique saved run exists. This view is a passive local read: no Herdr calls, chat startup/resume/focus, approval, PR refresh, Git fetch, runtime/authentication calls, journal/index writes or file creation. Only local Git reads and existing files may be consulted. It must work while Herdr or the network is unavailable.
+
+Show the issue title and link to the full problem/discussion, saved run state, current area and gate, open person question or chat-start failure, recorded human approvals and remaining approval decisions. A completed or cancelled run has no active gate, except a completed-at-PR-1 code-or-stop question remains optional code authorization. When the current area has finished and waits on its recorded PR with no open gate, identify PR review/merge as the remaining human action; do not say the area still needs to finish. Distinguish approving a workflow gate, approving a runtime prompt and authorizing code work; never imply that one grants the others. Include saved PR URLs and states, Runtime check lines/report URLs, and Try URLs, or explicitly say that none are recorded. Saved external status is not refreshed by viewing.
+
+Link to the exact current review files in the run worktree: changed Stories/PLAN, prompts and views, runtime scenario JSON and app maps relative to the pinned base; include untracked authored files. Add each reached scenario's story and entry prompt paths even when unchanged, and the run folder's Markdown gate notes. Use encoded local file URLs. Identify the current Git commit and whether uncommitted changes exist; explain that these links show current files and recorded gate approvals do not certify later edits. Missing or inaccessible artifacts stay visible as unavailable; unavailable Git inspection must not be presented as a clean or empty checkout. Never traverse a symlink outside the run root to read an artifact. Malformed scenario/prompt content may be linked for review but must not crash the view.
+
+For reached prompts with a Runtime interface, show their current admission status: approved with current prose hash, draft, stale approval/hash, or invalid interface. Surface drafts and stale/invalid interfaces as needing separate person review; a gate approval alone is not prompt approval. Prompts without a Runtime interface remain review-file links without fabricated approval status.
+
+Keep the output small and textual. Do not embed entire documents or build a server/browser UI. Links let the person read the full Story, acceptance criteria, plan, prompts and tests. Display data only; never execute a command contained in a summary or artifact.
+
+## Dependencies
+
+- Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. [Run records](workflow-runs.prompt.md) owns run selection; [runtime preflight](runtime-preflight.prompt.md) owns interface discovery and prose hashes.
+- Runtime: Node filesystem/path/URL primitives, Git local read commands through optional `ports.execFile`, and `ports.env`/`stateDir` for existing run-index selection. No runner/chat mutation helpers.

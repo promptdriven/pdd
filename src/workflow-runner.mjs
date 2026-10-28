@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 628d8eb79d90443c271481bb11360e7d2d07034693fd520f544ad53ba8860729).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bfa245e82759a878399ed4a36eede913fa026fdcdf0b658bc2d10db89f53fc88).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -829,7 +829,7 @@ function detail(run, chat = null, facts = {}) {
     ...(run.pr ?? []).map(pr => { const label = prLabel(run, run.areas.find(item => item.name === pr.stage) ?? {}); return `${label === 'the PR' ? 'PR' : label}: ${pr.url} — ${pr.state ?? 'open'}, ${ci(pr)}${pr.base && pr.base !== run.baseBranch ? ` (stacked on ${pr.base})` : ''}`; }),
     ...(drafts.length ? [draftLine(drafts)] : []),
     ...(storyCount(run) ? [`Stories: ${storyText(storyCount(run))}${storyCount(run).failing.length ? ` (✗ ${storyCount(run).failing.join(', ')})` : ''}`] : []),
-    `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
+    `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
 // One list line per run, grouped by what it needs: the person, the agent, a PR review, nothing.
@@ -858,7 +858,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
   const when = Number.isFinite(run.updatedAt) ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(timeZone ? { timeZone } : {}) }).format(new Date(run.updatedAt)) : 'unknown time';
   const prs = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url, state: pr.state ?? 'open' })), stories = storyCount(run);
   return { ref, repo: run.repo, number: run.number, workflow: run.workflow, area: area?.name ?? null, group, words, prs, stories,
-    updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir,
+    updatedAt: run.updatedAt ?? null, root: run.root, runDir: run.runDir, viewCommand: `pdd workflow view ${ref}`,
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
 
@@ -873,7 +873,7 @@ async function listStatus(runs, { json, cancelled, scope }, p) {
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   return done([...shown.map(item => item.line),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
-    `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
+    `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
 }
 
 export async function runStatus({ ref, cwd, all = false, json = false, cancelled = false }, ports) {
