@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f6d51a3528d1eedb9c67c10da2f7fda0a7bdee92902297c452907105a7eaaef4).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2ad8266c2aecdc504c0eceb108f5343c1a25ddf87c0b6c563902b658e96decd4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -662,9 +662,13 @@ function markdownContext(text) {
   const end = /^#{1,2}[ \t]+/m.exec(rest);
   const dependencies = end ? rest.slice(0, end.index) : rest;
   const paths = [...markdownLinks(dependencies, definitions), ...markdownLinks(prose, definitions, true)];
-  for (const match of dependencies.matchAll(/`([^`\n]+)`/g)) {
+  // A bare filename is shorthand for a dependency item, not every code span in its description.
+  for (const match of dependencies.matchAll(/^ {0,3}(?:[-+*]|[0-9]+[.)])[ \t]+`([^`\n]+)`(?=[ \t:]|$)/gm)) {
     const path = match[1];
-    if (path.includes('/') || /\.(?:md|txt|json|svg|css|csv|ya?ml|toml|xml|html|ui\.svg)$/i.test(path)) paths.push(path);
+    const externalOrCode = /^[~/%$]/.test(path) || /[\s\\:$%~<>*?|[\]{}()]/.test(path);
+    const fileName = /\.[A-Za-z][A-Za-z0-9_-]*$/.test(posix.basename(path));
+    const commonFile = /\.(?:md|prompt|txt|json|svg|css|csv|ya?ml|toml|xml|html?|[cm]?js|[cm]?ts|jsx|tsx|py|sh|sql|ini|conf)$/i.test(path);
+    if (!externalOrCode && ((path.includes('/') && fileName) || commonFile || isSecretPath(path))) paths.push(path);
   }
   return paths;
 }

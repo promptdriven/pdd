@@ -230,3 +230,49 @@ test('SOURCE8: Check ignores an unrelated default map, while Try and its explici
   assert.equal(fake.posts[1].request.app_map, 'app-map.json');
   for (const post of fake.posts) assert.ok(post.tar.equals(preview.tar));
 });
+
+// Slash-bearing prose is not a file declaration, even if a matching Git file happens to exist.
+test('SOURCE9: dependency descriptions do not load schema labels, install locations, saved-state paths or rule examples', async t => {
+  const setup = harbor(t), { repo } = setup;
+  prompt(repo, PLACE, [
+    '# Entry', '## Dependencies',
+    '- [Workspace view](../docs/workspace-view.md) owns the `pocket.workspace-view/v1` response schema.',
+    '- [Host setup](../docs/host-setup.md) documents `~/.local/bin`, `~/.local/pocket`, `/usr/local/bin/tool`, `%h/.local/bin` and `$HOME/.config/tool.json`.',
+    '- Runtime: `node:fs/promises` supplies files, and `owner/repo` names a project.',
+    '- The saved binding is `state/codex.json`.',
+    '- The accepted pattern is `^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`.',
+    '- `pocket.workspace-view/v1` is a schema label, not a file.',
+    '- `prompt_runtime.graph_llm_evaluator.GraphLLMEvaluator` and `prompt_runtime.repository_graph_runner.execute_repository_graph` are installed public APIs.',
+    '- `~/.local/bin/tool.json` is an installation destination.',
+    '- `data/menu.json`: required runtime context.',
+    '- `docs/service.contract`: required shared contract with an uncommon extension.',
+    '', '<details><summary>Required module rules</summary>',
+    'R1: Save the private binding to `state/private.json` and match `owner/name`.',
+    '</details>',
+  ].join('\n'));
+  write(repo, 'docs/workspace-view.md', '# Workspace view');
+  write(repo, 'docs/host-setup.md', '# Host setup');
+  write(repo, 'data/menu.json', '{"price":900}');
+  write(repo, 'docs/service.contract', 'Required shared contract.');
+  for (const path of ['prompts/pocket.workspace-view/v1', 'prompts/state/codex.json', 'prompts/state/private.json', 'prompts/owner/repo', 'prompts/owner/name']) write(repo, path, 'Unrelated file that must not be sent.');
+  const { ports } = offline(setup);
+  assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports), 0, ports.stderr.text);
+  assert.deepEqual(names(captureSource(repo, { tests: [ORDER] }).tar), [PLACE, ORDER, STORY, 'docs/workspace-view.md', 'docs/host-setup.md', 'data/menu.json', 'docs/service.contract'].sort());
+});
+
+// Fixing false positives must not hide a genuinely incomplete declaration or weaken file safety.
+test('SOURCE10: explicit missing links, bare file declarations and assets still refuse with their owner and path', async t => {
+  for (const [prose, path] of [
+    ['## Dependencies\n- [Policy](../docs/missing.md) owns the `pocket.workspace-view/v1` schema.', 'docs/missing.md'],
+    ['## Dependencies\n- [Policy][policy]\n\n[policy]: ../docs/missing.md', 'docs/missing.md'],
+    ['## Dependencies\n- `data/missing.json`: required runtime context.', 'data/missing.json'],
+    ['![Mockup](views/missing.ui.svg)\n## Dependencies\nNone.', 'prompts/views/missing.ui.svg'],
+  ]) {
+    const setup = harbor(t); prompt(setup.repo, PLACE, '# Entry\n' + prose);
+    const { ports } = offline(setup);
+    assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--files': true } }, ports), 4, prose);
+    assert.ok(ports.stderr.text.includes(PLACE), ports.stderr.text);
+    assert.ok(ports.stderr.text.includes(path), ports.stderr.text);
+    assert.match(ports.stderr.text, /not a Git-visible file/);
+  }
+});
