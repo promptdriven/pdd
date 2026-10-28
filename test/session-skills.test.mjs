@@ -67,10 +67,9 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
 
 // Wrong: setup copies over skills that npx skills add already installed (symlinked folders without the pdd marker).
 test('INSTALL3: after an npx-style install in the project, pdd setup finds the skills and copies nothing', t => {
-  const { home, project, run } = packageCopy(t);
+  const { pkg, home, project, run } = packageCopy(t);
   for (const name of PDD_SKILL_NAMES) {
-    mkdirSync(join(project, '.agents/skills', name), { recursive: true });
-    writeFileSync(join(project, '.agents/skills', name, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+    cpSync(join(pkg, 'skills', name), join(project, '.agents/skills', name), { recursive: true });
     mkdirSync(join(project, '.claude/skills'), { recursive: true });
     symlinkSync(join(project, '.agents/skills', name), join(project, '.claude/skills', name));
   }
@@ -145,4 +144,31 @@ test('INSTALL7: pdd setup names each skill that it updated', t => {
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.includes(`Updated 1 PDD skill in ${join(home, '.agents/skills')}: pdd-bug\n`), result.stdout);
   assert.ok(result.stdout.includes(`PDD skills found in ${join(home, '.agents/skills')}\n`), result.stdout);
+});
+
+// Wrong (0.1.6 tester): setup said "PDD skills found in ~/.agents/skills" for npx skills copies that were older than this
+// pdd, so a chat outside a workflow ran the old skills.
+test('INSTALL8: when the skills that setup finds differ from this pdd, it says so and prints the update command; it changes nothing', t => {
+  const { pkg, home, project, run } = packageCopy(t);
+  // An npx skills -g copy of another pdd version (no pdd marker); the Claude folder links to it.
+  mkdirSync(join(home, '.claude/skills'), { recursive: true });
+  for (const name of PDD_SKILL_NAMES) {
+    cpSync(join(pkg, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
+    symlinkSync(join(home, '.agents/skills', name), join(home, '.claude/skills', name));
+  }
+  writeFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'an older feature skill\n');
+  const result = run(['setup']);
+  assert.equal(result.status, 0, result.stderr);
+  for (const skillRoot of ROOTS) assert.ok(result.stdout.includes(`PDD skills in ${join(home, skillRoot)} differ from the skills of pdd ${version()}. To update them, run: npx skills update -g\n`), result.stdout);
+  assert.doesNotMatch(result.stdout, /found|Installed|Updated/);
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd-feature/SKILL.md'), 'utf8'), 'an older feature skill\n');
+  assert.equal(existsSync(join(home, '.agents/skills/pdd-feature', MARKER)), false);
+  // A project copy with a pdd marker of an older version gets the project command.
+  for (const name of PDD_SKILL_NAMES) {
+    cpSync(join(pkg, 'skills', name), join(project, '.agents/skills', name), { recursive: true });
+    writeFileSync(join(project, '.agents/skills', name, MARKER), JSON.stringify({ package: 'pdd', version: '0.0.1', digest: 'old' }));
+  }
+  const local = run(['setup']);
+  assert.equal(local.status, 0, local.stderr);
+  assert.ok(local.stdout.includes(`PDD skills in ${join(project, '.agents/skills')} are older than pdd ${version()}. To update them, run: npx skills update -p\n`), local.stdout);
 });

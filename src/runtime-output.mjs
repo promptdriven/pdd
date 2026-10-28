@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 31950901b783bbac888f3427cd803ad039e81f78abfd01bf33ca9ba9cebeecd5).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: fd45d21bc0dcc6c13486d985348875333755f720cfe189b0b8bb5c1acc0c88c6).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -21,7 +21,7 @@ export function cleanText(value, secrets = [], { paths = true } = {}) {
   return (paths ? text.replace(SERVER_PATH, '<server path>') : text).trim();
 }
 const cleanField = (value, secrets) => cleanText(value, secrets, { paths: false });
-const shown = (value, secrets) => { const text = cleanField(JSON.stringify(value) ?? 'nothing', secrets); return text.length > 80 ? `${text.slice(0, 77)}...` : text; };
+const shown = (value, secrets) => cleanField(JSON.stringify(value) ?? 'nothing', secrets);
 
 // A secret browser link from the runtime: same scheme and host as the origin, the expected path, no user or password.
 export function validLink(value, origin, kind) {
@@ -45,9 +45,13 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []).map(check => ({
     criterion_id: cleanField(check?.criterion_id, secrets), target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
     expected: scrub(check?.expected, secrets), actual: scrub(check?.actual, secrets), passed: check?.passed === true }));
+  // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => ({
     code: cleanText(item?.code, secrets) || 'unknown', section: cleanText(item?.section, secrets) || null,
-    message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null }));
+    message: cleanText(item?.message, secrets) || null, engine_message: cleanText(item?.engine_message, secrets) || null, hint: null,
+    reason: cleanText(item?.reason, secrets) || null, fix: cleanText(item?.fix, secrets) || null,
+    where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
+    cause: cleanText(item?.cause, secrets) || null }));
   const usage = answer?.usage ?? {};
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
@@ -75,7 +79,8 @@ const sentRow = row => row.phase === 'server';
 export function jsonRow(row) {
   return { story: row.story, title: row.title, test: row.test, state: row.state, checks: row.checks ?? null, criteria: row.criteria ?? null,
     failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
-      message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
+      message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
+      where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
@@ -120,10 +125,35 @@ function table(rows) {
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
 }
 
-const checkLine = (check, secrets) => `${check.criterion_id}  ${check.target} ${check.path}  expected ${shown(check.expected, secrets)}, got ${shown(check.actual, secrets)}`;
+// ---- Expected and got (round-2 tester: a CLI's stdout lost its line breaks and was cut near the difference) ----
+const VALUE_LINES = 20;
+// One line of a value: no control characters and no token, but its spaces stay.
+const plainLine = (text, secrets) => secrets.reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value,
+  text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' '));
+const oneLine = value => typeof value !== 'string' || !/\n(?!$)/.test(value);
+const valueLines = value => typeof value === 'string' ? value.replace(/\n$/, '').split('\n') : (JSON.stringify(value, null, 2) ?? 'nothing').split('\n');
+
+// The check line: one line when both values fit, else the check and a block for each value, never cut inside a line.
+function checkLines(check, secrets) {
+  const head = `${check.criterion_id}  ${check.target} ${check.path}`;
+  const fits = [check.expected, check.actual].every(value => oneLine(value) && shown(value, secrets).length <= 80);
+  if (fits) return [`${head}  expected ${shown(check.expected, secrets)}, got ${shown(check.actual, secrets)}`];
+  const expected = valueLines(check.expected), actual = valueLines(check.actual);
+  // Start 2 lines before the first line where two strings differ, when it is past the first 20.
+  const differ = typeof check.expected === 'string' && typeof check.actual === 'string' ? expected.findIndex((text, index) => text !== actual[index]) : -1;
+  const from = differ >= VALUE_LINES ? differ - 2 : 0;
+  const block = (word, value, lines) => [`  ${word}:`, ...(from ? [`    … ${from} lines before`] : []),
+    ...lines.slice(from, from + VALUE_LINES).map(text => `    ${plainLine(text, secrets)}`),
+    ...(lines.length > from + VALUE_LINES ? [`    … ${lines.length - from - VALUE_LINES} more lines in the report`] : []),
+    ...(typeof value === 'string' && value.endsWith('\n') ? ['    (ends with a line break)'] : [])];
+  return [head, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
+}
+// With a plain reason (#379): the reason, where and the fix; an AI service failure is not a problem in the test.
 function refusalLines(item) {
-  const lines = [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
-  if (item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
+  const lines = item.reason ? [`  ${item.code}: ${item.reason}`, ...(item.where ? [`  Where: ${item.where}`] : []),
+    ...(item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
+    : [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
+  if (!item.reason && item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
   if (item.hint) lines.push(`  ${item.hint}`);
   return lines;
 }
@@ -140,12 +170,14 @@ function localRefusals(rows) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
-  out.push(...table(rows), ...storyLines(rows).map(([, text]) => text), summaryLine(rows));
+  // One Story: its own line is the result; the overall line comes only with two or more Stories.
+  const perStory = storyLines(rows).map(([, text]) => text);
+  out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   for (const row of rows.filter(row => row.state === 'failed')) {
-    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).map(check => `  ${checkLine(check, secrets)}`),
+    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).flatMap(check => checkLines(check, secrets).map(text => `  ${text}`)),
       ...(row.warnings ?? []).map(text => `  ${text}`),
       `  Report: ${row.report_url ?? 'none'}   Next: show the person this check. Do not change the expected value yourself.`);
   }
@@ -157,7 +189,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
-    out.push(`STILL RUNNING${reading ? '' : interrupted ? ' when pdd stopped reading' : ` after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
+    const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
+    out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
@@ -168,7 +201,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,
-      ...[...row.all_checks].sort((a, b) => a.passed - b.passed).map(check => `  ${check.passed ? 'passed' : 'failed'}  ${checkLine(check, secrets)}`));
+      ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
+        .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
   }
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);

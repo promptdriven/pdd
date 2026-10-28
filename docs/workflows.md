@@ -25,7 +25,7 @@ PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Runtime check (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
@@ -37,13 +37,13 @@ What each step does:
 | change | Makes only the approved change. If a prompt owns the behavior, it changes the prompt first. Adds a test. |
 | reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
-| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. |
-| prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
-| check | Runs `pdd check` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. Puts one `Runtime check` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
+| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a page or a screen, it also writes the app map and its SVG mockups from the chosen design, so the Try page shows the real screen (the Screen tab). The chat asks you first, and recommends this step for a page or a screen. |
+| prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4, then the sections that fit: a CLI, a prompt that calls another, check paths, money and dates, a page or screen, AI calls and test patterns. A page gets a `render` operation that returns its HTML and an app map, so you can try the page on the Screen, and its tests check what the page shows. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
+| check | Runs `pdd check` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. It never sends the same check on the same files again: it reads a result again with `pdd check --read`. In `bug`, it checks every Story whose prompt changed. Puts one `Runtime check` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
 | try? | Makes a `pdd try` link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. |
 | build | Builds only what you approved. Tests through the public interface. |
-| verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the exact commands and their real output. |
-| formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`. |
+| verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
+| formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`, after the tables. |
 
 If verify or formal finds a failing case, the chat goes back to build in a new subagent, at most 2 times. If a case still fails, PR 2 opens anyway with "✗ N vectors fail" at the top.
 
@@ -78,7 +78,7 @@ you     review and merge on GitHub
 1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It does not write code itself.
-4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets a short brief and file paths, not the chat history.
+4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets its full brief at once, with file paths, not the chat history. Then the chat waits for it.
 5. After each step, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
@@ -88,14 +88,17 @@ you     review and merge on GitHub
 
 ### Try before PR 1
 
+The check comes first, then the Try. At the story gate, the chat can offer a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when visual made an app map.
+
 After the check and try steps, the chat shows one `Runtime check` line for each Story (✓ or ✗) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body is short:
 
-1. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
-2. `Part of #N`, and that the code comes in PR 2 only when you ask.
-3. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
-4. One short line for each step.
+1. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
+2. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
+3. `Part of #N`, and that the code comes in PR 2 only when you ask.
+4. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
+5. One short line for each step.
 
 PR 1 has no `verify.md`, no Try links and no local paths.
 
@@ -109,7 +112,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 | Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
 | Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the default branch |
 
-PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`.
+PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
 
 ### Who can approve
 
@@ -142,12 +145,6 @@ pdd does not run tests. The agents do.
 - The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
 
 Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
-
-The [ticket-status example](../examples/ticket-status/README.md) shows a full prompt, Story, test cases, code and tests. Run its tests from the repository root:
-
-```sh
-node --test examples/ticket-status/test/status.test.mjs
-```
 
 <a id="make-your-own-workflow"></a>
 

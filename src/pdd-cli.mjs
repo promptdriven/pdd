@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9b2ee0fffec5fd12008fc7ad24e333daf331e02a2c3e14d89dcdb2312a389622).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0724eca6a9e431356febadb002b4e8dbaa2580a7e61677ea9dd990ff35bd339b).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -68,7 +68,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       let code = 0;
       for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
         if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
-        if (result.found) line(stdout, `PDD skills found in ${result.found}`);
+        if (result.found && result.stale) {
+          const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+          const scope = [join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(result.found) ? '-p' : '-g';
+          line(stdout, `PDD skills in ${result.found} ${result.stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills update ${scope}`);
+        } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
         else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
         if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
       }

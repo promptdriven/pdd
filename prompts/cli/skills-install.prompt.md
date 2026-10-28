@@ -19,7 +19,7 @@ Claude started with `CLAUDE_CONFIG_DIR` reads `<CLAUDE_CONFIG_DIR>/skills` and n
 2. Find: the first read folder where all five `<folder>/<name>/SKILL.md` files exist. A symlinked skill folder counts.
 3. If no read folder has all five skills, copy each skill that is missing from the user folder.
 
-Return one result per agent, Codex first: `{agent, root, found, installed, updated}`. `root` is the user folder, `found` is the found read folder or null, and `installed` and `updated` are the absolute folders that were copied. A failure in one agent does not stop the other: put `error` in that agent's result instead of throwing. It never writes into the person's repo.
+Return one result per agent, Codex first: `{agent, root, found, stale, installed, updated}`. `root` is the user folder, `found` is the found read folder or null, and `installed` and `updated` are the absolute folders that were copied. `stale` says how the found skills compare with the package (0.1.6 tester: setup said "found" for npx skills copies older than pdd): `'older'` when every found skill that is not current carries a pdd marker with an older version, `'differs'` when one differs in another way (a folder without a marker whose files, hashed like the digest, are not the package's; a marker of the same version with another digest; a marker that is not valid JSON), else null (the same, a newer marker, or unreadable). setupSkills never changes a found folder that it does not own. A failure in one agent does not stop the other: put `error` in that agent's result instead of throwing. It never writes into the person's repo.
 
 ## The marker
 

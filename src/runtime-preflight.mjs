@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 81c9f1841074b51b0fc8f738a6179eabc775e4e6cf6ff1e2512dbdaad2ac1feb).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 9c4166b90bdb9abfb4c60626ccfa191c26f5ec7f172e1d535ec61fb04b7d6747).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,7 +18,7 @@ const SCHEMA_RULES = new Set(['type', 'properties', 'required', 'additionalPrope
   'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties']);
 const SCHEMA_NOTES = new Set(['title', 'description', 'default', 'examples', 'format', '$comment', '$schema', '$id']);
 
-// The engine's _INTERFACE regex (prompt_program_discovery.py, 7b03d3ea).
+// The engine's _INTERFACE regex (prompt_program_discovery.py, eae2202a).
 const INTERFACE = /<details\b[^>]*>\s*<summary\b[^>]*>\s*(?:<strong\b[^>]*>\s*)?Runtime\s+interface(?:\s*:\s*[^<]+?)?\s*(?:<\/strong\s*>\s*)?(?:\s*:\s*[^<]+?)?\s*<\/summary\s*>\s*```json\b\s*([\s\S]*?)\s*```\s*<\/details\s*>/gid;
 
 export class PreflightError extends Error {
@@ -43,7 +43,7 @@ const NEXT_HEADING = /(?<![^\n])##[ \t]+/;
 const NUMBERED_ITEM = /^([1-9][0-9]*)[.)][ \t]+(.+)$/;
 const BULLET_ITEM = /(?<![^\n])[ \t]*[-*][ \t]+([\s\S]+?)(?=\n[ \t]*[-*][ \t]+|(?![\s\S]))/g;
 
-// A port of the engine's explicit_story_criteria (program_scenario.py, 7b03d3ea).
+// A port of the engine's explicit_story_criteria (program_scenario.py, eae2202a).
 export function storyCriteria(source) {
   const heading = AC_HEADING.exec(source);
   const body = heading ? source.slice(heading.index + heading[0].length) : source;

@@ -209,6 +209,10 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
   When one step's worst case is bigger than `--max-calls` (at most 100), the runtime refuses the whole test before it
   starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
+- **A Try page allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
+  opens: refused at 0 calls. A screen prompt that calls another prompt with a high `max_calls` hits this fast
+  (`game` → `board` with `max_calls: 30` is 61 per tap). Keep the screen prompt's chain small: one call with a whole
+  list (section 18), not many calls.
 - **Check small first.** A schema refusal costs 0 AI calls. A wrong check path costs the full run: one cost 34 calls.
   - In a new project, check the story with the fewest steps first. Check the others only after it passes.
   - Start a new test with few steps: often one step for each criterion is enough. Add more cases after it passes.
@@ -226,6 +230,9 @@ pdd checks the files on this computer first. Then it sends one check for each te
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
 A failed check shows the criterion, the path, the expected value and the answer: `AC1  result /totalCents  expected 899, got 900`.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
+In a person's terminal, `pdd check` waits until every check ends and prints `Still running: …` every 30 s. In an
+agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd check --read` about every
+minute, doing other work in between, until every Story has a result. Never send the same check again.
 
 | Exit | Result | What to do |
 |---|---|---|
@@ -233,7 +240,7 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 | 1 | failed | Show the person the failed check. Fix the prompt. Never change the expected value yourself. |
 | 4 | refused | Nothing was judged. Fix the file that pdd names (table below). If the fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
-| 3 | unknown or still running | Run `pdd check --read`. Never send the check again. |
+| 3 | unknown or still running | Run `pdd check --read` about every minute until every Story has a result. Never send the check again. |
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
@@ -253,6 +260,7 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 100), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
 | `graph-provider-failure` | The AI service failed. No verdict, also when pdd prints `✗ … 1 refused` | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
+| `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd try` and Save as test
 
@@ -287,6 +295,9 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
+  The runtime cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
+  `background-color` for a fill, `aria-current="true"` for a chosen button, and `display:block` on each `<li>` for a
+  list with no bullets.
 - **A screen from a mockup** (`"source": "mockup"`, `"operation": null`, `"format": "svg"`, `"result_pointer": null`):
   the screen prompt declares the screen and its callbacks in one code line, for example
   `@Composable fun MenuScreen(state: MenuState, onAdd: (String, String) -> Unit): Unit`. Its one operation gets
@@ -297,11 +308,56 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   Use at most 4 mockups for each screen, 64 KiB each, with no scripts.
 - `input` is the operation input, or the `state` of a mockup screen. `{"$ref": "/state/cart"}` copies a value (roots:
   `/state`, `/event`, `/result`, `/route`, `/world`). Other values are used as written. `state_schema` follows section 3.
-- **A handler** connects a tap or a key to an operation. `match` for each `kind`: `button` `{"value": "place-order"}`
-  (html `<button value="place-order">`), `region` `{"region_id": "price-latte-m", "callback": "onAdd"}` (SVG), `key`
-  `{"value": "n"}`. `next` stays (`"same"`) or goes to a `"screen"`. `state` replaces the whole state: list every field,
-  or give `null` to keep it. `after` runs more operations in order and puts a result in the state (`"bind": "/order"`).
+- **A handler** connects a tap or a key to an operation. `match` may use `id`, `region_id`, `callback`, `href`,
+  `value`, `name` and `label`. Examples: `button` `{"value": "place-order"}` (html `<button value="place-order">`),
+  `region` `{"region_id": "price-latte-m", "callback": "onAdd"}` (SVG), `key` `{"value": "n"}`. `state` replaces the
+  whole state: list every field, or give `null` to keep it. `after` runs more operations in order and puts a result
+  in the state (`"bind": "/order"`).
+- **`next`** always has these 3 keys. Stay on this screen: `{"kind": "same", "screen": null, "route_pointer": null}`.
+  Go to a screen: `{"kind": "screen", "screen": "cart", "route_pointer": null}`. Use the router (only with a `router`):
+  `{"kind": "route", "screen": null, "route_pointer": "/route"}`.
+- **`/event`** in `input` or `state`: every event has `screen`, `target` and `kind`. `target` is the element's own
+  `id` when that id is unique on the screen. A `link` adds `href`. A `key` or `command` adds `value` (the key). A
+  `button` matched by `value` has that `value`. A `submit` (a `<form>`) adds `fields`: the form's named, visible
+  fields, as strings (hidden inputs are not sent). A mockup `region` with a typed callback adds `arguments`. Use one
+  field, for example `{"$ref": "/event/target"}`. The whole event (`{"$ref": "/event"}`) is refused.
+- **Give every button a unique `id`** in the drawing. Then a tap keeps its target when the screen draws again, also a
+  tap that waits in line.
+- **On one screen, match all handlers of one kind by the same key.** Two `button` handlers with `{"value": …}` and
+  `{"name": …}` on one screen are refused as `ambiguous-handler`.
+- **A button on each row:** give the row buttons one `name` and the row's key as `id`:
+  `<button name="mark-read" id="b2">Mark as read</button>`. One handler serves all rows:
+  `{"kind": "button", "match": {"name": "mark-read"}, "input": {"id": {"$ref": "/event/target"}}, …}`. Then match the
+  other buttons of that screen by `name` too (`name="show-all"`). The field that gets `/event/target` must be a plain
+  `{"type": "string"}`: a stricter schema (`minLength`, `pattern`) is refused as `template-reference-schema`.
 - Each tap costs the handler's AI calls plus 1 to draw the screen. In Harbor, opening cost 1 and a tap cost 2 to 3.
+- A tap's worst case is the handler's worst case (section 10) plus 1 to draw. A Try page allows 40 for each tap.
+  A screen or handler whose prompt's worst case is over 40 never opens (refused at 0 calls). Keep the chain small.
+
+A full, small app map (a book list with 2 filter buttons; one screen from an operation):
+```json
+{"schema_version": "prompt-runtime.app-map.v1", "name": "Bookshelf", "initial_screen": "shelf", "initial_route": null,
+ "initial_state": {"show": "all", "books": [{"id": "b1", "title": "Dune", "read": false}]},
+ "state_schema": {"type": "object", "properties": {
+   "show": {"type": "string", "enum": ["all", "unread"]},
+   "books": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"},
+     "title": {"type": "string"}, "read": {"type": "boolean"}}, "required": ["id", "title", "read"],
+     "additionalProperties": false}}},
+   "required": ["show", "books"], "additionalProperties": false},
+ "synthetic": true, "router": null, "routes": [], "stylesheets": [],
+ "screens": [{"id": "shelf", "prompt_path": "prompts/shelf_page.prompt.md", "operation": "render", "source": "operation",
+   "format": "html", "input": {"books": {"$ref": "/state/books"}, "show": {"$ref": "/state/show"}}, "result_pointer": "/html"}],
+ "handlers": [
+  {"screen": "shelf", "kind": "button", "match": {"value": "show-unread"},
+   "handler": {"prompt_path": "prompts/books_api.prompt.md", "operation": "list_books"}, "input": {"read": "false"},
+   "next": {"kind": "same", "screen": null, "route_pointer": null},
+   "state": {"show": "unread", "books": {"$ref": "/result/books"}}},
+  {"screen": "shelf", "kind": "button", "match": {"value": "show-all"},
+   "handler": {"prompt_path": "prompts/books_api.prompt.md", "operation": "list_books"}, "input": {},
+   "next": {"kind": "same", "screen": null, "route_pointer": null},
+   "state": {"show": "all", "books": {"$ref": "/result/books"}}}]}
+```
+`render` returns `{"html": "…"}` with `<button id="show-unread" value="show-unread">Only unread</button>`.
 
 Cut from the Harbor Coffee app map (`…` marks cut parts):
 ```json
@@ -337,11 +393,12 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put one line and the report link at the top of the PR text. The link expires after 7 days. Anyone with the link can
-open it. Do not paste logs, warnings or full paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in
-it is still draft.
+Put the `Runtime check` line(s) that `pdd check` prints, with their report links, at the top of the PR text. One
+Story gives one line, `Runtime check (<story>): …`. 2 or more Stories give one line each and a last `Runtime check:`
+line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
+paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
 ```
-Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
+Runtime check (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 Report: https://…/r/617480ac-…
 ```
 
@@ -353,7 +410,6 @@ Report: https://…/r/617480ac-…
 - The report page says "Run in your signed-in terminal: `pdd replay …`". That command does not exist yet.
 - In a Try, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
 - The Try page says "1 AI call each". A step with saved data or a prompt call uses 2 to 3.
-- `pdd try --stop <story>` finds the Try only on a branch that has the story's test file.
 
 ## 17. The code PR (PR 2): test vectors and the formal check
 
@@ -394,8 +450,12 @@ The runtime proves the prompt. PR 2 must prove that the **code** does the same.
 
 Test only the real operations of the program: functions, commands or routes that the code will have. Never add an
 operation only for a check (for example `moveWithInputObservation`, `sequence` or `replay`). The runtime sees results,
-saved data and call counts. It cannot see a browser, a phone layout or whether an input object changed. Put such
-criteria in a story with no runtime test (pdd only warns "has no test"), and prove them with the repo's tests in PR 2.
+saved data and call counts. It cannot see CSS layout, sizes, animation or whether an input object changed.
+A page or a screen is never "browser-only": what it shows and what each tap does are results. Give it an app map
+(section 13). A page with no mockup gets a `render` operation that returns `{"html": …}` plus the facts it shows,
+for example `{"html": "…", "emptyMessage": "No books yet", "rows": 3}`. Check the facts with `equals` or `count`
+on those fields (`/emptyMessage`), not on the html. Only what the runtime truly cannot see (CSS layout, sizes,
+animation) goes in a story with no runtime test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
 Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
 repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
 

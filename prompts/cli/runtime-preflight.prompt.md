@@ -10,7 +10,7 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 - No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible `*.json` under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Exit 2.
 - Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. An unknown word is a command error that lists the stories with tests.
 
-## Rules (engine 7b03d3ea codes; `pdd-*` codes are pdd only)
+## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
 A story may have more than one test file (for example a different starting world). Each file must still cover every criterion of its story (P5, P6). There is no P11.
 
@@ -49,7 +49,7 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 ## Prose hash
 
-- The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at 7b03d3ea), in JS with the flags `gi`.
+- The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
 - `prose_sha256` = lowercase hex SHA-256 of the UTF-8 bytes of the text with every block removed. Read the file as UTF-8 and do not change newlines.
 - `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": ""`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
 

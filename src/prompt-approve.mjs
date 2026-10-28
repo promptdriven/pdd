@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 95717c7bdc02fe786a618fd5557ed4994cc9d24fda730cfd92e48c8df78e6872).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 5e6a0d3ea532d868f2b3176d5445c0fd5a01bbf038e56cbbc9bb1f337de356bc).
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
@@ -73,6 +73,79 @@ export function describeInterface(path, iface) {
   return out;
 }
 
+// ---- The prose that the person approves (round-2 tester: the screen showed only the interface) ----
+const PROSE_LINES = 40, HISTORY = 200;
+// No control characters, so that terminal codes cannot hide words; spaces stay.
+const plain = text => text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' ').trimEnd();
+// The text without its Runtime interface block (what prose_sha256 hashes).
+function proseOf(text) {
+  let out = '', at = 0;
+  for (const block of interfaceBlocks(text)) { out += text.slice(at, block.index); at = block.index + block[0].length; }
+  return out + text.slice(at);
+}
+
+// The newest version in Git that was approved with its own prose hash: {commit, text}, or null.
+function lastApproved(root, path) {
+  const log = spawnSync('git', ['log', '--format=%H', '-n', String(HISTORY), '--', path], { cwd: root, encoding: 'utf8' });
+  for (const commit of log.status === 0 ? log.stdout.split('\n').filter(Boolean) : []) {
+    const shown = spawnSync('git', ['show', `${commit}:${path}`], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    const blocks = shown.status === 0 ? interfaceBlocks(shown.stdout) : [];
+    let value = null;
+    try { value = blocks.length === 1 ? JSON.parse(blocks[0][1]) : null; } catch { value = null; }
+    if (value?.status === 'approved' && value.prose_sha256 === proseSha256(shown.stdout)) return { commit, text: shown.stdout };
+  }
+  return null;
+}
+
+// A line diff (longest common subsequence) as [mark, line] with mark ' ', '-' or '+'.
+function lineDiff(before, after) {
+  const a = before.split('\n'), b = after.split('\n');
+  let head = 0, tailA = a.length, tailB = b.length;
+  while (head < tailA && head < tailB && a[head] === b[head]) head += 1;
+  while (tailA > head && tailB > head && a[tailA - 1] === b[tailB - 1]) { tailA -= 1; tailB -= 1; }
+  const x = a.slice(head, tailA), y = b.slice(head, tailB), middle = [];
+  if (x.length * y.length > 4_000_000) middle.push(...x.map(text => ['-', text]), ...y.map(text => ['+', text]));
+  else {
+    const common = Array.from({ length: x.length + 1 }, () => new Uint32Array(y.length + 1));
+    for (let i = x.length - 1; i >= 0; i -= 1) for (let j = y.length - 1; j >= 0; j -= 1) common[i][j] = x[i] === y[j] ? common[i + 1][j + 1] + 1 : Math.max(common[i + 1][j], common[i][j + 1]);
+    for (let i = 0, j = 0; i < x.length || j < y.length;) {
+      if (i < x.length && j < y.length && x[i] === y[j]) { middle.push([' ', x[i]]); i += 1; j += 1; }
+      else if (i < x.length && (j >= y.length || common[i + 1][j] >= common[i][j + 1])) { middle.push(['-', x[i]]); i += 1; }
+      else { middle.push(['+', y[j]]); j += 1; }
+    }
+  }
+  return [...a.slice(0, head).map(text => [' ', text]), ...middle, ...a.slice(tailA).map(text => [' ', text])];
+}
+
+// The changed lines with 1 unchanged line around each change, and "…" between parts.
+function changedRows(before, after) {
+  const diff = lineDiff(before, after), keep = new Set();
+  diff.forEach(([mark], index) => { if (mark !== ' ') for (const near of [index - 1, index, index + 1]) keep.add(near); });
+  const rows = [];
+  diff.forEach(([mark, text], index) => {
+    if (!keep.has(index)) return;
+    if (rows.length && !keep.has(index - 1)) rows.push('  …');
+    rows.push(plain(`${mark === ' ' ? '    ' : `  ${mark} `}${text}`));
+  });
+  return rows;
+}
+
+const capped = (title, rows, more) => rows.length <= PROSE_LINES ? [title, ...rows]
+  : [title, ...rows.slice(0, PROSE_LINES), `… ${rows.length - PROSE_LINES} more lines not shown. ${more}`];
+
+// What the person approves in words: the prose changes since the last approved version, else all of the prose.
+function proseView(root, path, text) {
+  const before = lastApproved(root, path), prose = proseOf(text);
+  if (!before) {
+    const rows = prose.split('\n').map(text => plain(`  ${text}`));
+    while (rows.length && !rows.at(-1)) rows.pop();
+    return capped('Text (no approved version in Git, so all of it):', rows, `Read the whole file: ${path}`);
+  }
+  const commit = before.commit.slice(0, 12), rows = changedRows(proseOf(before.text), prose);
+  if (!rows.length) return [`Text: the same as the last approved version (${commit}).`];
+  return capped(`Text changes since the last approved version (${commit}):`, rows, `See all of them with: git diff ${commit} -- ${path}`);
+}
+
 // The [start, end) of the string value of a top-level key in a JSON object text, or null.
 function topLevelString(text, key) {
   const skip = at => { let index = at + 1; while (index < text.length && text[index] !== '"') index += text[index] === '\\' ? 2 : 1; return index + 1; };
@@ -138,7 +211,7 @@ export async function askApproval({ root, path, stdout, answers, expectedHash })
     for (const problem of problems) line(stdout, `  ${problem.code}  ${problem.pointer}  ${problem.rule}`);
     return { state: 'declined', exitCode: 4, message: `Fix these in ${path} before you approve.` };
   }
-  for (const row of describeInterface(path, iface)) line(stdout, row);
+  for (const row of [...describeInterface(path, iface), ...proseView(root, path, text)]) line(stdout, row);
   if (iface.status === 'approved') line(stdout, 'The text changed after it was approved. Read the prompt again before you answer.');
   stdout.write(`Approve ${path}? y/n `);
   const answer = await answers.ask();

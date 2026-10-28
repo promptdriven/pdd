@@ -1,6 +1,6 @@
 {
   "name": "pdd",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "PDD Alpha: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
@@ -16,11 +16,10 @@
     "src/",
     "prompts/cli/",
     "docs/",
-    "skills/",
-    "examples/"
+    "skills/"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs examples/ticket-status/test/*.test.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=22.16.0"
