@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9768de321984d0e61e699354d17d7026a221cdcc5680f56a126b830ac84583df).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cef447175472a4bb0ff2703a1a130c733bad7faebb7a4be34b4f06cd3e1ace81).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';

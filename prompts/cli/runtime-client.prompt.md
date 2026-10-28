@@ -39,7 +39,7 @@ resource_run_config:<config path>. Preliminary lint gets the same archive but no
 Persist these fields and a live marker per row; legitimate pre-dispatch retries retain them,
 and --read retains the marker without sending a new CHECK or requiring local config files.
 Lost replies keep existing same-ID read-only recovery. No new replay or automatic retry of an
-uncertain live operation. Server report resource_mode=live may also identify an existing live run.
+uncertain live operation. Server report resource_mode=live or transport_mode=live may also identify an existing live run.
 
 The server owns live admission. Preserve its exact sanitized refusal/reason/location/fix, including structured HTTP error fields and details from either error.details or top-level details. Add a
 plain hint for live policy refusals or a live CHECK's422: currently CHECK allows exactly one

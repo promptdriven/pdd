@@ -96,3 +96,8 @@ test('LIVE14: two authored tests for the same Story retain their own config defa
  const setup=harbor(t,r=>{profiles(r);profiles(r,'specs','second_session');mkdirSync(join(r,'specs'),{recursive:true});writeFileSync(join(r,'specs/second.json'),readFileSync(join(r,'tests/place-order.json')))}),fake=await fakeRuntime(t,normal),r=await invoke(setup,fake,{'--live':true},['place-order']);assert.equal(r.code,0,r.err);
  const checks=fake.posts.filter(p=>p.command==='check');assert.equal(checks.length,2);assert.deepEqual(checks.map(p=>p.request.resource_run_config).sort(),['specs/runtime-run-config.json','tests/runtime-run-config.json']);
 });
+
+test('LIVE15: read-only request recovery recognizes the real server report transport_mode',async t=>{
+ const setup=harbor(t),id='11111111-1111-4111-8111-111111111111',fake=await fakeRuntime(t,(e,f)=>{const answer=f.check(id);answer.result.report.transport_mode='live';answer.draft_prompts=[PLACE];return{status:200,json:answer}});
+ const r=await invoke(setup,fake,{'--request':id},[]);assert.equal(r.code,0,r.err);assert.equal(r.json.rows[0].live,true);assert.match(r.json.summary_line,/DRAFT.*LIVE/);assert.equal(fake.posts.length,0);assert.equal(fake.gets.length,1);
+});

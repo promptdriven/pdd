@@ -19,7 +19,7 @@ ran. Keep it independent of DRAFT. Add ` (LIVE)` after the existing draft suffix
 per-Story/overall Runtime check lines and report-link rows. A live JSON row and a batch containing
 one add live:true and resource_mode:"live"; ordinary simulated JSON stays unchanged. Saved reads
 keep the marker. A server answer with resource_mode:"live" (top-level or result.report) may supply
-it when reading a run. Preserve actual exit codes, accounting and specific refusal details.
+it when reading a run. The current server also records the actual mode in result.report.transport_mode; recognize its value "live" when resource_mode is absent. Preserve actual exit codes, accounting and specific refusal details.
 
 ## Exit code
 

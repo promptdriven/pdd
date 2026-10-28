@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 52164550e53557b6c8ac78d24d268ae4c6bb0700b948a4691eddcc8f008baad6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: aef697932c9ac5aed8cc6e3bd65f30c91d84eda0d0400ab49dc696b0aea15506).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -67,7 +67,7 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
-    resource_mode: answer?.resource_mode ?? report?.resource_mode ?? null,
+    resource_mode: answer?.resource_mode ?? report?.resource_mode ?? report?.transport_mode ?? null,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
