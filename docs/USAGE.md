@@ -150,11 +150,11 @@ Where the skills go:
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 | `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 
-`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills differ from the skills of this pdd, `pdd setup` says so and prints the command that updates them: `npx skills update -g` (or `-p` for a copy in your project). pdd never copies the skills into your repo.
+`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.9`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -498,8 +498,11 @@ Do not run `herdr server stop` without a session name. That stops your default H
 Update the skills:
 
 ```sh
-npx skills update        # add -g for the skills of all your projects, -p for this project only
+npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y   # for all your projects
+npx skills add promptdriven/pdd#alpha -a codex -a claude-code -y      # in a project that has its own copy
 ```
+
+This replaces the PDD skills, also a copy that `pdd setup` made. Start a new agent chat after the update, so it loads the new skills.
 
 Update the pdd command, then let it check the skills:
 
@@ -561,7 +564,8 @@ This is an alpha. These limits are known today:
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
-| The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
+| The agent uses an old PDD skill | Run `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y`, then start a new chat. `pdd --version` says when your skills are older than pdd. |
+| `npx skills update -g` prints `No global skills tracked in lock file` | `npx skills add` did not install these skills (for example, `pdd setup` did). Run `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` once. After that, `npx skills update -g` works too. |
 | `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
