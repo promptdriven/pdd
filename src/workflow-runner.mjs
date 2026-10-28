@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6b220dd7d78b7b1ba2b8341929b5c8c3c8a1371e12c9342ec98c7c3327181c80).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 98e4813faaf1654af82561cbfbced60bc35cff3a396656ce01f4907898e628cf).
 import { execFile as execFileCallback } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -12,8 +12,10 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { interfaceBlocks } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
+import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
+import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -54,7 +56,13 @@ function deps(ports = {}) {
   const env = ports.env ?? process.env;
   const execFile = ports.execFile ?? ((file, args, { cwd }) => ordinary(file, args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
-    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY) };
+    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
+}
+// The real reason of a failed gh, git or Herdr call, in plain words.
+function causeOf(error) {
+  if (error?.code === 'ENOENT') return `${String(error.path ?? error.message ?? '').match(/\b(herdr|gh|git)\b/)?.[1] ?? 'a needed program'} is not installed or not on PATH`;
+  if (error?.code === 'workflow_github_command_unavailable') return 'gh is not installed or not on PATH';
+  return causeText(error?.stderr || error?.detail) || String(error?.code ?? 'error');
 }
 export const pddCommand = (packageRoot = PACKAGE_ROOT) => [process.execPath, join(packageRoot, 'bin', 'pdd.mjs')].map(shell).join(' ');
 const pddFor = (p, packageRoot) => p.pdd ?? pddCommand(packageRoot ?? PACKAGE_ROOT);
@@ -223,8 +231,9 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     } catch { return badBase(); }
   }
   let binding;
+  p.say(`Reading issue ${issue} from GitHub…`);
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
-  catch (error) { return fail(`pdd could not read issue ${issue} with gh (${error.code ?? 'error'}). Check "gh auth status", the origin remote and the issue number.`); }
+  catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
   if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [], baseBranch = explicitBase ? base : binding.defaultBranch;
@@ -245,10 +254,12 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase) {
+    p.say(`Fetching origin/${baseBranch}…`);
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
   const runId = randomUUID();
+  p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
   if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
@@ -268,7 +279,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   try { await startNextChat(run, p, packageRoot); }
   catch (error) {
     run.warnings.push(`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`); writeRun(run, p);
-    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code ?? 'error'}: ${oneLine(error.message)}).`,
+    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code === 'ENOENT' ? causeOf(error) : `${error.code ?? 'error'}: ${oneLine(error.message)}`}).`,
       `Start it with: pdd workflow open ${number}`].join('\n'));
   }
   writeRun(run, p);
@@ -333,17 +344,44 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-// The step summary that holds the run's runtime result: the check step's, else the latest one with a Runtime check.
-const checkSummary = (run, steps = Object.keys(run.done ?? {})) => /Runtime check/.test(run.done?.check?.summary ?? '') ? run.done.check.summary
-  : steps.map(step => run.done[step]?.summary ?? '').reverse().find(text => /Runtime check/.test(text)) ?? null;
-// "N of M Stories pass" from the latest check lines; a summary with only an overall line is one Story.
-function storyCount(run) {
-  const lines = runtimeLines(checkSummary(run));
-  if (!lines.length) return null;
-  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
-  return { pass: counted.filter(line => line.pass).length, total: counted.length, failing: counted.filter(line => !line.pass && line.story).map(line => line.story) };
+// Content identity includes uncommitted and untracked Git-visible source, independent of commit SHA.
+function gitFingerprint(root) {
+  try {
+    const files = gitFiles(root).sort().map(path => {
+      const full = join(root, path);
+      let stat; try { stat = lstatSync(full); } catch (error) { if (error.code === 'ENOENT') return [path, 'missing']; throw error; }
+      if (stat.isSymbolicLink()) return [path, 'link', readlinkSync(full)];
+      if (!stat.isFile()) throw Error('Not a regular source file');
+      return [path, stat.mode & 0o111, createHash('sha256').update(readFileSync(full)).digest('hex')];
+    });
+    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
+  } catch { return null; }
 }
-const storyText = count => `${count.pass} of ${count.total} Stories pass`;
+function matchesSource(record, root, fingerprint) {
+  const source = record.source;
+  if (!source?.sha256) return false;
+  if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
+  if (source.kind === 'runtime-capture-v1') {
+    try { return captureSource(root, { tests: source.tests, appMap: null }).sha256 === source.sha256; } catch { return false; }
+  }
+  return false;
+}
+function storyCount(run) {
+  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+    .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  if (!records.length) return null;
+  const fingerprint = gitFingerprint(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint));
+  const lines = (compatible.length ? compatible : records).flatMap(record => runtimeLines(record.summary));
+  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
+  const unknown = line => !compatible.length || !line.pass && !line.result.includes('✗');
+  const result = { pass: compatible.length ? counted.filter(line => line.pass).length : 0, total: counted.length,
+    failing: counted.filter(line => !unknown(line) && !line.pass && line.story).map(line => line.story) };
+  const unresolved = counted.filter(unknown).map(line => line.story ?? 'all Stories');
+  if (unresolved.length) result.unknown = unresolved;
+  if (!compatible.length) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
+  return result;
+}
+const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
@@ -391,6 +429,56 @@ function verifyBody(text) {
     .map(({ section }) => section.lines.join('\n').trim()).filter(Boolean).join('\n\n');
 }
 
+// GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report, and every retry
+// failed the same way). The body stays at most 60,000 characters (code points), so the marker and GitHub's count have room.
+const BODY_BUDGET = 60_000, characters = text => [...text].length;
+const reportsFailure = line => /✗|\bfail(?:s|ed|ing)?\b/i.test(line);
+// verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
+// still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
+// a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
+function verifyFit(text, room, env) {
+  const full = verifyBody(text);
+  if (characters(full) <= room) return full;
+  const note = what => `_The full verify report has ${characters(text).toLocaleString('en-US')} characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: ${what}. The PR author has the full report: verify.md in the run folder._`;
+  const lines = [], hiddenEvidence = new Set();
+  let depth = 0, summary = null;
+  for (const line of full.split('\n')) {
+    const opens = (line.match(/<details\b/gi) ?? []).length, closes = (line.match(/<\/details>/gi) ?? []).length;
+    if (!depth && !opens) { lines.push(line); continue; }
+    if (reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line)) hiddenEvidence.add(line.replace(/<\/?(?:details|summary)\b[^>]*>/gi, ''));
+    for (const reference of reportLinks(line, env)) hiddenEvidence.add(reference);
+    summary ??= /<summary>(.*?)<\/summary>/i.exec(line)?.[1].trim() || null;
+    depth = Math.max(0, depth + opens - closes);
+    if (!depth) { lines.push(`- ${summary ?? 'Details'}: not shown here.`); summary = null; }
+  }
+  if (hiddenEvidence.size) lines.push('', 'Evidence from the blocks not shown:', '', ...hiddenEvidence);
+  const short = note('the long blocks are not shown');
+  if (characters(lines.join('\n')) + characters(short) + 2 <= room) return `${lines.join('\n')}\n\n${short}`;
+  const reserve = characters(note('its first 000000 lines; 000000 more lines are not shown, and 000000 of them report a failure (the first 000000 are listed below); 000000 report references are listed and 000000 are not shown')) + 256;
+  const failRoom = Math.max(0, Math.min(8000, Math.floor((room - reserve) / 4))), keepRoom = Math.max(0, room - reserve - failRoom);
+  let used = 0, at = 0, fence = null;
+  for (; at < lines.length; at++) {
+    const size = characters(lines[at]) + 1;
+    if (used + size > keepRoom) break;
+    used += size;
+    const mark = lines[at].trim().match(/^(`{3,}|~{3,})/)?.[1];
+    if (mark) fence = !fence ? mark : lines[at].trim().startsWith(fence) ? null : fence;
+  }
+  const kept = [...lines.slice(0, at), ...(fence ? [fence] : [])], failing = lines.slice(at).filter(line => reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line));
+  const references = [...new Set(lines.slice(at).flatMap(line => reportLinks(line, env)))];
+  const listed = [], linked = [];
+  let left = room - reserve - used - 40;
+  for (const line of failing) { if (characters(line) + 1 > left) break; listed.push(line); left -= characters(line) + 1; }
+  const alreadyShown = [...kept, ...listed].join('\n');
+  const remainingRefs = references.filter(line => {
+    const url = line.match(/https?:\/\/[^\s)<>\]"';]+/)?.[0];
+    return !url || !alreadyShown.includes(url);
+  });
+  for (const line of remainingRefs) { if (characters(line) + 1 > left) break; linked.push(line); left -= characters(line) + 1; }
+  const what = `its first ${at} lines; ${lines.length - at} more lines are not shown, and ${failing.length} of them report${failing.length === 1 ? 's' : ''} a failure${listed.length < failing.length ? listed.length ? ` (the first ${listed.length} are listed below)` : ' (they do not fit here)' : ''}${remainingRefs.length ? `; ${linked.length} report references are listed and ${remainingRefs.length - linked.length} are not shown` : ''}`;
+  return [...kept, ...(listed.length ? ['', 'Lines that report a failure, from the part not shown:', '', '```text', ...listed, '```'] : []), ...(linked.length ? ['', 'Report references from the part not shown:', '', ...linked] : []), '', note(what)].join('\n');
+}
+
 function prBody(run, area, env, drafts = [], tests = true) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
@@ -422,9 +510,10 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
-  return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
-    ...(verify !== null ? ['', '## Verify', '', verifyBody(verify)] : []), ''].join('\n'), run);
+    ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
+  return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body('')), env));
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
@@ -438,8 +527,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
   if (existing) {
+    p.say(`Pushing ${run.branch} to ${label}…`);
     try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
-    catch { return fail([...lines, `git push to ${run.branch} failed. Check the network and gh auth, then ${retry}.`].join('\n')); }
+    catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -448,16 +538,19 @@ async function publishAreaPr(run, area, p, lines, retry) {
   const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
   writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
   let intent;
+  p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
     intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
       title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
   } catch (error) {
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
-      : `pdd could not prepare ${label} (${error.code ?? 'error'}). Fix it, then ${retry}.`;
+      : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
-  if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label} did not open: ${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`].join('\n'));
+  // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
+  if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
+    ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   run.pr.push({ stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base });
   return null;
 }
@@ -490,6 +583,37 @@ async function finishPr(run, area, step, p, lines) {
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
 }
 
+// Record saved Runtime evidence without progressing the workflow or contacting external services.
+export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
+  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+  if (found.error) return fail(found.error);
+  const run = found.run;
+  let receipt, source, lines;
+  try {
+    if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
+    receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
+    if (realpathSync(receipt.repo) !== realpathSync(run.root)) throw Error('The evidence belongs to a different repository/worktree.');
+    if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
+    const tests = receipt.rows.map(row => row?.test);
+    if (tests.some(path => typeof path !== 'string' || !path) || new Set(tests).size !== tests.length) throw Error('Evidence test paths must be unique.');
+    source = { kind: 'runtime-capture-v1', sha256: receipt.source_sha256, tests };
+    if (!matchesSource({ source }, run.root, null)) throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
+    const found = findTests({ root: run.root });
+    const rows = receipt.rows.map(row => {
+      const test = found.tests.find(test => test.path === row.test);
+      if (!test || test.story !== row.story || !['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'].includes(row.state))
+        throw Error('Evidence row Story/state does not match its selected test.');
+      return { ...row, phase: 'server', criteria_total: test.doc?.criteria?.length ?? 0 };
+    });
+    const expected = new Map(storyLines(rows));
+    lines = rows.map(row => row.summary_line);
+    if (rows.some(row => row.summary_line !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
+  } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
+  (run.evidence ??= []).push({ at: p.now(), summary: [...new Set(lines)].join('\n'), source, receipt });
+  writeRun(run, p);
+  return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
+}
+
 export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
@@ -509,7 +633,12 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     for (const item of later) delete run.done[item];
     lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length > 1 ? 'those steps' : 'that step'}; run ${later.length > 1 ? 'them' : 'it'} again.`);
   }
-  run.done[step] = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  if (runtimeLines(record.summary).length) {
+    record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
+    (run.runtimeHistory ??= []).push({ ...record, step });
+  }
+  run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
     run.state = 'running'; run.gate = null; writeRun(run, p);
@@ -623,6 +752,7 @@ const agentMarker = env => env.CLAUDECODE ? `CLAUDECODE=${env.CLAUDECODE}` : env
 
 async function startNextChat(run, p, packageRoot) {
   const area = run.areas[run.area];
+  p.say(`Starting the ${area.name} chat in Herdr…`);
   try {
     run.chats.push(await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, p));
     clearChatFailure(run);
@@ -649,6 +779,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   let carried = [];
   if (askCode && run.gate?.kind === 'ask-code') {
     // The code is built only from approved prompts; pdd never approves them itself.
+    p.say('Reading PR 1 on GitHub…');
     const carry = await syncPr1(run, p);
     if (carry.failed) return fail(carry.failed);
     if (carry.drafts.length) return fail(approveFirst(run, carry.drafts));
@@ -710,6 +841,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   let based = '';
   if (askCode) {
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
+    p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }
     catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
@@ -772,6 +904,7 @@ export async function cancelRun({ ref, cwd }, ports) {
   if (found.error) return fail(found.error);
   const run = found.run;
   if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
+  p.say('Closing the chat tabs in Herdr…');
   const { warnings } = await closeChats(run, p);
   run.state = 'cancelled'; run.cancelled = { state: 'cancelled', at: p.now() }; run.gate = null; writeRun(run, p);
   return done([...warnings, `Cancelled the run for ${run.repo}#${run.number} and closed its Herdr tabs.`,
@@ -818,7 +951,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [];
+  const drafts = facts.drafts ?? [], stories = storyCount(run);
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -833,7 +966,9 @@ function detail(run, chat = null, facts = {}) {
     ...(tab && !ended(run) ? [`Chat: Herdr session pdd, tab "${tab.label}" — pdd workflow open ${run.number}`] : []),
     ...(run.pr ?? []).map(pr => { const label = prLabel(run, run.areas.find(item => item.name === pr.stage) ?? {}); return `${label === 'the PR' ? 'PR' : label}: ${pr.url} — ${pr.state ?? 'open'}, ${ci(pr)}${pr.base && pr.base !== run.baseBranch ? ` (stacked on ${pr.base})` : ''}`; }),
     ...(drafts.length ? [draftLine(drafts)] : []),
-    ...(storyCount(run) ? [`Stories: ${storyText(storyCount(run))}${storyCount(run).failing.length ? ` (✗ ${storyCount(run).failing.join(', ')})` : ''}`] : []),
+    ...(stories ? [`Stories: ${storyText(stories)}${stories.failing.length ? ` (✗ ${stories.failing.join(', ')})` : ''}`,
+      ...(stories.unknown?.length ? [`Unknown Stories: ${stories.unknown.join(', ')}`] : []),
+      ...(stories.evidence ? [stories.evidence] : [])] : []),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 
@@ -868,6 +1003,8 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
 }
 
 async function listStatus(runs, { json, cancelled, scope }, p) {
+  const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
+  if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
   const all = [];
   for (const run of runs) all.push(summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p)));
@@ -887,6 +1024,7 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository' }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   await refreshPr(found.run, p);
   const run = found.run, facts = ended(run) ? {} : await gateFacts(run, p), chat = await chatState(run, p);
   if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [item] }, null, 2)); }
@@ -904,6 +1042,7 @@ export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   let chat = currentChat(run), started = false;
   try {
     if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
+    p.say(`Opening the ${chat.area} chat in Herdr…`);
     const opened = await openChat({ run, chat }, p);
     if (opened.restartAvailable) {
       run.abandonedChats = [...(run.abandonedChats ?? []), { ...chat, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];

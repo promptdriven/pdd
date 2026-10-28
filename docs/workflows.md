@@ -57,7 +57,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | No. Ask the agent if you want one | pdd opens them. It never merges |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. It never merges | pdd opens them. It never merges |
 
 ## How a run works
 
@@ -244,4 +244,4 @@ pdd-mybug/
 - Each step has a file `steps/STEP.md`.
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
 
-Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves, pushes, opens a PR or merges.
+Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves or merges. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.

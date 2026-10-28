@@ -4,7 +4,7 @@ Own `src/runtime-output.mjs`. It turns `pdd check` rows into the terminal table,
 
 ## Rows
 
-A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
+A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, `failed_checks [{criterion_id, target, path, expected, actual}]`, `refusals [{code, section, message, engine_message, hint, reason, fix, where, cause}]`, `calls`, `seconds`, `requested_model`, `report_url`, `request_id`. A confirmed unstarted capacity row has `busy:true`, `can_retry:true` and state `not_run`; it is not a source refusal or failed assertion. Render its capacity advice without a Fix-the-test line and mark a busy-only summary `busy`, not ✗. Mixed actual failures retain ✗. Preserve request ID, report and zero-call accounting. States: `passed`, `failed`, `refused`, `not_run`, `unknown`, `queued`, `running`.
 
 - From a server answer: checks come from `result.report.samples[0].steps[].checks[]`; refusals from `result.refusals` (prompt-runtime #379 adds `reason` in plain words, `fix`, `file`, `at`, `where` = file and place as one text, and `cause`: `call-budget`, `ai-service`, `test`, `prompt`, `server` or `unknown`; `where` falls back to `file` and `at`; each is null when missing); calls from `usage.calls`; the model from `usage.requested_model` (else the report's `evaluation.requested_model`). pdd uses `state`, not `outcome`.
 - Seconds are rounded to 0.1.
@@ -48,3 +48,22 @@ One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title,
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.
+
+Saved check JSON includes source_sha256 (full captured upload hash, null when no capture) so workflow evidence can verify it against the exact selected source.
+
+## Try usage
+Export tryUsage(answer, {cap}={}), tryUsageLine(usage, {command=false}={}) and tryUsageHeaders(usage). Normalize only nonnegative safe-integer counts; absent/malformed counts are unknown, never invented zero. Owner model calls.cap/remaining, session.max_calls/remaining_calls and call usage.calls/report.remaining_calls are the existing server fields. Derive cumulative used only from valid cap and remaining <=cap; this is the Try session allowance, not a machine/account/tester allowance. Format a short startup/session line and per-command line that distinguishes this command's calls, session used, remaining and cap, with unknowns explicit. HTTP header names are x-pdd-ai-calls, x-pdd-try-used, x-pdd-try-remaining and x-pdd-try-cap; values are decimal integers or unknown. These headers are owned metadata and cannot come from program result headers.
+
+## Progress and causes
+Every pdd command reports progress and errors through these two helpers, so all progress has one style.
+- Export `progressTicker(stream, now, everyMs = 15000)`. A slow step (more than about 2 s: network, lint, upload, the queue, AI calls, git, gh, Herdr, an agent) first prints one plain line that ends with `…`, for example `Checking 3 files (29 KB) on the PDD runtime (lint, 0 AI calls)…`. The returned `tick(text)` prints `<text> · <time>` at most once every `everyMs`, counted from the start, with the time from `sinceText` (`N s` under a minute, else `N min`). Each step ends with a clear line: the result, or `Try ready: <link>`.
+- Progress goes to stderr only, never to stdout, so the result and `--json` stay clean. A person and an agent (no terminal) get the same lines: no spinner, no carriage return, no colour codes.
+- Export `causeText(value, secrets = [])`: the first nonempty line of a tool's or server's error text, with control characters, the given secrets and GitHub or API tokens removed, at most 300 characters. An error line says what failed, this real reason, and what to do next.
+
+## Step time limits
+
+Export `stepTimeLimit(answer, {steps=[], secrets=[]}={})` to recognize a server step time refusal from raw report/sample/step refusals. The published server currently reports legacy `graph-provider-failure` with explicit timeout/timed-out/time-limit detail (including failure_cause.detail or legacy failure_cause.kind timeout); do not classify a generic provider failure, queue wait or client polling deadline as a step limit. A typed failure_cause.kind `step_timeout` also identifies a step limit independent of its code. No dedicated new code is assumed until the runtime publishes it.
+
+Identify the step by its reported step_id/name, otherwise a valid steps[N] refusal section mapped to authored step IDs (including the sole matching companion refusal section when raw sample metadata omits it), otherwise say unnamed step. Preserve/sanitize the server-provided name. Use an explicit positive timeout_seconds/limit_seconds from the refusal or its details, otherwise a timeout detail's explicit seconds/minutes; legacy default is180seconds. A typed step_timeout without a reported duration uses the requested600second policy. Never infer the time limit from total job elapsed time. Return code, step, minutes and the message `Step NAME took more than N minutes and was stopped.` plus `Make the step smaller, for example split 30 moves into 3 steps of 10.`
+
+This is inconclusive execution, never a failed expectation. Project it as unknown with structured time_limit and reason, retaining actual usage, earlier check evidence and report/ID. In text, give a STOPPED block with that step message and advice, suppress the generic provider-failure/failed-expectation framing for this refusal. Other provider failures retain existing behavior. JSON contains the same message and structured time_limit. No automatic retry is authorized.

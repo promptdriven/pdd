@@ -21,6 +21,8 @@ Read section 3 (schema rules) and section 8 (check paths) before the first check
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
+
+Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
 Add a second file only for a case that needs a different starting world. That file also checks every criterion.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
@@ -127,6 +129,25 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
 - Never change a test to make it pass. Fix the prompt. If you think an expected value is wrong, tell the person.
 
+**Possible numeric mismatches.** pdd checks nearby numeric literals as typo advice, not as a verdict. It uses the
+result path and companion checks to distinguish a component from a total. The warning names the test, step/check,
+result path and Story criterion. Confirm that both quantities agree with the Story and prompt; retain a correct
+expected value. Calls, world assertions and count checks do not get this advice.
+
+For a reviewed difference that remains ambiguous, record a rationale in the Git-visible repository-root file
+`pdd-numeric-reviews.json`. This acknowledges only that advisory; it changes no test or Runtime assertion:
+```json
+{"schema_version":"pdd.numeric-reviews.v1","reviews":[
+  {"test_path":"tests/budget.json","test_sha256":"<current test SHA-256>","step_id":"usage","criterion_id":"AC8",
+   "target":"result","path":"/derived_usage","value":95,"reason":"This is component usage; the criterion states the combined cap."}
+]}
+```
+Get the full test hash with `shasum -a 256 tests/budget.json`. Every identity field must match, including current
+test bytes, step, criterion, target, path and value. The reason must be nonblank and one line (at most 1000 characters).
+A changed test invalidates its review. The file allows at most 100 reviews and 16 KiB; invalid metadata warns and
+suppresses nothing. It is local authoring metadata and is not automatically uploaded. Exact criterion-text checks
+and all Runtime checks stay in force.
+
 ## 5. Saved data
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
@@ -224,12 +245,14 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
-- `pdd check` gives each test 4 calls for each step, at least 6 and at most 100. To give more, use `--max-calls N`.
+- `pdd check` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the runtime maximum.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a Check or Try. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- A new `pdd try` requests a session budget of 400 calls. `pdd try STORY --max-calls 600` chooses a different ceiling when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new` starts fresh saved data. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
   prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.
   `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
-  When one step's worst case is bigger than `--max-calls` (at most 100), the runtime refuses the whole test before it
+  When one step's worst case is bigger than `--max-calls` (at most 1000), the runtime refuses the whole test before it
   starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
 - **A Try page allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
   opens: refused at 0 calls. A screen prompt that calls another prompt with a high `max_calls` hits this fast
@@ -245,7 +268,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
 `pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
-Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Never import pdd's source.
+Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
@@ -257,6 +280,9 @@ A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is
 In a person's terminal, `pdd check` waits until every check ends and prints `Still running: …` every 30 s. In an
 agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd check --read` about every
 minute, doing other work in between, until every Story has a result. Never send the same check again.
+Before `pdd check` or `pdd try`, tell the person in one line what you run and that it can take a few minutes. pdd prints
+a progress line on stderr before each slow step (lint, upload, the queue, the Try setup). When it fails, it says what
+failed, the real reason and what to do next: pass that line on as it is.
 
 | Exit | Result | What to do |
 |---|---|---|
@@ -268,9 +294,9 @@ minute, doing other work in between, until every Story has a result. Never send 
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
-- pdd warns "the AC1 check expects 0, but the AC1 text says 409" when a value is not in the criterion text. For counts,
-  status codes and exit codes, this warning is often false. Do not change a check for it. The warning "N of the M
-  files sent are not prompt, story or test files" is normal in an app repo.
+- A `possible numeric mismatch` is advisory. Confirm the quantities against the Story and prompt; retain a correct
+  expected value. Section 4 explains scoped review rationales. The count of files sent that are not prompt, Story
+  or test files is an informational note.
 
 | Refusal | Usual cause | Fix |
 |---|---|---|
@@ -281,15 +307,16 @@ minute, doing other work in between, until every Story has a result. Never send 
 | `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft, fill the hash, ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
-| `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 100), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
+| `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
 | `graph-provider-failure` | The AI service failed. No verdict, also when pdd prints `✗ … 1 refused` | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd try` and Save as test
 
-`pdd try place-order` makes a Try link and opens it in the browser. Opening costs 0 AI calls. pdd prints:
-`Try link for "Place a coffee order" is open in your browser. It ends in 24 hours, or with: pdd try --stop place-order`
+`pdd try place-order` makes a Try link and opens it in the browser. Opening costs 0 AI calls. While it works (about a minute), pdd
+prints a progress line on stderr for each step. It ends with:
+`Try ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order`
 - A draft prompt can be tried. The person tries it before they approve. Show the Try link only to the person.
   Never write it into a file, PR, issue or shared channel: anyone with the link can use it.
 - Ask the person: "Did it do what you expect?" Wait for the answer before you open PR 1. If the person is not at this
@@ -298,15 +325,15 @@ minute, doing other work in between, until every Story has a result. Never send 
   An action that fails with `session-action-failed` at 0 AI calls means the calls ran out: run `pdd try --new <story>`.
 - In a Try, the same input again is answered from the cache, at 0 AI calls. An error answer is not cached.
 - A Try pauses after 15 minutes with no clicks. `pdd try <story>` reopens it at 0 AI calls. It does not send changed
-  files or a new app map: for that, run `pdd try <story> --new`.
+  files or a new app map: for that, run `pdd try <story> --new`. Connecting Ask your agent or a CLI/HTTP door requires matching uploaded prompts; if a prompt changed, start a fresh Try with `--new`.
 
 **Save as test.** Only the person saves a case. Never save one yourself. pdd adds each saved case as a new step to the
 story's test file and prints `added to tests/<file> as step <id>`. It makes a new file only when the story has none.
 - The Try page may say "Save this file in your project as `tests/<name>.json`" and warn about unchecked criteria.
   Ignore that. Do not make a second file: `pdd try` adds the case to the story's test file.
-- In a person's terminal, `pdd try` keeps waiting and adds saved cases as they come.
+- With terminal stdout, `pdd try` connects Ask your agent, keeps waiting and adds saved cases as they come. `--no-wait` skips the connection.
 - When you (an agent) run `pdd try`, it reads the saved cases once and returns, so it never blocks you. After the person
-  says "I saved some cases", run `pdd try <story>` again to add them.
+  says "I saved some cases", run `pdd try <story>` again to add them. An explicit `--agent NAME` connects even without a terminal and waits until Ctrl-C. Keep its private owner chat link out of shared messages.
 Then make sure that every criterion still has a check, and run `pdd check <story>`.
 
 ## 13. Give your app a screen (app map)
@@ -499,13 +526,14 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 - The state goes in and comes out (`step(state, dir)` returns the new state): give each step the result of the step
   before it. `"input": {"state": {"$step_result": {"step_id": "move-1", "path": ""}}, "dir": "up"}`. The path `""` is
   the whole result. Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
-- The app really replays a list of moves: one operation takes the list. Make all moves in that one AI call: link the
-  rule prompt (`board.prompt.md`) under `## Dependencies` with no `calls` entry, so the AI reads its rules. A `calls`
-  entry with `max_calls: 30` makes every step of the prompt need 61 calls (section 10).
+- If the app really accepts a list of moves, use short lists of about 10 per step. Check the expected state after
+  each part and pass it to the next part; keep the same complete replay coverage. Link its rule prompt under
+  `## Dependencies`. Do not invent a replay operation only for tests, or expand a short action into an unbounded
+  chain of prompt calls. The server stops one step after 10 minutes, regardless of the remaining call budget.
 
 ## 19. Use a Try from your terminal or curl
 
-`pdd try STORY --cli` prints a shim path and a PATH line. Copy the PATH line, then run the program normally.
+`pdd try STORY --cli` prints a shim path and a PATH line. Startup and every command show a Try AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
 `pdd try --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
@@ -580,3 +608,5 @@ provide stylesheet rules. External URLs are removed; retained URL attributes mus
 scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
+
+The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.

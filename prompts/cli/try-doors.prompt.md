@@ -21,7 +21,7 @@ user's bash or zsh (otherwise /bin/sh) with the PATH and inherited terminal, wai
 `runShim(descriptorPath, argv, ports={})` loads the private descriptor and passes argv unchanged. Read stdin only when the input schema declares a stdin property. Otherwise do not open, iterate or consume the stream, even when piped or never closed, so an enclosing shell read loop retains its input. For declared piped stdin, read at most 1 MiB as UTF-8; forward even an empty pipe. Terminal stdin is
 omitted unless required, when it is an empty string. --help is passed to the prompt like any argv. Authenticate
 and invoke through runDoorCall. Require stdout/stderr strings and integer exit_code in 0..255 except 125.
-Print streams byte-for-byte and return that exit code. Reserve 125 for wrapper failures: stderr starts with
+Preserve program stdout byte-for-byte and return its exit code. Preserve program stderr, then append a separated short Try usage line on stderr; wrapper accounting must never enter stdout. If program stderr lacks a final newline, separate the usage line with one. Show known usage on refused calls too, unknown when unconfirmed; never replay for accounting. Reserve 125 for wrapper failures: stderr starts with
 `pdd try:` followed by a plain reason; stdout remains empty. Never print credentials, stacks or internal URLs.
 Record the last confirmed command/result with the original test identity in private state, independently of
 whether the program exited successfully. Unknown execution must not leave an older command eligible for Save.
@@ -51,3 +51,10 @@ An older session without pinned source hashes needs --new before becoming a CLI.
 Keep the reported before/after world privately alongside the last result. Like the hosted Try Save, the appended
 case records the last command's observed output; it does not rewrite the original scenario's initial_world or
 preceding steps. For a nonempty saved world, print a short reminder to review the saved-data setup before replay.
+
+At CLI startup, read authenticated owner model metadata once (GET /v1/try/ID/model, no model calls) and print current session usage on stderr; model calls.cap/remaining are authoritative. If metadata is unavailable, show unknown and keep existing CLI startup behavior. Retain the known cap in the private descriptor so each confirmed call can show session used/remaining. Do not treat usage as a new budget or reset it.
+
+Usage normalization and formatting are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
+
+## Progress
+A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd try: running <name> on the Try…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.

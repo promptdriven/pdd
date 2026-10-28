@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4d3530be9e2b8615b0e7d920117b989c2a37cc01cb7357d013e5e36af130ce66).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 83676e372e6e57d59b7b0ae36e06b23565ae154b69b60c07958bc23b8adc2aec).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -8,15 +8,21 @@ import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
-import { setupSkills } from './skills-install.mjs';
+import { findSkills, setupSkills } from './skills-install.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
+import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
+// The real reason of an unexpected error, after the fixed safe line.
+const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
+// npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
+const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd#alpha${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
+  'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
@@ -53,21 +59,27 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, metadata.version);return 0;
+        line(stdout, metadata.version);
+        try {
+          for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
+            if (result.found && result.stale === 'older') line(stderr, staleLine(result, metadata.version, cwd));
+        } catch { /* The skills check never changes --version. */ }
+        return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
     case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
-    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': {
+    case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
+      if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
         if (typeof runner[name] !== 'function') throw Error('Missing runner export');
-        const result = await runner[name]({ ...input, cwd, packageRoot });
+        const result = await runner[name]({ ...input, cwd, packageRoot }, { say: text => line(stderr, text) });
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid runner reply');
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
-      } catch {
-        line(stderr, 'The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.');
+      } catch (error) {
+        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
       }
     }
@@ -77,7 +89,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await viewRun({ ref: plan.operands[0], cwd });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
-      } catch { line(stderr, 'The saved run could not be read. Check pdd workflow status.'); return 1; }
+      } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
     }
     case 'setup': {
       let code = 0;
@@ -85,8 +97,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
         if (result.found && result.stale) {
           const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
-          const scope = [join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(result.found) ? '-p' : '-g';
-          line(stdout, `PDD skills in ${result.found} ${result.stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills update ${scope}`);
+          line(stdout, staleLine(result, version, cwd));
         } else if (result.found) line(stdout, `PDD skills found in ${result.found}`);
         else if (result.installed.length) line(stdout, `Installed ${skillCount(result.installed)} to ${result.root}: ${skillNames(result.installed)}`);
         if (result.error) { line(stderr, `pdd setup: the PDD skills could not be installed in ${result.root} (${result.error.code ?? result.error.message}).`); code = 1; }
@@ -102,8 +113,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       try {
         const runtime = await import('./runtime-client.mjs');
         return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr });
-      } catch {
-        line(stderr, 'pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.');
+      } catch (error) {
+        line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.${reason(error)}`);
         return 3;
       }
     case 'prompt-approve': {

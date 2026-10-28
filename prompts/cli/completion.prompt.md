@@ -11,3 +11,5 @@ Offer workflow run/resume, three named workflow operands for run, --agent choice
 Offer workflow attach as well as run/resume. For NAME after workflow run, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the former no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke run/attach/native/network. Invalid/unavailable listing yields no names. Keep the --agent choices.
 
 Offer `check` and `try` with their options and the `--tab` choices. Never offer an option marked `hidden` (`--request`).
+
+Choice completion is scoped to the command prefix as well as the option: workflow --agent offers only codex/claude, while try --agent offers codex/claude/gemini, at any argument position. A same-named option on another command cannot widen choices.

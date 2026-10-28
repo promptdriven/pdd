@@ -79,3 +79,12 @@ test('LINT-RETRY: direct lint queue full is busy, and interrupting backoff sends
   });
   assert.equal(stopped.fake.posts.length,1);assert.doesNotMatch(stopped.ports.stderr.text+stopped.ports.stdout.text,/lint result is unknown|"state":"unknown"/i);
 });
+
+for (const json of [false, true]) test(`h2048-1: explicit lint still running exits 3, never success (json=${json})`, async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => ({ status: 200, json: f.job(e.request?.requestId ?? e.url.split('/').at(-1), 'lint', e.method === 'POST' ? 'queued' : 'running') }));
+  const { ports, clock } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--lint': true, ...(json ? { '--json': true } : {}) } }, ports), 3);
+  assert.match(ports.stderr.text, /Lint is still running.*pdd check --read/);
+  assert.equal(fake.posts.length, 1); assert.equal(fake.posts[0].command, 'lint');
+  assert.ok(clock.now - Date.parse('2026-10-27T16:27:47Z') <= 90_000);
+});

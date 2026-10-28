@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fd45d21bc0dcc6c13486d985348875333755f720cfe189b0b8bb5c1acc0c88c6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 12598b84343031847d5e2fe5fead9d4be6be3ec2c3e4c2195e99bdbb1e0fb4ac).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -21,6 +21,18 @@ export function cleanText(value, secrets = [], { paths = true } = {}) {
   return (paths ? text.replace(SERVER_PATH, '<server path>') : text).trim();
 }
 const cleanField = (value, secrets) => cleanText(value, secrets, { paths: false });
+
+// Progress for slow steps: plain lines on stderr, the same for a person and an agent; stdout keeps the result.
+export const sinceText = ms => ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`;
+export function progressTicker(stream, now, everyMs = 15_000) {
+  const start = now();
+  let shown = start;
+  return text => { if (now() - shown < everyMs) return; shown = now(); stream.write(`${text} · ${sinceText(shown - start)}\n`); };
+}
+// The real reason of a tool or server error: its first line, without control characters, secrets or tokens.
+const TOKENS = /\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b|Bearer\s+\S+/g;
+export const causeText = (value, secrets = []) => (String(value ?? '').split(/\r?\n/).map(text => cleanField(text, secrets)).find(Boolean) ?? '')
+  .replace(TOKENS, '[secret]').slice(0, 300);
 const shown = (value, secrets) => cleanField(JSON.stringify(value) ?? 'nothing', secrets);
 
 // A secret browser link from the runtime: same scheme and host as the origin, the expected path, no user or password.
@@ -38,9 +50,43 @@ const scrub = (value, secrets) => typeof value === 'string' ? secrets.reduce((te
   : Array.isArray(value) ? value.map(item => scrub(item, secrets))
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrub(item, secrets)])) : value;
 
+// A server step deadline is execution evidence, separate from a polling deadline or a queue wait.
+export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
+  const report = answer?.result?.report, candidates = [];
+  const add = (refusal, index, step) => { if (refusal && typeof refusal === 'object') candidates.push({ refusal, index, step }); };
+  const refusals = Array.isArray(answer?.result?.refusals) ? answer.result.refusals : [];
+  for (const refusal of refusals) add(refusal);
+  add(report?.refusal);
+  for (const sample of Array.isArray(report?.samples) ? report.samples : []) {
+    add(sample?.refusal);
+    for (const [index, step] of (Array.isArray(sample?.steps) ? sample.steps : []).entries()) add(step?.refusal, index, step?.step_id);
+  }
+  for (const { refusal, index, step } of candidates) {
+    const cause = refusal.failure_cause ?? {}, details = refusal.details ?? {};
+    const text = [cause.detail, refusal.engine_message, refusal.message].filter(value => typeof value === 'string').join(' ');
+    const typed = cause.kind === 'step_timeout';
+    if (!typed && !(refusal.code === 'graph-provider-failure' && (cause.kind === 'timeout' || /\b(?:timeout|timed[ -]out|time[ -]limit|deadline[ -]exceeded)\b/i.test(text)))) continue;
+    const explicit = [refusal.timeout_seconds, refusal.limit_seconds, details.timeout_seconds, details.limit_seconds, cause.timeout_seconds]
+      .find(value => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 86400);
+    const duration = /(?:after|timeout[=:]?|limit(?: of)?)\s*(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m)\b/i.exec(text);
+    const parsed = duration ? Number(duration[1]) * (/^m/i.test(duration[2]) ? 60 : 1) : null;
+    const seconds = explicit ?? (parsed > 0 && parsed <= 86400 ? parsed : typed ? 600 : 180);
+    const companions = refusals.filter(item => item?.code === refusal.code);
+    const section = refusal.section ?? refusal.at ?? (companions.length === 1 ? companions[0].section ?? companions[0].at : '');
+    const at = index ?? refusal.step_index ?? Number(/(?:^|\.)steps\[(\d+)\]/.exec(section)?.[1] ?? -1);
+    const name = [refusal.step_id, details.step_id, refusal.step_name, step, Number.isInteger(at) && steps[at]?.step_id]
+      .find(value => typeof value === 'string' && value.trim());
+    const label = cleanText(name || 'unnamed step', secrets).slice(0, 200), minutes = Number((seconds / 60).toFixed(3));
+    return { code: cleanText(refusal.code || 'step_timeout', secrets), step: label, minutes,
+      message: `Step ${label} took more than ${minutes} minutes and was stopped.`,
+      fix: 'Make the step smaller, for example split 30 moves into 3 steps of 10.' };
+  }
+  return null;
+}
+
 // The parts of a server answer that pdd shows.
-export function projectAnswer(answer, { origin, secrets = [] } = {}) {
-  const result = answer?.result ?? null, report = result?.report ?? null;
+export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [] } = {}) {
+  const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks : []).map(check => ({
     criterion_id: cleanField(check?.criterion_id, secrets), target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets),
@@ -60,13 +106,13 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     ? { code: refusals.find(item => item.code === 'graph-provider-failure')?.code ?? 'graph-provider-failure',
       detail: [cause?.kind, cause?.detail].filter(Boolean).map(text => cleanText(text, secrets)).join(', ') || null } : null;
   return {
-    state: answer?.state, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
+    state: time_limit ? 'unknown' : answer?.state, time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
     calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
-    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
+    engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider: time_limit ? null : provider,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
@@ -82,13 +128,13 @@ export function jsonRow(row) {
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
-    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
-    reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
+    request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
+    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
-export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
+export function renderJson({ batch = null, repo, sourceSha256 = null, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
   const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
-  return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
+  return { batch, repo, source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
     rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
 }
 
@@ -110,16 +156,16 @@ export function summaryLine(rows, story = null) {
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
-  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state));
+  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state) && !row.busy);
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
-    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : 'unknown ·';
+    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -192,8 +238,12 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
     out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
-  for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
+  for (const row of rows.filter(row => row.state === 'unknown' && !row.provider && !row.time_limit)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
+  }
+  for (const row of rows.filter(row => row.time_limit)) {
+    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, `  ${row.time_limit.fix}`,
+      ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
@@ -214,4 +264,20 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   const rest = [...warnings, ...rows.filter(row => row.state !== 'failed').flatMap(row => (row.warnings ?? []).map(text => `${text} (${row.test})`))];
   out.push(...rest);
   return `${out.join('\n')}\n`;
+}
+
+// Owner-provided Try accounting is separate from a program's stdout/body and from account-wide allowances.
+export function tryUsage(answer, { cap } = {}) {
+  const number = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
+  const total = number(answer?.calls?.cap ?? answer?.result?.session?.max_calls ?? cap);
+  const remaining = number(answer?.calls?.remaining ?? answer?.result?.session?.remaining_calls ?? answer?.result?.report?.remaining_calls);
+  return { calls: number(answer?.usage?.calls), remaining, cap: total,
+    used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown' };
+}
+export function tryUsageLine(usage, { command = false } = {}) {
+  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
+}
+export function tryUsageHeaders(usage) {
+  return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),
+    'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap) };
 }

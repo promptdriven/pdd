@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { renderCompletion } from '../src/completion.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -15,7 +16,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -143,4 +144,28 @@ test('ALPHA8: runner argument failures and invalid replies are finite without a 
   }
   let calls = 0;
   assert.equal(await runPdd(['workflow','open','7'], { stdout: capture(), stderr: capture(), workflowRunner: { openRun: async () => { calls++; throw Error('possible effect'); } } }), 1); assert.equal(calls, 1);
+});
+
+
+test('workflow evidence routes required saved summary file without progressing steps', async () => {
+  const stdout = capture(), stderr = capture(); let input;
+  const runner = { recordEvidence: async args => { input = args; return { exitCode: 0, message: 'Recorded saved evidence.' }; } };
+  assert.equal(await runPdd(['workflow','evidence','17','--summary','/tmp/check.json'], { workflowRunner: runner, cwd: '/chosen', stdout, stderr }), 0);
+  assert.equal(input.ref, '17'); assert.equal(input.summaryFile, '/tmp/check.json');
+  input = null;
+  assert.equal(await runPdd(['workflow','evidence','17'], { workflowRunner: runner, stdout, stderr }), 2);
+  assert.equal(input, null);
+});
+
+test('Try accepts named local launchers while workflow agent choices stay bounded', () => {
+  for (const name of ['Codex (account-b)', 'Claude (account-a)', 'codex', 'claude', 'gemini']) {
+    const plan=parseArgv(['try','my-story','--agent',name]);
+    assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
+  }
+  for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (account-b)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const shell of ['bash','zsh']) {
+    const completion=renderCompletion(shell);
+    assert.doesNotMatch(completion,/try:--agent\)/);
+    assert.match(completion,/workflow:--agent\)/);
+  }
 });

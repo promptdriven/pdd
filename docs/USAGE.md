@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.8 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.9 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.8
+pdd --version   # prints 0.1.9
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.8
+pdd --version   # PDD Alpha prints 0.1.9
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -150,11 +150,11 @@ Where the skills go:
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 | `pdd setup`, when the skills are missing | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` when you set that variable |
 
-`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills differ from the skills of this pdd, `pdd setup` says so and prints the command that updates them: `npx skills update -g` (or `-p` for a copy in your project). pdd never copies the skills into your repo.
+`pdd setup` copies the skills only when your agent does not have them yet, and says where. If `npx skills` already installed them, it copies nothing. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.9`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -387,6 +387,8 @@ pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```
 
+The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd check STORY --max-calls N` overrides that ceiling. A new `pdd try STORY` requests 400 calls; use `pdd try STORY --max-calls 600` when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new --max-calls 600` replaces it with fresh saved data. Try shows the runtime-confirmed total and remaining calls, and reusing a Try without a budget option keeps its current ceiling. Both Check and Try accept --max-calls from 1 through 1000, the runtime maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
+
 In a terminal, `pdd check` waits until every check ends. When an agent runs it (no terminal), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`; the checks keep running on the server. `--timeout MIN` (1 to 120 minutes) sets the limit in both cases. While checks run, pdd prints one line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Press Ctrl-C to stop waiting, and run `pdd check --read` to see the results.
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
@@ -496,8 +498,11 @@ Do not run `herdr server stop` without a session name. That stops your default H
 Update the skills:
 
 ```sh
-npx skills update        # add -g for the skills of all your projects, -p for this project only
+npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y   # for all your projects
+npx skills add promptdriven/pdd#alpha -a codex -a claude-code -y      # in a project that has its own copy
 ```
+
+This replaces the PDD skills, also a copy that `pdd setup` made. Start a new agent chat after the update, so it loads the new skills.
 
 Update the pdd command, then let it check the skills:
 
@@ -544,7 +549,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.8` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.9` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -559,7 +564,8 @@ This is an alpha. These limits are known today:
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |
 | The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
 | The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
-| The agent uses an old PDD skill | Run `npx skills update`. If the pdd command installed the skills, run `pdd setup`. |
+| The agent uses an old PDD skill | Run `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y`, then start a new chat. `pdd --version` says when your skills are older than pdd. |
+| `npx skills update -g` prints `No global skills tracked in lock file` | `npx skills add` did not install these skills (for example, `pdd setup` did). Run `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` once. After that, `npx skills update -g` works too. |
 | `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
@@ -597,3 +603,35 @@ For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/boo
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
 if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.md §19 for details.
+
+
+## Ask your agent on the Try page
+
+Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
+
+```sh
+pdd try my-story
+pdd try my-story --agent claude
+```
+
+Many accounts? List your agents in `~/.config/pdd/agents.json`:
+
+```json
+{
+  "agents": [
+    { "name": "Claude (account-a)", "kind": "claude", "command": "claude-account-a" },
+    { "name": "Codex (account-b)", "kind": "codex", "command": "codex", "env": { "CODEX_HOME": "~/.pdd-codex/account-b" } }
+  ],
+  "include_defaults": true
+}
+```
+
+Use `pdd try my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+
+The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
+
+If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
+
+Chat uses your agent account's allowance. The runtime relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent cannot run the Try action or edit the project.
+
+Closing pdd or pressing Ctrl-C disconnects chat and leaves the Try open. `pdd try STORY --no-wait` opens an ordinary Try link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Try links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.

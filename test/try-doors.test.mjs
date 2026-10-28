@@ -29,10 +29,11 @@ async function opened(t, setup, options = {}, callReply) {
       if (callReply) { const response = callReply(entry, f); if (response.json) f.jobs.set(entry.json.requestId, response.json); return response; }
       n += 1;
       const input = entry.json.input, result = { stdout: input.argv.join('\n') + '\n' + (input.stdin ?? ''), stderr: input.argv[0] === 'bad' ? 'invalid\n' : '', exit_code: input.argv[0] === 'bad' ? 7 : 0 };
-      const response = { status: 200, json: { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: result, report: { verdict: 'passed', result, remaining_calls: 40 - n }, output: result }), session_id: entry.url.split('/')[3] } };
+      const response = { status: 200, json: { ...f.job(entry.json.requestId, 'call', 'passed', { program_result: result, report: { verdict: 'passed', result, remaining_calls: 40 - n }, output: result }, 1), session_id: entry.url.split('/')[3] } };
       f.jobs.set(entry.json.requestId, response.json); return response;
     }
     if (f.jobs.has(entry.url.split('/').at(-1))) return { status: 200, json: f.jobs.get(entry.url.split('/').at(-1)) };
+    if (entry.url.endsWith('/model')) return { status: 200, json: { calls: { cap: 40, remaining: 40 } } };
     if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
     if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
     return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
@@ -58,6 +59,8 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   const shim = join(setup.repo, '.pdd/try/bin/paperclip');
   assert.equal(statSync(shim).mode & 0o777, 0o700);
   assert.match(ready.ports.stdout.text, /export PATH=/);
+  assert.match(ready.ports.stderr.text, /Try budget 400 calls; 400 remaining/);
+  assert.doesNotMatch(ready.ports.stdout.text, /budget|charged only/);
   assert.match(ready.ports.stdout.text, /paperclip say 'two words'/);
   assert.ok(!readFileSync(shim, 'utf8').includes(TOKEN));
   const { runShim } = await import('../src/try-doors.mjs');
@@ -66,10 +69,10 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   assert.equal(await runShim(ready.descriptor, args, io), 0, io.stderr.text);
   assert.deepEqual(ready.fake.jsonPosts[0].json.input, { argv: args, stdin: 'piped\n' });
   assert.equal(io.stdout.text, args.join('\n') + '\npiped\n');
-  assert.equal(io.stderr.text, '');
+  assert.equal(io.stderr.text, 'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n');
   const bad = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['bad'], bad), 7);
-  assert.equal(bad.stderr.text, 'invalid\n');
+  assert.equal(bad.stderr.text, 'invalid\nTry AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n');
   const reuse = ready.makePorts();
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, reuse), 0);
   assert.equal(ready.fake.posts.filter(p => p.command === 'try').length, 1);
@@ -140,7 +143,7 @@ test('doors: budget refusal and unknown outcome leave no stale output eligible f
   const io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['again'], io), 125);
   assert.equal(io.stdout.text, '');
-  assert.equal(io.stderr.text, 'pdd try: This Try has no AI calls left.\n');
+  assert.equal(io.stderr.text, 'pdd try: This Try has no AI calls left.\nTry AI usage: 0 this command · unknown used · unknown remaining (session cap 40).\n');
   const save = ready.makePorts();
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, save), 125);
   assert.match(save.stderr.text, /unknown/);
@@ -185,7 +188,7 @@ test('doors: real launcher executes from CommonJS project', async t => {
       const timer = setTimeout(() => child.kill('SIGKILL'), 5000);
       child.on('error', reject); child.on('exit', code => { clearTimeout(timer); done({ code, stdout, stderr }); });
     });
-    assert.deepEqual(outcome, { code: 0, stdout: 'say\ntwo words\n\n', stderr: '' }, name);
+    assert.deepEqual(outcome, { code: 0, stdout: 'say\ntwo words\n\n', stderr: 'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\n' }, name);
     assert.equal(ready.fake.jsonPosts.length, 1, name);
   }
 });
@@ -235,7 +238,7 @@ test('doors: a queued lint ending refused prints the confirmed reason and sends 
   const ports = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports), 125);
   assert.equal(ports.stdout.text, '');
-  assert.equal(ports.stderr.text, `pdd try: ${message}\n`);
+  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd try: ${message}`);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
 
@@ -326,7 +329,29 @@ test('RELEASE3: the actual launcher leaves a shell read loop input open for its 
     child.on('close',code=>{clearTimeout(timer);done({code,stdout,stderr,continued});});
     child.stdin.write('first\n'); // Deliberately keep the pipe open until the first command returns.
   });
-  assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'',continued:true});
+  assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\nTry AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n',continued:true});
   assert.equal(readdirSync(setup.sandbox).includes('INJECTED'),false);
   assert.deepEqual(ready.fake.jsonPosts.map(p=>p.json.input),[{argv:['first']},{argv:['second']}]);
+});
+
+test('hcli-4: startup and each CLI command show session usage only on stderr', async t => {
+  const setup = clip(t), ready = await opened(t, setup);
+  assert.equal(ready.code, 0);
+  assert.match(ready.ports.stderr.text, /Try AI usage:.*0 used.*40 remaining.*cap 40/);
+  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
+  assert.equal(await runShim(ready.descriptor, ['say', 'hello'], io), 0);
+  assert.equal(io.stdout.text, 'say\nhello\n');
+  assert.match(io.stderr.text, /Try AI usage:.*1 this command.*1 used.*39 remaining.*cap 40/);
+  assert.equal(ready.fake.jsonPosts.length, 1);
+});
+
+
+test('hcli-4: unterminated program stderr is preserved and separated from accounting', async t => {
+  const ready = await opened(t, clip(t), {}, (e, f) => {
+    const result = { stdout: 'exact stdout', stderr: 'exact stderr', exit_code: 7 };
+    return { status: 200, json: { ...f.job(e.json.requestId, 'call', 'passed', { program_result: result, report: { remaining_calls: 38 } }, 2), session_id: e.url.split('/')[3] } };
+  });
+  const { runShim } = await import('../src/try-doors.mjs'), io = ready.makePorts();
+  assert.equal(await runShim(ready.descriptor, ['bad'], io), 7); assert.equal(io.stdout.text, 'exact stdout');
+  assert.equal(io.stderr.text, 'exact stderr\nTry AI usage: 2 this command · 2 used · 38 remaining (session cap 40).\n');
 });
