@@ -194,7 +194,7 @@ In a chat, the work stays in your folder: no worktree and no automatic PR. To tu
 
 - Use a clone of a GitHub repository that you can push to. The `origin` remote must point to it.
 - The issue must be in that same repository. It must be an issue, not a PR.
-- Run `git fetch origin` first. PDD starts the new branch from your last fetch of `origin`'s default branch (for example `origin/main`). PDD does not fetch for you.
+- PDD fetches `origin`'s default branch (for example `origin/main`) and starts the new issue branch there. If that default fetch fails, it warns and uses the last fetched commit. Add `--base BRANCH` to select an existing origin topic branch; an explicit base must fetch successfully before startup.
 - If the default branch on GitHub changed, also run `git remote set-head origin -a`, so Git knows the new one.
 - The project needs a way to test the change. The agents find and run the project's tests.
 - Your own checkout can have uncommitted work. PDD does not touch it.
@@ -210,6 +210,14 @@ pdd workflow run small-change 42
 ```
 
 ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
+
+To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
+
+```sh
+pdd workflow run bug 2 --base round3/tipjar-workflow-base
+```
+
+PDD fetches that exact branch and starts the issue worktree from its commit. A failed fetch or missing branch stops the run; it does not use a local or default branch instead. Startup prints the selected base. The PR targets that saved base, and PDD pushes only its new issue branches. It does not change the repository's default branch. For two PRs, PR 2 stacks on an open PR 1; after PR 1 merges, PR 2 starts from and targets the saved base.
 
 The command returns at once. It prints where the run is and the commands to open and approve it. **You can close the terminal now. There are no time limits.**
 
@@ -296,7 +304,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 The PR 1 body is short. For a bug, it starts with the verdict line (for example "Verdict: the bug is in the PROMPT …") and the `Before ✗ … → after ✓ …` line with both report links. Then comes one `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. A `Report (<story>)` link follows for each Story. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Try links.
 
 - **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
-- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
+- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the run’s saved base branch.
 - If PR 1 says "Draft prompts: …", approve each one with `pdd approve prompts/NAME.prompt.md` before you merge ([section 7.1](#71-approve-a-prompt)). An agent never sets `approved`. The code is built only from approved prompts, so pdd offers the code PR only after that. It prints the lines to run: `pdd approve` in the run's worktree, then `pdd workflow approve 42`. pdd then commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area. If you committed in the worktree yourself, pdd pushes those commits to PR 1 too, so they do not end up in PR 2.
 - If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
 

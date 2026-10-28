@@ -412,8 +412,9 @@ const featureAreas = { version: 2, areas: [
   { name: 'story', steps: ['understand', 'visual', 'prompt-story'], optional: ['visual'], gate: 'approve' },
   { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
   { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] };
-async function featureToPr1(t, promptText = 'Return two.\n') {
+async function featureToPr1(t, promptText = 'Return two.\n', base) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  if (base) { topicBase(f, base); f.run = () => startRun({ name: 'feature', issue: '17', agent: 'codex', base, cwd: f.source, packageRoot }, f.ports); }
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
   mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
   assert.equal((await f.run()).exitCode, 0);
@@ -1365,4 +1366,120 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
     'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
+});
+
+function topicBase(f, name = 'round3/workflow-base') {
+  const main = f.git(f.source, 'rev-parse', 'refs/heads/main');
+  f.git(f.source, 'switch', '-q', '-c', name);
+  writeFileSync(join(f.source, 'topic-only.txt'), 'Approved prompt work for this isolated base.\n');
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'Topic base');
+  const sha = f.git(f.source, 'rev-parse', 'HEAD');
+  f.git(f.source, 'update-ref', `refs/remotes/origin/${name}`, sha);
+  f.git(f.source, 'switch', '-q', 'main');
+  // A same-named local branch is deliberately different: --base always means origin's branch.
+  f.git(f.source, 'branch', '-f', name, main);
+  return { name, sha, main };
+}
+
+// Wrong: --base is ignored, resolves a local branch, or creates a PR against the repository default.
+test('BASE1: an explicit origin topic base owns the worktree commit and PR target without a default/base push', async t => {
+  const f = await fixture(t), base = topicBase(f), fetched = [], original = f.ports.execFile;
+  f.ports.execFile = (file, args, opts) => { if (file === 'git' && args[0] === 'fetch') fetched.push(args); return original(file, args, opts); };
+  const started = await startRun({ name: 'small-change', issue: '17', agent: 'claude', base: base.name, cwd: f.source, packageRoot }, f.ports);
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /Base: origin\/round3\/workflow-base/);
+  const run = f.record();
+  assert.equal(run.baseBranch, base.name); assert.equal(run.baseSha, base.sha);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), base.sha);
+  assert.ok(existsSync(join(run.root, 'topic-only.txt')));
+  assert.deepEqual(fetched, [['fetch', 'origin', `refs/heads/${base.name}:refs/remotes/origin/${base.name}`]]);
+  await stepDone({ step: 'scope', summary: 'Change value in the isolated topic', cwd: run.root }, f.agentPorts());
+  f.tick();
+  assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  f.git(run.root, 'commit', '-qam', 'Use value two');
+  for (const step of f.record().areas.at(-1).steps) {
+    f.tick(); const out = await stepDone({ step, summary: `${step} done`, cwd: run.root }, f.agentPorts());
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  assert.equal(f.prs.length, 1); assert.equal(f.prs[0].baseRefName, base.name);
+  assert.deepEqual(f.pushes.map(args => args[2].split(':')[1]), [`refs/heads/${run.branch}`]);
+  assert.equal(f.git(f.source, 'rev-parse', 'refs/heads/main'), base.main);
+  assert.equal(f.git(f.source, 'rev-parse', 'refs/remotes/origin/main'), base.main);
+  assert.equal(f.git(f.source, 'rev-parse', `refs/remotes/origin/${base.name}`), base.sha);
+});
+
+// Wrong: an explicit failed/missing base silently uses a stale tracking ref, local branch or main.
+test('BASE2: failed explicit fetch or missing remote commit stops before worktree, record, claim or chat effects', async t => {
+  for (const mode of ['fetch-failed', 'fetch-refused', 'missing-remote']) {
+    const f = await fixture(t), base = topicBase(f), original = f.ports.execFile;
+    if (mode === 'missing-remote') f.git(f.source, 'update-ref', '-d', `refs/remotes/origin/${base.name}`);
+    f.ports.execFile = (file, args, opts) => {
+      if (mode === 'fetch-failed' && file === 'git' && args[0] === 'fetch') throw Error('unavailable');
+      if (mode === 'fetch-refused' && file === 'git' && args[0] === 'fetch') return { stdout: '', code: 128 };
+      return original(file, args, opts);
+    };
+    const result = await startRun({ name: 'small-change', issue: '17', base: base.name, cwd: f.source, packageRoot }, f.ports);
+    assert.equal(result.exitCode, 1, `${mode}: ${result.message}`);
+    assert.ok(result.message.includes(base.name), result.message);
+    assert.equal(f.herdr.calls.length, 0); assert.deepEqual(f.pushes, []);
+    assert.equal(existsSync(join(f.source, '.git/pdd/runs/17/status.json')), false);
+    assert.equal(existsSync(join(f.source, '.git/pdd/worktree-assignments')), false);
+    assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
+  }
+});
+
+// Wrong: a revision, option or full ref is accepted as a branch and reaches startup effects.
+test('BASE3: invalid explicit branch names refuse before fetch, allocation or chat', async t => {
+  const f = await fixture(t), original = f.ports.execFile;
+  let gh = 0;
+  f.ports.execFile = (file, args, opts) => { if (file === 'gh') gh++; return original(file, args, opts); };
+  for (const base of ['', null, 42, '-topic', '../main', '/tmp/topic', 'refs/heads/main', 'HEAD', 'main~1', 'main:other', '@{-1}', 'main\nother']) {
+    const result = await startRun({ name: 'small-change', issue: '17', base, cwd: f.source, packageRoot }, f.ports);
+    assert.equal(result.exitCode, 1, String(base)); assert.match(result.message, /base|branch/i);
+  }
+  assert.equal(gh, 0); assert.equal(f.fetches, 0); assert.equal(f.herdr.calls.length, 0);
+  assert.equal(existsSync(join(f.source, '.git/pdd/runs/17/status.json')), false);
+});
+
+// Wrong: choosing a base works for PR 1 but a later code area silently returns to main.
+test('BASE4: PR 2 stacks on open PR 1 and returns to the saved topic base after PR 1 merges', async t => {
+  for (const merged of [false, true]) {
+    const base = 'round3/bookshelf-workflow-base';
+    const { f, run, done } = await featureToPr1(t, undefined, base);
+    const main = f.git(f.source, 'rev-parse', 'refs/heads/main');
+    assert.equal(f.prs[0].baseRefName, base);
+    if (merged) f.mergedNumbers.push(23);
+    const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(code.exitCode, 0, code.message);
+    assert.equal(f.record().baseBranch, base);
+    assert.equal(f.record().prBase, merged ? base : run.branch);
+    assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), f.prs[0].headRefOid);
+    writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+    f.git(run.root, 'commit', '-qam', 'Code on selected base');
+    await done('build', 'value is two'); await done('verify', 'tests pass');
+    assert.equal(f.prs[1].baseRefName, merged ? base : run.branch);
+    assert.ok(f.pushes.every(args => args[2].split(':')[1].startsWith('refs/heads/pdd/')));
+    assert.equal(f.git(f.source, 'rev-parse', 'refs/heads/main'), main);
+    assert.equal(f.git(f.source, 'rev-parse', 'refs/remotes/origin/main'), main);
+  }
+});
+
+// Wrong: a failed replacement start frees a cancelled run's custody before its new base is usable.
+test('BASE5: explicit base failure preserves a cancelled run, worktree and issue claim', async t => {
+  const f = await fixture(t); await f.run();
+  const old = f.record();
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const recordFile = join(old.runDir, 'status.json');
+  const claimFile = join(f.source, '.git/pdd/worktree-assignments/issues/17.json');
+  const record = readFileSync(recordFile), claim = readFileSync(claimFile);
+  const original = f.ports.execFile;
+  f.ports.execFile = (file, args, opts) => {
+    if (file === 'git' && args[0] === 'fetch') throw Error('base unavailable');
+    return original(file, args, opts);
+  };
+  const out = await startRun({ name: 'small-change', issue: '17', base: 'round3/missing', cwd: f.source, packageRoot }, f.ports);
+  assert.equal(out.exitCode, 1, out.message);
+  assert.ok(readFileSync(recordFile).equals(record)); assert.ok(readFileSync(claimFile).equals(claim));
+  assert.ok(existsSync(old.root)); assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 2);
 });

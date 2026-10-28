@@ -9,7 +9,7 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).

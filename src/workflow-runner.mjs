@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c6d8bf6f2815744561a039d61f9acb4b3b6d5372a266b5d5d85ad5de2ba3e548).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4fd5b49a6dcc1f4b7dfbe9abe9379c316c1587e7c9b560ee09fcad3b99bb44a5).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -182,7 +182,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   return step ? `the agent works on ${step}` : 'the agent works';
 }
 
-export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function startRun({ name, issue, agent = 'codex', base, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
@@ -190,31 +190,53 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
   // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
   const variable = homeVariable(agent), configDir = p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
   if (configDir && !isFolder(configDir)) return fail(`${variable} is "${configDir}", but that folder does not exist. Fix ${variable} and run the command again.`);
+  const explicitBase = base !== undefined;
+  const badBase = () => fail('Use --base with a branch name, for example round3/workflow-base.');
+  if (explicitBase && (typeof base !== 'string' || !base || base === 'HEAD' || base.startsWith('-') || base.startsWith('refs/'))) return badBase();
   const context = await gitContext(cwd, p);
   if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
+  if (explicitBase) {
+    try {
+      const checked = await p.execFile('git', ['check-ref-format', `refs/heads/${base}`], { cwd: context.toplevel });
+      if (checked?.code !== undefined && checked.code !== 0) return badBase();
+    } catch { return badBase(); }
+  }
   let binding;
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${error.code ?? 'error'}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
   if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
-  const warnings = [];
+  const warnings = [], baseBranch = explicitBase ? base : binding.defaultBranch;
+  // A requested origin branch must be usable before releasing a cancelled run's claim.
+  if (explicitBase) {
+    try {
+      const fetched = await p.execFile('git', ['fetch', 'origin', `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], { cwd: context.toplevel });
+      if (!fetched || fetched.code !== undefined && fetched.code !== 0) throw Error('base fetch failed');
+      const sha = await git(p, context.toplevel, 'rev-parse', '--verify', '--end-of-options', `refs/remotes/origin/${baseBranch}^{commit}`);
+      if (!/^[0-9a-f]{40}$/.test(sha)) throw Error('base commit unavailable');
+    } catch {
+      return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
+    }
+  }
   if (existing) {
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
     warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
-  try { await p.execFile('git', ['fetch', 'origin', binding.defaultBranch], { cwd: context.toplevel }); }
-  catch { warnings.push(`warning: "git fetch origin ${binding.defaultBranch}" failed; the worktree starts from the last fetched ${binding.defaultBranch}.`); }
+  if (!explicitBase) {
+    try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
+    catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
+  }
   const runId = randomUUID();
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
-    workflowName: name, baseRef: `refs/remotes/origin/${binding.defaultBranch}` }, p.commandPorts);
+    workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
   if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
   const a = allocated.assignment;
   // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
   if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
-    baseBranch: binding.defaultBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
+    baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
     configDir,
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
@@ -234,6 +256,7 @@ export async function startRun({ name, issue, agent = 'codex', cwd, packageRoot 
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
     `Area 1 of ${run.areas.length}: ${first.name} (${first.steps.join(', ')}). ${agent === 'claude' ? 'Claude' : 'Codex'} works in Herdr session pdd, tab "${chat.label}".`,
     ...(agent === 'claude' && !claudeTrusts(run.sourceRoot, run.configDir, p.env) ? ['Claude may first ask you to trust the new worktree folder. Open the chat and choose "Yes, I trust this folder".'] : []),
+    `Base: origin/${run.baseBranch}`,
     `Worktree: ${run.root} (branch ${run.branch})`,
     `Run folder: ${runDir}`,
     `Watch the chat: pdd workflow open ${number}`,
@@ -496,7 +519,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   return done(lines.join('\n'));
 }
 
-// The code area works on <branch>-code: on PR 1's head while PR 1 is open (PR 2 stacks on it), else on the merged default branch.
+// The code area works on <branch>-code: on PR 1's head while PR 1 is open (PR 2 stacks on it), else on the merged saved base branch.
 async function codeBranch(run, area, p) {
   const pr1 = prOf(run, area.name), name = `${pr1.branch}-code`;
   const state = await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts);

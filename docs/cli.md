@@ -16,7 +16,7 @@ You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and 
 
 | Command | What it does |
 |---|---|
-| `pdd workflow run NAME ISSUE [--agent codex\|claude]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. Every chat of the run uses the `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR` (Claude Code) of this terminal. A leading `~` in it means your home folder. If that folder does not exist, `run` stops before it starts anything |
+| `pdd workflow run NAME ISSUE [--agent codex\|claude] [--base BRANCH]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. PRs target the saved base, with PR 2 stacked on an open PR 1. Every chat of the run uses the `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR` (Claude Code) of this terminal. A leading `~` in it means your home folder. If that folder does not exist, `run` stops before it starts anything |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
 | `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" when no agent runs in the chat: run `pdd workflow open ISSUE` to start it again. At a gate it says that the agent writes the gate message until the chat has asked you |
 | `pdd workflow open ISSUE` | Show the current chat of the run. If the chat ended, resume it in its tab |
@@ -26,6 +26,7 @@ You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and 
 
 - NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
 - ISSUE is the issue number in the current repo, worktrees included. If several repos match, use `owner/repo#N`. An issue can have only one active run. `run` refuses a second one.
+- `--base` takes a branch name such as `round3/workflow-base`. The branch must already be on `origin`. PDD fetches it and starts from that remote commit, preserves the repository default, and pushes only its new issue branches. A failed explicit fetch stops startup.
 - The run folder is `.git/pdd/runs/N/` in your clone. See [workflows.md](workflows.md#the-run-folder).
 - In Herdr, the session is `pdd`. Each repo has a workspace with its name. Each run has a tab such as `my-app#42 feature`.
 - With Claude Code, the first chat can ask once to trust the new worktree. `run` prints a hint when your clone's folder is not trusted yet.

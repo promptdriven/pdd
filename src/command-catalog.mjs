@@ -1,11 +1,11 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5efc44e829d1c73072f5e01eaaca3b9637b0a7e4c7aada957178adbedb2476ba).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: e85643307c7ab08a1160c7ec08ab4ca3b1146a521107d1eff24605ef76181461).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']}],
-    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude]', 'Start the first area chat for a GitHub issue in Herdr and exit; pdd later pushes the branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
+    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
