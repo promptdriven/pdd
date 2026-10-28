@@ -358,7 +358,7 @@ For extra files, add `pdd-source.json` at the repository root:
 {"include": ["docs/shared-policy.md", "data/menu.json"]}
 ```
 
-`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file.
+`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file that launched the Try, even when a Story has several test files. Reopening that Try keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
 
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing

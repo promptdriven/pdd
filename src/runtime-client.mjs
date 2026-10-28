@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e2cbb434cce13447ad999d56a4ce91a61e8cd21e601ef064d074672bfe002770).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ccaa35da49a76ef7a114179acee08751a178161e0f58f3f67f35a0a4608f1ba0).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -783,7 +783,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible });
+    Object.assign(context, { root, store, origin, visible: found.visible, seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
     const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
@@ -806,7 +806,11 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
+      if (link && !options['--new']) {
+        if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
+        context.seedTest.storyPath = record.storyPath ?? test.storyPath;
+        return await showTry(context, test, link, options, record.id);
+      }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
@@ -821,7 +825,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (row.state !== 'ready') return printTryProblem(context, row);
     const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, ...(appMap ? { app_map: appMap } : {}),
       tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
+    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin } } });
     store.posted(context.folder, request.requestId);
     if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
@@ -983,11 +987,11 @@ const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json
 const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
 
 // One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
-function addSavedCase(root, saved) {
-  try { return addSavedCaseSafely(realpathSync(root), saved); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+function addSavedCase(root, saved, seedTest) {
+  try { return addSavedCaseSafely(realpathSync(root), saved, seedTest); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
 }
 
-function addSavedCaseSafely(root, saved) {
+function addSavedCaseSafely(root, saved, seedTest) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
   if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
@@ -995,7 +999,10 @@ function addSavedCaseSafely(root, saved) {
   if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
     return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
   }
-  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const seededStory = seedTest?.storyPath === story;
+  const target = seededStory ? found.tests.find(item => item.path === seedTest.path && item.storyPath === story && item.doc)
+    : found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  if (seededStory && !target) return `not added: the original test ${cleanText(seedTest.path)} is missing or no longer belongs to ${cleanText(story)}. Restore it before importing the case.`;
   if (!target) {
     // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
     const folder = statOrNull(join(root, 'tests'));
@@ -1047,7 +1054,7 @@ async function collectSavedTests(context, tryId) {
   for (const saved of reply.json.tests) {
     const key = typeof saved?.id === 'string' ? saved.id : null;
     if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved);
+    const said = addSavedCase(root, saved, context.seedTest);
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
     line(ports.stdout, said);
