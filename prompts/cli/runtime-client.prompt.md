@@ -193,3 +193,20 @@ provider_calls=0 and dispatch=not_started). Preserve that confirmed refusal's pl
 do not mislabel it as an unknown result and do not send a Try. A later explicit setup may use a new lint ID.
 
 Pass the captured source SHA into saved and printed check JSON, including GET-only reads, so a workflow can bind saved evidence to source without another execution.
+
+## Ask your agent connection
+
+Ordinary `pdd try STORY` stays running, including when launched in the background, connecting the
+person's local agent to the Try page through the owner-only [agent bridge](agent-chat.prompt.md).
+`--agent codex|claude|gemini` chooses it; otherwise use the project's remembered choice or discovery.
+`--no-wait` explicitly returns without a bridge; it cannot combine with --agent. Agent choice is
+not valid with --stop, --save-last, --cli or --serve. Validate conflicts before sign-in/network.
+Explicit budget reuse and connected agent reuse both require the recorded login and runtime origin; neither may weaken the other owner check. Reuse must match the authenticated login/runtime and pinned prompt hashes before connecting; a
+changed prompt requires --new. Never expose a chat key to another owner's session or print it.
+Open the bridge's owner URL in the browser while printing only the ordinary shared Try link. With --no-open or a failed browser open, also print the owner chat URL explicitly labeled private: it contains only a scoped chat capability in the fragment, never the GitHub/provider token.
+Keep collecting saved tests and approval requests while connected; an agent terminal cannot approve
+prompts. Ctrl-C cancels the agent/poll and disconnects chat, leaving the Try open. --no-wait retains
+one-shot saved-test collection. An older runtime with no bridge gets a plain compatibility message
+and the ordinary Try behavior. Other relay errors fail plainly, without a new Try or program call.
+The injected `agentBridge` port may replace bridge setup in tests; production loads the generic
+module. No user configuration, model, global agent settings or login is changed.

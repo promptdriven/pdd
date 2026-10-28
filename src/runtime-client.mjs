@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 059ebeec73699348b5bcb4eed872bc4fb69b54eb94b0a9027fe6bf6c91aafdea).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 31614f3a9551a740ea231d6929248d4a4b56c98ce071355538517b5a76596e29).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -50,7 +50,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -1005,6 +1005,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (rawBudget !== undefined && (!(typeof rawBudget === 'number' || typeof rawBudget === 'string' && /^[1-9][0-9]{0,5}$/.test(rawBudget))
       || !Number.isSafeInteger(Number(rawBudget)) || Number(rawBudget) < 1 || Number(rawBudget) > 999999)) throw new Stop(2, '--max-calls must be a whole number from 1 to 999999; the runtime enforces its session maximum.');
     const requestedBudget = rawBudget === undefined ? null : Number(rawBudget);
+    if (options['--agent'] !== undefined && (!['codex','claude','gemini'].includes(options['--agent']) || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses Codex, Claude or Gemini for an ordinary connected pdd try; omit --no-wait and door modes.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
@@ -1033,8 +1034,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
-      if ((context.doorMode || requestedBudget !== null) && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-      if ((context.doorMode || requestedBudget !== null) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
+      const needsOwner = context.doorMode || requestedBudget !== null || (!options['--no-wait'] && ports.agentBridge !== false);
+      if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -1051,7 +1053,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && options['--serve'] && !options['--new']) {
+      if (live && (options['--serve'] || (!options['--cli'] && !options['--no-wait'] && ports.agentBridge !== false)) && !options['--new']) {
         let matches = false;
         try {
           const hashes = record.prompt_hashes;
@@ -1060,7 +1062,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
             && Object.entries(hashes).every(([path, expected]) => found.visible.has(path)
               && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === expected);
         } catch { /* A removed prompt cannot match the uploaded source. */ }
-        if (!matches) throw new Stop(125, 'A prompt changed or this Try has no source record. Run pdd try STORY --serve --new.');
+        if (!matches) throw new Stop(options['--serve'] ? 125 : 4, `A prompt changed or this Try has no source record. Run pdd try STORY${options['--serve'] ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
@@ -1211,13 +1213,28 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
   }
   const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
     : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
-  if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
-  else {
-    line(ports.stdout, `Try link for "${test.title}": ${link}`);
-    line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
-  }
-  await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story);
-  return 0;
+  let bridge = null, answers = null;
+  try {
+    if (!options['--no-wait'] && ports.agentBridge !== false) {
+      const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
+      context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
+      try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }
+      catch (error) { throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
+    }
+    if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
+    else {
+      line(ports.stdout, `Try link for "${test.title}": ${link}`);
+      line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
+      if (bridge) line(ports.stdout, `Owner agent chat link (private; do not share): ${bridge.url}`);
+    }
+    if (!bridge) { await watchSavedTests(context, tryId, !options['--no-wait'] && ports.interactive, test.story); return 0; }
+    answers = ports.interactive ? lineReader(ports.stdin) : null;
+    context.onAgentChatClose = () => answers?.close();
+    return await bridge.run(async () => {
+      const tests = await collectSavedTests(context, tryId), approvals = await collectApprovals(context, tryId, test.story, answers);
+      return tests !== 'ended' && approvals !== 'ended';
+    });
+  } finally { answers?.close(); await bridge?.close(); }
 }
 
 // ---- Save as test: cases saved on the Try page become steps of the story's test file ----

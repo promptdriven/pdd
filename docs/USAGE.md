@@ -599,3 +599,19 @@ For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/boo
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
 if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.md §19 for details.
+
+
+## Ask your agent on the Try page
+
+Run `pdd try STORY` in your project folder and keep pdd running. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
+
+```sh
+pdd try my-story
+pdd try my-story --agent claude
+```
+
+The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
+
+Chat uses your agent account's allowance. The runtime relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent cannot run the Try action or edit the project.
+
+Closing pdd or pressing Ctrl-C disconnects chat and leaves the Try open. `pdd try STORY --no-wait` opens an ordinary Try link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Try links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
