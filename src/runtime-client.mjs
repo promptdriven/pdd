@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3610a8c027bbe13173e1ca94214fade8f6f312b3b3901ff1879c88211da05502).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 76ec6762a106bc975c29dbb5875f6928728062e3a870586ae1f48c4cc2aec3f7).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -391,10 +391,10 @@ function progressLine(rows, ms) {
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
 }
 
-async function runLint(context) {
+async function runLint(context, complete = false) {
   const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
   for (;;) {
-    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256 };
+    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null);
     if (verdict.kind === 'busy' && context.ports.now() + verdict.wait < lintEnd && !context.interrupted) {
@@ -533,7 +533,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   saveBatch(context);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
-  const lint = await runLint(context);
+  const lint = await runLint(context, true);
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer, program = answer?.result?.report?.program;
   const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
@@ -541,9 +541,19 @@ async function runLintOnly(context, cwd, words, setRelease) {
   if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
     throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
   }
+  const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
+  for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
+    const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
+    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
+      section: cleanText(item.at ?? item.section, context.secrets) || null,
+      message: cleanText(item.message, context.secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
+      severity: cleanText(item.severity, context.secrets) || 'error', pointer: cleanText(item.pointer, context.secrets) || null,
+      source: cleanText(item.source, context.secrets) || null });
+  }
   for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
-    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
-      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null });
+    const problem = { code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
+    if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
   }
   const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
   for (const [row, problem] of verdicts) {
@@ -552,6 +562,13 @@ async function runLintOnly(context, cwd, words, setRelease) {
     if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
   }
   if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  for (const item of Array.isArray(answer?.result?.tests) ? answer.result.tests.filter(isObject) : []) {
+    const row = rows.find(row => row.test === item.path);
+    if (!row || item.verdict !== 'refused') continue;
+    const own = problems.filter(p => p.path === row.test && p.severity !== 'warning');
+    Object.assign(row, { state: 'refused', refusals: own.length ? own : row.refusals.length ? row.refusals
+      : [{ code: 'lint-refused', section: 'lint', message: `${row.test} was refused by complete lint.` }] });
+  }
   for (const row of rows) if (row.state === 'ready') row.state = 'passed';
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;

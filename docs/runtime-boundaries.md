@@ -13,7 +13,7 @@ offline work does not permit this command.
 
 Record the actual checks you performed. Offline review is not a server lint pass or a Runtime
 behavior verdict. If server access is outside the task's permission, leave those results
-unverified. When server access is allowed, lint prints the problems the server reports;
+unverified. When server access is allowed, explicit `--lint` requests complete diagnostics and prints the problems the server reports;
 correct them and check again before submitting a behavior check.
 
 ## Native factories and JSON operations

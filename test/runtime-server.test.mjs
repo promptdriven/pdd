@@ -859,3 +859,41 @@ test('RUNTIME-LINT5: passing selected lint JSON preserves unrelated refusal diag
   assert.deepEqual(result.json.problems.map(row => [row.path, row.code]), [['prompts/legacy.prompt.md', 'duplicate-interface']]);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
+
+
+test('T3-5: explicit lint requests complete diagnostics while preliminary check lint stays unchanged', async t => {
+  const setup = harbor(t);
+  const faults = [{ code:'invalid-schema',path:PLACE,section:'Runtime interface.entries[0].input_schema.properties.argv.items.type',message:'Use one schema type.' },
+    { code:'invalid-schema',path:PLACE,section:'Runtime interface.resources[0].result_schema.properties.value.items',message:'Array items are required.' }];
+  const fake = await fakeRuntime(t, (entry,f) => entry.command === 'lint'
+    ? { status:200, json:f.lint(entry.request.requestId,[{path:PLACE,state:'refused',admission_state:'refused'}],entry.request.complete === true ? faults : faults.slice(0,1)) }
+    : f.normal(entry));
+  const result = await check(setup,fake,['place-order'],{'--lint':true,'--json':true});
+  assert.equal(result.code,4);
+  assert.equal(result.json.problems.length,2,'complete mode must retain both independent faults');
+  assert.deepEqual(fake.posts.map(p=>p.command),['lint']);
+  assert.deepEqual(Object.keys(fake.posts[0].request).sort(),['complete','requestId','source_sha256']);
+  assert.equal(fake.posts[0].request.complete,true);
+  const ordinary=await fakeRuntime(t,(entry,f)=>f.normal(entry));
+  assert.equal((await check(setup,ordinary,['place-order'])).code,0);
+  assert.equal(Object.hasOwn(ordinary.posts[0].request,'complete'),false);
+});
+
+
+test('T3-5 complete lint retains canonical schema pointers and selected test refusals outside prompt admission', async t => {
+  const setup=harbor(t);
+  const canonical=[{code:'graph-schema-type-list',file:PLACE,at:'Runtime interface.entries[0].input_schema.properties.argv.items',pointer:'/entries/0/input_schema/properties/argv/items',severity:'error',source:'server',reason:'Use one schema type.',fix:'Use oneOf.'},
+    {code:'graph-schema-invalid',file:PLACE,at:'Runtime interface.resources[0].operations[1].arguments_schema.properties.value',pointer:'/resources/0/operations/1/arguments_schema/properties/value',severity:'error',source:'server',reason:'Array items are required.',fix:'Add items.'}];
+  const schema=await fakeRuntime(t,(entry,f)=>{const job=f.lint(entry.request.requestId,[{path:PLACE,state:'refused',admission_state:'refused'}],[{code:canonical[0].code,path:PLACE,section:canonical[0].at,message:canonical[0].reason}]);
+    return {status:200,json:{...job,result:{...job.result,problems:canonical,problems_complete:true,tests:[{path:'tests/place-order.json',verdict:'refused'}]}}};});
+  const faults=await check(setup,schema,['place-order'],{'--lint':true,'--json':true});
+  assert.equal(faults.code,4);assert.equal(faults.json.problems.length,2);
+  assert.deepEqual(faults.json.problems.map(p=>p.pointer),canonical.map(p=>p.pointer));
+  const mismatch={code:'story-criterion-mismatch',file:'tests/place-order.json',at:'criteria[0].text',pointer:'/criteria/0/text',severity:'error',reason:'Copy the exact Story criterion.',fix:'Keep the expected criterion unchanged.'};
+  const fake=await fakeRuntime(t,(entry,f)=>{const job=f.lint(entry.request.requestId);return {status:200,json:{...job,result:{...job.result,problems:[mismatch],problems_complete:true,tests:[{path:'tests/place-order.json',verdict:'refused'},{path:'tests/unknown-item.json',verdict:'passed'}]}}};});
+  const bad=await check(setup,fake,['place-order'],{'--lint':true,'--json':true});
+  assert.equal(bad.code,4);assert.equal(bad.json.lint_state,'refused');assert.equal(bad.json.rows[0].state,'refused');
+  assert.equal(bad.json.rows[0].refusals[0].code,'story-criterion-mismatch');
+  const unrelated=await check(setup,fake,['unknown-item'],{'--lint':true,'--json':true});
+  assert.equal(unrelated.code,0);assert.equal(unrelated.json.lint_state,'passed');assert.equal(unrelated.json.problems.length,1);
+});
