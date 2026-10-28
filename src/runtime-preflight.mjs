@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4eb5498687d769e4add98a9ed3ec31f0cfdb55d2b01ea0d54113846a8e65bcac).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 847fbdd9ac7cb65221e64267281c510f05c0c7bb672a2f7d2355ff545d726a73).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -739,7 +739,7 @@ function sourceLimit(files) {
   return total;
 }
 
-function captureOnce(root, { tests, appMap = null }) {
+function captureOnce(root, { tests, appMap = null, extraFiles = [] }) {
   const names = gitFiles(root), visible = new Set(names), snapshots = new Map(), payload = new Map(), queue = [], visited = new Set();
   function inspect(path, from) {
     if (snapshots.has(path)) return snapshots.get(path);
@@ -794,6 +794,7 @@ function captureOnce(root, { tests, appMap = null }) {
     const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) add(appMap, 'App map', 'app-map');
+    for (const path of extraFiles) add(path, 'Required file');
     for (let index = 0; index < queue.length; index++) {
       const { path, role } = queue[index], key = `${path}\0${role}`;
       if (visited.has(key)) continue;

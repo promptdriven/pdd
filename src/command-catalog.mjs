@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 15aa659c2881fc63c9070a0fa763cc7a3dbbab34490b589bd321965f121f3d00).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 43bec9adaa117ad9590536f8f432ec0d80f3109f6fa92f4432192580f1a3d74e).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -42,8 +42,9 @@ const routes = [
   { id: 'check', prefix: ['check'], local: 'runtime-check', operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--fill-hash', kind: 'flag' },
+      { name: '--live', kind: 'flag' }, { name: '--bindings', kind: 'text' }, { name: '--run-config', kind: 'text' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links.'),
+    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N] [--live] [--bindings FILE] [--run-config FILE]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. --live selects one Story and asks for the approved Herdr read on the server; --bindings and --run-config require --live and default to runtime-bindings.json and runtime-run-config.json beside each selected test.'),
       form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),

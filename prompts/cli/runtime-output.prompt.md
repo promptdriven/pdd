@@ -12,6 +12,15 @@ A row is one test: `story`, `title`, `test`, `state`, `checks {passed, total}`, 
 - Other values (round-2 tester: a CLI's stdout lost its line breaks and was cut near the difference) print as a block under the check line: `    expected:` and `    got:`, each followed by its lines, 6 spaces in. A string shows its own lines with no quotes, and `(ends with a line break)` when it ends with one; any other value shows as JSON with 2-space indents. pdd never cuts inside a line. A value shows at most 20 lines: from line 1, or from 2 lines before the first line where two strings differ when that line is later. Lines left out are named: `… N lines before` above, `… N more lines in the report` below. Each line loses control characters and the token but keeps its spaces.
 - Clean all server text: remove control characters, the token and server paths (`/home/…`, `/srv/…`, `/var/…`, `/tmp/…` and similar). Expected and actual values keep their JSON type but lose the token.
 
+## Live labels
+
+A row's live marker identifies its requested live resource mode, not proof that a live operation
+ran. Keep it independent of DRAFT. Add ` (LIVE)` after the existing draft suffix in table results,
+per-Story/overall Runtime check lines and report-link rows. A live JSON row and a batch containing
+one add live:true and resource_mode:"live"; ordinary simulated JSON stays unchanged. Saved reads
+keep the marker. A server answer with resource_mode:"live" (top-level or result.report) may supply
+it when reading a run. The current server also records the actual mode in result.report.transport_mode; recognize its value "live" when resource_mode is absent. Preserve actual exit codes, accounting and specific refusal details.
+
 ## Exit code
 
 The first match from the top wins:

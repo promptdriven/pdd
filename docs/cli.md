@@ -44,7 +44,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 | Command | What it does |
 |---|---|
-| `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Runtime check` line for each Story and, with two or more Stories, the overall line |
+| `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N] [--live] [--bindings FILE] [--run-config FILE]` | Check Stories on the PDD runtime with your gh login. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Runtime check` line for each Story and, with two or more Stories, the overall line |
 | `pdd check --read [BATCH] [--json]` | Show saved check results again. Sends no check |
 | `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews a Try map |
@@ -56,6 +56,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
 - Offline-only work uses local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Runtime boundaries](runtime-boundaries.md).
 - Running `pdd try STORY` for a paused Try explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
+- `--live` requests the server’s approved Herdr read. `--bindings FILE` and `--run-config FILE` require `--live`; defaults are `runtime-bindings.json` and `runtime-run-config.json` beside each selected test. Explicit paths start from your current directory. See [Real calls on the server](USAGE.md#real-calls-on-the-server).
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 - With no test file, `pdd check` says `No tests found` and lists why, for example a `tests/*.json` file without the PDD `schema_version`, or a prompt with no Runtime interface block.
 - A GitHub login that is not invited gets one line: `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` A pdd that is too old gets `Please update pdd: …`. Both exit with code 5.

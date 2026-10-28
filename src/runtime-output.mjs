@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fd45d21bc0dcc6c13486d985348875333755f720cfe189b0b8bb5c1acc0c88c6).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: aef697932c9ac5aed8cc6e3bd65f30c91d84eda0d0400ab49dc696b0aea15506).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -67,6 +67,7 @@ export function projectAnswer(answer, { origin, secrets = [] } = {}) {
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider,
+    resource_mode: answer?.resource_mode ?? report?.resource_mode ?? report?.transport_mode ?? null,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
 }
@@ -83,12 +84,14 @@ export function jsonRow(row) {
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft,
+    ...(row.live ? { live: true, resource_mode: 'live' } : {}),
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
   const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
   return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
+    ...(rows.some(row => row.live) ? { live: true, resource_mode: 'live' } : {}),
     rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
 }
 
@@ -113,13 +116,13 @@ export function summaryLine(rows, story = null) {
   const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state));
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : 'unknown ·';
-  return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
+  return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}${rows.some(row => row.live) ? ' (LIVE)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}${row.live ? ' (LIVE)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
@@ -209,7 +212,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   const linked = rows.filter(row => row.report_url);
   if (linked.length) {
     const width = Math.max(...linked.map(row => row.story.length));
-    out.push('Reports (anyone with a link can open it):', ...linked.map(row => `  ${row.story.padEnd(width)}  ${row.report_url}${row.draft ? '  (DRAFT)' : ''}`));
+    out.push('Reports (anyone with a link can open it):', ...linked.map(row => `  ${row.story.padEnd(width)}  ${row.report_url}${row.draft ? '  (DRAFT)' : ''}${row.live ? '  (LIVE)' : ''}`));
   }
   const rest = [...warnings, ...rows.filter(row => row.state !== 'failed').flatMap(row => (row.warnings ?? []).map(text => `${text} (${row.test})`))];
   out.push(...rest);
