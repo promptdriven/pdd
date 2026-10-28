@@ -54,7 +54,7 @@ export async function fakeRuntime(t, answer) {
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   t.after(() => { server.closeAllConnections(); server.close(); });
   fake.origin = `http://127.0.0.1:${server.address().port}`;
-  fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: '7b03d3ea8cc047ed0c58905075321e59e62b02f1',
+  fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
     result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('md5').update(id).digest('hex')}` });
   fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) =>
     fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: { verdict: 'passed', program: { prompts, refused_prompts: refused } } });
@@ -79,7 +79,7 @@ export async function fakeRuntime(t, answer) {
 // In-process ports: a fake clock (sleep moves time), a fake gh and spies on IDs and interrupts.
 export function portsFor(env, extra = {}) {
   const clock = { now: Date.parse('2026-10-27T16:27:47Z'), uuids: 0, gh: [] };
-  const ports = { env, stdout: sink(), stderr: sink(), pollMs: 2000,
+  const ports = { env, stdout: sink(), stderr: sink(), pollMs: 2000, interactive: false,
     now: () => clock.now, sleep: async ms => { clock.now += ms; await new Promise(done => setImmediate(done)); },
     randomUUID: () => { clock.uuids += 1; return randomUUID(); },
     gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },

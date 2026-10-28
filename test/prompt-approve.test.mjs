@@ -67,6 +67,42 @@ test('APPROVE3: only y or yes approves; a stale approval asks again; schema prob
   assert.equal(missing.code, 2); assert.match(missing.err, /prompts\/nope\.prompt\.md is not a Git-visible \*\.prompt\.md file/);
 });
 
+const section = (out, title) => { const lines = out.split('\n'), at = lines.findIndex(text => text.startsWith(title)); return at < 0 ? [] : lines.slice(at, lines.findIndex((text, index) => index > at && text.startsWith('Approve '))); };
+
+// Wrong: the person approves a prose change that the screen does not show (round-2 tester, Oct 27: only the interface was shown).
+test('APPROVE6: pdd approve shows the prose changes since the last approved version in Git, short, before the question', async t => {
+  const setup = harbor(t), file = join(setup.repo, PLACE), approved = readFileSync(file, 'utf8');
+  const commit = spawnSync('git', ['log', '-1', '--format=%H'], { cwd: setup.repo, encoding: 'utf8' }).stdout.trim().slice(0, 12);
+  writeFileSync(file, asDraft(approved));
+  const same = await approve(setup, [PLACE], 'n');
+  assert.deepEqual(section(same.out, 'Text'), [`Text: the same as the last approved version (${commit}).`]);
+  writeFileSync(file, asDraft(approved).replace('Use this menu.', 'Use this menu now.'));
+  const changed = await approve(setup, [PLACE], 'y');
+  assert.equal(changed.code, 0, changed.err);
+  assert.deepEqual(section(changed.out, 'Text'), [`Text changes since the last approved version (${commit}):`, '', '  - Use this menu. Prices are in whole cents.',
+    '  + Use this menu now. Prices are in whole cents.', '']);
+  assert.ok(changed.out.indexOf('Operation place_order') < changed.out.indexOf('Text changes'));
+  const rules = Array.from({ length: 45 }, (_, index) => `Rule ${index + 1}: keep it short.`).join('\n');
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"status": "approved"', '"status": "draft"').replace('Use this menu now.', `Use this menu now.\n${rules}`));
+  const long = section((await approve(setup, [PLACE], 'n')).out, 'Text');
+  assert.equal(long.length, 42);
+  assert.match(long.at(-1), new RegExp(`^… \\d+ more lines not shown\\. See all of them with: git diff ${commit} -- prompts/place_order\\.prompt\\.md$`));
+});
+
+// Wrong: a new prompt shows no text, or a long one floods the screen, or terminal codes hide words from the person.
+test('APPROVE7: with no approved version pdd approve shows the whole prose, at most 40 lines, with no terminal codes', async t => {
+  const extra = Array.from({ length: 50 }, (_, index) => `Rule ${index + 1}.`).join('\n');
+  const setup = harbor(t, repo => { const file = join(repo, PLACE); writeFileSync(file, asDraft(readFileSync(file, 'utf8')).replace('Use this menu.', `Use this \x1b[8mhidden\x1b[0m menu.\n${extra}`)); });
+  const result = await approve(setup, [PLACE], 'n');
+  assert.equal(result.code, 1);
+  const shown = section(result.out, 'Text');
+  assert.deepEqual(shown.slice(0, 3), ['Text (no approved version in Git, so all of it):', '  # Place a Harbor Coffee order', '']);
+  assert.ok(shown.includes('  Use this hidden menu.'), shown.join('\n'));
+  assert.equal(shown.length, 42);
+  assert.match(shown.at(-1), /^… \d+ more lines not shown\. Read the whole file: prompts\/place_order\.prompt\.md$/);
+  assert.equal(result.out.includes('\x1b'), false);
+});
+
 // Wrong: the text edit touches a nested "status" or drops formatting.
 test('APPROVE4: the edit changes only the top-level status and prose_sha256 values', () => {
   const text = '# P\n\n<details><summary>Runtime interface</summary>\n\n```json\n{"status": "draft", "prose_sha256": "", "entries": [{"operation": "x", "input_schema": {"type": "object", "properties": {"status": {"type": "string", "const": "draft"}}, "required": [], "additionalProperties": false}, "result_schema": {"type": "string"}, "errors": []}], "calls": [], "resources": [], "limits": {"max_steps": 1, "max_model_calls": 1}}\n```\n</details>\n';

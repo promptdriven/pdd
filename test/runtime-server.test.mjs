@@ -62,7 +62,7 @@ test('RUNTIME-SERVER2: a lost connection after a POST is read with the same ID a
   assert.deepEqual(fake.gets.map(get => get.url), [`/v1/runs/${fake.posts[1].request.requestId}`]);
   const missing = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: { error: { code: 'not-found', message: 'The requested run or session was not found.' } } } : f.normal(entry));
-  const lost = await check(setup, missing, ['place-order'], {}, {});
+  const lost = await check(setup, missing, ['place-order'], {}, { interactive: true });
   assert.equal(lost.code, 3);
   assert.equal(missing.posts.filter(post => post.command === 'check').length, 1);
   assert.ok(missing.gets.length > 100 && missing.gets.every(get => get.url === `/v1/runs/${missing.posts[1].request.requestId}`));
@@ -219,10 +219,105 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check: running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
+});
+
+// Wrong: pdd gives up on a slow check after 10 min, or waits in silence (Serhan: no timeouts).
+test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
+  const setup = harbor(t), sent = new Map();
+  const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
+  let clock;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario });
+    if (entry.method !== 'GET') return f.normal(entry);
+    const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
+    return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
+  });
+  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
+  clock = made.clock;
+  const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
+  const err = made.ports.stderr.text, out = made.ports.stdout.text;
+  assert.equal(code, 0, err + out);
+  const progress = err.split('\n').filter(text => text.startsWith('Still running'));
+  assert.equal(progress.length, 49, progress.join('\n'));
+  assert.equal(progress[0], 'Still running: 0 of 2 Stories done · 2 AI calls so far · 30 s');
+  assert.equal(progress[7], 'Still running: 1 of 2 Stories done · 2 AI calls so far · 4 min');
+  assert.equal(progress.at(-1), 'Still running: 1 of 2 Stories done · 2 AI calls so far · 24 min');
+  // Polite: one GET for each open row every 2 s, the same as with a limit.
+  assert.equal(fake.gets.length, 30 + 750);
+  assert.equal(fake.posts.length, 3);
+  assert.doesNotMatch(out, /STILL RUNNING/);
+  assert.match(out, /^2 of 2 stories passed\./m);
+  const one = await check(harbor(t), await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry)),
+    ['place-order'], { '--timeout': '1' }, { interactive: true });
+  assert.equal(one.code, 3);
+  assert.deepEqual(one.err.split('\n').filter(text => text.startsWith('Still running')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
+    `Still running. Read the results later with: pdd check --read ${one.batch}`]);
+});
+
+// Wrong: with no time limit Ctrl-C loses the batch, or a waiting check is said to have hit a timeout.
+test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --read then shows the result', async t => {
+  const setup = harbor(t);
+  let clock, done = false;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.request.scenario === 'tests/unknown-item.json')
+      return { status: 429, json: { dispatch: 'not_started', error: { code: 'server-full', message: 'The runtime is busy. Try again later.' } } };
+    if (entry.method !== 'GET') return f.normal(entry);
+    if (clock.now >= Date.parse('2026-10-27T16:39:47Z')) clock.interrupt?.();
+    return { status: 200, json: f.check(entry.url.split('/').at(-1), done ? 'passed' : 'running') };
+  });
+  const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
+  clock = made.clock;
+  const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
+  const out = made.ports.stdout.text, batch = /pdd check --read (\S+)/.exec(made.ports.stderr.text)[1];
+  assert.equal(code, 3, out);
+  assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
+  assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
+  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: pdd stopped while the runtime was busy\. \(server-full\)$/m);
+  assert.equal(made.ports.stderr.text.split('\n').filter(text => text.startsWith('Still running')).length, 23);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8')).timeout_min, null);
+  done = true;
+  const read = await check(setup, fake, [batch], { '--read': true });
+  assert.match(read.out, /^Place a coffee order +tests\/place-order\.json +passed/m);
+});
+
+// Wrong: an agent's shell tool (Claude Code: 2 min) cuts pdd off before pdd prints anything (owner, Oct 27).
+test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table and the read line, and exits 3; --timeout overrides', async t => {
+  const setup = harbor(t);
+  let clock;
+  const sent = new Map(), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, clock.now);
+    if (entry.method !== 'GET') return f.normal(entry);
+    const id = entry.url.split('/').at(-1);
+    return { status: 200, json: f.check(id, clock.now - sent.get(id) < 12 * 60_000 ? 'running' : 'passed') };
+  });
+  const run = async (options, extra) => {
+    const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
+    clock = made.clock;
+    const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
+    return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd check --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
+  };
+  const agent = await run({}, { interactive: false });
+  assert.equal(agent.code, 3, agent.err + agent.out);
+  assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.match(agent.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.$/m);
+  const err = agent.err.trimEnd().split('\n');
+  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
+    'Still running: 0 of 1 Story done · 1 AI call so far · 1 min']);
+  assert.equal(err.at(-1), `Still running. Read the results later with: pdd check --read ${agent.batch}`);
+  assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1.5);
+  const longer = await run({ '--timeout': '20' }, { interactive: false });
+  assert.equal(longer.code, 0, longer.err + longer.out);
+  assert.doesNotMatch(longer.err, /Read the results later/);
+  const person = await run({}, { interactive: true });
+  assert.equal(person.code, 0, person.err + person.out);
+  const short = await run({ '--timeout': '1' }, { interactive: true });
+  assert.equal(short.code, 3);
+  assert.match(short.out, /^STILL RUNNING after 1 min: /m);
 });
 
 // Wrong: a 429 with no Retry-After header is retried at once, again and again (it must wait 5 s).
@@ -294,12 +389,17 @@ test('RUNTIME-SERVER14: --json output and saved answers never hold the token, ev
 // Wrong: the runtime runs a newer engine and nobody notices that pdd's local rules may now differ (OPEN 9).
 test('RUNTIME-SERVER15: an answer from another engine build gives a warning', async t => {
   const setup = harbor(t);
-  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: 'eae2202a0123456789' } } : f.normal(entry));
-  const result = await check(setup, fake, ['place-order']);
+  const engine = sha => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: sha } } : f.normal(entry));
+  const result = await check(setup, await engine('eae2202a0123456789'), ['place-order']);
   assert.equal(result.code, 0);
-  assert.match(result.out, /Warning: the runtime engine is eae2202a0123, but pdd's local checks copy engine 7b03d3ea\. The engine stays the judge\./);
-  const same = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order']);
-  assert.doesNotMatch(same.out, /runtime engine is/);
+  assert.match(result.out, /Warning: the runtime engine is eae2202a0123, but pdd's local checks copy engine eae2202a68d0\. The engine stays the judge\./);
+  const old = await check(setup, await engine('7b03d3ea8cc047ed0c58905075321e59e62b02f1'), ['place-order']);
+  assert.match(old.out, /Warning: the runtime engine is 7b03d3ea8cc0, but pdd's local checks copy engine eae2202a68d0\./);
+  // The local rules were checked to match engine eae2202a (Oct 27): its full or short sha gives no warning.
+  for (const sha of [null, 'eae2202a68d00ab762fcbbf1eba0d8607a132a15', 'eae2202a68d0']) {
+    const same = await check(setup, sha ? await engine(sha) : await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order']);
+    assert.doesNotMatch(same.out, /runtime engine is/, String(sha));
+  }
 });
 
 // Wrong: the PR line hides a failure, or --json lacks the line an agent pastes (Serhan, Oct 27).
@@ -385,6 +485,29 @@ test('RUNTIME-SERVER18: after a POST timeout pdd reads the same ID for at least 
   assert.doesNotMatch(lost.out, /refused/);
 });
 
+// Wrong: with no time limit, a check whose job never shows up on the server is read forever.
+test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read for 5 min, then the row is unknown', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
+    : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order'], {}, { interactive: true });
+  assert.equal(result.code, 3);
+  assert.ok(fake.gets.length >= 149 && fake.gets.length <= 150, String(fake.gets.length));
+  assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the run may have executed\. Its result is unknown\.\n {2}The answer to the request was lost\.$/m);
+});
+
+// Wrong: a lost POST answer keeps an agent's pdd reading for 5 min, past its shell tool's limit.
+test('RUNTIME-WAIT5: with no terminal a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
+    : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 3);
+  assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
+  assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
+  assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd check --read ${result.batch}`);
+});
+
 // Wrong: an AI provider failure looks like a failed check, or pdd resends it by itself.
 test('RUNTIME-SERVER19: a provider failure gets its own UNKNOWN block, exit 3 and no new POST', async t => {
   const setup = harbor(t);
@@ -415,11 +538,63 @@ test('RUNTIME-SERVER20: expected and got strings print JSON-escaped', async t =>
   assert.match(result.out, /^ {2}AC2 {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
 });
 
+// Wrong: a failed CLI output loses its line breaks and is cut near the difference (round-2 tester, Oct 27).
+test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is never cut inside a line, and names the lines left out', async t => {
+  const setup = harbor(t);
+  const bill = cents => `Bill:  $100.00\nTip:   $0.00 (0%)\nTotal: $100.00\nPerson 1: $${cents}\nPerson 2: $33.33\nPerson 3: $33.33\n`;
+  const long = mark => Array.from({ length: 60 }, (_, index) => index === 24 ? `line 25 ${mark}` : `line ${index + 1}`).join('\n');
+  const checks = [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', expected: bill('33.34'), actual: bill('33.33'), passed: false },
+    { criterion_id: 'AC2', target: 'result', path: '/log', op: 'equals', expected: long('want'), actual: long('got'), passed: false }];
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', checks) } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 1, result.err);
+  const lines = result.out.split('\n'), first = lines.indexOf('  AC1  result /stdout');
+  const shown = cents => ['      Bill:  $100.00', '      Tip:   $0.00 (0%)', '      Total: $100.00', `      Person 1: $${cents}`, '      Person 2: $33.33', '      Person 3: $33.33',
+    '      (ends with a line break)'];
+  assert.deepEqual(lines.slice(first, first + 17), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
+  const window = mark => ['      … 22 lines before', ...Array.from({ length: 20 }, (_, index) => `      line ${index + 23}${index === 2 ? ` ${mark}` : ''}`),
+    '      … 18 more lines in the report'];
+  const second = lines.indexOf('  AC2  result /log');
+  assert.deepEqual(lines.slice(second, second + 47), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
+  assert.match(lines[second + 47], /^ {2}Report: http/);
+});
+
+// Refusal items as prompt-runtime #379 sends them (not live yet): plain reason, fix, file, at, where, cause, and message = reason + fix.
+const PLAIN_REFUSALS = [
+  { code: 'unknown-criterion', reason: 'The test names a criterion that the Story does not have.', fix: 'Use AC1, AC2 or AC3, as the Story lists them.',
+    file: 'tests/place-order.json', at: 'steps[0].checks[1]', where: 'tests/place-order.json steps[0].checks[1]', cause: 'test',
+    message: 'The test names a criterion that the Story does not have. Use AC1, AC2 or AC3, as the Story lists them.' },
+  { code: 'graph-uncertain-child-dispatch', reason: 'The AI service did not answer one call.', fix: 'Run the check again.', file: null, at: null, where: null,
+    cause: 'ai-service', message: 'The AI service did not answer one call. Run the check again.' }];
+
+// Wrong: a refused check shows only a code, or calls an AI service failure a problem in the test (round-2 report text, Oct 27).
+test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and fix; ai-service says the test is fine; old answers keep their text', async t => {
+  const setup = harbor(t);
+  const refusing = refusals => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], refusals) } : f.normal(entry));
+  const plain = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order']);
+  assert.equal(plain.code, 4, plain.err + plain.out);
+  const lines = plain.out.split('\n'), at = lines.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
+  assert.deepEqual(lines.slice(at + 1, at + 6), ['  unknown-criterion: The test names a criterion that the Story does not have.',
+    '  Where: tests/place-order.json steps[0].checks[1]', '  Fix: Use AC1, AC2 or AC3, as the Story lists them.',
+    '  graph-uncertain-child-dispatch: The AI service did not answer one call.', '  Your test is fine. Run it again.']);
+  const json = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order'], { '--json': true });
+  assert.deepEqual(json.json.rows[0].refusals.map(item => [item.code, item.reason, item.where, item.fix, item.cause]), [
+    ['unknown-criterion', PLAIN_REFUSALS[0].reason, PLAIN_REFUSALS[0].where, PLAIN_REFUSALS[0].fix, 'test'],
+    ['graph-uncertain-child-dispatch', PLAIN_REFUSALS[1].reason, null, PLAIN_REFUSALS[1].fix, 'ai-service']]);
+  const { where, ...noWhere } = PLAIN_REFUSALS[0];
+  const placed = await check(setup, await refusing([noWhere]), ['place-order']);
+  assert.match(placed.out, /^ {2}Where: tests\/place-order\.json steps\[0\]\.checks\[1\]$/m);
+  const old = await check(setup, await refusing([{ code: 'unknown-criterion', section: 'steps[0].checks[1]', message: 'unknown-criterion', engine_message: 'criterion AC9 is not in the story' }]), ['place-order']);
+  const before = old.out.split('\n'), from = before.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
+  assert.deepEqual(before.slice(from + 1, from + 3), ['  unknown-criterion  steps[0].checks[1]  unknown-criterion', '  engine: criterion AC9 is not in the story']);
+  assert.doesNotMatch(old.out, /Where:|Fix:|Your test is fine/);
+});
+
 // Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);
-  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: 'eae2202a68d00ab7' } } : f.normal(entry));
-  const warned = /runtime engine is eae2202a68d0/;
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: '7b03d3ea8cc047ed' } } : f.normal(entry));
+  const warned = /runtime engine is 7b03d3ea8cc0/;
   assert.match((await check(setup, fake, ['place-order'])).out, warned);
   assert.doesNotMatch((await check(setup, fake, ['place-order'])).out, warned);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
@@ -441,7 +616,7 @@ test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary li
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 0, result.err + result.out);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed \(DRAFT\) +1\/1/m);
-  assert.match(result.out, /^Runtime check \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
+  assert.match(result.out, /^Runtime check \(place-order\) \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
   assert.match(result.out, /^ {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {2}\(DRAFT\)$/m);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.draft, true); assert.equal(json.json.rows[0].draft, true);
@@ -566,7 +741,17 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
   assert.equal(json.json.summary_line, 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
   const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);
   assert.ok(draft.out.split('\n').includes('Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
-  assert.ok(draft.out.split('\n').includes('Runtime check (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
+});
+
+// Wrong: one Story prints its line twice, once with its name and once as the overall line (round-2 tester, Oct 27).
+test('RUNTIME-STORYLINE2: one Story prints only its own Runtime check line; two Stories add the overall line', async t => {
+  const fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
+  const one = await check(draftRepo(t), fake, ['place-order']);
+  assert.deepEqual(one.out.split('\n').filter(text => text.startsWith('Runtime check')),
+    ['Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']);
+  const two = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), []);
+  assert.deepEqual(two.out.split('\n').filter(text => text.startsWith('Runtime check')), ['Runtime check (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
+    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
 });
 
 // Wrong: when the server retires an address it answers "update required", and an old pdd shows a failure table or retries (0.1.6).

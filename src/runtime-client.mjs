@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0cd92f5d563f9e07bc329a0742e3f71071401ff375a2a3e6772ca34cecd0aab9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: f90902b73ef91d080770005c4e685e0a0ea4547f8b0c5f812fc943efcf1a853e).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -16,10 +16,14 @@ const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
-// pdd's local rules copy this engine build (spec OPEN 9: warn when the runtime runs another one).
-const ENGINE_SHA = '7b03d3ea8cc047ed0c58905075321e59e62b02f1';
-const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8;
-// Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for at least 5 min.
+// pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
+const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+// The same engine: the full sha or a prefix of it with at least 7 hex digits.
+const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
+const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
+// An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool; a person has no limit.
+const AGENT_WAIT_MIN = 1.5;
+// Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for 5 min.
 const LOST_READ_MS = 300_000;
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
@@ -360,7 +364,9 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
-  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Math.max(context.deadline, context.ports.now() + LOST_READ_MS) });
+  // The agent's default limit caps this read too: pdd exits 3 and --read reads the same ID later.
+  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: context.agentLimit ? context.deadline
+    : Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
 }
 
 // GET one open row once.
@@ -374,6 +380,15 @@ async function readRow(context, row) {
 }
 
 const isOpen = row => OPEN_STATES.has(row.state) || (row.state === 'unknown' && row.lost);
+
+// One line every 30 s while checks run (Serhan: no timeouts, so pdd shows that it still waits).
+function progressLine(rows, ms) {
+  const stories = new Map();
+  for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && ENDED.has(row.state) && !isOpen(row));
+  const done = [...stories.values()].filter(Boolean).length, calls = rows.reduce((sum, row) => sum + (typeof row.calls === 'number' ? row.calls : 0), 0);
+  return `Still running: ${done} of ${stories.size} ${stories.size === 1 ? 'Story' : 'Stories'} done · ${calls} AI call${calls === 1 ? '' : 's'} so far · `
+    + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
+}
 
 async function runLint(context) {
   const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
@@ -390,7 +405,7 @@ async function runLint(context) {
     if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // A lost lint answer is read by the same ID, like a lost check.
-    const readEnd = verdict.kind === 'unknown' ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
+    const readEnd = verdict.kind === 'unknown' && !context.agentLimit ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
     let answer = verdict.answer ?? null, id = request.requestId, lost = false;
     while (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state) && context.ports.now() < readEnd && !context.interrupted) {
       await context.ports.sleep(context.ports.pollMs, context.signal);
@@ -431,12 +446,14 @@ async function checkBatch(context, rows) {
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
   if (context.blocked && !toSend.some(isOpen)) throw new Stop(5, context.blocked);
-  let waitingShown = -1;
-  // Read open rows until the timeout; a row whose POST answer was lost is read for at least 5 min.
-  const readable = row => isOpen(row) && (ports.now() < context.deadline || ports.now() < (row.read_until ?? 0));
+  let waitingShown = -1, shownAt = ports.now();
+  const sentAt = shownAt;
+  // Read open rows until they end (or --timeout); a row whose POST answer was lost is read for 5 min, or until --timeout if later.
+  const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? 0 : Math.max(context.deadline, row.read_until ?? 0));
   while (!context.interrupted && !context.readStop) {
     const waiting = ports.now() < context.deadline ? toSend.filter(row => row.state === 'waiting') : [], open = toSend.filter(readable);
     if (!waiting.length && !open.length) break;
+    if (ports.now() - shownAt >= PROGRESS_MS) { shownAt = ports.now(); line(ports.stderr, progressLine(rows, shownAt - sentAt)); }
     if (waiting.length !== waitingShown) {
       if (waiting.length) line(ports.stderr, `Server busy: ${open.length} checks running, ${waiting.length} waiting for a free slot.`);
       waitingShown = waiting.length;
@@ -451,9 +468,13 @@ async function checkBatch(context, rows) {
     else for (const row of toSend.filter(row => row.state === 'waiting')) Object.assign(row, { state: 'not_run', note: context.stopped });
     saveBatch(context);
   }
+  const stoppedEarly = context.interrupted || !!context.readStop;
+  context.timedOut = !stoppedEarly && ports.now() >= context.deadline && toSend.some(isOpen);
   for (const row of toSend) {
-    if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full', message: 'The runtime stayed busy until the timeout.' } });
-    if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run before the timeout.';
+    if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full',
+      message: stoppedEarly ? 'pdd stopped while the runtime was busy.' : 'The runtime stayed busy until the timeout.' } });
+    if (row.state === 'unknown' && row.lost) row.why ??= stoppedEarly ? 'pdd stopped before it could read this run.'
+      : Number.isFinite(context.deadline) ? 'pdd could not read this run before the timeout.' : 'pdd could not read this run for 5 min after its answer was lost.';
   }
 }
 
@@ -469,8 +490,8 @@ function firstToday(context, sha) {
 
 function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
-  const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && sha !== ENGINE_SHA))].filter(sha => firstToday(context, sha));
-  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 8)}. The engine stays the judge.`)];
+  const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
+  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode, summaryLine: summaryLine(rows),
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
@@ -480,7 +501,9 @@ function printResult(context, rows, extra = {}) {
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
   else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, warnings, details: context.details, timeoutMin: context.timeoutMin,
     interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
-  if (exitCode === 3 && context.batch) line(ports.stderr, `If pdd stops, read the results with: pdd check --read ${context.batch}`);
+  // At the time limit the jobs keep running on the server.
+  if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd check --read ${context.batch}`
+    : `If pdd stops, read the results with: pdd check --read ${context.batch}`);
   return exitCode;
 }
 
@@ -567,7 +590,7 @@ async function runRead(context, batchWord) {
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? 10,
+  Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [] }));
@@ -638,7 +661,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  context.timeoutMin = Number(options['--timeout'] ?? 10);
+  // A person has no time limit (Serhan: no timeouts); an agent has 90 s; --timeout MIN overrides both.
+  context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
+  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
   const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
@@ -651,7 +676,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
-  Object.assign(context, { capture, identity, batch, startedAt, deadline: startedAt + context.timeoutMin * 60_000, rows,
+  Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
   saveBatch(context);
@@ -800,7 +825,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (verdict.kind !== 'accepted') {
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
       if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
-      if (verdict.kind === 'refused') { Object.assign(row, { state: 'refused', phase: 'server', refusals: [verdict.refusal] }); return printTryProblem(context, row); }
+      if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
       if (verdict.blocked) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
@@ -822,6 +847,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     applyAnswer(row, done.answer, context);
     delete repoState.tries[test.path];
     store.saveRepo(root, repoState);
+    if (row.state === 'refused') {
+      const report = isObject(done.answer.result?.report?.refusal) ? done.answer.result.report.refusal : null, given = done.answer.result?.refusals;
+      const refusals = (Array.isArray(given) && given.length ? given : report ? [report] : []).filter(isObject)
+        .map(item => ({ ...item, ...(report?.code === item.code ? { reason: item.reason ?? report.reason, fix: item.fix ?? report.fix } : {}) }));
+      return trySetupRefused(context, test, appMap, refusals, row.report_url);
+    }
     return printTryProblem(context, row);
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
@@ -858,6 +889,24 @@ async function checkLint(context, rows) {
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
   if (!verdicts) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd try again later.');
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
+}
+
+// A refused Try setup is not a check (runtime team, Oct 27): two plain lines with what was refused, why and the fix; no table.
+const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kind must match by the same key',
+  'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
+const GENERIC_REFUSAL = /^The runtime refused this job\b/;
+function trySetupRefused(context, test, appMap, refusals, reportUrl) {
+  const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
+  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
+    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
+    fix: text(item.fix), where: text(item.where) || [text(item.file), text(item.at)].filter(Boolean).join(' ') }));
+  const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
+  const why = items.map(item => `${item.reason ? `${item.code}: ${item.reason}` : item.code}${item.where ? `; at ${item.where}` : ''}`).join('; '), fix = items.find(item => item.fix)?.fix;
+  const again = `run pdd try ${test.story} --new.`;
+  line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
+  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
+    : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
+  return 4;
 }
 
 function printTryProblem(context, row) {
