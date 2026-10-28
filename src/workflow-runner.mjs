@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1f8d6e87398b8c431d2235c145ab7d498e3e04eb88b48f11d5feeb1973f79699).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cbaab5dd64991a33d4596685a64f79400d3ea7cf109885ce546e9b02c7a2626f).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -429,6 +429,46 @@ function verifyBody(text) {
     .map(({ section }) => section.lines.join('\n').trim()).filter(Boolean).join('\n\n');
 }
 
+// GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report, and every retry
+// failed the same way). The body stays at most 60,000 characters (code points), so the marker and GitHub's count have room.
+const BODY_BUDGET = 60_000, characters = text => [...text].length;
+const reportsFailure = line => /✗|\bfail(?:s|ed|ing)?\b/i.test(line);
+// verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
+// still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
+// a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
+function verifyFit(text, room) {
+  const full = verifyBody(text);
+  if (characters(full) <= room) return full;
+  const note = what => `_The full verify report has ${characters(text).toLocaleString('en-US')} characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: ${what}. The PR author has the full report: verify.md in the run folder._`;
+  const lines = [];
+  let depth = 0, summary = null;
+  for (const line of full.split('\n')) {
+    const opens = (line.match(/<details\b/gi) ?? []).length, closes = (line.match(/<\/details>/gi) ?? []).length;
+    if (!depth && !opens) { lines.push(line); continue; }
+    summary ??= /<summary>(.*?)<\/summary>/i.exec(line)?.[1].trim() || null;
+    depth = Math.max(0, depth + opens - closes);
+    if (!depth) { lines.push(`- ${summary ?? 'Details'}: not shown here.`); summary = null; }
+  }
+  const short = note('the long blocks are not shown');
+  if (characters(lines.join('\n')) + characters(short) + 2 <= room) return `${lines.join('\n')}\n\n${short}`;
+  const reserve = characters(note('its first 000000 lines; 000000 more lines are not shown, and 000000 of them report a failure (the first 000000 are listed below)')) + 64;
+  const failRoom = Math.max(0, Math.min(8000, Math.floor((room - reserve) / 4))), keepRoom = Math.max(0, room - reserve - failRoom);
+  let used = 0, at = 0, fence = null;
+  for (; at < lines.length; at++) {
+    const size = characters(lines[at]) + 1;
+    if (used + size > keepRoom) break;
+    used += size;
+    const mark = lines[at].trim().match(/^(`{3,}|~{3,})/)?.[1];
+    if (mark) fence = !fence ? mark : lines[at].trim().startsWith(fence) ? null : fence;
+  }
+  const kept = [...lines.slice(0, at), ...(fence ? [fence] : [])], failing = lines.slice(at).filter(line => reportsFailure(line) && !/^\s*(`{3,}|~{3,})/.test(line));
+  const listed = [];
+  let left = room - reserve - used - 40;
+  for (const line of failing) { if (characters(line) + 1 > left) break; listed.push(line); left -= characters(line) + 1; }
+  const what = `its first ${at} lines; ${lines.length - at} more lines are not shown, and ${failing.length} of them report${failing.length === 1 ? 's' : ''} a failure${listed.length < failing.length ? listed.length ? ` (the first ${listed.length} are listed below)` : ' (they do not fit here)' : ''}`;
+  return [...kept, ...(listed.length ? ['', 'Lines that report a failure, from the part not shown:', '', '```text', ...listed, '```'] : []), '', note(what)].join('\n');
+}
+
 function prBody(run, area, env, drafts = [], tests = true) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
@@ -460,9 +500,10 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
-  return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
-    ...(verify !== null ? ['', '## Verify', '', verifyBody(verify)] : []), ''].join('\n'), run);
+    ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
+  return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body(''))));
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
@@ -497,7 +538,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
     return fail([...lines, why].join('\n'));
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
-  if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label} did not open: ${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`].join('\n'));
+  // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
+  if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
+    ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   run.pr.push({ stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base });
   return null;
 }

@@ -1,9 +1,10 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 6a809f6ec0df34b454aaccc3eaddf662a1457c4040431e7435329b21a8acffd1).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 25e4e47047d6a5a4eaead0e56eb475822273d604190b7014a5038287d49c7f22).
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { causeText } from './runtime-output.mjs';
 
 const execute = promisify(execFile);
 const fields = 'number,url,state,headRefName,baseRefName,headRefOid,mergeCommit,body,isCrossRepository,headRepository,headRepositoryOwner';
@@ -15,6 +16,19 @@ const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.t
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 const parseJson = value => { try { return JSON.parse(value); } catch { fail('workflow_github_json_invalid'); } };
 const outcome = (state, message, pr = null) => ({ state, pr, message });
+// GitHub refuses a PR description over 65,536 characters, counted as Unicode code points (0.1.7 tester: 105,489).
+const PR_BODY_LIMIT = 65_536, characters = value => [...value].length;
+// gh's error line, cleaned of tokens: gh may print "Creating pull request for …" first.
+const ghLine = stderr => { const lines = String(stderr).split(/\r?\n/).map(line => causeText(line)).filter(Boolean);
+  return lines.find(line => /GraphQL:|error|fail|HTTP \d{3}|denied|refused|not found/i.test(line)) ?? lines.at(-1) ?? ''; };
+// GitHub's own refusal of the create, as gh prints it: "GraphQL: <reason> (createPullRequest)". Then no PR exists.
+function refusal(stderr) {
+  const reason = causeText(/GraphQL: (.+?) \(createPullRequest\)/.exec(String(stderr))?.[1] ?? '');
+  if (!reason) return null;
+  return /Body is too long/i.test(reason)
+    ? 'GitHub refused to open the PR: its description is too long (GitHub\'s limit is 65,536 characters). The branch is pushed; no PR was opened. Make the PR description shorter, then try again.'
+    : `GitHub refused to open the PR: ${reason.replace(/\.$/, '')}. The branch is pushed; no PR was opened. Fix what GitHub names, then try again.`;
+}
 
 function dependencies(ports = {}) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
@@ -251,6 +265,7 @@ export async function publishWorkflowPr(input, ports = {}) {
     if (topic.headBranch !== intent.headBranch || topic.headSha !== intent.headSha) fail('workflow_github_source_changed');
     const body = await deps.readFile(intent.bodyFile, 'utf8');
     if (!markerBody(body, intent.marker)) fail('workflow_github_marker_missing');
+    if (characters(body) > PR_BODY_LIMIT) return outcome('failed', `The PR description has ${characters(body).toLocaleString('en-US')} characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.`);
     const pushRemote = (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim();
     if (!sameRepo(originRepository(pushRemote), intent.repository)) fail('workflow_github_repository_mismatch');
     if (unpublishedOnly) {
@@ -266,10 +281,21 @@ export async function publishWorkflowPr(input, ports = {}) {
         || (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim() !== pushRemote)
         fail('workflow_github_repository_mismatch');
     }
+    // An earlier attempt may have pushed this exact SHA before GitHub refused the PR: do not push it again.
+    const remote = unpublishedOnly ? null : await deps.raw(cwd, 'git', ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
     effectStarted = true;
-    await deps.command(cwd, 'git', ['push', 'origin', `${intent.headSha}:refs/heads/${intent.headBranch}`]);
-    await deps.command(cwd, 'gh', ['pr', 'create', '--repo', intent.repository, '--head', intent.headBranch,
+    if (remote?.code !== 0 || remote.stdout.trim() !== `${intent.headSha}\trefs/heads/${intent.headBranch}`)
+      await deps.command(cwd, 'git', ['push', 'origin', `${intent.headSha}:refs/heads/${intent.headBranch}`]);
+    const created = await deps.raw(cwd, 'gh', ['pr', 'create', '--repo', intent.repository, '--head', intent.headBranch,
       '--base', intent.baseBranch, '--title', intent.title, '--body-file', intent.bodyFile]);
+    if (created.code !== 0) {
+      // Read back first: an exact PR wins. Only GitHub's own refusal with no PR is certain; anything else stays unconfirmed.
+      const found = await lookup(cwd, intent, deps);
+      if (found.state === 'found') return found.outcome;
+      const refused = found.state === 'absent' && refusal(created.stderr), line = ghLine(created.stderr);
+      return refused ? outcome('rejected', refused)
+        : outcome('recovery_required', `PR creation is unconfirmed${line ? ` (gh: ${line})` : ''}. Reconcile this same saved intent; do not publish again.`);
+    }
     // A successful create exit/printed URL is insufficient; use genuine GitHub readback.
     return await reconcileWorkflowPr({ cwd, intent }, ports);
   } catch {
