@@ -103,3 +103,6 @@ and the login. Refuse using a different local prompt against an existing door; -
 Door calls can provide a captured absolute gh executable path so a project shim named gh does not shadow sign-in.
 A cancelled door call stops polling promptly and reports an unknown result if dispatch may have occurred. Never
 resend it. Forward cancellation to polling waits so closing a local HTTP server cannot hang for the call deadline.
+A door's lint can finish refused before producing a program report (for example lint-queue-timeout with
+provider_calls=0 and dispatch=not_started). Preserve that confirmed refusal's plain reason on stderr/125;
+do not mislabel it as an unknown result and do not send a Try. A later explicit setup may use a new lint ID.

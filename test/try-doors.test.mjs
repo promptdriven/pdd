@@ -223,3 +223,15 @@ test('doors: dependency names are refused before creating PATH launchers', async
     assert.match(ready.ports.stderr.text, /reserved/);
   }
 });
+
+test('doors: a queued lint ending refused prints the confirmed reason and sends no Try', async t => {
+  const setup = clip(t), message = 'Lint waited 20 seconds for a free slot. No checks ran. Retry with a new request ID.';
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST'
+    ? { status: 202, json: f.job(entry.request.requestId, 'lint', 'queued') }
+    : { status: 200, json: f.job(entry.url.split('/').at(-1), 'lint', 'refused', { report: { refusal: { code: 'lint-queue-timeout', message }, provider_calls: 0, dispatch: 'not_started' }, refusals: [{ code: 'lint-queue-timeout', message }] }) });
+  const ports = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
+  assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports), 125);
+  assert.equal(ports.stdout.text, '');
+  assert.equal(ports.stderr.text, `pdd try: ${message}\n`);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});

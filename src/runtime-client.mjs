@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 966e1611aebc274e521959387a18b6b0e518a9d00b87012461a36c1af7235165).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 51688250b6ed843e34d032ee0ea5000af08e2f81a9e71397d3fd0060c66a851d).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -922,6 +922,10 @@ async function checkLint(context, rows) {
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, rows, context.root, context.visible, context.secrets) : null;
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code ? ` (${lint.note.code})` : ''}`);
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
+  if (context.doorMode && lint.kind === 'answer' && lint.answer?.state === 'refused' && !isObject(lint.answer.result?.report?.program)) {
+    const refusal = lint.answer.result?.refusals?.[0] ?? lint.answer.result?.report?.refusal;
+    throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The runtime refused lint.');
+  }
   if (!verdicts) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd try again later.');
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
 }
