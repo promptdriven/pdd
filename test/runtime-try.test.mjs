@@ -39,11 +39,11 @@ test('RUNTIME-TRY1: pdd try lints, posts one Try with the test as seed, opens th
   assert.deepEqual(Object.keys(request).sort(), ['max_calls', 'requestId', 'seed', 'source_sha256', 'tab']);
   assert.equal(request.max_calls, 160); assert.equal(request.seed, 'tests/place-order.json'); assert.equal(request.tab, 'call');
   assert.deepEqual(first.opened, [`${fake.origin}/s/${'t'.repeat(43)}/`]);
-  assert.equal(first.out, 'Try budget 160 calls; 160 remaining. You are charged only for calls that run.\nTry link for "Place a coffee order" is open in your browser. It ends in 24 hours, or with: pdd try --stop place-order\n');
+  assert.equal(first.out, `Try budget 160 calls; 160 remaining. You are charged only for calls that run.\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order\n`);
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0, again.err);
   assert.equal(fake.posts.length, 2); assert.deepEqual(again.opened, []);
-  assert.match(again.out, new RegExp(`Try link for "Place a coffee order": ${fake.origin}/s/t{43}/`));
+  assert.match(again.out, new RegExp(`Try ready for "Place a coffee order": ${fake.origin}/s/t{43}/`));
   const screen = await tryStory(setup, fake, ['place-order'], { '--new': true, '--tab': 'screen' });
   assert.equal(screen.code, 0, screen.err);
   assert.equal(fake.deletes.length, 1); assert.match(fake.deletes[0].headers['x-request-id'], /^[0-9a-f-]{36}$/);
@@ -88,12 +88,12 @@ test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not 
 });
 
 // Wrong: too many Try links are retried, or pdd picks a test when several exist.
-test('RUNTIME-TRY4: 429 is exit 5 with the stop hint; no STORY with many tests lists them (exit 2)', async t => {
+test('RUNTIME-TRY4: 429 is exit 5 with the server\'s reason; no STORY with many tests lists them (exit 2)', async t => {
   const setup = harbor(t);
   const busy = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 429, headers: { 'retry-after': '5' }, json: { error: { code: 'server-full', message: 'The runtime is busy. Try again later.' }, dispatch: 'not_started' } } : trying()(entry, f));
   const full = await tryStory(setup, busy, ['place-order']);
-  assert.equal(full.code, 5); assert.match(full.err, /Too many Try links are open\. Stop one with pdd try --stop/);
+  assert.equal(full.code, 5); assert.match(full.err, /The runtime is busy\. Try again later\./);
   assert.equal(busy.posts.filter(post => post.command === 'try').length, 1);
   const many = await tryStory(setup, busy, []);
   assert.equal(many.code, 2); assert.match(many.err, /place-order/); assert.match(many.err, /unknown-item/);
@@ -266,7 +266,7 @@ test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are n
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(result.code, 0);
   const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
-  assert.deepEqual(said, ['Sent 4 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
+  assert.deepEqual(said, ['Starting your Try: sending 4 files, 6 KB (1 is not prompt, story or test files; run `pdd check --files` to see them)…']);
 });
 
 const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });

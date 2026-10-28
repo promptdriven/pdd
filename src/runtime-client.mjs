@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 031a14d81248d8463982627e14b1ea19b758da4ae72b7cc7ce4e8921fb7906d0).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 47fb2d43f47c5e05bdcbcf7f37d1f5c39d5f2fa9e612abc8b95deb2928d94a8a).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,7 +9,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, tryUsage, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, tryUsage, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -146,7 +146,8 @@ function signIn(gh, store) {
   if (store) store.secrets = [value];
   const user = gh(['api', 'user', '--jq', '.login + " " + (.id|tostring)']);
   const [login, id] = user.status === 0 ? String(user.stdout ?? '').trim().split(' ') : [];
-  if (!login || !/^\d+$/.test(id ?? '')) throw new Stop(5, 'pdd could not read your GitHub login (gh api user). Run gh auth status.');
+  const why = user.status === 0 ? '' : causeText(user.stderr || user.error?.code, [value]);
+  if (!login || !/^\d+$/.test(id ?? '')) throw new Stop(5, `pdd could not read your GitHub login (gh api user${why ? `: ${why}` : ''}). Run gh auth status.`);
   return { token: value, login, userId: id };
 }
 
@@ -155,6 +156,17 @@ function retryAfter(headers) {
   const raw = headers?.get?.('retry-after'), seconds = Number(raw);
   return raw && /^\d+$/.test(raw.trim()) ? Math.min(Math.max(seconds, 1), 300) * 1000 : 5000;
 }
+
+// Network errors that prove the request never reached the server: nothing was sent, so pdd can stop and say why.
+const UNREACHABLE = { ENOTFOUND: 'the address was not found', EAI_AGAIN: 'the address was not found', ECONNREFUSED: 'the connection was refused',
+  EHOSTUNREACH: 'there is no network route to it', ENETUNREACH: 'there is no network route to it', UND_ERR_CONNECT_TIMEOUT: 'the connection timed out' };
+function lostReply(error, origin) {
+  const code = String(error?.cause?.code ?? error?.code ?? ''), cert = /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS/.test(code);
+  const reason = UNREACHABLE[code] ?? (cert ? 'its TLS certificate was not accepted' : null);
+  if (reason) return { lost: true, unreachable: `pdd could not reach the PDD runtime at ${origin}: ${reason} (${code}). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` };
+  return { lost: true, why: code ? `connection failed: ${code}` : error?.name === 'AbortError' ? 'no answer in time' : null };
+}
+const AUTH_TEXT = 'The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
 
 // HTTP to the runtime. The token stays in this object and in request headers only.
 class Runtime {
@@ -171,7 +183,7 @@ class Runtime {
       let json = null;
       try { json = JSON.parse(text); } catch { json = null; }
       return { status: response.status, headers: response.headers, text, json };
-    } catch { return { lost: true }; } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
+    } catch (error) { return lostReply(error, this.origin); } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
   }
   post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
@@ -226,6 +238,7 @@ function markBusy(context, row, wait) {
 
 // One answer to a POST, as the row table of the spec.
 function judgePost(reply, id, command, secrets) {
+  if (reply.unreachable) return { kind: 'stop', note: { code: null, message: reply.unreachable } };
   if (reply.lost) return { kind: 'unknown', why: 'The answer to the request was lost.' };
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
@@ -244,18 +257,19 @@ function judgePost(reply, id, command, secrets) {
       : { kind: 'not_run', note: note('The runtime is busy. Try again later.') };
   }
   if (gateText(reply)) return { kind: 'stop', note: { code: null, message: 'The runtime opens soon.' } };
-  if (reply.status === 401) return { kind: 'stop', note: { code: cleanText(error?.code, secrets) || 'auth-required', message: 'Run gh auth login' } };
+  if (reply.status === 401) return { kind: 'stop', note: { code: cleanText(error?.code, secrets) || 'auth-required', message: AUTH_TEXT } };
   if (reply.status === 503 && /^(?:pool-low-room|pool-copy-[a-z-]+|github-unavailable)$/.test(error?.code ?? '')) return { kind: 'not_run', note: note('Try again later.') };
   if ([400, 413, 415, 422].includes(reply.status) && error?.code) {
     return { kind: 'refused', refusal: { code: cleanText(error.code, secrets), section: null, message: cleanText(error.message, secrets) || null,
       engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null, hint: null } };
   }
-  return { kind: 'unknown', why: `The runtime answered HTTP ${reply.status}.` };
+  const said = cleanText(error?.message, secrets);
+  return { kind: 'unknown', why: `The runtime answered HTTP ${reply.status}${said ? `: ${said.replace(/\.$/, '')}` : ''}.` };
 }
 
 // One answer to a GET of a known request ID.
 function judgeGet(reply, id, command) {
-  if (reply.lost) return { kind: 'again' };
+  if (reply.lost) return { kind: 'again', why: reply.unreachable ? 'cannot reach the runtime' : reply.why, unreachable: reply.unreachable };
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'blocked', message: stopLine };
   if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
@@ -435,9 +449,12 @@ async function sendCheck(context, row) {
 async function readRow(context, row) {
   const id = row.request_ids.at(-1), end = row.lost ? row.read_until ?? context.deadline : context.deadline;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
+  // A network problem while reading says so once; pdd keeps reading the same IDs.
+  if (verdict.kind === 'again' && verdict.why && !context.readTrouble) line(context.ports.stderr, `pdd cannot read the results right now (${verdict.why}). It keeps trying.`);
+  if (verdict.kind !== 'again') context.readTrouble = false; else if (verdict.why) context.readTrouble = true;
   if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
-  else if (verdict.kind === 'auth') context.readStop = 'Run gh auth login';
+  else if (verdict.kind === 'auth') context.readStop = AUTH_TEXT;
   else if (verdict.kind === 'blocked') context.readStop = verdict.message;
   else if (verdict.kind === 'gate') context.readStop = 'The runtime opens soon.';
 }
@@ -466,10 +483,16 @@ function pendingLintMessage(context, answer) {
     : 'No Try was created. Lint uses no AI calls.');
 }
 
+// A wait's server state in plain words, for a progress tick.
+const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answer${read.why ? ` (${read.why})` : ''}`
+  : answer?.state === 'queued' ? 'in line' : answer?.state === 'running' ? 'running' : 'waiting for an answer';
+
 async function runLint(context, complete = false) {
   const agent = context.agentLimit ?? !context.ports.interactive;
   const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   let attempts = 0;
+  const tick = progressTicker(context.ports.stderr, context.ports.now);
+  line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
   const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
   const pause = async wait => {
     if (context.interrupted || attempts >= 3 || context.ports.now() + wait >= lintEnd) return false;
@@ -497,7 +520,8 @@ async function runLint(context, complete = false) {
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
-      else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
+      else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? AUTH_TEXT : 'The runtime opens soon.' } };
+      if (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state)) tick(`Still checking the files: ${waitWord(answer, read)}`);
     }
     if (!lost && answer?.state === 'refused') {
       const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
@@ -726,7 +750,7 @@ async function readUnsentLint(context, rows) {
   if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
     const read = judgeGet(await context.runtime.get(id), id, 'lint');
     if (read.kind === 'blocked') throw new Stop(5, read.message);
-    if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
     answer = read.kind === 'state' ? read.answer : null;
     if (answer) saveAnswer(context, id, answer);
@@ -786,6 +810,8 @@ async function runRead(context, batchWord, quiet = false) {
     if (row.request_ids.length) row.state = 'unknown';
     else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
+  const reads = rows.filter(row => row.request_ids?.length && row.phase === 'server' && ['queued', 'running', 'unknown'].includes(row.state)).length;
+  if (reads && !quiet) line(ports.stderr, `Reading ${reads} result${reads === 1 ? '' : 's'} from the PDD runtime…`);
   await readUnsentLint(context, rows);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
@@ -821,6 +847,7 @@ async function runRetry(context, name, options) {
   const selected = rows.filter(row => row.can_retry && row.eligible && (row.busy || !row.request_ids.length));
   Object.assign(context, { capture, reading: false, timeoutMin: timeout });
   for (const row of selected) row.state = row.retry_at > ports.now() ? 'waiting' : 'ready';
+  if (selected.length) line(ports.stderr, `Retrying ${selected.length} unstarted check${selected.length === 1 ? '' : 's'}…`);
   if (selected.length) await runScheduledChecks(context, rows, selected);
   saveBatch(context);
   return printResult(context, rows);
@@ -834,7 +861,7 @@ async function runRequest(context, id) {
   const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
   const read = judgeGet(await runtime.get(id), id, 'check');
   if (read.kind === 'state') applyAnswer(row, read.answer, context);
-  else row.why = read.why ?? (read.kind === 'auth' ? 'Run gh auth login' : 'pdd could not read this run.');
+  else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
   return printResult(context, [row], { recovery: `pdd check --request '${id}'` });
 }
 
@@ -929,15 +956,16 @@ function oneTest(found, words, root) {
   return selected[0];
 }
 
-async function readUntil(context, id, command, isDone, ms) {
-  const end = context.ports.now() + ms;
+async function readUntil(context, id, command, isDone, ms, label) {
+  const end = context.ports.now() + ms, tick = progressTicker(context.ports.stderr, context.ports.now);
   let last = null;
   for (;;) {
     const read = judgeGet(await context.runtime.get(id), id, command);
     if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
-    else if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    else if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     else if (read.kind === 'blocked') throw new Stop(5, read.message);
+    if (label) tick(`${label}: ${waitWord(last, read)}`);
     if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
     await context.ports.sleep(context.ports.pollMs, context.signal);
   }
@@ -963,10 +991,12 @@ async function reopenTry(context, record, test) {
   const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
   const again = `pdd try ${target}`;
   if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
+  line(context.ports.stderr, 'Reopening your Try…');
   const reply = await context.runtime.reopen(record.id);
+  if (reply.unreachable) throw new Stop(5, reply.unreachable);
   const blocked = blockingAnswer(reply);
   if (blocked) throw new Stop(5, blocked);
-  if (reply.status === 401) throw new Stop(5, 'Run gh auth login');
+  if (reply.status === 401) throw new Stop(5, AUTH_TEXT);
   if (gateText(reply)) throw new Stop(5, 'The runtime opens soon.');
   if (!reply.lost && ![200, 202].includes(reply.status)) {
     const reason = cleanText(reply.json?.error?.message, context.secrets) || `HTTP ${reply.status}`;
@@ -977,7 +1007,7 @@ async function reopenTry(context, record, test) {
   if (tryLink(initial, context.origin)) return initial;
   const done = await readUntil(context, record.id, 'try', answer => answer.result?.session?.state === 'running'
     || ['failed', 'refused', 'unknown'].includes(answer.state)
-    || (answer.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state)), TRY_MS);
+    || (answer.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state)), TRY_MS, 'Still reopening your Try');
   if (done.answer?.state === 'passed' && done.answer.result?.session?.state === 'running') return done.answer;
   throw new Stop(3, `Reopening this Try was not confirmed. Read the same Try again with: ${again}`);
 }
@@ -993,7 +1023,7 @@ async function stopTry(context, record) {
   if (verdict.kind === 'not_run') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
   if (verdict.kind === 'refused') throw new Stop(4, `The runtime refused to stop this Try: ${verdict.refusal.message} (${verdict.refusal.code})`);
   if (verdict.kind !== 'accepted') throw new Stop(3, 'The stop result is unknown. Run pdd try --stop again later; it sends a new stop request.');
-  const done = verdict.answer.state === 'passed' ? { answer: verdict.answer } : await readUntil(context, id, 'stop', answer => ENDED.has(answer.state), TRY_MS);
+  const done = verdict.answer.state === 'passed' ? { answer: verdict.answer } : await readUntil(context, id, 'stop', answer => ENDED.has(answer.state), TRY_MS, 'Still stopping the Try');
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
 }
 
@@ -1045,9 +1075,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
       if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
-      if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+      if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
       if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
+      if (read.unreachable) throw new Stop(5, read.unreachable);
       let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
@@ -1085,7 +1116,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!ended && !options['--new']) {
         throw new Stop(3, `The last Try for "${test.title}" is not ready or its state is unknown. Run pdd try ${test.story} again later, or pdd try ${test.story} --new to stop it and make a new one.`);
       }
-      if (!ended) await stopTry(context, record);
+      if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
       delete repoState.tries[test.path];
       store.saveRepo(root, repoState);
     }
@@ -1099,19 +1130,19 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
     store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);
-    if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
+    line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
     if (verdict.answer) store.write(join(context.folder, `${request.requestId}.json`), verdict.answer);
     if (verdict.kind !== 'accepted') {
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
-      if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
+      if (reply.status === 429) throw new Stop(5, cleanText(reply.json?.error?.message, context.secrets) || 'Too many Try links are open. Stop one with pdd try --stop');
       if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
       if (verdict.blocked) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
     }
     const done = ENDED.has(verdict.answer.state) ? { answer: verdict.answer }
-      : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS);
+      : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS, 'Still starting your Try');
     const link = tryLink(done.answer, origin);
     if (link) {
       const cap = done.answer?.result?.session?.max_calls;
@@ -1125,7 +1156,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       throw new Stop(3, `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd try ${test.story} to make a new Try.`);
     }
     if (done.unknownWhy || done.open || !done.answer) {
-      throw new Stop(3, `The Try setup is not finished yet. Run pdd try ${test.story} again later; it reads this Try first and makes no second one.`);
+      throw new Stop(3, `The Try setup is not finished after ${TRY_MS / 60_000} min${done.answer?.state ? ` (last state: ${cleanText(done.answer.state)})` : ''}. Run pdd try ${test.story} again later; it reads this Try first and makes no second one.`);
     }
     // A ready Try with a bad link stays recorded, so pdd try --stop can still end it; pdd never prints that link.
     if (done.answer.state === 'passed' && LIVE_SESSION.has(done.answer.result?.session?.state)) throw new Stop(3, refusedLink(done.answer, origin));
@@ -1161,6 +1192,7 @@ async function stopByName(context, cwd, words, origin) {
   const identity = signIn(ports.gh, store);
   context.secrets = [identity.token];
   context.runtime = new Runtime({ origin: record.origin ?? origin, token: identity.token, ports });
+  line(ports.stderr, `Stopping the Try for "${title}"…`);
   await stopTry(context, record);
   delete repoState.tries[path];
   store.saveRepo(root, repoState);
@@ -1228,9 +1260,9 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
       try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }
       catch (error) { throw new Stop(5, cleanText(error.message || 'Your agent could not connect.', context.secrets)); }
     }
-    if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
+    if (!options['--no-open'] && await ports.openUrl(bridge?.url ?? link)) line(ports.stdout, `Try ready for "${test.title}": ${link} (open in your browser). ${ends}`);
     else {
-      line(ports.stdout, `Try link for "${test.title}": ${link}`);
+      line(ports.stdout, `Try ready for "${test.title}": ${link}`);
       line(ports.stdout, `${options['--no-open'] ? '' : 'pdd could not open a browser. Open the link yourself. '}Anyone with the link can use it. ${ends}`);
       if (bridge) line(ports.stdout, `Owner agent chat link (private; do not share): ${bridge.url}`);
     }

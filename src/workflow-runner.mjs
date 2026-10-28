@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: eb91801a69d1a1489fe4609515a46b0b6ebf3ec0c20003c6be2a8a9a3029947f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1f8d6e87398b8c431d2235c145ab7d498e3e04eb88b48f11d5feeb1973f79699).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -15,6 +15,7 @@ import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, h
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
+import { causeText } from './runtime-output.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -55,7 +56,13 @@ function deps(ports = {}) {
   const env = ports.env ?? process.env;
   const execFile = ports.execFile ?? ((file, args, { cwd }) => ordinary(file, args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
-    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY) };
+    isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
+}
+// The real reason of a failed gh, git or Herdr call, in plain words (Serhan, Oct 28: errors name their cause).
+function causeOf(error) {
+  if (error?.code === 'ENOENT') return `${String(error.path ?? error.message ?? '').match(/\b(herdr|gh|git)\b/)?.[1] ?? 'a needed program'} is not installed or not on PATH`;
+  if (error?.code === 'workflow_github_command_unavailable') return 'gh is not installed or not on PATH';
+  return causeText(error?.stderr || error?.detail) || String(error?.code ?? 'error');
 }
 export const pddCommand = (packageRoot = PACKAGE_ROOT) => [process.execPath, join(packageRoot, 'bin', 'pdd.mjs')].map(shell).join(' ');
 const pddFor = (p, packageRoot) => p.pdd ?? pddCommand(packageRoot ?? PACKAGE_ROOT);
@@ -224,8 +231,9 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     } catch { return badBase(); }
   }
   let binding;
+  p.say(`Reading issue ${issue} from GitHub…`);
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
-  catch (error) { return fail(`pdd could not read issue ${issue} with gh (${error.code ?? 'error'}). Check "gh auth status", the origin remote and the issue number.`); }
+  catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
   if (existing && existing.state !== 'cancelled') return fail(`Issue #${number} already has a run (${existing.workflow}, ${describe(existing)}). Open it: pdd workflow open ${number}. Status: pdd workflow status ${number}.`);
   const warnings = [], baseBranch = explicitBase ? base : binding.defaultBranch;
@@ -246,10 +254,12 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
   if (!explicitBase) {
+    p.say(`Fetching origin/${baseBranch}…`);
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
   }
   const runId = randomUUID();
+  p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
   if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
@@ -269,7 +279,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   try { await startNextChat(run, p, packageRoot); }
   catch (error) {
     run.warnings.push(`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`); writeRun(run, p);
-    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code ?? 'error'}: ${oneLine(error.message)}).`,
+    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code === 'ENOENT' ? causeOf(error) : `${error.code ?? 'error'}: ${oneLine(error.message)}`}).`,
       `Start it with: pdd workflow open ${number}`].join('\n'));
   }
   writeRun(run, p);
@@ -466,8 +476,9 @@ async function publishAreaPr(run, area, p, lines, retry) {
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
   if (existing) {
+    p.say(`Pushing ${run.branch} to ${label}…`);
     try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
-    catch { return fail([...lines, `git push to ${run.branch} failed. Check the network and gh auth, then ${retry}.`].join('\n')); }
+    catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -476,12 +487,13 @@ async function publishAreaPr(run, area, p, lines, retry) {
   const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
   writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
   let intent;
+  p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
     intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
       title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
   } catch (error) {
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
-      : `pdd could not prepare ${label} (${error.code ?? 'error'}). Fix it, then ${retry}.`;
+      : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
   const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
@@ -687,6 +699,7 @@ const agentMarker = env => env.CLAUDECODE ? `CLAUDECODE=${env.CLAUDECODE}` : env
 
 async function startNextChat(run, p, packageRoot) {
   const area = run.areas[run.area];
+  p.say(`Starting the ${area.name} chat in Herdr…`);
   try {
     run.chats.push(await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, p));
     clearChatFailure(run);
@@ -713,6 +726,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   let carried = [];
   if (askCode && run.gate?.kind === 'ask-code') {
     // The code is built only from approved prompts; pdd never approves them itself.
+    p.say('Reading PR 1 on GitHub…');
     const carry = await syncPr1(run, p);
     if (carry.failed) return fail(carry.failed);
     if (carry.drafts.length) return fail(approveFirst(run, carry.drafts));
@@ -774,6 +788,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   let based = '';
   if (askCode) {
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
+    p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }
     catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
@@ -836,6 +851,7 @@ export async function cancelRun({ ref, cwd }, ports) {
   if (found.error) return fail(found.error);
   const run = found.run;
   if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
+  p.say('Closing the chat tabs in Herdr…');
   const { warnings } = await closeChats(run, p);
   run.state = 'cancelled'; run.cancelled = { state: 'cancelled', at: p.now() }; run.gate = null; writeRun(run, p);
   return done([...warnings, `Cancelled the run for ${run.repo}#${run.number} and closed its Herdr tabs.`,
@@ -934,6 +950,8 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
 }
 
 async function listStatus(runs, { json, cancelled, scope }, p) {
+  const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
+  if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
   const all = [];
   for (const run of runs) all.push(summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p)));
@@ -953,6 +971,7 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository' }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
+  if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   await refreshPr(found.run, p);
   const run = found.run, facts = ended(run) ? {} : await gateFacts(run, p), chat = await chatState(run, p);
   if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [item] }, null, 2)); }
@@ -970,6 +989,7 @@ export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   let chat = currentChat(run), started = false;
   try {
     if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
+    p.say(`Opening the ${chat.area} chat in Herdr…`);
     const opened = await openChat({ run, chat }, p);
     if (opened.restartAvailable) {
       run.abandonedChats = [...(run.abandonedChats ?? []), { ...chat, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];

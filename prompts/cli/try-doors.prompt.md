@@ -52,3 +52,6 @@ preceding steps. For a nonempty saved world, print a short reminder to review th
 At CLI startup, read authenticated owner model metadata once (GET /v1/try/ID/model, no model calls) and print current session usage on stderr; model calls.cap/remaining are authoritative. If metadata is unavailable, show unknown and keep existing CLI startup behavior. Retain the known cap in the private descriptor so each confirmed call can show session used/remaining. Do not treat usage as a new budget or reset it.
 
 Usage normalization and formatting are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
+
+## Progress
+A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd try: running <name> on the Try…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.

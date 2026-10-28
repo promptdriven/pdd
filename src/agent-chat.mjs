@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: 04ba5c67ade73f96e92e3d339be86062b6c85b94bca28ef6f84c9b8d79c0154a).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 8241fb8ba894fca6201b99de6f9258a6824c3f870a6cc496cfd3083e31d6c67c).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {cleanText} from './runtime-output.mjs';
@@ -7,6 +7,8 @@ const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
 const json=body=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 const good=reply=>reply?.status>=200&&reply.status<300&&object(reply.json);
+// Why a relay request failed, for the terminal: the network cause, else the server's message, else the HTTP status.
+const why=reply=>reply?.unreachable??cleanText(reply?.json?.error?.message??reply?.why??(reply?.status?`HTTP ${reply.status}`:'no answer'));
 function scrub(value,secrets){
  if(typeof value==='string'){for(const secret of secrets??[])if(secret)value=value.split(secret).join('[redacted]');return value.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g,'[redacted]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]');}
  if(Array.isArray(value))return value.map(v=>scrub(v,secrets));
@@ -20,9 +22,10 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;
  if(options['--agent']!==undefined&&!explicit)throw Error('Unknown agent name. Choose a name from agents.json or an enabled default.');
  const {ports,root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
+ write(context,'Connecting your agent to the Try page…');
  const modelReply=await runtime.send(`${prefix}/model`,{method:'GET'},30000);
  if(modelReply.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
- if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error('Could not read the owner’s Try model for agent chat.');
+ if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd try again.`);
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema}));
  const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
@@ -32,7 +35,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
  const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice}),30000);
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
- if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error('Could not connect your agent to this Try. Run pdd try again.');
+ if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd try again.`);
  remember(choice);
  const ownerUrl=new URL(link);ownerUrl.hash=`agent=${connected.json.browser_key}`;
  let closed=false,task=null,tickTask=null,failed=false;const seen=new Set(),controller=new AbortController();
@@ -42,11 +45,13 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   try{await (context.agentFinalSend??runtime.send.bind(runtime))(`${prefix}/agent/disconnect`,json({bridge_id}),5000);}catch{}
  }
  async function answer(message){
-  const agent=agents.find(a=>a.id===message.agent);let result;
+  const agent=agents.find(a=>a.id===message.agent),name=agent?.name??'Your agent';let result;
+  if(ready(agent))write(context,`${name} is answering a question from the Try page…`);
   if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
   else result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,
    context:scrub({message:message.text,story:test.story,stories:model.stories??[],entries,current:message.context??{}},context.secrets)});
   if(controller.signal.aborted)return;
+  write(context,result.error||!ready(agent)?`${name} could not answer: ${result.error?.message??result.say}`:`${name} answered.${result.fill?' It proposed input for the form.':''}`);
   if(result.error)agents=agents.map(a=>a.id===message.agent?{...a,state:result.error.state,detail:result.error.message}:a);
   else if(agent)agents=agents.map(a=>a.id===message.agent?{...a,state:'ready',detail:undefined}:a);
   const safe=scrub(result,context.secrets);
@@ -54,7 +59,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   if(!good(reply)||reply.json.ok!==true){failed=true;write(context,'Your agent reply could not be delivered. It will not be run again. Reconnect with pdd try.');stop();}
  }
  async function run(onTick){
-  write(context,`Ask your agent is connected (${agents.find(a=>a.id===choice)?.name??choice}). Keep pdd running; Ctrl-C disconnects chat and keeps the Try open.`);
+  write(context,`Ask your agent is connected (${agents.find(a=>a.id===choice)?.name??choice}). Keep this window open for Ask your agent; Ctrl-C disconnects the chat and keeps the Try open.`);
   try{while(!closed&&!controller.signal.aborted&&!context.interrupted){
    const before=ports.now();const poll=await runtime.send(`${prefix}/agent/poll?bridge_id=${bridge_id}`,{method:'GET'},25000);
    if(controller.signal.aborted||context.interrupted)break;

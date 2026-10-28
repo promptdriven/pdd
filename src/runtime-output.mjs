@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 142719d396e2f927a670f8b1ed1f29a8d9d3a061d96903d5e83fb375c3b3fb05).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 246efe35633950089c95cab5f8106b7df00adf11cb77087e90ee38aa970c21c5).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -21,6 +21,18 @@ export function cleanText(value, secrets = [], { paths = true } = {}) {
   return (paths ? text.replace(SERVER_PATH, '<server path>') : text).trim();
 }
 const cleanField = (value, secrets) => cleanText(value, secrets, { paths: false });
+
+// Progress for slow steps: plain lines on stderr, the same for a person and an agent; stdout keeps the result.
+export const sinceText = ms => ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`;
+export function progressTicker(stream, now, everyMs = 15_000) {
+  const start = now();
+  let shown = start;
+  return text => { if (now() - shown < everyMs) return; shown = now(); stream.write(`${text} · ${sinceText(shown - start)}\n`); };
+}
+// The real reason of a tool or server error: its first line, without control characters, secrets or tokens.
+const TOKENS = /\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b|Bearer\s+\S+/g;
+export const causeText = (value, secrets = []) => (String(value ?? '').split(/\r?\n/).map(text => cleanField(text, secrets)).find(Boolean) ?? '')
+  .replace(TOKENS, '[secret]').slice(0, 300);
 const shown = (value, secrets) => cleanField(JSON.stringify(value) ?? 'nothing', secrets);
 
 // A secret browser link from the runtime: same scheme and host as the origin, the expected path, no user or password.

@@ -238,7 +238,7 @@ test('doors: a queued lint ending refused prints the confirmed reason and sends 
   const ports = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports), 125);
   assert.equal(ports.stdout.text, '');
-  assert.equal(ports.stderr.text, `pdd try: ${message}\n`);
+  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd try: ${message}`);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
 
