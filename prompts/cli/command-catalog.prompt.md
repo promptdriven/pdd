@@ -35,3 +35,5 @@ Try also catalogs flags --cli, --shell and --save-last and optional-integer --se
 Help forms: `pdd try [STORY] --cli [--shell] [--new]`, `pdd try [STORY] --serve [PORT] [--new]`,
 `pdd try --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
 into its original test. --shell compatibility and mode conflicts belong to runtime-client.
+
+`pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.

@@ -168,3 +168,5 @@ resend it. Forward cancellation to polling waits so closing a local HTTP server 
 A door's lint can finish refused before producing a program report (for example lint-queue-timeout with
 provider_calls=0 and dispatch=not_started). Preserve that confirmed refusal's plain reason on stderr/125;
 do not mislabel it as an unknown result and do not send a Try. A later explicit setup may use a new lint ID.
+
+Pass the captured source SHA into saved and printed check JSON, including GET-only reads, so a workflow can bind saved evidence to source without another execution.

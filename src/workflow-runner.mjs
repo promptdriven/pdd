@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6b220dd7d78b7b1ba2b8341929b5c8c3c8a1371e12c9342ec98c7c3327181c80).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: eb91801a69d1a1489fe4609515a46b0b6ebf3ec0c20003c6be2a8a9a3029947f).
 import { execFile as execFileCallback } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -12,7 +12,8 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { interfaceBlocks } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
+import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -333,17 +334,44 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-// The step summary that holds the run's runtime result: the check step's, else the latest one with a Runtime check.
-const checkSummary = (run, steps = Object.keys(run.done ?? {})) => /Runtime check/.test(run.done?.check?.summary ?? '') ? run.done.check.summary
-  : steps.map(step => run.done[step]?.summary ?? '').reverse().find(text => /Runtime check/.test(text)) ?? null;
-// "N of M Stories pass" from the latest check lines; a summary with only an overall line is one Story.
-function storyCount(run) {
-  const lines = runtimeLines(checkSummary(run));
-  if (!lines.length) return null;
-  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
-  return { pass: counted.filter(line => line.pass).length, total: counted.length, failing: counted.filter(line => !line.pass && line.story).map(line => line.story) };
+// Content identity includes uncommitted and untracked Git-visible source, independent of commit SHA.
+function gitFingerprint(root) {
+  try {
+    const files = gitFiles(root).sort().map(path => {
+      const full = join(root, path);
+      let stat; try { stat = lstatSync(full); } catch (error) { if (error.code === 'ENOENT') return [path, 'missing']; throw error; }
+      if (stat.isSymbolicLink()) return [path, 'link', readlinkSync(full)];
+      if (!stat.isFile()) throw Error('Not a regular source file');
+      return [path, stat.mode & 0o111, createHash('sha256').update(readFileSync(full)).digest('hex')];
+    });
+    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
+  } catch { return null; }
 }
-const storyText = count => `${count.pass} of ${count.total} Stories pass`;
+function matchesSource(record, root, fingerprint) {
+  const source = record.source;
+  if (!source?.sha256) return false;
+  if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
+  if (source.kind === 'runtime-capture-v1') {
+    try { return captureSource(root, { tests: source.tests, appMap: null }).sha256 === source.sha256; } catch { return false; }
+  }
+  return false;
+}
+function storyCount(run) {
+  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+    .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  if (!records.length) return null;
+  const fingerprint = gitFingerprint(run.root), compatible = records.filter(record => matchesSource(record, run.root, fingerprint));
+  const lines = (compatible.length ? compatible : records).flatMap(record => runtimeLines(record.summary));
+  const named = latestStories(lines), counted = named.length ? named : lines.slice(-1);
+  const unknown = line => !compatible.length || !line.pass && !line.result.includes('✗');
+  const result = { pass: compatible.length ? counted.filter(line => line.pass).length : 0, total: counted.length,
+    failing: counted.filter(line => !unknown(line) && !line.pass && line.story).map(line => line.story) };
+  const unresolved = counted.filter(unknown).map(line => line.story ?? 'all Stories');
+  if (unresolved.length) result.unknown = unresolved;
+  if (!compatible.length) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
+  return result;
+}
+const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
@@ -490,6 +518,37 @@ async function finishPr(run, area, step, p, lines) {
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
 }
 
+// Record saved Runtime evidence without progressing the workflow or contacting external services.
+export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
+  const p = deps(ports), found = await resolveRun(ref, { cwd }, p);
+  if (found.error) return fail(found.error);
+  const run = found.run;
+  let receipt, source, lines;
+  try {
+    if (!summaryFile || !lstatSync(resolve(cwd, summaryFile)).isFile() || lstatSync(resolve(cwd, summaryFile)).size > 2 * 1024 * 1024) throw Error('Supply a regular saved JSON file of at most 2 MiB.');
+    receipt = JSON.parse(readFileSync(resolve(cwd, summaryFile), 'utf8'));
+    if (realpathSync(receipt.repo) !== realpathSync(run.root)) throw Error('The evidence belongs to a different repository/worktree.');
+    if (!/^[a-f0-9]{64}$/.test(receipt.source_sha256 ?? '') || !Array.isArray(receipt.rows) || !receipt.rows.length) throw Error('Saved check JSON needs source_sha256 and nonempty rows.');
+    const tests = receipt.rows.map(row => row?.test);
+    if (tests.some(path => typeof path !== 'string' || !path) || new Set(tests).size !== tests.length) throw Error('Evidence test paths must be unique.');
+    source = { kind: 'runtime-capture-v1', sha256: receipt.source_sha256, tests };
+    if (!matchesSource({ source }, run.root, null)) throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
+    const found = findTests({ root: run.root });
+    const rows = receipt.rows.map(row => {
+      const test = found.tests.find(test => test.path === row.test);
+      if (!test || test.story !== row.story || !['passed', 'failed', 'refused', 'not_run', 'unknown', 'queued', 'running'].includes(row.state))
+        throw Error('Evidence row Story/state does not match its selected test.');
+      return { ...row, phase: 'server', criteria_total: test.doc?.criteria?.length ?? 0 };
+    });
+    const expected = new Map(storyLines(rows));
+    lines = rows.map(row => row.summary_line);
+    if (rows.some(row => row.summary_line !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
+  } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
+  (run.evidence ??= []).push({ at: p.now(), summary: [...new Set(lines)].join('\n'), source, receipt });
+  writeRun(run, p);
+  return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
+}
+
 export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
@@ -509,7 +568,12 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     for (const item of later) delete run.done[item];
     lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length > 1 ? 'those steps' : 'that step'}; run ${later.length > 1 ? 'them' : 'it'} again.`);
   }
-  run.done[step] = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  if (runtimeLines(record.summary).length) {
+    record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
+    (run.runtimeHistory ??= []).push({ ...record, step });
+  }
+  run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
     run.state = 'running'; run.gate = null; writeRun(run, p);
@@ -818,7 +882,7 @@ async function gateFacts(run, p) {
 }
 
 function detail(run, chat = null, facts = {}) {
-  const drafts = facts.drafts ?? [];
+  const drafts = facts.drafts ?? [], stories = storyCount(run);
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
@@ -833,7 +897,9 @@ function detail(run, chat = null, facts = {}) {
     ...(tab && !ended(run) ? [`Chat: Herdr session pdd, tab "${tab.label}" — pdd workflow open ${run.number}`] : []),
     ...(run.pr ?? []).map(pr => { const label = prLabel(run, run.areas.find(item => item.name === pr.stage) ?? {}); return `${label === 'the PR' ? 'PR' : label}: ${pr.url} — ${pr.state ?? 'open'}, ${ci(pr)}${pr.base && pr.base !== run.baseBranch ? ` (stacked on ${pr.base})` : ''}`; }),
     ...(drafts.length ? [draftLine(drafts)] : []),
-    ...(storyCount(run) ? [`Stories: ${storyText(storyCount(run))}${storyCount(run).failing.length ? ` (✗ ${storyCount(run).failing.join(', ')})` : ''}`] : []),
+    ...(stories ? [`Stories: ${storyText(stories)}${stories.failing.length ? ` (✗ ${stories.failing.join(', ')})` : ''}`,
+      ...(stories.unknown?.length ? [`Unknown Stories: ${stories.unknown.join(', ')}`] : []),
+      ...(stories.evidence ? [stories.evidence] : [])] : []),
     `Worktree: ${run.root} (branch ${run.branch})`, `Run folder: ${run.runDir}`, `Review without resuming: pdd workflow view ${run.repo}#${run.number}`, ...(next ? [`Next: ${next}`] : [])].join('\n');
 }
 

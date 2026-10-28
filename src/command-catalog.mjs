@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5a37d4d170eca227164eba3df5daa98dfe9632cb6c41922e9eb0189ee0502926).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d6b8bfdd7d7be48d661addcec68a9714ee5c3f3524aeb2efc6d31ce91b41f40f).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -9,6 +9,9 @@ const routes = [
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
+  { id: 'workflow.evidence', prefix: ['workflow', 'evidence'], local: 'workflow-evidence',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--summary',kind:'text'}],
+    forms: [form('pdd workflow evidence ISSUE --summary FILE', 'Record source-verified saved check JSON without rerunning steps, gates or publication.')] },
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },

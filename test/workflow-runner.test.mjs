@@ -1680,3 +1680,82 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
   assert.equal(code.exitCode,0,code.message);assert.equal(refreshed,true);
   assert.equal(f.git(run.root,'rev-parse','HEAD'),newest,'PR2 uses the newly fetched base');
 });
+
+// Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
+test('GREG2442-1: newest compatible verify evidence replaces 7/8 with 17/17; unknown stays unknown', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const old = Array.from({ length: 8 }, (_, i) => `Runtime check (story-${i}): ${i === 7 ? 'unknown · 0' : '✓ 1'} of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
+  f.tick(); await stepDone({ step: 'check', summary: old, cwd: run.root }, f.agentPorts());
+  let data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 7); assert.deepEqual(data.failing, []); assert.deepEqual(data.unknown, ['story-7']);
+  const newer = Array.from({ length: 17 }, (_, i) => `Runtime check (story-${i}): ✓ 1 of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
+  f.tick(); await stepDone({ step: 'verify', summary: newer, cwd: run.root }, f.agentPorts());
+  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 17); assert.equal(data.total, 17); assert.deepEqual(data.failing, []);
+});
+
+test('GREG2442-2: changed uncommitted source invalidates pass evidence, byte-identical content restores it', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
+  writeFileSync(file, 'export const value = 999;\n');
+  let out = await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports);
+  let data = JSON.parse(out.message).runs[0].stories;
+  assert.equal(data.pass, 0); assert.deepEqual(data.failing, []); assert.ok(data.unknown.length);
+  writeFileSync(file, original);
+  data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 1);
+});
+
+test('GREG2442-3: saved check JSON records only source-verified evidence and preserves all workflow/publication state', async t => {
+  const { recordEvidence } = await import('../src/workflow-runner.mjs');
+  assert.equal(typeof recordEvidence, 'function');
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { f, run } = await featureAtTryGate(t);
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.equal(f.prs.length, 1); const prBody = f.prs[0].body;
+  const fixtureRoot = join(packageRoot, 'test/fixtures/harbor');
+  const { cpSync } = await import('node:fs');
+  for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(fixtureRoot, dir), join(run.root, dir), { recursive: true });
+  const rows = ['tests/place-order.json', 'tests/unknown-item.json'].map(test => ({ test, story: test.split('/').at(-1).replace('.json', ''), state: 'passed',
+    criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0,
+    summary_line: `Runtime check (${test.split('/').at(-1).replace('.json', '')}): ✓ 1 of 1 criterion · 1/1 checks · 0 AI calls` }));
+  const source = captureSource(run.root, { tests: rows.map(r => r.test), appMap: null });
+  const file = join(f.base, 'evidence.json'), doc = { repo: run.root, source_sha256: source.sha256, rows, batch: 'older-byte-identical-receipt' };
+  writeFileSync(file, JSON.stringify(doc));
+  const before = f.record(), gitBefore = f.git(run.root, 'status', '--porcelain'), heads = f.git(run.root, 'rev-parse', 'HEAD');
+  const noExternal = { ...f.ports, herdr: async () => assert.fail('Herdr'), execFile: async (cmd, args, opts) => {
+    assert.equal(cmd, 'git'); assert.ok(['rev-parse', 'ls-files'].includes(args[0]), args.join(' ')); return exec(cmd, args, { ...opts, encoding: 'utf8' });
+  } };
+  f.tick(); const result = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal);
+  assert.equal(result.exitCode, 0, result.message);
+  const after = f.record();
+  for (const key of ['done', 'state', 'gate', 'question', 'decisions', 'chats', 'pr']) assert.deepEqual(after[key], before[key], key);
+  assert.equal(f.prs.length, 1); assert.equal(f.prs[0].body, prBody);
+  assert.equal(after.evidence.length, 1); assert.equal(after.evidence[0].receipt.batch, doc.batch);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), heads); assert.equal(f.git(run.root, 'status', '--porcelain'), gitBefore);
+  const data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 2); assert.equal(data.total, 2);
+  for (const mutate of [d => { d.rows[0].state = 'unknown'; }, d => { d.rows[0].story = 'invented'; }, d => { delete d.source_sha256; }, d => { d.repo = f.source; }]) {
+    const invalid = structuredClone(doc); mutate(invalid); writeFileSync(file, JSON.stringify(invalid));
+    const beforeBad = readFileSync(join(run.runDir, 'status.json'), 'utf8');
+    assert.notEqual((await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal)).exitCode, 0);
+    assert.equal(readFileSync(join(run.runDir, 'status.json'), 'utf8'), beforeBad);
+  }
+  writeFileSync(file, JSON.stringify(doc));
+  writeFileSync(join(run.root, 'user_stories/place-order.md'), 'changed');
+  const unchanged = readFileSync(join(run.runDir, 'status.json'), 'utf8');
+  const stale = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, noExternal);
+  assert.notEqual(stale.exitCode, 0); assert.match(stale.message, /source/i);
+  assert.equal(readFileSync(join(run.runDir, 'status.json'), 'utf8'), unchanged);
+});
+
+
+test('GREG2442-4: later stale-source verify cannot override compatible older results', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const file = join(run.root, 'value.mjs'), original = readFileSync(file);
+  writeFileSync(file, 'export const value = 999;\n');
+  f.tick(); await stepDone({ step: 'verify', summary: 'Runtime check: ✗ 0 of 2 criteria', cwd: run.root }, f.agentPorts());
+  writeFileSync(file, original);
+  const data = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(data.pass, 1); assert.deepEqual(data.failing, []);
+});

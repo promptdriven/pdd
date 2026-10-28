@@ -48,3 +48,5 @@ One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title,
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.
+
+Saved check JSON includes source_sha256 (full captured upload hash, null when no capture) so workflow evidence can verify it against the exact selected source.

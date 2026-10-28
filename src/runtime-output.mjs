@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 26a61a080c2230f8e2f55b2ab7915edc5ed51abdf593b10f9bd76c0a4b8d8c46).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 045daa42a39ef7dcb364d946f1fb9e487c1e6921c6786b7ccc7275c05df2ad68).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -86,9 +86,9 @@ export function jsonRow(row) {
     reason: row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
-export function renderJson({ batch = null, repo, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
+export function renderJson({ batch = null, repo, sourceSha256 = null, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
   const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
-  return { batch, repo, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
+  return { batch, repo, source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
     rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
 }
 
