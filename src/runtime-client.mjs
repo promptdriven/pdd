@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cffd0e8781f8a16e77d025a5cd28172ea9916c40ae54035ecabca4b828879780).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ece64b29dbebc004f4fcd5aebcccf974ba34736dc3f9e75d44fa32e2ccd5b8e6).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -153,13 +153,13 @@ class Runtime {
       return { status: response.status, headers: response.headers, text, json };
     } catch { return { lost: true }; } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
   }
-  post(path, request, tar) {
+  post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
     form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
     form.set('source', new Blob([tar], { type: 'application/x-tar' }), 'source.tar');
-    return this.send(path, { method: 'POST', body: form }, this.ports.postMs);
+    return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
-  get(id) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, GET_MS); }
+  get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
@@ -186,6 +186,7 @@ function judgePost(reply, id, command, secrets) {
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
+  if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null) return { kind: 'busy', wait: lintQueueWait(error) };
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
     return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
@@ -341,13 +342,13 @@ function batchRecord(context) {
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
 function saveAnswer(context, id, json) { if (isObject(json)) context.store.write(join(context.folder, `${id}.json`), json); }
 
-async function postJob(context, path, command, request, row) {
+async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
   if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; }
   saveBatch(context);
-  const reply = await context.runtime.post(path, request, context.capture.tar);
+  const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   return verdict;
@@ -390,31 +391,49 @@ function progressLine(rows, ms) {
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
 }
 
-async function runLint(context) {
-  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
+function lintQueueWait(refusal) {
+  if (!['lint-queue-timeout', 'lint-queue-full'].includes(refusal?.code) || refusal.details?.retryable !== true) return null;
+  const seconds = refusal.details.retry_after;
+  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(30, Math.max(1, seconds)) : 5) * 1000;
+}
+
+async function runLint(context, complete = false) {
+  const agent = context.agentLimit ?? !context.ports.interactive;
+  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
+  let attempts = 0;
+  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
+  const pause = async wait => {
+    if (context.interrupted || attempts >= 3 || context.ports.now() + wait >= lintEnd) return false;
+    line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
+    await context.ports.sleep(wait, context.signal);
+    return !context.interrupted && context.ports.now() < lintEnd;
+  };
   for (;;) {
-    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256 };
-    context.lint.request_ids.push(request.requestId);
-    const verdict = await postJob(context, '/v1/lint', 'lint', request, null);
-    if (verdict.kind === 'busy' && context.ports.now() + verdict.wait < lintEnd && !context.interrupted) {
-      line(context.ports.stderr, 'Server busy: lint is waiting for a free slot.');
-      await context.ports.sleep(verdict.wait, context.signal); continue;
-    }
+    if (context.interrupted) return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (context.ports.now() >= lintEnd) return busy();
+    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
+    context.lint.request_ids.push(request.requestId); attempts++;
+    const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())));
+    if (verdict.kind === 'busy') { if (await pause(verdict.wait)) continue; return busy(); }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
-    if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
-    // A lost lint answer is read by the same ID, like a lost check.
-    const readEnd = verdict.kind === 'unknown' && !context.agentLimit ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
+    // Unknown dispatch still reads only this ID; only a confirmed terminal capacity refusal permits another attempt.
+    const readEnd = verdict.kind === 'unknown' && !agent ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
     let answer = verdict.answer ?? null, id = request.requestId, lost = false;
     while (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state) && context.ports.now() < readEnd && !context.interrupted) {
-      await context.ports.sleep(context.ports.pollMs, context.signal);
-      if (context.interrupted) break;
-      const read = judgeGet(await context.runtime.get(id), id, 'lint');
+      await context.ports.sleep(Math.min(context.ports.pollMs, Math.max(0, readEnd - context.ports.now())), context.signal);
+      if (context.interrupted || context.ports.now() >= readEnd) break;
+      const read = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, readEnd - context.ports.now()))), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
+    }
+    if (!lost && answer?.state === 'refused') {
+      const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
+      const wait = refusals.map(lintQueueWait).find(value => value !== null);
+      if (wait !== undefined) { if (await pause(wait)) continue; return busy(); }
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
   }

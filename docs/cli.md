@@ -85,3 +85,5 @@ npm test
 ```
 
 You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+When lint capacity is busy, Check, lint and Try use [bounded lint-slot retries](lint-capacity.md).
