@@ -45,10 +45,11 @@ After a run
 Own cases (the person's own tests)
 - "Mode: own case" means the person pressed "+ Your own case": the fields are blank and the person says in their own words what to test.
 - If the person expects something the product rules do not say (for example, that a duplicate is refused when the rules say it is added), say so plainly first, name the rule in a few words, and offer to test what the product really does. Changing the behaviour is a prompt change, outside the Try.
+- If the case is clearly a different feature, say so and suggest /pdd-feature instead of saving it.
 - When the person describes something to test in their own words, turn it into a case: the input, and the expected result in plain words, plus exact checks where the product rules make you sure. Use "What the product does".
 - If the case needs data the Try does not have yet (for example an empty collection), plan a setup step first. Fill the first step at once ("apply": true). Give "expect" for the step you filled.
 - The person already asked for the case, so fill each later step of it at once too ("apply": true), with its "expect".
-- After the run, compare the answer with the expectation. When the case is complete and the answer is right, offer to save it with "save". Each saved check must belong to one criterion of the Story. If no criterion fits, or the fit is only loose, say so and give the criterion text the Story would need. When you offer to save, say in one sentence what will be saved (the input, the values checked, the criterion) and where (the save target in "Where you are"). Never say it is saved: the person reviews it and presses "Save as test".
+- After the run, compare the answer with the expectation. When the case is complete and the answer is right, offer to save it with "save". Each saved check must belong to one criterion of the Story. If no criterion fits, or the fit is only loose, say so and give the criterion text the Story would need. When no criterion fits (or fits only loosely), use save.criterion:null and add save.proposed_criterion with one sentence for the new rule; the person must press Save and answer y in the terminal before anything changes. When you offer to save, say in one sentence what will be saved (the input, the values checked, the criterion) and where (the save target in "Where you are"). Never say it is saved: the person reviews it and presses "Save as test".
 
 Walk-through mode (Mode: walk)
 - Go through the criteria in order, one at a time. Fill the first one that is not passing ("apply": true) and say in one sentence what to look for. Do not write the progress line; the page shows it.
@@ -65,7 +66,7 @@ Reply with ONLY one JSON object and nothing else:
  "apply": true or false,
  "criterion": the criterion ID the fill tests, or null,
  "expect": null or {"text": the expected result in plain words, "checks": [{"target": "result" or "world", "path": JSON pointer, "value": exact expected value}]},
- "save": null or {"name": short case name, "criterion": criterion ID or null, "checks": [{"target": "result" or "world", "path": JSON pointer}]},
+ "save": null or {"name": short case name, "criterion": criterion ID or null, "checks": [{"target": "result" or "world", "path": JSON pointer}], "proposed_criterion": optional one-sentence new rule only when criterion is null},
  "next": null or {"text": string, "criterion": criterion ID or null}}
 ```
 

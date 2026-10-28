@@ -12,7 +12,7 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 
 ## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
-A story may have more than one test file (for example a different starting world). Each file must still cover every criterion of its story (P5, P6). There is no P11.
+A story may have more than one test file (for example a different starting world). Unscoped files cover every criterion of their Story. A scoped own-case file covers its explicitly selected criteria (P3, P5, P6), preserving its own starting world. There is no P11.
 
 Check each selected test. Stop at the first broken rule; that test is refused and is not sent.
 
@@ -20,14 +20,16 @@ Check each selected test. Stop at the first broken rule; that test is refused an
 |---|---|---|
 | P1 | Valid JSON; only the engine's top-level keys; `schema_version` is v1 | `invalid-document` |
 | P2 | `story_path` is set and names a Git-visible file | `pdd-no-story`, `story-missing` |
-| P3 | No `criteria_scope`; `check_exemptions` absent or empty | `pdd-partial-test` |
+| P3 | Optional `criteria_scope` selects canonical source criteria; `check_exemptions` remains absent or empty | `invalid-criteria-scope`, `pdd-partial-test` |
 | P4 | The story has criteria | `story-criteria-missing` |
-| P5 | Test criterion texts equal the story items (sorted). Name the first missing or extra line | `story-criterion-mismatch` |
+| P5 | Unscoped: criterion texts equal Story items (sorted). Scoped: criteria exactly equal the selected canonical records, in source order | `story-criterion-mismatch` |
 | P6 | Unique IDs; each ID has a check and an exact check (the engine's exact predicate) | `duplicate-criterion`, `unchecked-criteria`, `criterion-needs-exact-check` |
 | P7 | `entry_path` is a Git-visible `*.prompt.md` with one interface block, `approved` or `draft`, hash current | `entry-missing`, `interface-missing`, `pdd-two-interfaces`, `invalid-json`, `interface-unapproved`, `interface-stale` |
 | P8 | `operation` is in the interface `entries` | `entry-operation-missing` |
 | P9 | `input` matches `input_schema`. Skip an input that holds `$step_result`. Report every problem of every step at once | `invalid-input` |
 | P10 | An error step's `expected_error` is in the entry `errors`, with one `equals` check on `error` `/code` | `pdd-unknown-error`, `missing-error-check` |
+
+For a scoped test, derive canonical source records from `storyCriteria` in source order: `{id:"ac-1",text:first}`, `{id:"ac-2",text:second}`, and so on. `criteria_scope` must be a nonempty array of distinct strings. Selecting source records whose IDs appear in the scope must yield exactly that scope's IDs in that order: unknown IDs, alternate spellings, duplicates and reordered selections are `invalid-criteria-scope` at `criteria_scope`. The scenario's `criteria` array must deeply equal those selected records (IDs, exact text and source order), otherwise `story-criterion-mismatch` at `criteria`. A scope may select every criterion. Each selected criterion still needs an exact check under P6; checks for omitted criteria are `unknown-criterion`. Scope changes no input, expected value, starting world, source capture, prompt admission, or safety rule. Nonempty or malformed `check_exemptions` remains `pdd-partial-test`, including with a valid scope. Missing Story handling remains P2/P4.
 
 A broken step or check shape uses the engine code (`missing-steps`, `invalid-step`, `invalid-check`, `unknown-criterion`, `invalid-criterion`). A step may name a `model` (as the live engine eae2202a allows); a model that is not a nonblank string is `invalid-step-model`. pdd is never stricter than the live engine.
 - Default `max_calls` for a test: 4 for each step, at least 6, at most 100 (steps with saved data or prompt calls cost 2 to 3 AI calls each). A refusal has `code`, `section` (engine style, for example `steps[0].input.items[0].quantity`), `message`, an optional `hint` and the 1-based `step`.

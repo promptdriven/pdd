@@ -1,12 +1,12 @@
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 3c0f2c61aac0e439b318af2d5f4e6fac4a379fcd8cdebe82bb657122eeb1fed4).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 1d5180572aa4300ed01e1fc7721dcb543ceaa0e2ac077db82621e5f5a2fea9b5).
 import {createHash} from 'node:crypto';
-import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
+import {buildProjectCard,readAgentScenarios,readAgentStoryCriteria} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
 import {createCoverage} from './agent-coverage.mjs';
 import {checkInput} from './runtime-preflight.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const own=(x,k)=>object(x)&&Object.hasOwn(x,k);
-const clone=x=>JSON.parse(JSON.stringify(x));
+const clone=x=>structuredClone(x);
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const clip=(x,n)=>Array.from(String(x??'')).slice(0,n).join('');
 const clipBytes=(value,max)=>{let text='',bytes=0;for(const c of String(value??'')){const n=Buffer.byteLength(c);if(bytes+n>max)break;text+=c;bytes+=n;}return text;};
@@ -46,6 +46,50 @@ function normalizeScenarios(found){
  if(Array.isArray(found)&&found.length>128)incomplete=true;
  Object.defineProperty(rows,'incomplete',{value:incomplete});Object.defineProperty(rows,'readerIncomplete',{value:found?.incomplete===true});return rows;
 }
+function criterionIdentities(records,model,sourceFound){
+ const pinned=Array.isArray(model.stories)?model.stories:Object.values(model.stories??{}),sources=new Map();
+ let incomplete=records.incomplete||!Array.isArray(sourceFound)||sourceFound.incomplete===true;
+ for(const row of (Array.isArray(sourceFound)?sourceFound:[]).slice(0,128)){
+  if(!object(row)||typeof row.path!=='string'||!Array.isArray(row.criteria)){incomplete=true;continue;}
+  const valid=row.criteria.every((c,index)=>object(c)&&c.id===`ac-${index+1}`&&typeof c.text==='string'&&c.text.length>0);
+  if(!valid||sources.has(row.path)){incomplete=true;sources.set(row.path,{criteria:[],invalid:true});}else sources.set(row.path,row);
+ }
+ if(Array.isArray(sourceFound)&&sourceFound.length>128)incomplete=true;
+ const paths=new Set([...pinned.map(s=>s?.path).filter(x=>typeof x==='string'),...records.map(s=>s.doc.story_path)]),maps=new Map(),stories=[];
+ for(const path of paths){
+  const source=sources.get(path),sourceCriteria=source?.criteria??[],local=records.filter(r=>r.doc.story_path===path),pinnedStory=pinned.find(s=>s?.path===path),pinnedCriteria=Array.isArray(pinnedStory?.criteria)?pinnedStory.criteria:[];
+  const aliases=new Map();let ambiguous=source?.invalid===true;
+  const add=c=>{if(!object(c)||typeof c.id!=='string'||!c.id||typeof c.text!=='string'||!c.text){ambiguous=true;return;}if(!aliases.has(c.id))aliases.set(c.id,new Set());aliases.get(c.id).add(c.text);};
+  for(const c of pinnedCriteria)add(c);for(const row of local)for(const c of row.doc.criteria)add(c);
+  if([...aliases.values()].some(texts=>texts.size!==1))ambiguous=true;
+  if(new Set(sourceCriteria.map(c=>c.text)).size!==sourceCriteria.length||new Set(pinnedCriteria.map(c=>c?.text)).size!==pinnedCriteria.length)ambiguous=true;
+  const texts=source?[...new Set(sourceCriteria.map(c=>c.text))]:[...new Set([...pinnedCriteria,...local.flatMap(r=>r.doc.criteria)].map(c=>c?.text).filter(x=>typeof x==='string'&&x))];
+  if(source&&[...aliases.values()].some(values=>[...values].some(text=>!texts.includes(text))))ambiguous=true;
+  const display=new Map(),used=new Map();
+  for(const text of texts){
+   const candidates=pinnedCriteria.filter(c=>c?.text===text&&aliases.get(c.id)?.size===1).map(c=>c.id),canonical=sourceCriteria.find(c=>c.text===text)?.id;
+   let id=candidates.length===1?candidates[0]:canonical;
+   if(!id&&!source){const old=[...aliases].filter(([,values])=>values.size===1&&values.has(text)).map(([key])=>key);if(old.length===1)id=old[0];else if(!old.length)ambiguous=true;}
+   if(typeof id!=='string'||!/^[A-Za-z0-9._-]{1,64}$/.test(id)||used.has(id)&&used.get(id)!==text){ambiguous=true;id=`unknown-${hash(text).slice(0,12)}`;}
+   display.set(text,id);used.set(id,text);
+  }
+  const alias=new Map([...aliases].map(([raw,texts])=>[raw,texts.size===1?display.get([...texts][0])??null:null])),official=new Map();
+  for(const c of sourceCriteria){const raw=aliases.get(c.id);official.set(c.id,!ambiguous&&(!raw||raw.size===1&&raw.has(c.text))?display.get(c.text)??null:null);}
+  if(ambiguous)incomplete=true;
+  maps.set(path,{display,alias,official,ambiguous});
+  stories.push({...pinnedStory,path,title:pinnedStory?.title??path.split('/').at(-1).replace(/\.md$/,''),criteria:texts.map(text=>({id:display.get(text),text}))});
+ }
+ const normalized=records.map(row=>{
+  const map=maps.get(row.doc.story_path),byRaw=new Map(),criteria=[];let invalid=row.incomplete||map?.ambiguous===true;
+  for(const c of row.doc.criteria){const id=map?.display.get(c.text);if(!id){invalid=true;continue;}byRaw.set(c.id,id);if(criteria.some(item=>item.id===id)){invalid=true;continue;}criteria.push({...c,id});}
+  const steps=row.doc.steps.map(step=>({...step,checks:step.checks.flatMap(check=>{const id=byRaw.get(check.criterion_id);if(!id){invalid=true;return[];}return[{...check,criterion_id:id}];})}));
+  if(invalid)incomplete=true;
+  return{...row,doc:{...row.doc,criteria,steps},incomplete:invalid};
+ });
+ Object.defineProperty(normalized,'incomplete',{value:incomplete});Object.defineProperty(normalized,'readerIncomplete',{value:records.readerIncomplete});
+ const bindings=(Array.isArray(model.criterion_bindings)?model.criterion_bindings:[]).flatMap(binding=>{const map=maps.get(binding?.story_path);if(!map||map.ambiguous)return[];const id=map.alias.get(binding.criterion_id)??map.official.get(binding.criterion_id);return id?[{...binding,criterion_id:id}]:[];});
+ return{records:normalized,stories,maps,model:{...model,stories:Object.fromEntries(stories.map(s=>[s.path,s])),criterion_bindings:bindings},sourceIdentity:{rows:Array.isArray(sourceFound)?sourceFound:[],incomplete:sourceFound?.incomplete===true}};
+}
 const uncertain=verdict=>({...verdict,state:verdict.state==='pass'?'tried':verdict.state,items:(verdict.items??[]).map(item=>({...item,state:item.state==='pass'?'tried':item.state}))});
 function compactSurface(run){
  const result=[];
@@ -66,29 +110,30 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
  let closed=false,mode='chat',conversation=[],runs=[],ownCases=[],pending=null,lastContext=null,card=null,sourceAtConnect=null,scenarios=[],scenarioHash=null,scenarioAtConnect=null,judges=[],coverage=null,count=0,savedCount=0;
  const seen=new Set(),savedIds=new Set(),surfaceEvidence=new Map();let coverageHash=null;const entries=(model.entries??[]).map(e=>({...e,entry:entryId(e)}));
  const storyPath=test.storyPath??model.seed?.story_path??null;
- const modelStories=Array.isArray(model.stories)?model.stories:Object.values(model.stories??{});
+ let modelStories=Array.isArray(model.stories)?model.stories:Object.values(model.stories??{}),identityMaps=new Map(),viewModel=model;
  const currentStory=()=>storyPath??scenarios.find(s=>s.path===test.path)?.doc.story_path??modelStories[0]?.path??null;
  const validFill=fill=>{if(!object(fill)||!object(fill.input))return false;const e=entries.find(e=>e.entry===fill.entry);if(!e)return false;const checked=checkInput(fill.input,e.input_schema,0);return !checked.refusals.length&&!checked.warnings.length;};
  const safe=x=>clean(x,secrets);
  const finalFills=value=>{if(own(value,'fill')&&!validFill(value.fill)){value.fill=null;if(value.apply===true)delete value.apply;}if(object(value.next)&&own(value.next,'fill')&&!validFill(value.next.fill))delete value.next.fill;return value;};
  function refresh(){
-  const next=normalizeScenarios((ports.readAgentScenarios??readAgentScenarios)({root}));
-  const digest=hash({rows:next,incomplete:next.incomplete,readerIncomplete:next.readerIncomplete});scenarioAtConnect??=digest;
-  if(digest!==scenarioHash){scenarios=next;scenarioHash=digest;judges=scenarios.map(s=>{const base=createRunJudge({scenario:s.doc});return{path:s.path,story:s.doc.story_path,judge:s.incomplete?{record:r=>uncertain(base.record(r)),snapshot:()=>uncertain(base.snapshot()),bindings:()=>base.bindings()}:base};});for(const r of runs)if(!r.redacted)for(const j of judges)j.judge.record(r);}
+  const parsed=normalizeScenarios((ports.readAgentScenarios??readAgentScenarios)({root}));
+  const identity=criterionIdentities(parsed,model,(ports.readAgentStoryCriteria??readAgentStoryCriteria)({root}));
+  const next=identity.records,digest=hash({rows:next,incomplete:next.incomplete,readerIncomplete:next.readerIncomplete,sourceIdentity:identity.sourceIdentity});scenarioAtConnect??=digest;
+  if(digest!==scenarioHash){scenarios=next;scenarioHash=digest;modelStories=identity.stories;identityMaps=identity.maps;viewModel=identity.model;judges=scenarios.map(s=>{const base=createRunJudge({scenario:s.doc});return{path:s.path,story:s.doc.story_path,judge:s.incomplete?{record:r=>uncertain(base.record(r)),snapshot:()=>uncertain(base.snapshot()),bindings:()=>base.bindings()}:base};});for(const r of runs)if(!r.redacted)for(const j of judges)j.judge.record(r);}
  }
  function refreshCard(byStory){
-  card=(ports.buildProjectCard??buildProjectCard)({root,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model,scenarios,seedTest:test.path,savedCount});
+  card=(ports.buildProjectCard??buildProjectCard)({root,env,story:test.story??currentStory(),progress:byStory[currentStory()]??[],previousFingerprint:card?.fingerprint,secrets,entries,startWorld:model.seed?.initial_world,model:viewModel,scenarios,seedTest:test.path,savedCount});
   sourceAtConnect??=card.sourceFingerprint??card.fingerprint;
   const digest=hash({scenarioHash,source:card.sourceFingerprint??card.fingerprint,rules:card.productRules??[]});
-  if(!coverage||digest!==coverageHash){coverage=createCoverage({scenarios,model,productRules:card.productRules??[]});coverageHash=digest;}for(const r of surfaceEvidence.values())coverage.record(r);
+  if(!coverage||digest!==coverageHash){coverage=createCoverage({scenarios,model:viewModel,productRules:card.productRules??[]});coverageHash=digest;}for(const r of surfaceEvidence.values())coverage.record(r);
  }
  function statesByStory(){const result={};const paths=new Set([...modelStories.map(s=>s.path).filter(Boolean),...judges.map(j=>j.story)]);
   for(const path of paths){const rows=judges.filter(j=>j.story===path).map(j=>j.judge.snapshot().items);const declared=[...(modelStories.find(s=>s.path===path)?.criteria??[]),...scenarios.filter(s=>s.doc.story_path===path).flatMap(s=>s.doc.criteria)];const unique=[...new Map(declared.filter(object).map(c=>[c.id,c])).values()];
-   result[path]=unique.filter(c=>typeof c.id==='string').slice(0,64).map(c=>{const all=rows.flatMap(r=>r.filter(i=>i.id===c.id));const checks=(card?.latestCheck?.rows??[]).filter(row=>row.story===path||row.story===path.split('/').at(-1).replace(/\.md$/,''));const official=checks.flatMap(row=>(row.criterion_results??[]).filter(x=>x.criterion_id===c.id));return{id:c.id,state:rank(all.map(x=>x.state)),...(official.length&&official.every(x=>x.status==='passed')?{check_passed:true}:{})};});
+   result[path]=unique.filter(c=>typeof c.id==='string').slice(0,64).map(c=>{const all=rows.flatMap(r=>r.filter(i=>i.id===c.id));const checks=(card?.latestCheck?.rows??[]).filter(row=>row.story===path||row.story===path.split('/').at(-1).replace(/\.md$/,''));const identities=identityMaps.get(path);const official=identities?.ambiguous?[]:checks.flatMap(row=>(row.criterion_results??[]).filter(x=>{const id=/^ac-[1-9][0-9]*$/.test(x.criterion_id)?identities?.official.get(x.criterion_id):identities?.alias.get(x.criterion_id);return id===c.id;}));return{id:c.id,state:rank(all.map(x=>x.state)),...(official.length&&official.every(x=>x.status==='passed')?{check_passed:true}:{})};});
   }return result;
  }
  function bindings(){const bound=[];for(const j of judges.filter(j=>j.story===currentStory()))for(const b of j.judge.bindings())if(!bound.some(x=>x.id===b.id))bound.push(b);
-  for(const b of model.criterion_bindings??[])if(b.story_path===currentStory()&&!bound.some(x=>x.id===b.criterion_id)){const fill={entry:entryId(b),input:b.input};if(validFill(fill))bound.push({id:b.criterion_id,...fill});}return bound;
+  for(const b of viewModel.criterion_bindings??[])if(b.story_path===currentStory()&&!bound.some(x=>x.id===b.criterion_id)){const fill={entry:entryId(b),input:b.input};if(validFill(fill))bound.push({id:b.criterion_id,...fill});}return bound;
  }
  function ensureOwn(name){let current=ownCases.at(-1);if(!current||current.state==='saved'){current={id:`own-${++count}`,name:safe(clip(name||`Own case ${count}`,100)),state:'planned'};ownCases.push(current);ownCases=ownCases.slice(-32);}return current;}
  function prepare(message){

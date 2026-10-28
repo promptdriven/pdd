@@ -1,5 +1,6 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a6f78ee0a6039bd69efd37bfecd2120d2520e1362166bbb297494c740bdad262).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c0bfc8a0a27ac4734682c323b55f265a927685d503b0dfb80687894f363cccd7).
 import { loadAgentDefinitions } from './agent-config.mjs';
+import { collectAgentSavedCases } from './agent-case-collector.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -843,6 +844,15 @@ function appMapFor(found, given, cwd, root, stderr) {
 
 function oneTest(found, words, root) {
   const selected = select(found, words, root);
+  if (selected.length > 1 && new Set(selected.map(t => t.storyPath)).size === 1) {
+    const unscoped = selected.filter(t => !Array.isArray(t.doc?.criteria_scope));
+    if (unscoped.length === 1) return unscoped[0];
+    if (!unscoped.length) {
+      const widest = Math.max(...selected.map(t => t.doc.criteria_scope.length));
+      const candidates = selected.filter(t => t.doc.criteria_scope.length === widest);
+      if (candidates.length === 1) return candidates[0];
+    }
+  }
   if (selected.length !== 1) throw new Stop(2, ['pdd try needs one story. Choose one:', ...storyList({ tests: selected })].join('\n'));
   return selected[0];
 }
@@ -1140,13 +1150,13 @@ async function showTry(context, test, link, options, tryId, reused = false) {
     answers = ports.interactive ? lineReader(ports.stdin) : null;
     context.onAgentChatClose = () => answers?.close();
     return await bridge.run(async () => {
-      const tests = await collectSavedTests(context, tryId), approvals = await collectApprovals(context, tryId, test.story, answers);
+      const tests = await collectSavedTests(context, tryId, answers), approvals = await collectApprovals(context, tryId, test.story, answers);
       return tests !== 'ended' && approvals !== 'ended';
     });
   } finally { answers?.close(); await bridge?.close(); }
 }
 
-// ---- Save as test: cases saved on the Try page become steps of the story's test file ----
+// ---- Legacy CLI-door append importer; page saves use the independent case collector ----
 
 const slug = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
@@ -1259,22 +1269,8 @@ function addSavedCaseSafely(root, saved, seedTest) {
 }
 
 // Saved cases: add each new one once. Returns 'ok', 'missing' (no endpoint yet) or 'ended'.
-async function collectSavedTests(context, tryId) {
-  const { ports, store, root } = context, path = join(store.folder('tries'), `${tryId}.tests.json`);
-  const reply = await context.runtime.send(`/v1/try/${tryId}/tests`, { method: 'GET' }, GET_MS);
-  if ([401, 403, 410].includes(reply.status)) return 'ended';
-  if (reply.status !== 200 || !Array.isArray(reply.json?.tests)) return reply.lost ? 'ok' : 'missing';
-  const done = store.read(path) ?? {};
-  for (const saved of reply.json.tests) {
-    const key = typeof saved?.id === 'string' ? saved.id : null;
-    if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved, context.seedTest);
-    done[key] = { at: new Date(ports.now()).toISOString(), result: said };
-    store.write(path, done);
-    try { context.onAgentCaseSaved?.({ id: key, name: saved.name, story_path: saved.story_path ?? saved.test?.story_path, result: said }); } catch {}
-    line(ports.stdout, said);
-  }
-  return 'ok';
+async function collectSavedTests(context, tryId, answers = null) {
+  return collectAgentSavedCases(context, tryId, { answers, timeoutMs: GET_MS });
 }
 
 // Approval requests from the Try page (#9): only a person's y in this terminal approves; the page gets done or declined.
@@ -1314,7 +1310,7 @@ async function watchSavedTests(context, tryId, wait, story) {
   let polls = 0, told = false, tests = 'ok', approvals = 'ok';
   try {
     for (;;) {
-      if (tests !== 'missing') tests = await collectSavedTests(context, tryId);
+      if (tests !== 'missing') tests = await collectSavedTests(context, tryId, answers);
       if (tests === 'missing' && wait && !told) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
       if (approvals !== 'missing') approvals = await collectApprovals(context, tryId, story, answers);
       if (tests === 'ended' || approvals === 'ended' || !wait || context.interrupted) return;

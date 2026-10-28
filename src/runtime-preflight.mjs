@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 245c00c7e3acbbc421fd04a4de13989024c811f30790efc389185166e633b47e).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8aa2233a64d555cb166dc71a0f736b04adcd3b09f8dc3c6a011e2fddd0420e01).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -437,8 +437,8 @@ function checkTest(root, found, test, prompts) {
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
-  if (Object.hasOwn(doc, 'criteria_scope') || (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length))) {
-    return refusal('pdd-partial-test', Object.hasOwn(doc, 'criteria_scope') ? 'criteria_scope' : 'check_exemptions', 'In the beta a test checks the whole story. Remove criteria_scope and check_exemptions.');
+  if (Object.hasOwn(doc, 'check_exemptions') && !(Array.isArray(doc.check_exemptions) && !doc.check_exemptions.length)) {
+    return refusal('pdd-partial-test', 'check_exemptions', 'Each selected criterion needs an exact check. Remove check_exemptions.');
   }
   if (!Array.isArray(doc.criteria) || !doc.criteria.length) return refusal('invalid-criterion', 'criteria', 'The test has no criteria.');
   const ids = new Set();
@@ -451,8 +451,22 @@ function checkTest(root, found, test, prompts) {
   }
   const story = storyCriteria(readText(root, doc.story_path));
   if (!story.length) return refusal('story-criteria-missing', 'story_path', `${doc.story_path} has no numbered "## Acceptance criteria" list.`);
-  const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
-  if (!isDeepStrictEqual(testTexts, storyTexts)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
+  if (Object.hasOwn(doc, 'criteria_scope')) {
+    const scope = doc.criteria_scope;
+    if (!Array.isArray(scope) || !scope.length || scope.some(id => typeof id !== 'string') || new Set(scope).size !== scope.length) {
+      return refusal('invalid-criteria-scope', 'criteria_scope', 'criteria_scope must be a nonempty list of unique canonical Story IDs in source order, such as "ac-1".');
+    }
+    const selected = story.map((text, index) => ({ id: `ac-${index + 1}`, text })).filter(item => scope.includes(item.id));
+    if (!isDeepStrictEqual(selected.map(item => item.id), scope)) {
+      return refusal('invalid-criteria-scope', 'criteria_scope', 'criteria_scope must name existing canonical Story IDs (ac-1, ac-2, ...) in source order.');
+    }
+    if (!isDeepStrictEqual(doc.criteria, selected)) {
+      return refusal('story-criterion-mismatch', 'criteria', 'The scoped criteria must exactly match the selected Story records: canonical IDs, exact text and source order.');
+    }
+  } else {
+    const testTexts = doc.criteria.map(item => item.text).sort(), storyTexts = [...story].sort();
+    if (!isDeepStrictEqual(testTexts, storyTexts)) return refusal('story-criterion-mismatch', 'criteria', firstDifference(testTexts, storyTexts));
+  }
   if (!Array.isArray(doc.steps) || !doc.steps.length) return refusal('missing-steps', 'steps', 'The test has no steps.');
   const checked = new Set(), exact = new Set(), inputIssues = [];
   for (const [index, step] of doc.steps.entries()) {

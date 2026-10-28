@@ -20,8 +20,10 @@ Read section 3 (schema rules) and section 8 (check paths) before the first check
 | `tests/<story>.json` | The test for that story. pdd finds tests in any folder. If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`. |
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
-Across its steps, the test file must check every criterion of its story.
-Add a second file only for a case that needs a different starting world. That file also checks every criterion.
+A full test checks every criterion of its Story. A separate own-case file keeps its own starting world and
+uses `criteria_scope`: a nonempty source-ordered list such as `["ac-2"]`. Its `criteria` copy exactly those
+Story texts with canonical source IDs, and every selected criterion needs an exact check. Unknown, duplicate
+or reordered scope IDs are refused; a file without a scope still checks the whole Story.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
 prompt. Two prompts must never state the same rule. A command-line program has one program prompt (section 6).
@@ -45,7 +47,7 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 from a GitHub issue often has curly quotes. Put real values in the text: "$10.65", "2026-11-02". Write what a user
 types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns …"): the person must read and approve it.
 
-**The test** copies every criterion into `criteria`, word for word. From `todo-cli` (some checks cut):
+**The test** copies every criterion into `criteria`, word for word (only the selected criteria in a scoped file). From `todo-cli` (some checks cut):
 ```json
 {"schema_version": "prompt-runtime.program-scenario.v1", "story_path": "user_stories/finish-task.md",
  "criteria": [{"id": "AC1", "text": "`todo done 4` prints \"Done #4: Call mom\", exits with code 0 and saves task #4 as done."},
@@ -300,14 +302,17 @@ minute, doing other work in between, until every Story has a result. Never send 
 - A Try pauses after 15 minutes with no clicks. `pdd try <story>` reopens it at 0 AI calls. It does not send changed
   files or a new app map: for that, run `pdd try <story> --new`.
 
-**Save as test.** Only the person saves a case. Never save one yourself. pdd adds each saved case as a new step to the
-story's test file and prints `added to tests/<file> as step <id>`. It makes a new file only when the story has none.
-- The Try page may say "Save this file in your project as `tests/<name>.json`" and warn about unchecked criteria.
-  Ignore that. Do not make a second file: `pdd try` adds the case to the story's test file.
-- In a person's terminal, `pdd try` keeps waiting and adds saved cases as they come.
-- When you (an agent) run `pdd try`, it reads the saved cases once and returns, so it never blocks you. After the person
-  says "I saved some cases", run `pdd try <story>` again to add them.
-Then make sure that every criterion still has a check, and run `pdd check <story>`.
+**Save as test.** Only the person's explicit Save requests a local test. Each own case goes into a separate
+`tests/<story>-<case-name>-<id>.json`, keeping the starting world from before its Run. pdd prints the actual
+path after importing; it never appends this case to an authored file with different starting data.
+- When the checked case fits a Story criterion, pdd writes a scoped test under that criterion.
+- When it needs one new rule, a person's terminal asks: `This is not in the Story yet. Add it as a new rule: '<sentence>'? y/N`.
+  With y, pdd adds the rule and case, migrating existing full tests to their original explicit scopes without changing
+  expected values or inputs. With N, the Story and tests stay unchanged. Without a terminal the request stays pending.
+- The page receives the local import result: pending, added, declined or failed. A queued page case alone does not mean
+  a local file was saved. Reopening retries uncertain receipts without repeating writes or questions.
+- In a person's terminal, `pdd try` waits for saved cases. An agent reads once and returns; after the person saves,
+  run `pdd try <story>` again to collect them. Review the saved checks, then run `pdd check <story>`.
 
 ## 13. Give your app a screen (app map)
 

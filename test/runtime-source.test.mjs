@@ -149,7 +149,7 @@ test('SOURCE5: Check and lint upload precisely the offline selected manifest, sh
   }
 });
 
-test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the original test file', async t => {
+test('SOURCE6: scoped Try keeps its authored seed and saves a separate case with its own data', async t => {
   const setup = harbor(t, repo => write(repo, 'large-tracked.bin', Buffer.alloc(10_485_761)));
   const before = load(setup.repo, ORDER), saved = structuredClone(before);
   saved.steps = [saved.steps[0]]; saved.steps[0].step_id = 'saved-scoped';
@@ -164,12 +164,13 @@ test('SOURCE6: scoped Try keeps its authored seed and adds saved cases to the or
   assert.equal(fake.posts[1].request.seed, ORDER);
   assert.deepEqual(names(fake.posts[1].tar), [PLACE, ORDER, STORY].sort());
   const after = load(setup.repo, ORDER);
-  assert.equal(after.steps.length, before.steps.length + 1);
-  assert.equal(after.steps.at(-1).step_id, 'saved-scoped');
-  assert.match(ports.stdout.text, /added to tests\/place-order\.json as step saved-scoped/);
+  assert.deepEqual(after, before);
+  const file = /added to (tests\/place-order-saved-case-[a-f0-9]{10}\.json)/.exec(ports.stdout.text)?.[1];
+  assert.ok(file);assert.equal(load(setup.repo, file).steps[0].step_id, 'saved-scoped');
+  assert.deepEqual(load(setup.repo, file).initial_world, saved.initial_world);
 });
 
-test('SOURCE11: Try saves to its selected test when a Story has several tests, including a reopened Try', async t => {
+test('SOURCE11: independent saves preserve every authored test across a reopened Try', async t => {
   const setup = harbor(t), selected = 'tests/z-place-order.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
@@ -188,15 +189,15 @@ test('SOURCE11: Try saves to its selected test when a Story has several tests, i
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
     return ports.stdout.text;
   };
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected/);
+  const first = /added to (tests\/place-order-saved-case-[a-f0-9]{10}\.json)/.exec(await run())?.[1];assert.ok(first);
   savedCases = [...savedCases, { id: 'selected-case', path: ORDER, story_path: STORY, test: saved }];
-  assert.match(await run(), /added to tests\/z-place-order\.json as step saved-selected-2/);
+  const second = /added to (tests\/place-order-saved-case-[a-f0-9]{10}\.json)/.exec(await run())?.[1];assert.ok(second);assert.notEqual(first, second);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
-  assert.deepEqual(load(setup.repo, selected).steps.slice(-2).map(step => step.step_id), ['saved-selected', 'saved-selected-2']);
+  assert.equal(readFileSync(join(setup.repo, selected), 'utf8'), original);assert.equal(load(setup.repo, first).steps[0].step_id, 'saved-selected');assert.equal(load(setup.repo, second).steps[0].step_id, 'saved-selected');
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
-test('SOURCE13: reopening preserves the original Story identity after the selected test is reassigned', async t => {
+test('SOURCE13: original Story case saves independently after the selected test is reassigned', async t => {
   const setup = harbor(t), selected = 'tests/z-place-order.json';
   const original = readFileSync(join(setup.repo, ORDER), 'utf8');
   write(setup.repo, selected, original);
@@ -217,12 +218,12 @@ test('SOURCE13: reopening preserves the original Story identity after the select
   await run();
   json(setup.repo, selected, load(setup.repo, 'tests/unknown-item.json'));
   savedCases = [{ id: 'original-story', story_path: STORY, test: saved }];
-  assert.match(await run(), /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+  assert.match(await run(), /added to tests\/place-order-saved-case-[a-f0-9]{10}\.json/);
   assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
 });
 
-test('SOURCE12: a removed or reassigned Try seed is never replaced by another test for the Story', async t => {
+test('SOURCE12: missing or reassigned seed never causes another authored file to be overwritten', async t => {
   for (const change of ['remove', 'reassign']) {
     const setup = harbor(t), selected = 'tests/z-place-order.json';
     const original = readFileSync(join(setup.repo, ORDER), 'utf8');
@@ -240,7 +241,7 @@ test('SOURCE12: a removed or reassigned Try seed is never replaced by another te
     });
     const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
     assert.equal(await runTry({ cwd: setup.repo, words: [selected], options: { '--no-open': true, '--no-wait': true } }, ports), 0, ports.stderr.text);
-    assert.match(ports.stdout.text, /not added: the original test tests\/z-place-order\.json is missing or no longer belongs/);
+    assert.match(ports.stdout.text, /added to tests\/place-order-saved-case-[a-f0-9]{10}\.json/);
     assert.equal(readFileSync(join(setup.repo, ORDER), 'utf8'), original);
   }
 });

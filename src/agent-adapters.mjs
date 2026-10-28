@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 61d68b5875b5fdf3e1a6fa75c5605fcc81c5a42d1fbc5ba391029e1c930198cf).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 9cccb655f1448bfae629900046c6073ecf7e6ee71936579f23c5f72e5db73c13).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
@@ -135,7 +135,7 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
   if(clean.expect===null)result.expect=null;
   else if(result.fill&&object(clean.expect)&&Object.keys(clean.expect).sort().join(',')==='checks,text'&&typeof clean.expect.text==='string'&&clean.expect.text.trim()&&clean.expect.text.length<=500&&checks(clean.expect.checks,true)&&Buffer.byteLength(JSON.stringify(clean.expect))<=16384)result.expect=clean.expect;
   if(clean.save===null)result.save=null;
-  else if(object(clean.save)&&Object.keys(clean.save).sort().join(',')==='checks,criterion,name'&&typeof clean.save.name==='string'&&clean.save.name.trim()&&clean.save.name.length<=100&&(clean.save.criterion===null||known.has(clean.save.criterion))&&checks(clean.save.checks,false))result.save=clean.save;
+  else if(object(clean.save)&&['checks,criterion,name','checks,criterion,name,proposed_criterion'].includes(Object.keys(clean.save).sort().join(','))&&typeof clean.save.name==='string'&&clean.save.name.trim()&&clean.save.name.length<=100&&(clean.save.criterion===null||known.has(clean.save.criterion))&&checks(clean.save.checks,false)&&(!Object.hasOwn(clean.save,'proposed_criterion')||(clean.save.criterion===null&&typeof clean.save.proposed_criterion==='string'&&clean.save.proposed_criterion.trim()&&clean.save.proposed_criterion===clean.save.proposed_criterion.trim()&&clean.save.proposed_criterion.length<=500&&!/[\x00-\x1f\x7f-\x9f]/.test(clean.save.proposed_criterion))))result.save=clean.save;
   return result;
  }catch(e){if(e instanceof SyntaxError)return fail('error','The agent returned invalid JSON. No fields were applied.');const state=e.code==='ENOENT'?'not_installed':'error';return failedInvocation(agent,e.stderr||e.message,env,state,name);}
 }
