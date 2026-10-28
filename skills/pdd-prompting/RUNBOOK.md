@@ -245,14 +245,14 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
-- `pdd check` gives each test 12 calls for each step, at least 18 and at most 100. Override it with `--max-calls N` within the runtime maximum.
+- `pdd check` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the runtime maximum.
 - **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a Check or Try. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
-- A new `pdd try` requests a session budget of 160 calls. `pdd try STORY --max-calls 240` chooses a different ceiling when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new` starts fresh saved data. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
+- A new `pdd try` requests a session budget of 400 calls. `pdd try STORY --max-calls 600` chooses a different ceiling when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new` starts fresh saved data. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
   prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.
   `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
-  When one step's worst case is bigger than `--max-calls` (at most 100), the runtime refuses the whole test before it
+  When one step's worst case is bigger than `--max-calls` (at most 1000), the runtime refuses the whole test before it
   starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
 - **A Try page allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
   opens: refused at 0 calls. A screen prompt that calls another prompt with a high `max_calls` hits this fast
@@ -307,7 +307,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `interface-stale` | The prose changed after the hash | Draft: run `--fill-hash`. Approved: set draft, fill the hash, ask again. |
 | `repository-graph-catalog-error` | Too few AI calls left for a step | Run again with a higher `--max-calls`. |
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
-| `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 100), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
+| `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
 | `graph-provider-failure` | The AI service failed. No verdict, also when pdd prints `✗ … 1 refused` | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |

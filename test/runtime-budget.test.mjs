@@ -22,21 +22,22 @@ async function service(t,confirmed=cap=>cap){
  });return fake;
 }
 test('BUDGET1: Try budget parses in browser, CLI and serve forms; malformed values reject',()=>{
- for(const mode of [[],['--cli'],['--serve','8080']])assert.equal(parseArgv(['try','story',...mode,'--max-calls','240']).options['--max-calls'],'240');
- for(const value of ['0','-1','1.5','NaN','1e3','9007199254740992'])assert.throws(()=>parseArgv(['try','story','--max-calls',value]));
+ for(const mode of [[],['--cli'],['--serve','8080']])for(const value of ['1','400','1000'])assert.equal(parseArgv(['try','story',...mode,'--max-calls',value]).options['--max-calls'],value);
+ for(const value of ['1','101','1000'])assert.equal(parseArgv(['check','story','--max-calls',value]).options['--max-calls'],value);
+ for(const command of ['check','try'])for(const value of ['0','-1','1.5','NaN','1e3','1001','999999','9007199254740992'])assert.throws(()=>parseArgv([command,'story','--max-calls',value]));
 });
 test('BUDGET2: Check default ceiling is tripled and actual submitted default/override stay distinct',async t=>{
- const steps=n=>({steps:Array.from({length:n},()=>({}))});assert.deepEqual([0,1,2,3,8,9,30].map(n=>defaultMaxCalls(steps(n))),[18,18,24,36,96,100,100]);
- for(const requested of [undefined,7]){
+ const steps=n=>({steps:Array.from({length:n},()=>({}))});assert.deepEqual([0,1,2,3,8,9,30,83,84,100].map(n=>defaultMaxCalls(steps(n))),[18,18,24,36,96,108,360,996,1000,1000]);
+ for(const requested of [undefined,7,1000]){
   const setup=harbor(t),fake=await fakeRuntime(t,(e,f)=>f.normal(e));
   const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin});
   assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--json':true,...(requested?{'--max-calls':requested}:{})}},ports),0);
   assert.equal(fake.posts.find(p=>p.command==='check').request.max_calls,requested??18);
  }
 });
-test('BUDGET3: a new Try requests160 or its explicit ceiling and reports confirmed metadata',async t=>{
- for(const cap of [160,240]){
-  const setup=harbor(t),fake=await service(t),result=await invoke(setup,fake,cap===160?{}:{'--max-calls':cap});
+test('BUDGET3: a new Try requests400 or its explicit ceiling and reports confirmed metadata',async t=>{
+ for(const cap of [400,1000]){
+  const setup=harbor(t),fake=await service(t),result=await invoke(setup,fake,cap===400?{}:{'--max-calls':cap});
   assert.equal(result.code,0,result.err);assert.equal(fake.posts.find(p=>p.command==='try').request.max_calls,cap);
   assert.match(result.out,new RegExp(`Try budget ${cap} calls; ${cap} remaining`));assert.match(result.out,/charged only for calls that run/);
   const again=await invoke(setup,fake);assert.equal(again.code,0,again.err);assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.jsonPosts.length,0);
@@ -44,7 +45,7 @@ test('BUDGET3: a new Try requests160 or its explicit ceiling and reports confirm
  }
 });
 test('BUDGET4: direct API callers cannot bypass budget validation before any effect',async t=>{
- for(const cap of [0,-1,1.5,NaN,Infinity,true,'1e3',9007199254740992]){
+ for(const cap of [0,-1,1.5,NaN,Infinity,true,'1e3',1001,999999,9007199254740992]){
   const setup=harbor(t),fake=await service(t),result=await invoke(setup,fake,{'--max-calls':cap});
   assert.equal(result.code,2,String(cap));assert.equal(fake.posts.length,0);assert.equal(result.clock.gh.length,0);
  }
@@ -64,9 +65,9 @@ test('BUDGET6: creation must not present a different or unconfirmed explicit cei
 test('BUDGET7: equal or lower existing ceiling is read-only, keeps total and spent allowance',async t=>{
  const setup=harbor(t),fake=await service(t);
  assert.equal((await invoke(setup,fake)).code,0);fake.spent=40;
- for(const requested of [160,80]){
+ for(const requested of [400,80]){
   const before=fake.posts.length,r=await invoke(setup,fake,{'--max-calls':requested});assert.equal(r.code,0,r.err);
-  assert.equal(fake.posts.length,before);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.deletes.length,0);assert.match(r.out,/Try budget 160 calls; 120 remaining/);
+  assert.equal(fake.posts.length,before);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.deletes.length,0);assert.match(r.out,/Try budget 400 calls; 360 remaining/);
  }
 });
 test('BUDGET8: explicit budget on unknown/missing existing Try preserves it without replacement',async t=>{
@@ -89,5 +90,16 @@ test('BUDGET10: missing existing budget confirmation fails before mutation or re
 
 test('BUDGET11: an unsupported higher budget refuses before reopening a paused Try',async t=>{
  const setup=harbor(t),fake=await service(t);assert.equal((await invoke(setup,fake)).code,0);fake.mode='paused';
- const r=await invoke(setup,fake,{'--max-calls':240});assert.equal(r.code,5,r.err);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.posts.length,2);assert.equal(fake.deletes.length,0);
+ const r=await invoke(setup,fake,{'--max-calls':1000});assert.equal(r.code,5,r.err);assert.equal(fake.jsonPosts.length,0);assert.equal(fake.posts.length,2);assert.equal(fake.deletes.length,0);
+});
+
+test('BUDGET12: Check direct callers reject out-of-range budgets before any effect',async t=>{
+ for(const cap of [0,-1,1.5,NaN,Infinity,true,'1e3',1001,999999,9007199254740992]){
+  const setup=harbor(t),fake=await service(t),{ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin});
+  assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--max-calls':cap}},ports),2,String(cap));assert.equal(fake.posts.length+fake.gets.length,0);assert.equal(clock.gh.length,0);
+ }
+});
+test('BUDGET13: changing the default preserves an older existing160-call Try and its spent allowance',async t=>{
+ const setup=harbor(t),fake=await service(t);assert.equal((await invoke(setup,fake,{'--max-calls':160})).code,0);fake.spent=40;
+ const result=await invoke(setup,fake);assert.equal(result.code,0,result.err);assert.match(result.out,/Try budget 160 calls; 120 remaining/);assert.equal(fake.posts.length,2);assert.equal(fake.jsonPosts.length+fake.deletes.length,0);
 });

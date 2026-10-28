@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7d93bd32423bc1c92fe5414fead19cfc549b70d357ed505f3ff357f183643e61).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530049c3179bb545be051d15b0a0a2dbfb290faf0059a6ee1c5963c49d94d1f3).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -28,6 +28,13 @@ const AGENT_WAIT_MIN = 1.5;
 const LOST_READ_MS = 300_000;
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
+function requestedCalls(raw) {
+  if (raw === undefined) return null;
+  if (!(typeof raw === 'number' || typeof raw === 'string' && /^[1-9][0-9]{0,3}$/.test(raw))
+    || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 1000)
+    throw new Stop(2, '--max-calls must be a whole number from 1 to 1000, the runtime maximum.');
+  return Number(raw);
+}
 const line = (stream, text) => stream.write(`${text}\n`);
 const statOrNull = path => { try { return lstatSync(path); } catch { return null; } };
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -871,6 +878,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request', '--retry'].includes(modes[0]) && words.length)
@@ -1033,10 +1041,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
-    const rawBudget = options['--max-calls'];
-    if (rawBudget !== undefined && (!(typeof rawBudget === 'number' || typeof rawBudget === 'string' && /^[1-9][0-9]{0,5}$/.test(rawBudget))
-      || !Number.isSafeInteger(Number(rawBudget)) || Number(rawBudget) < 1 || Number(rawBudget) > 999999)) throw new Stop(2, '--max-calls must be a whole number from 1 to 999999; the runtime enforces its session maximum.');
-    const requestedBudget = rawBudget === undefined ? null : Number(rawBudget);
+    const requestedBudget = requestedCalls(options['--max-calls']);
     if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
@@ -1129,7 +1134,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
       return printTryProblem(context, row);
     }
-    const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 160, ...(appMap ? { app_map: appMap } : {}),
+    const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
       tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
     store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);

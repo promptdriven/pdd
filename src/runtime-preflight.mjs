@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 30e3cba807bbbce1d8c959969e3d790017766e477fa814e6327927ff649652b7).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 25d5f4318cd479dc6631189e7cd5211a8eb3123f8590507e2e46d64e5aee7656).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -443,7 +443,7 @@ export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
 
 const stepCount = doc => Array.isArray(doc?.steps) ? doc.steps.length : 0;
 // Leave room for the whole call graph; the budget is a ceiling, not a charge.
-export const defaultMaxCalls = doc => Math.min(100, Math.max(18, stepCount(doc) * 12));
+export const defaultMaxCalls = doc => Math.min(1000, Math.max(18, stepCount(doc) * 12));
 
 function firstDifference(testTexts, storyTexts) {
   const left = [...storyTexts];

@@ -37,9 +37,9 @@ test('RUNTIME-TRY1: pdd try lints, posts one Try with the test as seed, opens th
   assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'try']);
   const request = fake.posts[1].request;
   assert.deepEqual(Object.keys(request).sort(), ['max_calls', 'requestId', 'seed', 'source_sha256', 'tab']);
-  assert.equal(request.max_calls, 160); assert.equal(request.seed, 'tests/place-order.json'); assert.equal(request.tab, 'call');
+  assert.equal(request.max_calls, 400); assert.equal(request.seed, 'tests/place-order.json'); assert.equal(request.tab, 'call');
   assert.deepEqual(first.opened, [`${fake.origin}/s/${'t'.repeat(43)}/`]);
-  assert.equal(first.out, `Try budget 160 calls; 160 remaining. You are charged only for calls that run.\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order\n`);
+  assert.equal(first.out, `Try budget 400 calls; 400 remaining. You are charged only for calls that run.\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order\n`);
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0, again.err);
   assert.equal(fake.posts.length, 2); assert.deepEqual(again.opened, []);
