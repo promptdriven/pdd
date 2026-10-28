@@ -154,7 +154,7 @@ test('SKILLS9: build and verify point to RUNBOOK section 17 for the replay test,
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);
     assert.match(build, /replay test[^\n]*section 17 of RUNBOOK\.md/, name);
-    assert.match(build, /Never edit `tests\/<story>\.json`/, name);
+    assert.match(build, /Never edit the Story's test file/, name);
     assert.match(verify, /section 17 of RUNBOOK\.md/, name);
     assert.match(verify, /planted mistake/, name);
     assert.match(verify, /table/, name);
@@ -188,7 +188,7 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
   // 0.1.7: the rule has one home, the step that writes PR 1; SKILL.md names PR 1's parts in its area list.
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
-    assert.match(step, /PR 1 holds only the prompt, the Story and `tests\/\*\.json`/, name);
+    assert.match(step, /PR 1 holds only the prompt, the Story and its runtime test files/, name);
     assert.ok(step.includes("Runtime tests are not the repo's unit tests; the code area adds those, so merging PR 1 never turns main red."), name);
     assert.equal(read(`${name}/SKILL.md`).includes('PR 1 holds only'), false, `${name}/SKILL.md repeats the PR 1 rule`);
   }
@@ -287,7 +287,7 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
   assert.match(understand, /Count the separate behaviors/);
   assert.match(understand, /`user_stories\/PLAN\.md`: a numbered list, one line per Story, in build order/);
   assert.match(understand, /With 1 behavior, write one Story and no plan\./);
-  assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own `tests\/<story>\.json`/);
+  assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own test file/);
   assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
   // Real 2048 run: one check per Story, then one Story's overall line pasted as the total. The runner sums the lines itself.
   // RUNBOOK §10 says "check the story with the fewest steps first", so the step keeps its own once-for-all rule.
@@ -315,7 +315,7 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
 // interface block, because no step told it the runtime's file format before the check step.
 test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 first', () => {
   // 0.1.7: prompt-story reads the guide in the same first line; change reads the guide only when it changes a prompt.
-  const formats = ' Copy the RUNBOOK examples (`*.prompt.md` with a Runtime interface block, `tests/<story>.json`).';
+  const formats = " Copy the RUNBOOK examples: `*.prompt.md` with a Runtime interface block; the Story's test file, `tests/<story>.json` (RUNBOOK §2 names the folder when the repo already has tests/).";
   for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md'])
     assert.ok(read(file).split('\n').find(text => text.startsWith('- ')).startsWith(`- First read the pdd-prompting skill's guide.md in full and its RUNBOOK.md §2–§4.${formats}`), file);
   assert.equal(read('pdd-small-change/steps/change.md').split('\n').find(text => text.startsWith('- ')),
@@ -450,11 +450,13 @@ test('SKILLS32: every workflow writes each link as its full URL', () => {
   for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).includes('- Write each link as its full URL (`https://…`), never as a linked word.'), name);
 });
 
-// Wrong (round-2 cli tester, 0.1.7): the skills and the RUNBOOK named two test paths. pdd and the skills use tests/<story>.json.
-test('SKILLS33: skills name tests/<story>.json, never a tests/runtime/ folder', () => {
+// Wrong (round-2 cli tester, 0.1.7): a skill named a fixed tests/<story>.json while RUNBOOK §2 uses tests/runtime/ or
+// test/runtime/ in a repo that already has tests/ or test/. A skill names the path only with that rule.
+test('SKILLS33: a skill names a test path only together with the RUNBOOK §2 folder rule', () => {
+  assert.ok(RUNBOOK().includes("If the repo's own tests are in `tests/` or `test/`, use `tests/runtime/` or `test/runtime/`."));
   for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
-    assert.equal(/\btests?\/runtime\//.test(readFileSync(file, 'utf8')), false, file);
-  for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md', 'pdd-small-change/steps/change.md']) assert.ok(read(file).includes('`tests/<story>.json`'), file);
+    for (const line of readFileSync(file, 'utf8').split('\n').filter(line => /tests?\/(<story>|\*|runtime)/.test(line)))
+      assert.ok(line.includes('(RUNBOOK §2 names the folder when the repo already has tests/)'), `${file}: ${line.slice(0, 80)}`);
 });
 
 // Wrong (round-2 cli tester, 0.1.7): PR 2 showed 100 lines of shell script before the two tables.
