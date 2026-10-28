@@ -436,6 +436,15 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
   assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
   assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '[.]internal', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
+  // Check every tracked file for dotted, dashed or escaped addresses. Fixtures use
+  // loopback or documentation-only ranges, never a real server's address.
+  const files = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).stdout.split('\0').filter(Boolean);
+  const addresses = files.flatMap(path => {
+    const text = readFileSync(join(root, path), 'utf8').replace(/\\+\./g, '.');
+    return [...text.matchAll(/\b\d{1,3}([.-])\d{1,3}\1\d{1,3}\1\d{1,3}\b/g)]
+      .map(match => ({ path, address: match[0].replaceAll('-', '.') }));
+  });
+  assert.deepEqual(addresses.filter(({ address }) => !/^(?:127\.0\.0\.1$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(address)), []);
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
   assert.equal(runtimeOrigin({ PDD_RUNTIME_URL: 'https://runtime.example' }), 'https://runtime.example');
   for (const bad of ['http://runtime.example', 'https://u:p@runtime.example', 'https://runtime.example/v1', 'ftp://x']) assert.throws(() => runtimeOrigin({ PDD_RUNTIME_URL: bad }), bad);
@@ -655,7 +664,7 @@ test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links o
   const { runtimeOrigin } = await import('../src/runtime-client.mjs');
   const origin = runtimeOrigin({}), host = 'https://runtime.promptdriven.ai';
   assert.equal(origin, host);
-  const token = 'GzKhkowPRTBHXC8Px6XKK8bjrEpWNWk7E-igsV6aA-s';
+  const token = 'example-try-token';
   assert.equal(validLink(`${host}/s/${token}/`, origin, 'try'), `${host}/s/${token}/`);
   assert.equal(validLink(`${host}/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f`, origin, 'report'), `${host}/r/b3fbedfb-03de-4b15-ae23-ee6c35a2029f`);
   for (const bad of [`https://192.0.2.17/s/${token}/`, `https://promptdriven.ai/s/${token}/`, `https://runtime.promptdriven.ai.evil.example/s/${token}/`,
