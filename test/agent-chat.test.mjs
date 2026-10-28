@@ -80,7 +80,7 @@ test('CHAT11 legacy preferences migrate to names and empty definitions fail befo
 });
 test('CHAT12 bad user configuration and unknown named choice stop public Try before sign-in',async t=>{
  const {runTry}=await import('../src/runtime-client.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
- const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});const file=join(f.home,'.config/pdd/agents.json');const {ports,clock}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state},{agentBridge:async()=>{throw Error('must not connect')}});
+ const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});const file=join(f.home,'.config/pdd/agents.json');const {ports,clock}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state},{interactive:true,agentBridge:async()=>{throw Error('must not connect')}});
  writeFileSync(file,'{"agents":[{"name":"Work","kind":"wrong","command":"secret-command"}]}');assert.equal(await runTry({cwd:f.repo,words:['place-order']},ports),2);assert.equal(clock.gh.length,0);assert.ok(!ports.stderr.text.includes('secret-command'));
  writeFileSync(file,JSON.stringify({agents:namedDefinitions.map(({name,kind,command,env})=>({name,kind,command,env})),include_defaults:false}));assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'Unknown name'}},ports),2);assert.equal(clock.gh.length,0);
 });

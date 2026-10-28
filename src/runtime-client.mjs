@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c3e177c275a236c1b71b3a877394aed7290509dd4b9939956669344e89e15909).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a6f78ee0a6039bd69efd37bfecd2120d2520e1362166bbb297494c740bdad262).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -915,6 +915,8 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
 }
 
+const agentWanted = (ports, options) => !options['--no-wait'] && !options['--cli'] && !options['--serve'] && ports.agentBridge !== false && (ports.interactive || options['--agent'] !== undefined);
+
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
@@ -933,7 +935,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
-    if (!options['--no-wait'] && !options['--cli'] && !options['--serve'] && ports.agentBridge !== false) {
+    if (agentWanted(ports, options)) {
       try { context.agentDefinitions = loadAgentDefinitions({cwd:root,env:ports.env}); }
       catch (error) { throw new Stop(2,error.message); }
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
@@ -955,8 +957,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
-      if ((options['--cli'] || options['--serve'] || (!options['--no-wait'] && ports.agentBridge !== false)) && record.login && record.login !== identity.login) throw new Stop(options['--cli'] || options['--serve'] ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-      if ((options['--cli'] || options['--serve'] || (!options['--no-wait'] && ports.agentBridge !== false)) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
+      if ((options['--cli'] || options['--serve'] || agentWanted(ports, options)) && record.login && record.login !== identity.login) throw new Stop(options['--cli'] || options['--serve'] ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if ((options['--cli'] || options['--serve'] || agentWanted(ports, options)) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -970,7 +972,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (live && (options['--serve'] || (!options['--cli'] && !options['--no-wait'] && ports.agentBridge !== false)) && !options['--new']) {
+      if (live && (options['--serve'] || agentWanted(ports, options)) && !options['--new']) {
         let matches = false;
         try {
           const hashes = record.prompt_hashes;
@@ -1122,7 +1124,7 @@ async function showTry(context, test, link, options, tryId, reused = false) {
     : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   let bridge = null, answers = null;
   try {
-    if (!options['--no-wait'] && ports.agentBridge !== false) {
+    if (agentWanted(ports, options)) {
       const finalRuntime = new Runtime({ origin: context.origin, token: context.identity.token, ports });
       context.agentFinalSend = finalRuntime.send.bind(finalRuntime);
       try { bridge = await (ports.agentBridge ?? (await import('./agent-chat.mjs')).createAgentBridge)(context, test, tryId, options, link); }
