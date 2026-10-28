@@ -506,4 +506,12 @@ result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its J
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
 route returns 404 without an AI call. Runtime or wrapper trouble returns 502 with a plain **pdd try:** reason.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
-local server while the Try keeps its data. When an app map exists, use the hosted Try Screen to click it.
+local server while the Try keeps its data. Use curl or fetch for API routes; browser page, image, script and
+stylesheet loads cannot spend calls through an API route.
+
+When the Story has an app map, open `http://127.0.0.1:8080/` for the actual Screen. If it has not been drawn,
+click **Open the app**; opening and taps use the same Try budget and saved data. Loading the page alone uses
+no AI call. The Screen reuses the hosted renderer, styles and declared click/form/key targets. It keeps an action
+ID before sending and reads that same ID after a lost reply or reload; it never sends the action twice. Unknown
+outcomes block new taps until recovered. Screen-only Stories need no named HTTP route. An app map reserves
+GET/HEAD `/` and `/__pdd/screen/`; move conflicting named routes. Credentials stay in pdd, outside the page.

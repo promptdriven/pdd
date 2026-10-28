@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-http.prompt.md (sha256: 179e5f222ab65d2a8c6523e5f00b0b31fe8665c8362666472299a0b9c573e124).
+// Generated from prompts/cli/try-http.prompt.md (sha256: a5c5ccd439f4327fd84d32d55713b2b5d5a7894d0ad69f6fe0ff78bd7811f728).
 import { createServer, validateHeaderName, validateHeaderValue } from 'node:http';
 import { checkInput } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
@@ -90,12 +90,36 @@ function responseFor(result) {
   return { status: result.status, headers, body };
 }
 
+const SCREEN_PREFIX = '/__pdd/screen/';
+const SCREEN_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'self'; frame-src 'self'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+function screenResource(url, method) {
+  if (url.pathname === '/' && ['GET', 'HEAD'].includes(method) && !url.search) return 'index.html';
+  if (!url.pathname.startsWith(SCREEN_PREFIX)) return null;
+  const path = url.pathname.slice(SCREEN_PREFIX.length);
+  if (['GET', 'HEAD'].includes(method)) {
+    if (!url.search && (['index.html', 'door-screen.js', 'door-screen.css', 'try-frame.js', 'api/state'].includes(path) || /^app-asset\/[0-9]+$/.test(path))) return path;
+    if (path === 'api/action' && [...url.searchParams.keys()].length === 1 && url.searchParams.has('id') && /^[A-Za-z0-9_-]{1,128}$/.test(url.searchParams.get('id'))) return path + url.search;
+  }
+  if (method === 'POST' && !url.search && ['api/app/open', 'api/act'].includes(path)) return path;
+  return null;
+}
+async function requestText(req) {
+  const chunks = []; let size = 0;
+  const timeout = setTimeout(() => req.destroy(), 30_000);
+  try {
+    for await (const chunk of req) { size += chunk.length; if (size > 1024 * 1024) throw problem(413, 'The request body exceeds 1 MiB.'); chunks.push(chunk); }
+  } finally { clearTimeout(timeout); }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)); } catch { throw problem(400, 'The request body must be UTF-8.'); }
+}
+
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
   if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The runtime could not read this Try’s routes. It needs the Try doors server branch.'));
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));
-  if (!routes.length) throw problem(502, 'This Story has no named HTTP routes. Add an input schema title such as HTTP GET /api/books (RUNBOOK §6).');
+  const hasScreen = model.json.app_map === true;
+  if (hasScreen && routes.some(e => ['GET', 'HEAD'].includes(e.route.method) && e.route.path === '/' || e.route.path.startsWith(SCREEN_PREFIX))) throw problem(502, 'This app map reserves GET/HEAD / and /__pdd/screen/; its HTTP routes conflict with the Screen.');
+  if (!routes.length && !hasScreen) throw problem(502, 'This Story has no named HTTP routes. Add an input schema title such as HTTP GET /api/books (RUNBOOK §6).');
   const keys = new Set();
   for (const entry of routes) {
     const key = `${entry.route.method} ${entry.route.path.replace(/:[A-Za-z][A-Za-z0-9_]*/g, ':param')}`;
@@ -111,21 +135,34 @@ export async function openServe(context, test, sessionId, options) {
       if (!acceptedHost.has(req.headers.host) || (req.headers.origin && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(req.headers.origin)) || req.headers['sec-fetch-site'] === 'cross-site') throw problem(403, 'This local Try accepts requests only from its own origin.');
       if (!req.url.startsWith('/') || req.url.startsWith('//') || req.url.includes('\\')) throw problem(400, 'Use a local absolute request path.');
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
+      const resource = hasScreen ? screenResource(url, req.method) : null;
+      if (resource) {
+        if (pending >= 32 || stopped || context.signal?.aborted) throw problem(503, 'The local Try is busy or stopped.');
+        pending++; counted = true;
+        const body = await requestText(req);
+        if (req.method === 'POST' && req.headers['content-type']?.split(';')[0] !== 'application/json') throw problem(415, 'Screen actions require application/json.');
+        if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
+        const upstream = await context.runtime.send(`/v1/try/${sessionId}/screen/${resource}`, { method: req.method === 'HEAD' ? 'GET' : req.method,
+          ...(req.method === 'POST' ? { headers: { 'Content-Type': 'application/json' }, body } : {}) }, 90_000);
+        if (upstream.lost || !Number.isInteger(upstream.status) || upstream.status < 200 || upstream.status > 599) throw problem(502, 'The Screen request result is unknown. Read its action ID; do not resubmit.');
+        const text = upstream.text ?? JSON.stringify(upstream.json);
+        if (typeof text !== 'string' || Buffer.byteLength(text) > 16 * 1024 * 1024) throw problem(502, 'The Screen response is unavailable or too large.');
+        res.writeHead(upstream.status, { 'content-type': upstream.headers?.get('content-type') || 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(text), 'cache-control': 'no-store', 'content-security-policy': SCREEN_CSP,
+          'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' });
+        res.end(req.method === 'HEAD' ? '' : text); return;
+      }
+      if (hasScreen && url.pathname.startsWith(SCREEN_PREFIX)) { req.resume(); reply(404, 'This Screen resource is not available.'); return; }
       let selected, params;
       // A literal route wins over a parameter route; HEAD has its own entry before GET fallback.
       const candidates = routes.filter(e => e.route.method === req.method || req.method === 'HEAD' && e.route.method === 'GET')
         .sort((a, b) => Number(a.route.method !== req.method) - Number(b.route.method !== req.method) || (a.route.path.match(/:/g)?.length ?? 0) - (b.route.path.match(/:/g)?.length ?? 0));
       for (const entry of candidates) { const found = pathParams(entry.route, url.pathname); if (found) { selected = entry; params = found; break; } }
       if (!selected) { req.resume(); reply(404, 'No prompt names this HTTP route.'); return; }
+      if (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'empty') throw problem(403, 'Use curl or fetch for this API route; embedded resources and page navigations cannot spend AI calls.');
       if (pending >= 32 || stopped) throw problem(503, 'The local Try is busy or stopped.');
       pending++; counted = true;
-      const chunks = []; let size = 0;
-      const timeout = setTimeout(() => req.destroy(), 30_000);
-      try {
-        for await (const chunk of req) { size += chunk.length; if (size > 1024 * 1024) throw problem(413, 'The request body exceeds 1 MiB.'); chunks.push(chunk); }
-      } finally { clearTimeout(timeout); }
-      let text;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)); } catch { throw problem(400, 'The request body must be UTF-8.'); }
+      const text = await requestText(req);
       const input = inputFor(selected, req, url, params, text, selected.route.method);
       const work = tail.then(async () => {
         if (stopped || context.signal?.aborted) throw problem(503, 'The local Try is stopped.');
@@ -146,7 +183,7 @@ export async function openServe(context, test, sessionId, options) {
   context.signal?.addEventListener('abort', stop, { once: true });
   const port = server.address().port;
   ports.stdout.write(`Try is serving at http://127.0.0.1:${port}\n${routes.map(e => `  ${e.route.method} ${e.route.path}`).join('\n')}\nCtrl-C closes this server. The Try session keeps its saved data.\n`);
-  if (model.json.app_map) ports.stdout.write('This Try has a Screen. Use its hosted Try page to click through it.\n');
+  if (hasScreen) ports.stdout.write(`Screen: http://127.0.0.1:${port}/\n`);
   try {
     if (ports.serve) { await ports.serve(server); return 0; }
     await new Promise(done => { server.once('close', done); if (context.signal?.aborted) stop(); });

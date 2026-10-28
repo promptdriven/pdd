@@ -578,4 +578,5 @@ Review that recording before treating it as an expected answer. Stop the session
 For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/books`, then run
 `pdd try <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
 HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
-See RUNBOOK.md §19 for query, body and response schemas. A Story with an app map can still use its hosted Try Screen.
+When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
+if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.md §19 for details.

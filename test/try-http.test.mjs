@@ -24,7 +24,7 @@ async function serving(t, entries, result, work, extra = {}) {
   const ports = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra).ports;
   ports.serve = async server => work(server.address().port, seen, ports);
   const context = { root: setup.repo, ports, store: { dir: setup.state }, identity: { login: 'octo' }, origin: fake.origin,
-    runtime: { send: async () => ({ status: 200, json: { entries, app_map: false } }) } };
+    runtime: { send: async () => ({ status: 200, json: { entries, app_map: extra.appMap ?? false } }) } };
   assert.equal(await openServe(context, {}, 'session', { '--serve': '0' }), 0);
   return { seen, ports };
 }
@@ -73,4 +73,14 @@ test('HTTP door: HEAD fallback supplies GET to a constrained request-shaped entr
     assert.equal(response.status, 200); assert.equal(response.body, '');
     assert.equal(seen[0].input.method, 'GET');
   });
+});
+
+
+test('HTTP door with Screen: named API works through fetch/curl, never through model resource loads', async t => {
+  await serving(t, [route('GET', '/api/books')], { status: 200, books: [] }, async (port, seen) => {
+    for (const dest of ['image', 'style', 'script', 'iframe', 'document']) assert.equal((await raw(port, '/api/books', { 'sec-fetch-dest': dest })).status, 403);
+    assert.equal(seen.length, 0);
+    assert.equal((await raw(port, '/api/books', { 'sec-fetch-dest': 'empty' })).status, 200);
+    assert.equal(seen.length, 1);
+  }, { appMap: true });
 });
