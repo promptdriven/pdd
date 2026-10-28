@@ -51,6 +51,28 @@ Order:
 - Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3. A waiting row is then not run: `pdd stopped while the runtime was busy.`
 - `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. One GET for each open row, saved JSON for ended rows. It never makes a request ID and never POSTs.
 
+## Retry confirmed lint capacity refusals
+
+For Check's preflight, explicit `--lint`, and Try, a confirmed terminal lint refusal
+`lint-queue-timeout` with literal `details.retryable: true` is busy, never unknown or a prompt
+fault. Read that signal from `result.report.refusal` or `result.refusals`. A direct503
+`lint-queue-full` with the same literal flag is also a confirmed capacity refusal. Never apply
+this exception to a check/paid action, a wrong-ID reply, a nonretryable refusal or a lost result.
+
+Use at most3 total lint attempts for confirmed busy replies, with a fresh saved request ID
+and the same captured archive/options each time. Honor a positive numeric `retry_after` in
+seconds (bound1..30, default5) before retrying. Print `The server is busy. Waiting for a lint
+slot…` before the wait. No attempt or wait starts after interruption or the total lint deadline:
+the earlier existing command deadline and2minutes; agents also keep their90second rule unless
+a Check explicitly sets --timeout. Bound each lint HTTP request/read by the remaining wait.
+A lost reply still reads only that ID; it may retry only after that read confirms the retryable
+terminal capacity refusal. Do not submit checks or create a Try until lint succeeds.
+
+On exhausted attempts/time, return not-run (exit5; door wrappers retain their125 contract),
+0check AI calls, and plain advice that the server stayed busy, no checks ran, and the person
+can run the same command again later. Preserve every prior ID/answer. Unknown outcomes retain
+the existing read-only recovery and unknown wording; do not relabel them as safe capacity.
+
 ## State (outside the repo; folders 0700, files 0600; no tar and no token on disk)
 
 ```
