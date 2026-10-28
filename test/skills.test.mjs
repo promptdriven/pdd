@@ -108,7 +108,7 @@ test('SKILLS6: runtime lines depend on RUNBOOK.md, expected values stay with the
     const text = read(`${name}/SKILL.md`);
     // pdd-feature shows one line per Story (0.1.6); pdd-bug has one Story.
     assert.match(text, name === 'pdd-feature' ? /Before PR 1, show one `Runtime check` line per Story with its report link, and the Try links/
-      : /Before PR 1, show the `Runtime check:` line with its report link and the Try link/);
+      : /Before PR 1, show the `Runtime check` line\(s\) with the report link\(s\) and the Try link/);
     assert.match(text, /pdd opens PR 1 only after the approval\. Then show the PR 1 link/);
     // The same words as pdd's gate text, so a person who stops knows how to make the code PR later.
     assert.ok(text.includes('"Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."'), name);
@@ -134,7 +134,7 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
 // Wrong (plan D4): in a normal chat the agent writes a prompt and tests but never runs the runtime check unless asked.
 test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd try, and small-change checks before verify', () => {
   const prompting = read('pdd-prompting/SKILL.md');
-  assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check:` line and the report link. Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
+  assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
   assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` as [^\n]*RUNBOOK\.md says before verify\./);
 });
 
@@ -241,7 +241,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const check = read(`${name}/steps/check.md`);
     assert.match(check, /Write your notes to `<run folder>\/check\.md`, never to verify\.md\./, name);
-    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Runtime check \(<story>\): …` line/ : /put only pdd check's `Runtime check:` line and the report link in your `done` summary/, name);
+    assert.match(check, name === 'pdd-feature' ? /In your `done` summary put only every `Runtime check \(<story>\): …` line/ : /put only pdd check's `Runtime check` line\(s\) and the report link\(s\) in your `done` summary/, name);
   }
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd check`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
@@ -417,4 +417,12 @@ test('SKILLS28: before an optional step the main chat asks the person and waits 
     assert.ok(skill.split('\n').some(text => text.startsWith(line)), name);
     assert.equal(skill.includes('not a stop'), false, `${name}: "not a stop" reads as "do not wait"`);
   }
+});
+
+// Wrong (runtime 0.1.7): with one Story, pdd check prints only `Runtime check (<story>): …`, so a skill that asks for
+// "the `Runtime check:` line" sends the agent to look for a line that is not there.
+test('SKILLS29: skills name "the `Runtime check` line(s)", never a bare `Runtime check:` line', () => {
+  for (const name of readdirSync(skills)) for (const file of filesUnder(join(skills, name)).filter(file => file.endsWith('.md') && !/\/(RUNBOOK|guide)\.md$/.test(file)))
+    assert.equal(readFileSync(file, 'utf8').includes('`Runtime check:`'), false, file);
+  assert.match(read('pdd-bug/steps/reproduce.md'), /put its `Runtime check` line\(s\) and the report link\(s\) in your `done` summary as the "before" report/);
 });
