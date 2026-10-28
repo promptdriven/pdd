@@ -82,7 +82,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   git(source, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
   git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
-  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
+  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
   async function execFile(file, args, opts) {
     if (file === 'git' && args[0] === 'push') {
       f.pushes.push(args);
@@ -114,7 +114,11 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = f.prs.find(item => item.url === args[2]);
-      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci }) };
+      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
+    }
+    if (args[0] === 'pr' && args[1] === 'edit') {
+      const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
+      pr.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8'); f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
@@ -1073,13 +1077,13 @@ test('0.1.7 #4: approve in an agent environment tells the person how to approve;
   const claudeCode = await approveRun({ ref: '17', cwd: f.source }, person({ CLAUDECODE: '1' }));
   assert.equal(claudeCode.exitCode, 1);
   assert.equal(claudeCode.message, ['pdd sees an agent environment (CLAUDECODE=1), so it cannot ask you y/N here.',
-    'No approval was found in the plan chat: No user message was found after the gate question in this native session.',
+    'No approval was found in the plan chat: there is no reply from you after the gate question.',
     'To approve, run pdd workflow approve 17 in a normal terminal. Or answer the gate question in the plan chat: pdd workflow open 17'].join('\n'));
   const piped = await approveRun({ ref: '17', cwd: f.source }, person({}, { isTTY: false }));
   assert.equal(piped.exitCode, 1); assert.match(piped.message, /^pdd sees an agent environment \(stdin is not a terminal\), so it cannot ask you y\/N here\./);
   assert.equal(f.prompts.length, 0, 'still no y/N question'); assert.equal(f.record().area, 0);
   // The chat agent itself keeps the words meant for it.
-  assert.match((await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: noReply }))).message, /^Only the person can approve\. Ask them in this chat/);
+  assert.match((await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: noReply }))).message, /^Only the person can approve/);
   // A reply from the person in the chat still approves, also from that terminal.
   const replied = await approveRun({ ref: '17', cwd: f.source }, person({ CLAUDECODE: '1' }, { readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'claude', sessionId: run.chats[0].session.id, userMessage: 'I approve', userMessageAt: f.clock - 1 }) }));
   assert.equal(replied.exitCode, 0, replied.message); assert.equal(f.record().area, 1);
@@ -1127,6 +1131,9 @@ test('0.1.7 #7: with a draft prompt in PR 1, pdd does not offer the code PR; it 
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(code.exitCode, 0, code.message);
   assert.match(code.message, /pdd committed your approval of feature\.prompt\.md and pushed it to PR 1\./);
+  assert.equal(f.git(run.root, 'log', '-1', '--format=%s', run.branch), 'Approve feature.prompt.md');
+  assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
+  assert.doesNotMatch(f.prs[0].body, /Draft prompts/); assert.match(f.prs[0].body, /<!-- pdd-workflow:/, 'the PR marker stays');
   assert.match(f.prompts.at(-1), /Make the code PR now/);
   assert.equal(f.git(run.root, 'show', `${run.branch}:feature.prompt.md`), runtimePrompt('approved').trim());
   assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), f.git(run.root, 'rev-parse', run.branch), 'PR 1 has the approval');
@@ -1165,4 +1172,197 @@ test('0.1.7 #8: with a test file and a Try link, PR 1 keeps "(prompt, Story and 
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)');
   assert.match(f.prs[0].body, /^PR 1 of this run: the prompt, Story and test cases\./m);
+});
+
+// ---- 0.1.7: the round-2 "cli" tester (tipjar, bug workflow, Oct 27) ----
+
+// Tester 4.18–4.20: "pdd approve" (y), then "pdd workflow approve 2" was refused again until a guessed "git commit". That
+// commit then went to PR 2, and PR 1 still said "Draft prompts".
+test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the code area starts, and PR 1 drops its "Draft prompts" line', async t => {
+  const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
+  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\./);
+  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'Approve prompts/tipjar.prompt.md');
+  const approval = f.git(run.root, 'rev-parse', 'HEAD');
+  f.tick();
+  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(code.exitCode, 0, code.message);
+  assert.match(code.message, /pdd pushed 1 new commit from the worktree to PR 1\./); assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
+  assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), approval, 'the approval is on PR 1');
+  assert.doesNotMatch(f.prs[0].body, /Draft prompts/); assert.match(f.prs[0].body, /^Part of #17$/m);
+  assert.equal(f.record().areas[f.record().area].name, 'code'); assert.equal(f.record().prBase, run.branch, 'PR 2 stacks on PR 1, which has the approval');
+});
+
+test('0.1.7 #9: when pdd cannot push the approval to PR 1, it changes nothing else and says the exact next commands', async t => {
+  const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
+  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved'));
+  const execFile = f.ports.execFile;
+  f.ports.execFile = async (file, args, opts) => file === 'git' && args[0] === 'push' ? Promise.reject(Object.assign(Error('rejected'), { code: 1 })) : execFile(file, args, opts);
+  f.tick();
+  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(refused.exitCode, 1);
+  assert.equal(refused.message, `pdd could not push your approval of feature.prompt.md to PR 1. Run: cd ${run.root} && git push origin HEAD:refs/heads/${run.branch}\nThen run pdd workflow approve 17 again.`);
+  assert.equal(f.record().area, 1); assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
+  assert.equal(f.prompts.length, 1, 'no code question');
+  f.ports.execFile = execFile; f.tick();
+  assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0, 'the next approve pushes and goes on');
+  assert.doesNotMatch(f.prs[0].body, /Draft prompts/);
+});
+
+// Tester 4.8 (round 1 R1-5): a person's terminal tab in Herdr must be able to approve; the chat's own pane must not.
+test('0.1.7 #10: a person terminal in a Herdr tab approves with y/N; the run chat pane in the pdd session and agent environments do not', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  const noReply = async () => ({ ok: false, code: 'user_message_missing', message: 'No user message was found after the gate question in this native session.' });
+  const herdrTab = (pane, socket, extra = {}) => ({ ...f.ports, readApprovalEvidence: noReply,
+    env: { HOME: f.ports.env.HOME, HERDR_ENV: '1', HERDR_PANE_ID: pane, HERDR_TAB_ID: 'w1:t9', HERDR_SOCKET_PATH: socket, ...extra } });
+  const pddSocket = join(f.ports.env.HOME, '.config/herdr/sessions/pdd/herdr.sock'), defaultSocket = join(f.ports.env.HOME, '.config/herdr/herdr.sock');
+  const chatPane = herdrTab(run.chats[0].paneId, pddSocket);
+  const refused = await approveRun({ ref: '17', cwd: f.source }, chatPane);
+  assert.equal(refused.exitCode, 1); assert.equal(f.prompts.length, 0);
+  assert.match(refused.message, new RegExp(`^pdd sees the plan chat's own Herdr pane \\(${run.chats[0].paneId}\\), so it cannot ask you y/N here\\.\\n`));
+  assert.match(refused.message, /To approve, run pdd workflow approve 17 in another terminal tab\. Or answer the gate question in the plan chat: pdd workflow open 17$/);
+  assert.equal((await approveRun({ ref: '17', cwd: f.source }, herdrTab(run.chats[0].paneId, pddSocket, { CODEX_THREAD_ID: 't' }))).exitCode, 1);
+  assert.equal(f.prompts.length, 0, 'an agent environment in a Herdr tab gets no y/N');
+  // The same pane id in the person's default Herdr session is another pane.
+  f.tick();
+  const tab = await approveRun({ ref: '17', cwd: f.source }, herdrTab(run.chats[0].paneId, defaultSocket));
+  assert.equal(tab.exitCode, 0, tab.message); assert.equal(f.prompts.length, 1); assert.equal(f.record().decisions.at(-1).via, 'terminal');
+});
+
+// Tester 4.15: 10 minutes after PR 1 opened, status still showed the answered question "Do you approve this revision so
+// PDD can open PR 1?".
+test('0.1.7 #11: an approval clears the question that the chat asked at the gate, and status ignores a question older than the gate', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  f.herdr.idle();
+  await askPerson({ text: 'Try is skipped. Do you approve this revision so PDD can open PR 1?', cwd: run.root }, f.agentPorts());
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: waiting for you: Try is skipped\. Do you approve/m);
+  f.tick();
+  const opened = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve, open PR 1.', userMessageAt: f.clock - 1 }) }));
+  assert.equal(opened.exitCode, 0, opened.message);
+  assert.equal(f.record().question, null);
+  f.herdr.idle();
+  let shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^State: PR 1 open \(https:\/\/github\.com\/example\/project\/pull\/23\); waiting for you: code PR now, or stop and merge PR 1\./m);
+  assert.doesNotMatch(shown, /Do you approve this revision/);
+  // A record from an older pdd kept the answered question.
+  const record = JSON.parse(readFileSync(join(run.runDir, 'status.json'), 'utf8'));
+  record.question = { text: 'Old question?', at: record.gate.at - 5, area: 'prompt-pr' }; writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(record));
+  shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.match(shown, /^State: PR 1 open/m); assert.doesNotMatch(shown, /Old question/);
+  assert.doesNotMatch((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /Old question/);
+});
+
+// Tester, small things: "step summaries are cut in the middle of a URL ("report https://ru")".
+test('0.1.7 #12: status and PR step lines never cut a summary inside a URL', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  const url = 'https://runtime.example.test/r/da176d28-b1a3-4556-9e86-0654dc964ebe';
+  await stepDone({ step: 'scope', summary: `${'word '.repeat(22)}report ${url} and some more words after it`, cwd: run.root }, f.agentPorts());
+  const shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
+  assert.ok(shown.includes(`report ${url} …")`), shown);
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: `${'word '.repeat(37)}see ${url} for the report`, cwd: run.root }, f.agentPorts());
+  writeFileSync(join(run.runDir, 'verify.md'), 'ok\n');
+  await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
+  const line = f.prs[0].body.split('\n').find(row => row.startsWith('- **change**'));
+  assert.ok(line.endsWith(`see ${url} …`), line);
+});
+
+// Tester 4.13: the chat told the person "PDD rejected recording your earlier "Go on" because it requires a reply after
+// the PR gate opens."
+test('0.1.7 #13: a refused chat approval gives the agent plain words for the person, not pdd internals', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  const refused = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: false, code: 'user_message_missing', message: 'No user message was found after the gate question in this native session.' }) }));
+  assert.equal(refused.exitCode, 1);
+  assert.equal(refused.message, ['Only the person can approve, with a reply after your gate question. pdd found none: there is no reply from the person after the gate question.',
+    'Do not explain this check to the person. Tell them plainly: "I still need your approval for this step. Reply "I approve" here, or run pdd workflow approve 17 in your terminal." Then stop and wait.'].join('\n'));
+  assert.doesNotMatch(refused.message, /native session/);
+  const unreadable = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: false, code: 'session_unreadable', message: 'Cannot verify chat approval because native session evidence could not be read.' }) }));
+  assert.match(unreadable.message, /^Only the person can approve, with a reply after your gate question\. pdd found none: pdd could not read this chat\.\n/);
+});
+
+// Tester 4.22: the PR 2 body pasted verify.md as written: 100 lines of shell before the vector table and the Formal check.
+const oldVerify = ['# Verify', '', 'Build commit: `d2eb2db`.', '', '## Commands and captured output', '', 'The commands:', '', '```sh',
+  ...Array.from({ length: 40 }, (_, i) => `echo step ${i}`), '```', '', 'Fixed-code output:', '', '```text', ...Array.from({ length: 30 }, (_, i) => `ok ${i}`), '```', '',
+  'The old-code failures:', '', '| Case | Old code got |', '|---|---|', '| `split-100` | `$33.33` |', '',
+  '## Vector results', '', '| Case | Expected | Fixed code got | Result |', '|---|---|---|---|', '| `split-100` | `$33.34` | `$33.34` | Pass |', '',
+  '## Coverage limits', '', 'No vector uses error checks.', '', '## Formal check', '', '**Proved (bounded)**: 1,208,412 inputs.', '', '```text', '# FORMAL checked=1208412', '# pass 1', '```', ''].join('\n');
+test('0.1.7 #14: PR 2 puts the vector results and the Formal check first and folds long command output into closed <details> blocks', async t => {
+  const f = await fixture(t, { name: 'bug', agent: 'codex' });
+  const skill = join(f.source, '.agents', 'skills', 'pdd-bug');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'story', steps: ['reproduce'], optional: [], gate: 'approve' },
+    { name: 'prompt-pr', steps: ['check'], optional: [], gate: 'pr', then: 'ask-code' },
+    { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] }));
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
+  writeFileSync(join(run.root, 'story.md'), 'Story\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'story');
+  await done('reproduce', 'seen'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 1 of 1'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'fix');
+  await done('build', 'fixed');
+  writeFileSync(join(run.runDir, 'verify.md'), oldVerify);
+  await done('verify', '✓ 20/20 vectors');
+  const verify = f.prs[1].body.slice(f.prs[1].body.indexOf('## Verify'));
+  const at = text => { const index = verify.indexOf(text); assert.notEqual(index, -1, text); return index; };
+  assert.doesNotMatch(verify, /^# Verify$/m, 'one Verify heading');
+  assert.ok(at('### Vector results') < at('### Formal check') && at('### Formal check') < at('### Commands and captured output') && at('### Commands and captured output') < at('### Coverage limits'), verify);
+  assert.ok(at('Build commit') < at('### Vector results'), 'the text before the first heading stays on top');
+  assert.equal((verify.match(/<details><summary>/g) ?? []).length, 2, 'the two long blocks fold');
+  assert.match(verify, /<details><summary>Commands \(40 lines\)<\/summary>\n\n```sh\necho step 0\n/);
+  assert.match(verify, /<details><summary>Output \(30 lines\)<\/summary>\n\n```text\nok 0\n/);
+  assert.match(verify, /### Formal check\n\n\*\*Proved \(bounded\)\*\*: 1,208,412 inputs\.\n\n```text\n# FORMAL checked=1208412/, 'a short block stays open');
+  assert.match(verify, /\| `split-100` \| `\$33\.33` \|/, 'nothing is lost');
+});
+
+// The 0.1.7 verify step writes the tables first and the commands last, in a closed <details> block; pdd keeps that order.
+test('0.1.7 #14: a verify.md that already folds its commands in <details> keeps its order', async t => {
+  const f = await fixture(t);
+  await f.run(); const run = f.record(); f.tick();
+  await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n'); f.git(run.root, 'commit', '-qam', 'two');
+  await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts());
+  const verify = ['| Case | Expected | Code got | Result |', '|---|---|---|---|', '| a | 1 | 1 | Pass |', '', '## Commands', '', 'Ran the replay.', '',
+    '<details><summary>Commands and output</summary>', '', '```sh', ...Array.from({ length: 25 }, (_, i) => `echo ${i}`), '```', '', '</details>', '', '## Formal check', '', 'Proved (bounded).', ''].join('\n');
+  writeFileSync(join(run.runDir, 'verify.md'), verify);
+  await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
+  const body = f.prs[0].body;
+  assert.ok(body.includes(verify.replaceAll('## ', '### ').trim()), body);
+  assert.equal((body.match(/<details>/g) ?? []).length, 1);
+});
+
+// skills-017 7d2d7e7 (bug check step): the check summary starts with the verdict and "Before ✗ … → after ✓ …" for the top of PR 1.
+const verdictSummary = ['Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
+  'Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631',
+  'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
+  'Report (split-cent-conservation): https://rt.example.test/r/526de1aa-e631'];
+for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['joined with "; "', verdictSummary.join('; ')]]) {
+  test(`0.1.7 #15: PR 1 starts with the Verdict line and the Before → after line from the check summary (${name})`, async t => {
+    const { f, run } = await featureAtTryGate(t);
+    f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+    await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+    f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+    assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
+      'Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
+      'Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631 (report links expire after 7 days)',
+      'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
+      '', 'Part of #17']);
+    assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
+    assert.doesNotMatch(f.prs[0].body, /^Runtime report links expire after 7 days\.$/m, 'the top line says it already');
+  });
+}
+
+test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without a verdict keeps the 0.1.6 top', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  f.tick(); await stepDone({ step: 'check', summary: 'Verdict: no prompt covers this yet; the bug can only be in the code.\nBefore: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3\nRuntime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls\nReport: https://rt.example.test/r/after-3', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
+    'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
 });

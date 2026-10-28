@@ -94,10 +94,11 @@ After the check and try steps, the chat shows one `Runtime check` line for each 
 
 The PR 1 body is short:
 
-1. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
-2. `Part of #N`, and that the code comes in PR 2 only when you ask.
-3. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
-4. One short line for each step.
+1. For a bug: the verdict line and the `Before ✗ … → after ✓ …` line with its report links.
+2. One `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. Then a `Report (<story>)` link for each Story (report links expire after 7 days).
+3. `Part of #N`, and that the code comes in PR 2 only when you ask.
+4. `Draft prompts: … Approve them before you merge.`, when a prompt is still `draft`.
+5. One short line for each step.
 
 PR 1 has no `verify.md`, no Try links and no local paths.
 
@@ -111,7 +112,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 | Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
 | Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the default branch |
 
-PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`, which commits your approval to PR 1 and starts the code area.
+PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
 
 ### Who can approve
 
