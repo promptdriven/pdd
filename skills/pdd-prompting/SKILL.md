@@ -11,11 +11,10 @@ Each code module's `.prompt.md` is the source; code implements it.
 
 ## Core rules
 
-- Read `guide.md` in full before you write or change a prompt, Story or test cases. A link or a summary is not enough. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
+- Read `guide.md` in full before you write or change a prompt, Story or test cases. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
 - Change the prompt first, then the code.
-- One prompt per module: purpose and behavior, not code narration.
-- Give each rule one owner prompt. Link to a shared rule. Do not copy it. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
-- Keep the behavior callers need and the edge cases that matter.
+- Give each rule one owner prompt. Describe behavior; link shared rules. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
+- Linked `.ui.svg` is the layout spec: parts, words, order, ids and states. Prose and drawing must agree (RUNBOOK §13).
 - Write expected results from the requirement before the code exists. Never copy them from the code's output.
 - Show the prompt, Story and cases to the person before you build. The person decides; never approve for them.
 - Report only checks that you ran, with their real output.
@@ -35,6 +34,6 @@ Each code module's `.prompt.md` is the source; code implements it.
 5. Show the drafts and mark open questions. Ask only about choices that change the result.
 6. After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.
 
-For code with no prompts yet, use the code, callers and tests as evidence. Change no code until asked.
+Without prompts, use code, callers and tests as evidence. Change no code until asked.
 
 Workflow skills: pdd-small-change, pdd-bug and pdd-feature.
