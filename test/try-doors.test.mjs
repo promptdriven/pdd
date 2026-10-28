@@ -59,6 +59,8 @@ test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reus
   const shim = join(setup.repo, '.pdd/try/bin/paperclip');
   assert.equal(statSync(shim).mode & 0o777, 0o700);
   assert.match(ready.ports.stdout.text, /export PATH=/);
+  assert.match(ready.ports.stderr.text, /Try budget 160 calls; 160 remaining/);
+  assert.doesNotMatch(ready.ports.stdout.text, /budget|charged only/);
   assert.match(ready.ports.stdout.text, /paperclip say 'two words'/);
   assert.ok(!readFileSync(shim, 'utf8').includes(TOKEN));
   const { runShim } = await import('../src/try-doors.mjs');

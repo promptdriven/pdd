@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 501eeb873d22e8cffe4c5d4dd4959711f383987abd434166c804dff1fb893004).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 57dc4866f7708045e6cdc9ada415a453bc5e6239624b5c1a253fa7f3b7d89cb7).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -442,8 +442,8 @@ export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
 }
 
 const stepCount = doc => Array.isArray(doc?.steps) ? doc.steps.length : 0;
-// Steps with saved data or prompt calls cost 2 to 3 AI calls each (real-projects report): 4 per step, 6 to 100.
-export const defaultMaxCalls = doc => Math.min(100, Math.max(6, stepCount(doc) * 4));
+// Leave room for the whole call graph; the budget is a ceiling, not a charge.
+export const defaultMaxCalls = doc => Math.min(100, Math.max(18, stepCount(doc) * 12));
 
 function firstDifference(testTexts, storyTexts) {
   const left = [...storyTexts];

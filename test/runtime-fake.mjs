@@ -64,7 +64,7 @@ export async function fakeRuntime(t, answer) {
         criterion_results: [...new Set(checks.map(check => check.criterion_id))].map(id => ({ criterion_id: id, status: checks.every(check => check.criterion_id !== id || check.passed) ? 'passed' : 'failed' })) } },
     state === 'refused' ? 0 : 1);
   fake.tryJob = (id, url = `${fake.origin}/s/${'t'.repeat(43)}/`, session = 'running') => fake.job(id, 'try', 'passed',
-    { exitCode: 0, refusals: [], url, session: { id, state: session, tab: 'call', max_calls: 40, remaining_calls: 40 } });
+    { exitCode: 0, refusals: [], url, session: { id, state: session, tab: 'call', max_calls: 160, remaining_calls: 160 } });
   fake.stopJob = (id, tryId) => fake.job(id, 'stop', 'passed', { exitCode: 0, refusals: [], output: 'Try stopped. Saved results can be replayed.', session: { id: tryId, state: 'stopped' } });
   // The usual server: lint passes at once; checks are queued, then pass on the first read.
   fake.normal = entry => {
