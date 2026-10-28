@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: b6fd306b2fdcbfcff8b46d62680e316794b1b0d017f91ccd6a13903280094c2d).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: e980c1ab74696eadd03f183b974809bab45ce4e8f554d5384ae553f9d88d9709).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -157,7 +157,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
-    out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
+    const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
+    out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));

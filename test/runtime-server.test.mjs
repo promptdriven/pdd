@@ -62,7 +62,7 @@ test('RUNTIME-SERVER2: a lost connection after a POST is read with the same ID a
   assert.deepEqual(fake.gets.map(get => get.url), [`/v1/runs/${fake.posts[1].request.requestId}`]);
   const missing = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
     : entry.method === 'GET' ? { status: 404, json: { error: { code: 'not-found', message: 'The requested run or session was not found.' } } } : f.normal(entry));
-  const lost = await check(setup, missing, ['place-order'], {}, {});
+  const lost = await check(setup, missing, ['place-order'], {}, { interactive: true });
   assert.equal(lost.code, 3);
   assert.equal(missing.posts.filter(post => post.command === 'check').length, 1);
   assert.ok(missing.gets.length > 100 && missing.gets.every(get => get.url === `/v1/runs/${missing.posts[1].request.requestId}`));
@@ -284,8 +284,8 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   assert.match(read.out, /^Place a coffee order +tests\/place-order\.json +passed/m);
 });
 
-// Wrong: an agent's shell tool cuts pdd off at its own 10-minute limit before pdd prints anything (owner, Oct 27).
-test('RUNTIME-WAIT4: with no terminal pdd waits at most 8 min, prints the table and the read line, and exits 3; --timeout overrides', async t => {
+// Wrong: an agent's shell tool (Claude Code: 2 min) cuts pdd off before pdd prints anything (owner, Oct 27).
+test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table and the read line, and exits 3; --timeout overrides', async t => {
   const setup = harbor(t);
   let clock;
   const sent = new Map(), fake = await fakeRuntime(t, (entry, f) => {
@@ -303,12 +303,13 @@ test('RUNTIME-WAIT4: with no terminal pdd waits at most 8 min, prints the table 
   const agent = await run({}, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
   assert.match(agent.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
-  assert.match(agent.out, /^STILL RUNNING after 8 min: Place a coffee order\. Do not send it again\.$/m);
+  assert.match(agent.out, /^STILL RUNNING after 90 s: Place a coffee order\. Do not send it again\.$/m);
   const err = agent.err.trimEnd().split('\n');
-  assert.equal(err.filter(text => text.startsWith('Still running:')).length, 15);
+  assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
+    'Still running: 0 of 1 Story done · 1 AI call so far · 1 min']);
   assert.equal(err.at(-1), `Still running. Read the results later with: pdd check --read ${agent.batch}`);
   assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
-  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 8);
+  assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1.5);
   const longer = await run({ '--timeout': '20' }, { interactive: false });
   assert.equal(longer.code, 0, longer.err + longer.out);
   assert.doesNotMatch(longer.err, /Read the results later/);
@@ -493,6 +494,18 @@ test('RUNTIME-WAIT2: in a terminal with no --timeout a lost POST answer is read 
   assert.equal(result.code, 3);
   assert.ok(fake.gets.length >= 149 && fake.gets.length <= 150, String(fake.gets.length));
   assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the run may have executed\. Its result is unknown\.\n {2}The answer to the request was lost\.$/m);
+});
+
+// Wrong: a lost POST answer keeps an agent's pdd reading for 5 min, past its shell tool's limit.
+test('RUNTIME-WAIT5: with no terminal a lost POST answer is read until 90 s, then exit 3 with the read line and no new POST', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { destroy: true }
+    : entry.method === 'GET' ? { status: 404, json: NOT_STARTED } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 3);
+  assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
+  assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
+  assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd check --read ${result.batch}`);
 });
 
 // Wrong: an AI provider failure looks like a failed check, or pdd resends it by itself.

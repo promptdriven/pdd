@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cd9b36f073a1096fb7af29d63b9cd316e6eb2e1b7baa64b7db0da17364dd91ff).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a92c9056fa0a5863a92b00452cca816622b9760b87e95da3c5910ea27d210662).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -21,8 +21,8 @@ const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
 // The same engine: the full sha or a prefix of it with at least 7 hex digits.
 const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
 const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
-// An agent (no terminal) waits at most 8 min, below the usual 10-minute limit of its shell tool; a person has no limit.
-const AGENT_WAIT_MIN = 8;
+// An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool; a person has no limit.
+const AGENT_WAIT_MIN = 1.5;
 // Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for 5 min.
 const LOST_READ_MS = 300_000;
 
@@ -364,8 +364,9 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
-  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true,
-    read_until: Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
+  // The agent's default limit caps this read too: pdd exits 3 and --read reads the same ID later.
+  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: context.agentLimit ? context.deadline
+    : Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
 }
 
 // GET one open row once.
@@ -404,7 +405,7 @@ async function runLint(context) {
     if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // A lost lint answer is read by the same ID, like a lost check.
-    const readEnd = verdict.kind === 'unknown' ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
+    const readEnd = verdict.kind === 'unknown' && !context.agentLimit ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
     let answer = verdict.answer ?? null, id = request.requestId, lost = false;
     while (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state) && context.ports.now() < readEnd && !context.interrupted) {
       await context.ports.sleep(context.ports.pollMs, context.signal);
@@ -468,7 +469,7 @@ async function checkBatch(context, rows) {
     saveBatch(context);
   }
   const stoppedEarly = context.interrupted || !!context.readStop;
-  context.timedOut = !stoppedEarly && toSend.some(row => OPEN_STATES.has(row.state));
+  context.timedOut = !stoppedEarly && ports.now() >= context.deadline && toSend.some(isOpen);
   for (const row of toSend) {
     if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full',
       message: stoppedEarly ? 'pdd stopped while the runtime was busy.' : 'The runtime stayed busy until the timeout.' } });
@@ -660,8 +661,9 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  // A person has no time limit (Serhan: no timeouts); an agent has 8 min; --timeout MIN overrides both.
-  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
+  // A person has no time limit (Serhan: no timeouts); an agent has 90 s; --timeout MIN overrides both.
+  context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
+  context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
   const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
