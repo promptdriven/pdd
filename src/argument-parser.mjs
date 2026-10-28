@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 6f5ce267ed444bde064ab4b2af253c0e1b8d4915f2dd9ce2073e2d5619b42a00).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: b319023a0a9830f2ee108978afc6bb2d88d67d086e1377f18a24050c32b06c36).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -30,6 +30,13 @@ function parseRoute(route, words) {
       const option = route.options.find(option => option.name === word);
       if (!option || Object.hasOwn(options, word)) fail();
       if (option.kind === 'flag') options[word] = true;
+      else if (option.kind === 'optional-integer') {
+        const next = words[index + 1];
+        if (/^[0-9]+$/.test(next ?? '')) {
+          if (Number(next) < option.min || Number(next) > option.max) fail();
+          options[word] = words[++index];
+        } else options[word] = String(option.default);
+      }
       else {
         const value = words[++index];
         if (!optionValue(option, value)) fail();

@@ -1,18 +1,18 @@
 ---
 name: pdd-feature
-description: PDD feature workflow. Use when the person asks for a new feature or new behavior in a PDD project. Write the prompt, Story and tests (PR 1), then the code (PR 2) if asked.
+description: PDD feature workflow. Use when a person asks for a PDD feature. Write the prompt, Story and tests (PR 1), then the code (PR 2) if asked.
 ---
 
 # PDD feature
 
-Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
+One chat per area. Briefs: `steps/`. `?` = optional.
 1. story: understand, visual?, prompt-story → gate: approve
 2. prompt-pr: check, try? → approve, then gate: pr (PR 1: prompt, Story, tests), then ask
 3. code: build, verify, formal → gate: pr (PR 2)
 
 ## Rules
 
-- The main chat coordinates and talks with the person. It does not write code.
+- The main chat coordinates with the person. It writes no code.
 - Run each step in a new subagent, never reused, so verify never checks its own code. Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out. Do not send small follow-up messages or use short waits.
 - At a gate, show the result, ask the person, and stop. For changes, revise here and ask again.
 - Write each link as its full URL (`https://…`), never as a linked word.
@@ -28,3 +28,5 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
 - When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
 - When the person approves in their own words, run `<pdd> workflow approve N`. Never approve for them.
+
+To try a CLI, run `pdd try <story> --cli`, then run the command.
