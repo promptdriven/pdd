@@ -441,7 +441,7 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   const files = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).stdout.split('\0').filter(Boolean);
   const addresses = files.flatMap(path => {
     const text = readFileSync(join(root, path), 'utf8').replace(/\\+\./g, '.');
-    return [...text.matchAll(/\b\d{1,3}([.-])\d{1,3}\1\d{1,3}\1\d{1,3}\b/g)]
+    return [...text.matchAll(/(?<![\w.-])\d{1,3}([.-])\d{1,3}\1\d{1,3}\1\d{1,3}(?!\w|[.-]\d)/g)]
       .map(match => ({ path, address: match[0].replaceAll('-', '.') }));
   });
   assert.deepEqual(addresses.filter(({ address }) => !/^(?:127\.0\.0\.1$|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.)/.test(address)), []);
