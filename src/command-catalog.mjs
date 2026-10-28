@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4f0803d523da420fd40601c38bb5539e733b9c9e4d720e4c60cbd91e108fb811).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 60b9b51d94c4c12069ae0a835816e336dc5bd43b2c8ea4b95025c0c3aba7771b).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -46,7 +46,7 @@ const routes = [
       form('pdd check --files', 'List the files a check would send; no network.'),
       form('pdd check --lint [STORY...] [--json]', 'Run only the PDD runtime lint (0 AI calls) on your Git files and print every problem it finds; sends no checks.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
-    forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and set it to approved after you answer y. For a person at a terminal only.')] },
+    forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
   { id: 'try', prefix: ['try'], local: 'runtime-try', operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
       { name: '--no-open', kind: 'flag' }, { name: '--stop', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--no-wait', kind: 'flag' }],

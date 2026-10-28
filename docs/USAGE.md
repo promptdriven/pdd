@@ -375,7 +375,7 @@ Only a person approves a prompt. An agent never sets `"status": "approved"`.
 pdd approve prompts/place_order.prompt.md
 ```
 
-pdd shows the prompt's runtime interface in plain words: each input, result and error. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd sets the prompt to `approved` and fills its hash. Any other answer changes nothing.
+pdd shows the prompt's runtime interface in plain words: each input, result and error. Then it shows the text that you approve: the changes since the last approved version in Git, or the whole text when there is none, at most 40 lines. Then it asks `Approve prompts/place_order.prompt.md? y/n`. When you answer `y`, pdd sets the prompt to `approved` and fills its hash. Any other answer changes nothing.
 
 - `pdd approve` works only for a person at a terminal. When an agent runs it, pdd tells the agent to ask you to run it.
 - If the prompt has schema problems, pdd lists them and does not approve.

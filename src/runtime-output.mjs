@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 137cb2121af770edf4413d32f94ca560f09b67daaaac0d036e38d1df7c69f25d).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: bcc9597d9a083285f7a5101f265503a6e108b2b1ef138df5f7259ca693a7eaca).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -21,7 +21,7 @@ export function cleanText(value, secrets = [], { paths = true } = {}) {
   return (paths ? text.replace(SERVER_PATH, '<server path>') : text).trim();
 }
 const cleanField = (value, secrets) => cleanText(value, secrets, { paths: false });
-const shown = (value, secrets) => { const text = cleanField(JSON.stringify(value) ?? 'nothing', secrets); return text.length > 80 ? `${text.slice(0, 77)}...` : text; };
+const shown = (value, secrets) => cleanField(JSON.stringify(value) ?? 'nothing', secrets);
 
 // A secret browser link from the runtime: same scheme and host as the origin, the expected path, no user or password.
 export function validLink(value, origin, kind) {
@@ -120,7 +120,29 @@ function table(rows) {
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
 }
 
-const checkLine = (check, secrets) => `${check.criterion_id}  ${check.target} ${check.path}  expected ${shown(check.expected, secrets)}, got ${shown(check.actual, secrets)}`;
+// ---- Expected and got (round-2 tester: a CLI's stdout lost its line breaks and was cut near the difference) ----
+const VALUE_LINES = 20;
+// One line of a value: no control characters and no token, but its spaces stay.
+const plainLine = (text, secrets) => secrets.reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value,
+  text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' '));
+const oneLine = value => typeof value !== 'string' || !/\n(?!$)/.test(value);
+const valueLines = value => typeof value === 'string' ? value.replace(/\n$/, '').split('\n') : (JSON.stringify(value, null, 2) ?? 'nothing').split('\n');
+
+// The check line: one line when both values fit, else the check and a block for each value, never cut inside a line.
+function checkLines(check, secrets) {
+  const head = `${check.criterion_id}  ${check.target} ${check.path}`;
+  const fits = [check.expected, check.actual].every(value => oneLine(value) && shown(value, secrets).length <= 80);
+  if (fits) return [`${head}  expected ${shown(check.expected, secrets)}, got ${shown(check.actual, secrets)}`];
+  const expected = valueLines(check.expected), actual = valueLines(check.actual);
+  // Start 2 lines before the first line where two strings differ, when it is past the first 20.
+  const differ = typeof check.expected === 'string' && typeof check.actual === 'string' ? expected.findIndex((text, index) => text !== actual[index]) : -1;
+  const from = differ >= VALUE_LINES ? differ - 2 : 0;
+  const block = (word, value, lines) => [`  ${word}:`, ...(from ? [`    … ${from} lines before`] : []),
+    ...lines.slice(from, from + VALUE_LINES).map(text => `    ${plainLine(text, secrets)}`),
+    ...(lines.length > from + VALUE_LINES ? [`    … ${lines.length - from - VALUE_LINES} more lines in the report`] : []),
+    ...(typeof value === 'string' && value.endsWith('\n') ? ['    (ends with a line break)'] : [])];
+  return [head, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
+}
 function refusalLines(item) {
   const lines = [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
   if (item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
@@ -147,7 +169,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   const perStory = storyLines(rows).map(([, text]) => text);
   out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   for (const row of rows.filter(row => row.state === 'failed')) {
-    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).map(check => `  ${checkLine(check, secrets)}`),
+    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).flatMap(check => checkLines(check, secrets).map(text => `  ${text}`)),
       ...(row.warnings ?? []).map(text => `  ${text}`),
       `  Report: ${row.report_url ?? 'none'}   Next: show the person this check. Do not change the expected value yourself.`);
   }
@@ -171,7 +193,8 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,
-      ...[...row.all_checks].sort((a, b) => a.passed - b.passed).map(check => `  ${check.passed ? 'passed' : 'failed'}  ${checkLine(check, secrets)}`));
+      ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
+        .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
   }
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);

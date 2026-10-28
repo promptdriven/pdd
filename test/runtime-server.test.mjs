@@ -538,6 +538,27 @@ test('RUNTIME-SERVER20: expected and got strings print JSON-escaped', async t =>
   assert.match(result.out, /^ {2}AC2 {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
 });
 
+// Wrong: a failed CLI output loses its line breaks and is cut near the difference (round-2 tester, Oct 27).
+test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is never cut inside a line, and names the lines left out', async t => {
+  const setup = harbor(t);
+  const bill = cents => `Bill:  $100.00\nTip:   $0.00 (0%)\nTotal: $100.00\nPerson 1: $${cents}\nPerson 2: $33.33\nPerson 3: $33.33\n`;
+  const long = mark => Array.from({ length: 60 }, (_, index) => index === 24 ? `line 25 ${mark}` : `line ${index + 1}`).join('\n');
+  const checks = [{ criterion_id: 'AC1', target: 'result', path: '/stdout', op: 'equals', expected: bill('33.34'), actual: bill('33.33'), passed: false },
+    { criterion_id: 'AC2', target: 'result', path: '/log', op: 'equals', expected: long('want'), actual: long('got'), passed: false }];
+  const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', checks) } : f.normal(entry));
+  const result = await check(setup, fake, ['place-order']);
+  assert.equal(result.code, 1, result.err);
+  const lines = result.out.split('\n'), first = lines.indexOf('  AC1  result /stdout');
+  const shown = cents => ['      Bill:  $100.00', '      Tip:   $0.00 (0%)', '      Total: $100.00', `      Person 1: $${cents}`, '      Person 2: $33.33', '      Person 3: $33.33',
+    '      (ends with a line break)'];
+  assert.deepEqual(lines.slice(first, first + 17), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
+  const window = mark => ['      … 22 lines before', ...Array.from({ length: 20 }, (_, index) => `      line ${index + 23}${index === 2 ? ` ${mark}` : ''}`),
+    '      … 18 more lines in the report'];
+  const second = lines.indexOf('  AC2  result /log');
+  assert.deepEqual(lines.slice(second, second + 47), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
+  assert.match(lines[second + 47], /^ {2}Report: http/);
+});
+
 // Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);
