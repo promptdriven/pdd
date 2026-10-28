@@ -607,7 +607,7 @@ if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.
 
 ## Ask your agent on the Try page
 
-Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
+Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the Try budget. Older pages keep manual **Fill fields** and **Run**.
 
 ```sh
 pdd try my-story
