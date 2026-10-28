@@ -21,6 +21,8 @@ Read section 3 (schema rules) and section 8 (check paths) before the first check
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
 Across its steps, the test file must check every criterion of its story.
+
+Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
 Add a second file only for a case that needs a different starting world. That file also checks every criterion.
 
 **One rule, one prompt.** Before you write a prompt, look in `prompts/` for a prompt that owns the rule. Change that
@@ -524,9 +526,10 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 - The state goes in and comes out (`step(state, dir)` returns the new state): give each step the result of the step
   before it. `"input": {"state": {"$step_result": {"step_id": "move-1", "path": ""}}, "dir": "up"}`. The path `""` is
   the whole result. Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
-- The app really replays a list of moves: one operation takes the list. Make all moves in that one AI call: link the
-  rule prompt (`board.prompt.md`) under `## Dependencies` with no `calls` entry, so the AI reads its rules. A `calls`
-  entry with `max_calls: 30` makes every step of the prompt need 61 calls (section 10).
+- If the app really accepts a list of moves, use short lists of about 10 per step. Check the expected state after
+  each part and pass it to the next part; keep the same complete replay coverage. Link its rule prompt under
+  `## Dependencies`. Do not invent a replay operation only for tests, or expand a short action into an unbounded
+  chain of prompt calls. The server stops one step after 10 minutes, regardless of the remaining call budget.
 
 ## 19. Use a Try from your terminal or curl
 
