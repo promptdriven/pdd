@@ -91,8 +91,8 @@ test('changed root terminal or an extra tab prevents run cleanup',async t=>{
 });
 test('Ctrl+C leaves a proved-dead layout owner recoverable by the next process',async t=>{
  const {spawn}=await import('node:child_process');const f=await fixture(t);
- const script=`import {withHerdrLayoutLock} from ${JSON.stringify(new URL('../src/workflow-herdr-layout.mjs',import.meta.url).href)};process.on('SIGINT',()=>process.exit(130));await withHerdrLayoutLock(async()=>{console.log('LOCKED');await new Promise(()=>{setInterval(()=>{},1000);});},{directory:${JSON.stringify(f.ports.directory)}});`;
- const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:['ignore','pipe','pipe']});
+ const script=`const {withHerdrLayoutLock}=await import(process.argv[1]);process.on('SIGINT',()=>process.exit(130));await withHerdrLayoutLock(async()=>{console.log('LOCKED');await new Promise(()=>{setInterval(()=>{},1000);});},{directory:process.argv[2]});`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script,new URL('../src/workflow-herdr-layout.mjs',import.meta.url).href,f.ports.directory],{stdio:['ignore','pipe','pipe']});
  t.after(()=>child.kill('SIGKILL'));
  const ready=new Promise(resolve=>child.stdout.once('data',resolve));const ended=new Promise(resolve=>child.once('exit',resolve));
  await ready;child.kill('SIGINT');assert.equal(await ended,130);

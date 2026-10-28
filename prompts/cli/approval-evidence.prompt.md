@@ -82,6 +82,10 @@ records. Exclude messages consisting only of `<environment_context>` or
 `<permissions instructions>` wrappers, and messages beginning with the generated
 `# AGENTS.md instructions for ` heading or with `# AGENTS.md instructions` followed by `<INSTRUCTIONS>`. These are not a person's reply; role
 alone does not make these known generated records evidence.
+Recognizing wrapper-only context must take linear time in the message length,
+including repeated opening/closing tags followed by ordinary user text. Preserve
+the same exclusion for concatenated complete wrappers with whitespace between them;
+an incomplete wrapper or a non-wrapper suffix is user text.
 Malformed complete records in a matched file refuse; an unterminated final line
 is an in-progress write and never serves as evidence. A matched file's metadata
 and messages come from the same read snapshot.

@@ -10,6 +10,9 @@ a letter, up to 64 characters; pdd, node, gh and git are reserved because puttin
 the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a POSIX shell shebang that execs the absolute Node executable. Never traverse a symlink
 or overwrite a file not marked as a PDD Try launcher. Ignore .pdd/try/ via the repository's local Git exclude file
 so future source captures contain no adapters or evidence. No token or browser capability enters the launcher.
+Keep the evaluated JavaScript constant. Pass the installed module URL and private
+descriptor path as separate data arguments, followed by the program's unchanged
+argv, with POSIX-safe shell quoting. Paths must never become JavaScript source.
 
 Print its absolute path, one POSIX-safe `export PATH=…:"$PATH"` line, and distinct examples from the Story's
 argv steps. Every shell word in an example is quoted safely. Default returns immediately. --shell launches the
