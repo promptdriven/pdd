@@ -188,8 +188,7 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
     assert.match(step, /PR 1 holds only the prompt, the Story and `tests\/\*\.json`/, name);
-    assert.match(step, /fail on today's code[^\n]*PR 2/, name);
-    assert.match(step, /so merging PR 1 never turns main red\./, name);
+    assert.ok(step.includes("Runtime tests are not the repo's unit tests; the code area adds those, so merging PR 1 never turns main red."), name);
     assert.equal(read(`${name}/SKILL.md`).includes('PR 1 holds only'), false, `${name}/SKILL.md repeats the PR 1 rule`);
   }
 });
@@ -314,7 +313,7 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
 // interface block, because no step told it the runtime's file format before the check step.
 test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 first', () => {
   // 0.1.7: prompt-story reads the guide in the same first line; change reads the guide only when it changes a prompt.
-  const formats = ' Copy the RUNBOOK examples: `prompts/<name>.prompt.md` with a Runtime interface block, and `tests/<story>.json`.';
+  const formats = ' Copy the RUNBOOK examples (`*.prompt.md` with a Runtime interface block, `tests/<story>.json`).';
   for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md'])
     assert.ok(read(file).split('\n').find(text => text.startsWith('- ')).startsWith(`- First read the pdd-prompting skill's guide.md in full and its RUNBOOK.md §2–§4.${formats}`), file);
   assert.equal(read('pdd-small-change/steps/change.md').split('\n').find(text => text.startsWith('- ')),
@@ -333,7 +332,7 @@ test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 
 test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and the story gate names paths and the approve sentence', () => {
   assert.ok(read('pdd-feature/steps/understand.md').includes("If the person's brief names other file names or test formats than PDD's (for example `*.prompt` or the repo's own test format), say so in one line and use PDD's, unless the person says otherwise."));
   for (const name of ['pdd-bug', 'pdd-feature']) {
-    assert.ok(read(`${name}/steps/prompt-story.md`).includes(" Runtime tests are not the repo's unit tests; the code area adds those."), name);
+    assert.ok(read(`${name}/steps/prompt-story.md`).includes(" Runtime tests are not the repo's unit tests; the code area adds those"), name);
     const skill = read(`${name}/SKILL.md`);
     assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
     assert.ok(skill.includes(`"Reply 'I approve' to go on, or tell me what to change."`), name);
@@ -341,23 +340,24 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
 });
 
 // Wrong (Serhan's 2048 test, 0.1.7): the Try page showed only a form, because no step made an app map.
-test('SKILLS22: for a screen, visual writes the app map, prompt-story links the SVG, and the person gets `pdd try <story> --new`', () => {
+test('SKILLS22: for a page or a screen, visual writes the app map, and the person gets `pdd try <story> --new`', () => {
   const runbook = RUNBOOK();
   assert.ok(runbook.includes('The Try page has a **Screen** tab only when the repo has an app map'));
   assert.ok(runbook.includes('Without `--new`, pdd reuses the open Try and does not send the map.'));
   const visual = read('pdd-feature/steps/visual.md');
-  assert.ok(visual.includes('For a screen, also write the app map and its SVG mockups from that design (RUNBOOK §13), so `pdd try` shows the real screen (the Screen tab) and keys or taps work.'));
+  assert.ok(visual.includes('For a page or a screen, also write the app map and its SVG mockups from that design (RUNBOOK §13), so `pdd try` shows the real screen (the Screen tab) and keys or taps work.'));
   assert.match(visual, /app map path in your `done` summary/);
-  assert.ok(read('pdd-feature/steps/prompt-story.md').includes("- If visual wrote an app map, write the prompts it names, and put its SVG in the screen prompt's `## Appearance`."));
+  assert.ok(runbook.includes('Its `## Appearance` section links the mockups'));
+  assert.ok(read('pdd-feature/steps/prompt-story.md').includes('- A page or a screen gets an app map, so the person can try it on the Screen.'));
   const skill = read('pdd-feature/SKILL.md');
-  assert.ok(skill.includes('For a screen, recommend visual: it makes the app map.'));
+  assert.ok(skill.includes('For a page or a screen, recommend visual: it makes the app map.'));
   assert.match(skill.split('\n').find(line => line.startsWith('- At the story gate')), /If visual made an app map, tell the person to run `pdd try <story> --new`/);
   assert.match(read('pdd-feature/steps/try.md'), /`pdd try STORY`[^\n]*with an app map, add `--new`/);
 });
 
 // Wrong (2048 test, 0.1.7): 30 tests in a row of one AI call each, and a check refused for its AI-call budget, because
 // the steps pointed only to RUNBOOK §2–§4. The writing step says it once; no other file of the skill repeats it.
-const POINTERS = '- Also read the RUNBOOK sections that fit: §6 for a CLI, §7 when one prompt calls another, §9 for money and dates, §13 for a screen and its app map. For tests, read §8 (check paths), §10 (AI-call budget: over it, a test is refused at 0 calls) and §18 (ONE call for a whole move list, never 30 in a row).';
+const POINTERS = '- Also read the RUNBOOK sections that fit: §6 a CLI, §7 a prompt that calls another, §9 money and dates, §13 a page or screen. For tests: §8 check paths, §10 the AI-call budget (over it, a test is refused at 0 calls), §18 ONE call for a whole move list, never 30 in a row.';
 test('SKILLS23: the step that writes prompts and tests points to the RUNBOOK sections that fit, once', () => {
   for (const [name, writer] of [['pdd-feature', 'prompt-story'], ['pdd-bug', 'prompt-story'], ['pdd-small-change', 'change']]) {
     assert.equal(read(`${name}/steps/${writer}.md`).split('\n').filter(line => line === POINTERS).length, 1, `${name}/${writer}`);
@@ -392,5 +392,29 @@ test('SKILLS26: no sentence of a workflow skill is in two of its files', () => {
         assert.ok(!seen.has(sentence) || seen.get(sentence) === where, `"${sentence}" is in ${seen.get(sentence)} and ${where}`);
         seen.set(sentence, where);
       }
+  }
+});
+
+// Wrong (round-2 tester, bookshelf "empty shelf", 0.1.7): a page-only feature got "No tests found", 0 AI calls and
+// nothing to try, because the agent called the page "browser-only" (RUNBOOK §18) and never used the Screen of §13.
+test('SKILLS27: a page gets a render operation that returns html, an app map and exact checks, never "browser-only"', () => {
+  const feature = read('pdd-feature/steps/prompt-story.md').split('\n').find(line => line.startsWith('- A page or a screen'));
+  for (const words of ['app map', 'try it on the Screen', '`render` operation that returns `{html}`', '`count` or `equals`', '`/emptyMessage`', 'never "browser-only, no runtime test"'])
+    assert.ok(feature.includes(words), words);
+  // A page bug is checked the same way.
+  const bug = read('pdd-bug/steps/prompt-story.md');
+  assert.match(bug, /For a page, check what it shows through its `render` operation[^\n]*`count` or `equals`[^\n]*never "browser-only, no runtime test"/);
+});
+
+// Wrong (round-2 tester, 0.1.7): the optional visual step ran without asking, though pdd said "Ask the person".
+test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
+  const ask = 'In a run, run `<pdd> workflow ask` first.';
+  const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
+    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
+    'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
+  for (const [name, line] of Object.entries(lines)) {
+    const skill = read(`${name}/SKILL.md`);
+    assert.ok(skill.split('\n').some(text => text.startsWith(line)), name);
+    assert.equal(skill.includes('not a stop'), false, `${name}: "not a stop" reads as "do not wait"`);
   }
 });

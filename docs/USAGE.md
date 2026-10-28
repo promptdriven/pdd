@@ -271,9 +271,9 @@ Rules:
 
 ### 6.6 Optional steps
 
-`visual` and `try` are optional. The chat asks you about them. They are questions, not stops. Answer in the chat.
+`visual` and `try` are optional. Before each one, the chat asks you, for example "Do you want a visual design step? yes/no", and waits for your answer. They are not gates: answer in the chat.
 
-For a feature with a screen, the chat recommends `visual`. It writes the app map, so the Try page shows the real screen and your keys or taps work. At the story gate, you can open a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when there is an app map. The check still runs first in the prompt PR area.
+For a page or a screen, the chat recommends `visual`. It writes the app map, so the Try page shows the real screen and your keys or taps work. A page with no visual step still gets an app map and a `render` operation that returns its HTML, so you can try it, and its tests check what the page shows. At the story gate, you can open a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when there is an app map. The check still runs first in the prompt PR area.
 
 ### 6.7 The PRs and the merge
 

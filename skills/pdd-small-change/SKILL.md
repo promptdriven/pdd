@@ -15,7 +15,8 @@ Each area is one main chat. Step briefs are in `steps/`.
 
 - The main chat coordinates and talks with the person. It does not write code.
 - Run each step in a new subagent, never reused, so verify never checks its own code. Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out. Do not send small follow-up messages or use short waits.
-- At a gate, show the result, ask the person, and stop. For changes, revise here and ask again. An optional step is a question in the chat, not a stop.
+- At a gate, show the result, ask the person, and stop. For changes, revise here and ask again.
+- Before an optional step, ask the person and wait for the answer. In a run, run `<pdd> workflow ask` first.
 - A person decides expected values. Never change a test to make it pass.
 - Never push, open a PR or merge.
 

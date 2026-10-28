@@ -1,7 +1,7 @@
 # change
 
-- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 in the pdd-prompting skill. Copy the RUNBOOK examples: `prompts/<name>.prompt.md` with a Runtime interface block, and `tests/<story>.json`.
-- Also read the RUNBOOK sections that fit: §6 for a CLI, §7 when one prompt calls another, §9 for money and dates, §13 for a screen and its app map. For tests, read §8 (check paths), §10 (AI-call budget: over it, a test is refused at 0 calls) and §18 (ONE call for a whole move list, never 30 in a row).
+- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 in the pdd-prompting skill. Copy the RUNBOOK examples (`*.prompt.md` with a Runtime interface block, `tests/<story>.json`).
+- Also read the RUNBOOK sections that fit: §6 a CLI, §7 a prompt that calls another, §9 money and dates, §13 a page or screen. For tests: §8 check paths, §10 the AI-call budget (over it, a test is refused at 0 calls), §18 ONE call for a whole move list, never 30 in a row.
 - Change only the approved scope.
 - If a prompt owns the changed behavior, read the pdd-prompting skill's guide.md in full. Change the prompt first, then the code.
 - For a behavior change, add a test through the public interface. Take its expected result from the plan, not from the code.
