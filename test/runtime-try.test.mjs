@@ -197,18 +197,42 @@ test('RUNTIME-TRY8: --no-wait returns at once; a runtime with no saved-tests end
   assert.equal(waiting.code, 0); assert.match(waiting.out, /The runtime does not keep saved tests yet/);
 });
 
-// Wrong: the live server pauses an idle Try, and pdd then thinks the Try is gone or unknown (seen on the live server, Oct 27).
-test('RUNTIME-TRY9: a paused Try is reused like a running one', async t => {
-  const setup = harbor(t);
-  let made = false;
+// T3-11: only an explicit owner reopen makes a paused Try usable; its ID, seed and cap stay the same.
+test('RUNTIME-TRY9: a paused Try is explicitly reopened before its link is reused', async t => {
+  const setup = harbor(t); let paused = false, reopened = false, polls = 0;
   const fake = await fakeRuntime(t, (entry, f) => {
-    if (entry.method === 'GET' && made && !entry.url.endsWith('/tests')) return { status: 200, json: f.tryJob(entry.url.split('/').at(-1), undefined, 'paused') };
-    return trying()(entry, f);
+    const id=f.posts.find(p=>p.command==='try')?.request.requestId;
+    if(entry.method==='POST' && entry.url===`/v1/try/${id}/reopen`){ reopened=true;return {status:200,json:f.job(id,'try','queued')}; }
+    if(entry.method==='GET' && paused && entry.url===`/v1/runs/${id}`){
+      if(!reopened)return {status:200,json:f.tryJob(id,undefined,'paused')};
+      return ++polls===1 ? {status:200,json:f.job(id,'try','running')} : {status:200,json:f.tryJob(id)};
+    }
+    return trying()(entry,f);
   });
-  assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
-  made = true;
-  const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
-  assert.equal(again.code, 0, again.err); assert.equal(fake.posts.filter(post => post.command === 'try').length, 1);
+  assert.equal((await tryStory(setup,fake,['place-order'],{'--no-open':true})).code,0); paused=true;
+  const again=await tryStory(setup,fake,['place-order'],{'--no-open':true});
+  assert.equal(again.code,0,again.err);assert.equal(reopened,true);assert.equal(polls,2);
+  assert.match(again.out,/keeps its original 24-hour expiry/);
+  assert.equal(fake.jsonPosts.length,1);assert.deepEqual(fake.jsonPosts[0].json,{});
+  assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.deletes.length,0);
+  assert.equal(again.clock.uuids,0,'same Try, no new request IDs');
+});
+
+test('a lost reopen reply is read once by ID, while a rejected reopen keeps the record and prints no link',async t=>{
+  for(const outcome of ['lost','refused']){
+    const setup=harbor(t);let paused=false,reopened=false;
+    const fake=await fakeRuntime(t,(entry,f)=>{
+      const id=f.posts.find(p=>p.command==='try')?.request.requestId;
+      if(entry.method==='POST'&&entry.url===`/v1/try/${id}/reopen`){reopened=true;return outcome==='lost'?{destroy:true}:{status:409,json:{dispatch:'not_started',error:{code:'session-stopped',message:'This Try cannot reopen.'}}};}
+      if(entry.method==='GET'&&paused&&entry.url===`/v1/runs/${id}`)return {status:200,json:f.tryJob(id,undefined,reopened&&outcome==='lost'?'running':'paused')};
+      return trying()(entry,f);
+    });
+    assert.equal((await tryStory(setup,fake,['place-order'],{'--no-open':true})).code,0);paused=true;
+    const again=await tryStory(setup,fake,['place-order'],{'--no-open':true});
+    assert.equal(again.code,outcome==='lost'?0:3,again.err);assert.equal(fake.jsonPosts.length,1);
+    assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
+    if(outcome==='refused'){assert.doesNotMatch(again.out,/Try link/);assert.match(again.err,/cannot reopen/);assert.match(again.err,/pdd try tests\/place-order\.json/);}
+  }
 });
 
 // Wrong: a Try that the server no longer knows (404) or that expired (410) blocks pdd try until the person edits the state file (review R8).
@@ -238,11 +262,11 @@ test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; 
 
 // Wrong: the note about other files reads like an alarm, or prints twice (runtime session, real check of b61547c).
 test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are not prompt, story or test files', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'pdd-source.json'), JSON.stringify({ include: ['README.md'] }))), fake = await fakeRuntime(t, trying());
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(result.code, 0);
   const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
-  assert.deepEqual(said, ['Sent 6 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
+  assert.deepEqual(said, ['Sent 4 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
 });
 
 const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });

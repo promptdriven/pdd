@@ -93,8 +93,9 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (file === 'git' && args[0] === 'fetch') {
       f.fetches++;
-      const merged = f.prs.find(pr => f.mergedNumbers.includes(pr.number) && pr.baseRefName === args[2]);
-      if (merged) await exec('git', ['update-ref', `refs/remotes/origin/${args[2]}`, merged.headRefOid], { cwd: opts.cwd });
+      const branch = args[2].replace(/^refs\/heads\//, '').split(':')[0];
+      const merged = f.prs.find(pr => f.mergedNumbers.includes(pr.number) && pr.baseRefName === branch);
+      if (merged) await exec('git', ['update-ref', `refs/remotes/origin/${branch}`, merged.headRefOid], { cwd: opts.cwd });
       return { stdout: '' };
     }
     if (file !== 'gh') return exec(file, args, { ...opts, encoding: 'utf8' });
@@ -412,8 +413,9 @@ const featureAreas = { version: 2, areas: [
   { name: 'story', steps: ['understand', 'visual', 'prompt-story'], optional: ['visual'], gate: 'approve' },
   { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
   { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] };
-async function featureToPr1(t, promptText = 'Return two.\n') {
+async function featureToPr1(t, promptText = 'Return two.\n', base) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  if (base) { topicBase(f, base); f.run = () => startRun({ name: 'feature', issue: '17', agent: 'codex', base, cwd: f.source, packageRoot }, f.ports); }
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
   mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
   assert.equal((await f.run()).exitCode, 0);
@@ -522,10 +524,11 @@ test('status --all lists every run on this machine across repositories, person-w
     const out = await runStatus(input, a.ports);
     assert.equal(out.exitCode, 0, out.message);
     const lines = out.message.split('\n');
-    assert.equal(lines.length, 3, out.message);
+    assert.equal(lines.length, 4, out.message);
     assert.match(lines[0], /^example\/project#17 · small-change · plan · waiting for you: approve the plan · Oct 27, 17:00$/);
     assert.match(lines[1], /^example\/project#17 · bug · story · agent working on reproduce · Oct 27, 17:01$/);
-    assert.equal(lines[2], 'Open one: pdd workflow open example/project#17');
+    assert.equal(lines[2], 'Review without resuming: pdd workflow view example/project#17');
+    assert.equal(lines[3], 'Open one: pdd workflow open example/project#17');
   }
   await cancelRun({ ref: '17', cwd: b.source }, b.ports);
   const hidden = await runStatus({ all: true, cwd: outside }, a.ports);
@@ -535,6 +538,7 @@ test('status --all lists every run on this machine across repositories, person-w
   const json = JSON.parse((await runStatus({ all: true, json: true, cancelled: true, cwd: outside }, a.ports)).message);
   assert.deepEqual(json.runs.map(run => [run.workflow, run.group, run.words]), [['small-change', 'waiting', 'waiting for you: approve the plan'], ['bug', 'cancelled', 'cancelled']]);
   assert.equal(json.runs[0].ref, 'example/project#17'); assert.equal(typeof json.runs[0].updatedAt, 'number'); assert.ok(json.runs[0].runDir);
+  assert.equal(json.runs[0].viewCommand, 'pdd workflow view example/project#17');
   // Inside a repository, plain status stays that repository's runs.
   assert.doesNotMatch((await runStatus({ cwd: a.source }, a.ports)).message, /· bug ·/);
 });
@@ -1365,4 +1369,314 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
     'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
+});
+
+function topicBase(f, name = 'round3/workflow-base') {
+  const main = f.git(f.source, 'rev-parse', 'refs/heads/main');
+  f.git(f.source, 'switch', '-q', '-c', name);
+  writeFileSync(join(f.source, 'topic-only.txt'), 'Approved prompt work for this isolated base.\n');
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'Topic base');
+  const sha = f.git(f.source, 'rev-parse', 'HEAD');
+  f.git(f.source, 'update-ref', `refs/remotes/origin/${name}`, sha);
+  f.git(f.source, 'switch', '-q', 'main');
+  // A same-named local branch is deliberately different: --base always means origin's branch.
+  f.git(f.source, 'branch', '-f', name, main);
+  return { name, sha, main };
+}
+
+// Wrong: --base is ignored, resolves a local branch, or creates a PR against the repository default.
+test('BASE1: an explicit origin topic base owns the worktree commit and PR target without a default/base push', async t => {
+  const f = await fixture(t), base = topicBase(f), fetched = [], original = f.ports.execFile;
+  f.ports.execFile = (file, args, opts) => { if (file === 'git' && args[0] === 'fetch') fetched.push(args); return original(file, args, opts); };
+  const started = await startRun({ name: 'small-change', issue: '17', agent: 'claude', base: base.name, cwd: f.source, packageRoot }, f.ports);
+  assert.equal(started.exitCode, 0, started.message);
+  assert.match(started.message, /Base: origin\/round3\/workflow-base/);
+  const run = f.record();
+  assert.equal(run.baseBranch, base.name); assert.equal(run.baseSha, base.sha);
+  assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), base.sha);
+  assert.ok(existsSync(join(run.root, 'topic-only.txt')));
+  assert.deepEqual(fetched, [['fetch', 'origin', `refs/heads/${base.name}:refs/remotes/origin/${base.name}`]]);
+  await stepDone({ step: 'scope', summary: 'Change value in the isolated topic', cwd: run.root }, f.agentPorts());
+  f.tick();
+  assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  f.git(run.root, 'commit', '-qam', 'Use value two');
+  for (const step of f.record().areas.at(-1).steps) {
+    f.tick(); const out = await stepDone({ step, summary: `${step} done`, cwd: run.root }, f.agentPorts());
+    assert.equal(out.exitCode, 0, out.message);
+  }
+  assert.equal(f.prs.length, 1); assert.equal(f.prs[0].baseRefName, base.name);
+  assert.deepEqual(f.pushes.map(args => args[2].split(':')[1]), [`refs/heads/${run.branch}`]);
+  assert.equal(f.git(f.source, 'rev-parse', 'refs/heads/main'), base.main);
+  assert.equal(f.git(f.source, 'rev-parse', 'refs/remotes/origin/main'), base.main);
+  assert.equal(f.git(f.source, 'rev-parse', `refs/remotes/origin/${base.name}`), base.sha);
+});
+
+// Wrong: an explicit failed/missing base silently uses a stale tracking ref, local branch or main.
+test('BASE2: failed explicit fetch or missing remote commit stops before worktree, record, claim or chat effects', async t => {
+  for (const mode of ['fetch-failed', 'fetch-refused', 'missing-remote']) {
+    const f = await fixture(t), base = topicBase(f), original = f.ports.execFile;
+    if (mode === 'missing-remote') f.git(f.source, 'update-ref', '-d', `refs/remotes/origin/${base.name}`);
+    f.ports.execFile = (file, args, opts) => {
+      if (mode === 'fetch-failed' && file === 'git' && args[0] === 'fetch') throw Error('unavailable');
+      if (mode === 'fetch-refused' && file === 'git' && args[0] === 'fetch') return { stdout: '', code: 128 };
+      return original(file, args, opts);
+    };
+    const result = await startRun({ name: 'small-change', issue: '17', base: base.name, cwd: f.source, packageRoot }, f.ports);
+    assert.equal(result.exitCode, 1, `${mode}: ${result.message}`);
+    assert.ok(result.message.includes(base.name), result.message);
+    assert.equal(f.herdr.calls.length, 0); assert.deepEqual(f.pushes, []);
+    assert.equal(existsSync(join(f.source, '.git/pdd/runs/17/status.json')), false);
+    assert.equal(existsSync(join(f.source, '.git/pdd/worktree-assignments')), false);
+    assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
+  }
+});
+
+// Wrong: a revision, option or full ref is accepted as a branch and reaches startup effects.
+test('BASE3: invalid explicit branch names refuse before fetch, allocation or chat', async t => {
+  const f = await fixture(t), original = f.ports.execFile;
+  let gh = 0;
+  f.ports.execFile = (file, args, opts) => { if (file === 'gh') gh++; return original(file, args, opts); };
+  for (const base of ['', null, 42, '-topic', '../main', '/tmp/topic', 'refs/heads/main', 'HEAD', 'main~1', 'main:other', '@{-1}', 'main\nother']) {
+    const result = await startRun({ name: 'small-change', issue: '17', base, cwd: f.source, packageRoot }, f.ports);
+    assert.equal(result.exitCode, 1, String(base)); assert.match(result.message, /base|branch/i);
+  }
+  assert.equal(gh, 0); assert.equal(f.fetches, 0); assert.equal(f.herdr.calls.length, 0);
+  assert.equal(existsSync(join(f.source, '.git/pdd/runs/17/status.json')), false);
+});
+
+// Wrong: choosing a base works for PR 1 but a later code area silently returns to main.
+test('BASE4: PR 2 stacks on open PR 1 and returns to the saved topic base after PR 1 merges', async t => {
+  for (const merged of [false, true]) {
+    const base = 'round3/bookshelf-workflow-base';
+    const { f, run, done } = await featureToPr1(t, undefined, base);
+    const main = f.git(f.source, 'rev-parse', 'refs/heads/main');
+    assert.equal(f.prs[0].baseRefName, base);
+    if (merged) f.mergedNumbers.push(23);
+    const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+    assert.equal(code.exitCode, 0, code.message);
+    assert.equal(f.record().baseBranch, base);
+    assert.equal(f.record().prBase, merged ? base : run.branch);
+    assert.equal(f.git(run.root, 'rev-parse', 'HEAD'), f.prs[0].headRefOid);
+    writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+    f.git(run.root, 'commit', '-qam', 'Code on selected base');
+    await done('build', 'value is two'); await done('verify', 'tests pass');
+    assert.equal(f.prs[1].baseRefName, merged ? base : run.branch);
+    assert.ok(f.pushes.every(args => args[2].split(':')[1].startsWith('refs/heads/pdd/')));
+    assert.equal(f.git(f.source, 'rev-parse', 'refs/heads/main'), main);
+    assert.equal(f.git(f.source, 'rev-parse', 'refs/remotes/origin/main'), main);
+  }
+});
+
+// Wrong: a failed replacement start frees a cancelled run's custody before its new base is usable.
+test('BASE5: explicit base failure preserves a cancelled run, worktree and issue claim', async t => {
+  const f = await fixture(t); await f.run();
+  const old = f.record();
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const recordFile = join(old.runDir, 'status.json');
+  const claimFile = join(f.source, '.git/pdd/worktree-assignments/issues/17.json');
+  const record = readFileSync(recordFile), claim = readFileSync(claimFile);
+  const original = f.ports.execFile;
+  f.ports.execFile = (file, args, opts) => {
+    if (file === 'git' && args[0] === 'fetch') throw Error('base unavailable');
+    return original(file, args, opts);
+  };
+  const out = await startRun({ name: 'small-change', issue: '17', base: 'round3/missing', cwd: f.source, packageRoot }, f.ports);
+  assert.equal(out.exitCode, 1, out.message);
+  assert.ok(readFileSync(recordFile).equals(record)); assert.ok(readFileSync(claimFile).equals(claim));
+  assert.ok(existsSync(old.root)); assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 2);
+});
+
+const closedChannel = () => Object.assign(Error('request handling failed: receiving on a closed channel'), { code: 'server_unavailable' });
+
+// Wrong: a failed first start saves running/no chat, so public status invents agent progress.
+test('CHATFAIL1: closed-channel startup and open failures stay waiting on the same explicit base and recover only after a real start', async t => {
+  const f = await fixture(t, { name: 'bug', agent: 'codex' }), base = topicBase(f, 'round3/tipjar-workflow-base');
+  const healthy = f.ports.herdr;
+  f.ports.herdr = async () => { throw closedChannel(); };
+  f.ports.spawnServer = () => assert.fail('Do not restart a server whose request failed');
+  const start = await startRun({ name: 'bug', issue: '17', agent: 'codex', base: base.name, cwd: f.source, packageRoot }, f.ports);
+  assert.equal(start.exitCode, 1, start.message);
+  const before = f.record(), claimFile = join(f.source, '.git/pdd/worktree-assignments/issues/17.json'), claim = readFileSync(claimFile);
+  assert.equal(before.state, 'waiting'); assert.equal(before.chatFailure.code, 'server_unavailable');
+  assert.equal(before.chatFailure.phase, 'start'); assert.equal(before.chats.length, 0); assert.equal(before.stageAgent, null);
+  assert.deepEqual(before.waitingFor.decisions, []); assert.match(before.waitingFor.what, /server_unavailable/);
+  assert.equal(before.baseBranch, base.name); assert.equal(before.baseSha, base.sha);
+  for (const input of [{ ref: '17' }, {}, { all: true }]) {
+    const out = await runStatus({ ...input, json: true, cwd: f.source }, f.ports);
+    const row = JSON.parse(out.message).runs[0];
+    assert.equal(row.group, 'waiting'); assert.match(row.words, /server_unavailable/);
+    assert.doesNotMatch(row.words, /agent working/); assert.match(row.words, /workflow open 17/);
+  }
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State:.*server_unavailable/);
+  const again = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(again.exitCode, 1); assert.equal(f.record().state, 'waiting');
+  assert.equal(f.record().runId, before.runId); assert.equal(f.record().root, before.root);
+  assert.ok(readFileSync(claimFile).equals(claim)); assert.equal(f.fetches, 1);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record();
+  assert.equal(after.state, 'running'); assert.equal(after.chatFailure ?? null, null); assert.equal(after.chats.length, 1);
+  assert.equal(after.runId, before.runId); assert.equal(after.root, before.root); assert.equal(after.baseSha, base.sha);
+  assert.equal(after.decisions.length, 0); assert.ok(readFileSync(claimFile).equals(claim)); assert.equal(f.fetches, 1);
+});
+
+// Wrong: a later-area start failure loses the approved transition or still claims work in the new area.
+test('CHATFAIL2: an approved transition keeps its decision and worktree when the next chat fails, then open starts only that area', async t => {
+  const f = await fixture(t); await f.run(); const before = f.record();
+  await stepDone({ step: 'scope', summary: 'Scope approved by the person next', cwd: before.root }, f.agentPorts());
+  const healthy = f.ports.herdr; f.ports.herdr = async () => { throw closedChannel(); };
+  const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(approved.exitCode, 1);
+  const failed = f.record(); assert.equal(failed.area, 1); assert.equal(failed.state, 'waiting');
+  assert.equal(failed.decisions.length, 1); assert.ok(failed.done.scope); assert.equal(failed.chats.length, 1);
+  assert.equal(failed.chatFailure.area, 'build'); assert.equal(failed.gate, null);
+  assert.equal(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].group, 'waiting');
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record(); assert.equal(after.chats.length, 2); assert.equal(after.chats[1].area, 'build');
+  assert.equal(after.decisions.length, 1); assert.equal(after.area, 1); assert.equal(after.root, before.root);
+  assert.equal(after.chatFailure ?? null, null); assert.equal(after.state, 'running');
+});
+
+// Wrong: an unavailable inspection is treated as no agent, causing a second native launch/resume.
+test('CHATFAIL3: closed-channel inspection cannot resume a chat; status is unavailable until confirmed recovery', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  const healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'agent') throw closedChannel(); return healthy(args); };
+  const unknown = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(unknown.group, 'waiting'); assert.match(unknown.words, /unavailable/i);
+  const out = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(out.exitCode, 1); assert.equal(pane.commands.length, 1); assert.equal(f.record().chatFailure.phase, 'open');
+  pane.agent = null; f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.equal(pane.commands.length, 2); assert.match(pane.commands[1], /--resume/);
+  assert.equal(f.record().chats.length, 1); assert.equal(f.record().chatFailure ?? null, null);
+});
+
+// Wrong: a lost launch reply discards the original pane identity and open starts another agent/tab.
+test('CHATFAIL4: a lost launch reply retains the prepared chat, and open reuses its observed live agent', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(); assert.equal(before.chats.length, 1); assert.equal(before.chats[0].startUnconfirmed, true);
+  const pane = f.herdr.paneOf(before.chats[0]), count = f.herdr.tabs.length;
+  assert.equal(pane.commands.length, 1);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record(); assert.equal(after.chats.length, 1); assert.equal(after.chats[0].paneId, before.chats[0].paneId);
+  assert.equal(after.chats[0].startUnconfirmed ?? false, false); assert.equal(after.chatFailure ?? null, null);
+  assert.equal(f.herdr.tabs.length, count); assert.equal(pane.commands.length, 1); assert.equal(after.state, 'running');
+});
+
+// Wrong: after an uncertain launch, missing agent inspection automatically sends the first prompt again.
+test('CHATFAIL5: an unconfirmed launch without a live agent refuses another launch and cancellation still wins', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return healthy(args); };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(); assert.equal(before.chats.length, 1);
+  const tabs = f.herdr.tabs.length; f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.equal(f.record().chats.length, 1); assert.equal(f.herdr.tabs.length, tabs);
+  assert.equal(f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 0);
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const row = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(row.group, 'cancelled'); assert.equal(row.words, 'cancelled'); assert.deepEqual(f.record().waitingFor, { decisions: [], what: null });
+});
+
+// Wrong: older failed-start records with no chat still fall through to agent-working forever.
+test('CHATFAIL6: legacy no-chat active records report unconfirmed startup without attempting Herdr recovery', async t => {
+  const f = await fixture(t); f.ports.herdr = async () => { throw closedChannel(); }; await f.run();
+  const run = f.record(); delete run.chatFailure; run.state = 'running';
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  f.ports.herdr = () => assert.fail('Status must not launch or probe a chat identity it does not have');
+  const row = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(row.group, 'waiting'); assert.match(row.words, /startup.*not confirmed/i); assert.doesNotMatch(row.words, /agent working/);
+});
+
+// Wrong: recovering the chat accidentally approves a gate or clears a person's outstanding question.
+test('CHATFAIL7: chat recovery preserves a waiting approval gate or person question', async t => {
+  for (const kind of ['gate', 'question']) {
+    const f = await fixture(t); await f.run(); const run = f.record();
+    if (kind === 'gate') await stepDone({ step: 'scope', summary: 'Ready for review', cwd: run.root }, f.agentPorts());
+    else await askPerson({ text: 'Which color?', cwd: run.root }, f.agentPorts());
+    const waiting = f.record(), healthy = f.ports.herdr;
+    f.ports.herdr = async () => { throw closedChannel(); };
+    assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+    assert.deepEqual(f.record().gate, waiting.gate); assert.deepEqual(f.record().question, waiting.question);
+    f.ports.herdr = healthy;
+    assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+    const recovered = f.record(); assert.equal(recovered.state, 'waiting'); assert.equal(recovered.decisions.length, 0);
+    assert.deepEqual(recovered.gate, waiting.gate); assert.deepEqual(recovered.question, waiting.question);
+    assert.equal(recovered.chatFailure ?? null, null);
+    assert.deepEqual(recovered.waitingFor.decisions, kind === 'gate' ? ['approve', 'changes'] : ['changes']);
+  }
+});
+
+// Wrong: a lost resume reply causes open to issue the resume command twice.
+test('CHATFAIL8: a lost resume reply marks the existing chat unconfirmed and a later open only observes it', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  pane.agent = null; const healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.equal(pane.commands.length, 2); assert.equal(f.record().chats[0].startUnconfirmed, true);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.equal(pane.commands.length, 2); assert.equal(f.record().chats.length, 1);
+  assert.equal(f.record().chatFailure ?? null, null); assert.equal(f.record().chats[0].startUnconfirmed ?? false, false);
+});
+
+// Wrong: recovery replaces a missing unconfirmed tab and persists new IDs, losing the original launch identity.
+test('CHATFAIL9: a missing tab after an unconfirmed launch preserves the original identity without creating a replacement', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(), chat = before.chats[0], pane = f.herdr.paneOf(chat);
+  f.herdr.tabs = f.herdr.tabs.filter(tab => tab.tab_id !== chat.tabId);
+  const tabs = f.herdr.tabs.length; f.ports.herdr = healthy;
+  const out = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(out.exitCode, 1); assert.match(out.message, /saved tab.*unavailable/i);
+  const after = f.record(); assert.equal(after.chats.length, 1);
+  assert.equal(after.chats[0].tabId, chat.tabId); assert.equal(after.chats[0].paneId, chat.paneId);
+  assert.equal(after.chats[0].startUnconfirmed, true); assert.equal(after.state, 'waiting');
+  assert.equal(after.root, before.root); assert.equal(after.baseSha, before.baseSha);
+  assert.equal(f.herdr.tabs.length, tabs); assert.equal(pane.commands.length, 1);
+});
+
+
+test('RELEASE10: confirmed gone unconfirmed tab/agent offers a fresh start without losing the run', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if(args[0]==='pane'&&args[1]==='run') throw closedChannel(); return healthy(args); };
+  assert.equal((await f.run()).exitCode,1);
+  const before=f.record(),chat=before.chats[0];
+  f.herdr.tabs=f.herdr.tabs.filter(tab=>tab.tab_id!==chat.tabId);
+  f.herdr.panes=f.herdr.panes.filter(pane=>pane.pane_id!==chat.paneId);
+  f.ports.herdr=healthy;const tabs=f.herdr.tabs.length;
+  const offered=await openRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(offered.exitCode,1);assert.match(offered.message,/pdd workflow open 17/);
+  const cleared=f.record();assert.equal(cleared.chats.length,0);assert.equal(cleared.abandonedChats[0].paneId,chat.paneId);
+  assert.equal(cleared.root,before.root);assert.equal(cleared.baseSha,before.baseSha);assert.equal(cleared.state,'waiting');
+  assert.equal(f.herdr.tabs.length,tabs,'first open offers but never dispatches');
+  assert.equal((await openRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const after=f.record();assert.equal(after.chats.length,1);assert.equal(after.abandonedChats.length,1);
+  assert.notEqual(after.chats[0].paneId,chat.paneId);assert.equal(after.root,before.root);
+  assert.equal(f.herdr.paneOf(after.chats[0]).commands.length,1);
+});
+
+test('RELEASE11: PR2 refreshes its selected remote base with an explicit tracking refspec', async t => {
+  const base='feature/checkout';const {f,run}=await featureToPr1(t,undefined,base);
+  f.mergedNumbers.push(23);
+  f.git(run.root,'commit','--allow-empty','-qm','Remote base advanced after PR1');
+  const newest=f.git(run.root,'rev-parse','HEAD'),tracking='refs/remotes/origin/'+base;
+  const expected='refs/heads/'+base+':'+tracking,original=f.ports.execFile;let refreshed=false;
+  f.ports.execFile=async(file,args,opts)=>{
+    if(file==='git'&&args[0]==='fetch'&&args[2].includes(base)){
+      if(args[2]===expected){f.git(f.source,'update-ref',tracking,newest);refreshed=true;}
+      return {stdout:''};
+    }
+    return original(file,args,opts);
+  };
+  const code=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(code.exitCode,0,code.message);assert.equal(refreshed,true);
+  assert.equal(f.git(run.root,'rev-parse','HEAD'),newest,'PR2 uses the newly fetched base');
 });

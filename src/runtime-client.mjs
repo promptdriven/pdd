@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f90902b73ef91d080770005c4e685e0a0ea4547f8b0c5f812fc943efcf1a853e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48d3f4a98e34c0db8c743ad34968667af3bb75b33da4939a7e847faa986f3988).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -32,11 +32,30 @@ const statOrNull = path => { try { return lstatSync(path); } catch { return null
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clock = ms => new Date(ms).toTimeString().slice(0, 8);
 
+
+// A virtual program named gh must not shadow the real sign-in tool on the printed PATH.
+function authExecutable(env, preferred) {
+  const candidates = [...(preferred ? [preferred] : []), ...(env.PATH || process.env.PATH || '').split(':').map(folder => join(folder, 'gh'))];
+  for (const path of candidates) {
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isFile() && !stat.isSymbolicLink()) continue;
+      if (readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1')) continue;
+      return realpathSync(path);
+    } catch { /* try the next PATH directory */ }
+  }
+  return null;
+}
+
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
-    gh: ports.gh ?? (args => spawnSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
+    env, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    gh: ports.gh ?? (args => {
+      const executable = authExecutable(env, ports.ghPath);
+      return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
+        : { status: null, error: { code: 'ENOENT' } };
+    }),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
     interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
@@ -153,13 +172,14 @@ class Runtime {
       return { status: response.status, headers: response.headers, text, json };
     } catch { return { lost: true }; } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
   }
-  post(path, request, tar) {
+  post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
     form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
     form.set('source', new Blob([tar], { type: 'application/x-tar' }), 'source.tar');
-    return this.send(path, { method: 'POST', body: form }, this.ports.postMs);
+    return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
-  get(id) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, GET_MS); }
+  get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
+  reopen(id) { return this.send(`/v1/try/${id}/reopen`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, this.ports.postMs); }
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
@@ -186,6 +206,7 @@ function judgePost(reply, id, command, secrets) {
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
+  if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null) return { kind: 'busy', wait: lintQueueWait(error) };
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
     return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
@@ -254,7 +275,7 @@ function select(found, words, root) {
 }
 
 const localRows = rows => rows.map(row => ({ ...row, state: row.refusals.length ? 'refused' : 'ready', phase: row.refusals.length ? 'local' : 'server',
-  request_ids: [], report_url: null, checks: null, failed_checks: [], all_checks: [] }));
+  request_ids: [], calls: 0, report_url: null, checks: null, failed_checks: [], all_checks: [] }));
 
 // Lint verdict for each test: the prompts it reaches must be approved or a current draft, and not refused. A draft marks the row.
 function judgeLint(answer, rows, root, visible, secrets = []) {
@@ -341,13 +362,13 @@ function batchRecord(context) {
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
 function saveAnswer(context, id, json) { if (isObject(json)) context.store.write(join(context.folder, `${id}.json`), json); }
 
-async function postJob(context, path, command, request, row) {
+async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
   saveBatch(context);
-  const reply = await context.runtime.post(path, request, context.capture.tar);
+  const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   return verdict;
@@ -358,7 +379,7 @@ async function sendCheck(context, row) {
   const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row);
   row.retry_at = null;
-  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', note: { code: null, message: 'Stopped before sending.' } });
+  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
@@ -390,31 +411,60 @@ function progressLine(rows, ms) {
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
 }
 
-async function runLint(context) {
-  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
+function lintQueueWait(refusal) {
+  if (!['lint-queue-timeout', 'lint-queue-full'].includes(refusal?.code) || refusal.details?.retryable !== true) return null;
+  const seconds = refusal.details.retry_after;
+  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(30, Math.max(1, seconds)) : 5) * 1000;
+}
+
+function pendingLintMessage(context, answer) {
+  return `Lint is still ${answer.state}. No checks were sent. ` + (context.batch
+    ? `Read the result later with: pdd check --read ${context.batch}`
+    : 'No Try was created. Lint uses no AI calls.');
+}
+
+async function runLint(context, complete = false) {
+  const agent = context.agentLimit ?? !context.ports.interactive;
+  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
+  let attempts = 0;
+  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
+  const pause = async wait => {
+    if (context.interrupted || attempts >= 3 || context.ports.now() + wait >= lintEnd) return false;
+    line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
+    await context.ports.sleep(wait, context.signal);
+    return !context.interrupted && context.ports.now() < lintEnd;
+  };
   for (;;) {
-    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256 };
-    context.lint.request_ids.push(request.requestId);
-    const verdict = await postJob(context, '/v1/lint', 'lint', request, null);
-    if (verdict.kind === 'busy' && context.ports.now() + verdict.wait < lintEnd && !context.interrupted) {
-      line(context.ports.stderr, 'Server busy: lint is waiting for a free slot.');
-      await context.ports.sleep(verdict.wait, context.signal); continue;
-    }
+    if (context.interrupted) return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (context.ports.now() >= lintEnd) return busy();
+    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
+    context.lint.request_ids.push(request.requestId); attempts++;
+    const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())));
+    if (verdict.kind === 'busy') { if (await pause(verdict.wait)) continue; return busy(); }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
-    if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
-    // A lost lint answer is read by the same ID, like a lost check.
-    const readEnd = verdict.kind === 'unknown' && !context.agentLimit ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
+    // Unknown dispatch still reads only this ID; only a confirmed terminal capacity refusal permits another attempt.
+    const readEnd = verdict.kind === 'unknown' && !agent ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
     let answer = verdict.answer ?? null, id = request.requestId, lost = false;
     while (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state) && context.ports.now() < readEnd && !context.interrupted) {
-      await context.ports.sleep(context.ports.pollMs, context.signal);
-      if (context.interrupted) break;
-      const read = judgeGet(await context.runtime.get(id), id, 'lint');
+      await context.ports.sleep(Math.min(context.ports.pollMs, Math.max(0, readEnd - context.ports.now())), context.signal);
+      if (context.interrupted || context.ports.now() >= readEnd) break;
+      const read = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, readEnd - context.ports.now()))), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
+    }
+    if (!lost && answer?.state === 'refused') {
+      const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
+      const wait = refusals.map(lintQueueWait).find(value => value !== null);
+      if (wait !== undefined) { if (await pause(wait)) continue; return busy(); }
+    }
+    if (!lost && ['queued', 'running'].includes(answer?.state)) {
+      Object.assign(context.lint, { state: answer.state, pending: true, unknown: false });
+      saveBatch(context);
+      return { kind: 'pending', answer };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
   }
@@ -425,9 +475,14 @@ async function checkBatch(context, rows) {
   const lint = await runLint(context);
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
-  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, ...extra }); };
+  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', ...extra }); };
   if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
-  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note }); return; }
+  if (lint.kind === 'pending') {
+    context.lintPending = true;
+    notSent('not_run', { note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
+    return;
+  }
+  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, sendable, context.root, context.visible, context.secrets) : null;
   if (!verdicts) {
@@ -489,7 +544,7 @@ function firstToday(context, sha) {
 }
 
 function printResult(context, rows, extra = {}) {
-  const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
+  const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode, summaryLine: summaryLine(rows),
@@ -507,11 +562,14 @@ function printResult(context, rows, extra = {}) {
   return exitCode;
 }
 
-function runFiles(root, ports) {
-  const capture = captureSource(root), found = findTests({ root });
+function runFiles(cwd, words, options, ports) {
+  const { root, found, normalized } = localSetup(cwd, words);
+  const tests = select(found, normalized, root).map(test => test.path);
+  const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+  const capture = captureSource(root, { tests, appMap });
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
-  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${formatSize(file.size)}`);
-  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)}. ${other.length} of them are not prompt, story or test files.`);
+  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
+  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
   return 0;
 }
 
@@ -519,16 +577,18 @@ function runFiles(root, ports) {
 // Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
-  const rows = select(found, normalized, root).map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
+  const selected = select(found, normalized, root);
+  const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
-  const capture = captureSource(root), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null }), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
     secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
   context.folder = context.store.folder('batches', batch);
   saveBatch(context);
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
-  const lint = await runLint(context);
+  const lint = await runLint(context, true);
+  if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer, program = answer?.result?.report?.program;
   const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
@@ -536,9 +596,19 @@ async function runLintOnly(context, cwd, words, setRelease) {
   if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
     throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
   }
+  const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
+  for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
+    const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
+    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
+      section: cleanText(item.at ?? item.section, context.secrets) || null,
+      message: cleanText(item.message, context.secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
+      severity: cleanText(item.severity, context.secrets) || 'error', pointer: cleanText(item.pointer, context.secrets) || null,
+      source: cleanText(item.source, context.secrets) || null });
+  }
   for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
-    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
-      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null });
+    const problem = { code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
+      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
+    if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
   }
   const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
   for (const [row, problem] of verdicts) {
@@ -547,11 +617,18 @@ async function runLintOnly(context, cwd, words, setRelease) {
     if (!problems.some(item => item.code === problem.code && item.path === path)) problems.push({ ...problem, path, section: null });
   }
   if (lint.kind === 'refused' || (answer?.state === 'refused' && !isObject(program))) for (const row of rows) Object.assign(row, { state: 'refused', refusals: problems });
+  for (const item of Array.isArray(answer?.result?.tests) ? answer.result.tests.filter(isObject) : []) {
+    const row = rows.find(row => row.test === item.path);
+    if (!row || item.verdict !== 'refused') continue;
+    const own = problems.filter(p => p.path === row.test && p.severity !== 'warning');
+    Object.assign(row, { state: 'refused', refusals: own.length ? own : row.refusals.length ? row.refusals
+      : [{ code: 'lint-refused', section: 'lint', message: `${row.test} was refused by complete lint.` }] });
+  }
   for (const row of rows) if (row.state === 'ready') row.state = 'passed';
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   if (context.json) {
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: answer?.state ?? lint.kind, summary_line: summary, problems,
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, problems,
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
     return exitCode;
   }
@@ -581,6 +658,56 @@ function interruptible(context) {
   return context.ports.onInterrupt(() => { context.interrupted = true; controller.abort(); });
 }
 
+async function readUnsentLint(context, rows) {
+  const lint = context.lint, id = lint?.request_ids?.at(-1);
+  if (!id) return;
+  const unresolved = lint.pending || lint.unknown || [null, undefined, 'queued', 'running'].includes(lint.state);
+  const held = rows.filter(row => !row.request_ids?.length && row.state === 'not_run' && (unresolved
+    || row.note?.code === 'lint-pending' || /lint result is unknown/i.test(row.note?.message ?? '')));
+  if (!held.length) return;
+  let answer = context.store.read(join(context.folder, `${id}.json`));
+  if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
+    const read = judgeGet(await context.runtime.get(id), id, 'lint');
+    if (read.kind === 'blocked') throw new Stop(5, read.message);
+    if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
+    answer = read.kind === 'state' ? read.answer : null;
+    if (answer) saveAnswer(context, id, answer);
+  }
+  const unknown = () => {
+    Object.assign(lint, { state: answer?.state ?? 'unknown', pending: false, unknown: true });
+    context.lintUnknown = true;
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+      note: { code: null, message: 'The lint result is unknown, so pdd sent no checks.' } });
+  };
+  if (['queued', 'running'].includes(answer?.state)) {
+    Object.assign(lint, { state: answer.state, pending: true, unknown: false });
+    context.lintPending = true;
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+      note: { code: 'lint-pending', message: pendingLintMessage(context, answer) } });
+    return;
+  }
+  if (!answer || answer.state === 'unknown') { unknown(); return; }
+  const rawRefusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
+  const busy = answer.state === 'refused' && rawRefusals.some(item => lintQueueWait(item) !== null);
+  const refusals = projectAnswer(answer, { origin: context.origin, secrets: context.secrets }).refusals;
+  const verdicts = judgeLint(answer, held, context.root, context.visible, context.secrets);
+  if (!busy && !verdicts && !(answer.state === 'refused' && refusals.length)) { unknown(); return; }
+  Object.assign(lint, { state: answer.state, pending: false, unknown: false });
+  for (const row of held) {
+    const problem = verdicts?.get(row);
+    Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], note: null });
+    if (problem || (!verdicts && !busy && refusals.length)) {
+      Object.assign(row, { state: 'refused', refusals: problem ? [problem] : refusals });
+    } else {
+      row.note = busy ? { code: 'lint-busy', message: 'The saved lint could not get a slot. No checks ran. Run the same command again later.' }
+        : { code: 'lint-finished', message: `The saved lint finished${refusals.length ? ' with refusals' : ''}. No checks were sent. `
+          + (refusals.length ? refusals.map(item => item.message || item.code).join(' ') + ' ' : '')
+          + 'Run a fresh pdd check command to start checks.' };
+    }
+  }
+}
+
 async function runRead(context, batchWord) {
   const { store, ports, root } = context;
   const name = batchWord ?? store.repo(root).last_batch;
@@ -593,18 +720,15 @@ async function runRead(context, batchWord) {
   Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [],
+    ...(!row.request_ids?.length && ['not_run', 'refused', 'ready'].includes(row.state) ? { calls: 0, phase: 'local' } : {}) }));
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.
   for (const row of rows) if (['ready', 'sending', 'waiting'].includes(row.state)) {
     if (row.request_ids.length) row.state = 'unknown';
-    else Object.assign(row, { state: 'not_run', note: { code: null, message: 'pdd stopped before sending this check.' } });
+    else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
-  if (context.lint?.unknown) {
-    const id = context.lint.request_ids?.at(-1), read = id ? judgeGet(await context.runtime.get(id), id, 'lint') : { kind: 'missing' };
-    if (read.kind === 'state') { saveAnswer(context, id, read.answer); context.lint.state = read.answer.state; }
-    context.lintUnknown = context.lint.unknown = !['passed', 'failed', 'refused'].includes(context.lint.state);
-  }
+  await readUnsentLint(context, rows);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
     if (!id || row.phase !== 'server') return;
@@ -639,13 +763,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   let release = () => {};
   try {
     const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])));
-    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
-      || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request'].includes(modes[0]) && words.length)
+      || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
-    if (modes[0] === '--files') return runFiles(root, ports);
+    if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
     if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
@@ -671,7 +795,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = captureSource(root);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -746,10 +870,33 @@ function refusedLink(answer, origin) {
 
 const otherNote = count => count ? `(${count} ${count === 1 ? 'is' : 'are'} not prompt, story or test files; run \`pdd check --files\` to see them)` : '';
 
-// A paused Try (live server, Oct 27) wakes up when the link is used, so it counts as live.
+// Paused sessions require an explicit owner reopen; only running sessions have a ready link.
 const LIVE_SESSION = new Set(['running', 'paused']);
 function tryLink(answer, origin) {
-  return answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) ? validLink(answer.result?.url, origin, 'try') : null;
+  return answer?.state === 'passed' && answer.result?.session?.state === 'running' ? validLink(answer.result?.url, origin, 'try') : null;
+}
+
+async function reopenTry(context, record, test) {
+  const target = /^[A-Za-z0-9_./-]+$/.test(test.path) ? test.path : "'" + test.path.replace(/'/g, "'\"'\"'") + "'";
+  const again = `pdd try ${target}`;
+  if (context.interrupted) throw new Stop(3, 'Stopped before reopening the Try.');
+  const reply = await context.runtime.reopen(record.id);
+  const blocked = blockingAnswer(reply);
+  if (blocked) throw new Stop(5, blocked);
+  if (reply.status === 401) throw new Stop(5, 'Run gh auth login');
+  if (gateText(reply)) throw new Stop(5, 'The runtime opens soon.');
+  if (!reply.lost && ![200, 202].includes(reply.status)) {
+    const reason = cleanText(reply.json?.error?.message, context.secrets) || `HTTP ${reply.status}`;
+    throw new Stop(reply.status === 429 ? 5 : 3, `This Try could not reopen: ${reason} Read the same Try again with: ${again}`);
+  }
+  if (!reply.lost && !sameJob(reply.json, record.id, 'try')) throw new Stop(3, 'The reopen answer has another request ID or command. Read the same Try again later.');
+  const initial = reply.json;
+  if (tryLink(initial, context.origin)) return initial;
+  const done = await readUntil(context, record.id, 'try', answer => answer.result?.session?.state === 'running'
+    || ['failed', 'refused', 'unknown'].includes(answer.state)
+    || (answer.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state)), TRY_MS);
+  if (done.answer?.state === 'passed' && done.answer.result?.session?.state === 'running') return done.answer;
+  throw new Stop(3, `Reopening this Try was not confirmed. Read the same Try again with: ${again}`);
 }
 
 async function stopTry(context, record) {
@@ -769,9 +916,16 @@ async function stopTry(context, record) {
 
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
+    if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
+      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
+    if (options['--save-last']) {
+      const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+      return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
+    }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env);
@@ -779,10 +933,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
-    Object.assign(context, { root, store, origin, visible: found.visible });
+    Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
-    if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
+    if (row.state === 'refused') {
+      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
+      line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
+    }
+    const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -790,19 +947,41 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
+      if ((options['--cli'] || options['--serve']) && record.login && record.login !== identity.login) throw new Stop(125, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if ((options['--cli'] || options['--serve']) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
-      const answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
       // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
         || (answer?.state === 'passed' && ['stopped', 'stopping', 'unknown'].includes(answer.result?.session?.state));
-      if (link && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
+      if (live && !options['--new'] && (options['--app-map'] !== undefined || options['--tab'])) {
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
-      if (link && !options['--new']) return await showTry(context, test, link, options, record.id);
+      if (live && options['--serve'] && !options['--new']) {
+        let matches = false;
+        try {
+          const hashes = record.prompt_hashes;
+          matches = isObject(hashes) && Object.keys(hashes).length > 0
+            && test.doc.steps.every(step => typeof hashes[step.entry_path] === 'string')
+            && Object.entries(hashes).every(([path, expected]) => found.visible.has(path)
+              && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === expected);
+        } catch { /* A removed prompt cannot match the uploaded source. */ }
+        if (!matches) throw new Stop(125, 'A prompt changed or this Try has no source record. Run pdd try STORY --serve --new.');
+      }
+      if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
+        if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
+        answer = await reopenTry(context, record, test); link = tryLink(answer, origin);
+      }
+      if (link && !options['--new']) {
+        if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
+        context.seedTest.storyPath = record.storyPath ?? test.storyPath;
+        return await showTry(context, test, link, options, record.id, true);
+      }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
       // A Try that may still start or run is never made twice by accident.
       if (!ended && !options['--new']) {
@@ -814,10 +993,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     await checkLint(context, [row]);
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
-    if (row.state !== 'ready') return printTryProblem(context, row);
+    if (row.state !== 'ready') {
+      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
+      return printTryProblem(context, row);
+    }
     const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, ...(appMap ? { app_map: appMap } : {}),
-      tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
+      tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
+    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);
     if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
@@ -855,6 +1037,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
+    if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); }
@@ -884,9 +1067,14 @@ async function stopByName(context, cwd, words, origin) {
 
 async function checkLint(context, rows) {
   const lint = await runLint(context);
+  if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, rows, context.root, context.visible, context.secrets) : null;
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code ? ` (${lint.note.code})` : ''}`);
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
+  if (context.doorMode && lint.kind === 'answer' && lint.answer?.state === 'refused' && !isObject(lint.answer.result?.report?.program)) {
+    const refusal = lint.answer.result?.refusals?.[0] ?? lint.answer.result?.report?.refusal;
+    throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The runtime refused lint.');
+  }
   if (!verdicts) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd try again later.');
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
 }
@@ -896,6 +1084,7 @@ const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kin
   'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
 const GENERIC_REFUSAL = /^The runtime refused this job\b/;
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
+  if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The runtime refused this Try.');
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
   const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
     reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
@@ -910,13 +1099,19 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
 }
 
 function printTryProblem(context, row) {
+  if (context.doorMode) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || `The Try could not start (${row.state}).`);
   const exitCode = exitCodeFor([row]);
   context.ports.stdout.write(renderText({ rows: [row], exitCode, secrets: context.secrets, recovery: `pdd try ${row.story}` }));
   return exitCode;
 }
 
-async function showTry(context, test, link, options, tryId) {
-  const { ports } = context, ends = `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
+async function showTry(context, test, link, options, tryId, reused = false) {
+  if (options['--cli'] || options['--serve']) {
+    const doors = await import('./try-doors.mjs');
+    return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
+  }
+  const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
+    : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
   else {
     line(ports.stdout, `Try link for "${test.title}": ${link}`);
@@ -979,11 +1174,11 @@ const NOT_TEST_FILES = /^(?:\..*|package(?:-lock)?\.json|tsconfig(?:\..+)?\.json
 const inRepo = (realRoot, path) => { try { return realpathSync(join(realRoot, path)) === join(realRoot, path); } catch { return false; } };
 
 // One saved case → a new step in its story's test file. Returns the line to print ("added …" or "not added: …").
-function addSavedCase(root, saved) {
-  try { return addSavedCaseSafely(realpathSync(root), saved); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
+function addSavedCase(root, saved, seedTest) {
+  try { return addSavedCaseSafely(realpathSync(root), saved, seedTest); } catch (error) { return `not added: pdd could not write the case (${cleanText(error.code ?? error.message)}).`; }
 }
 
-function addSavedCaseSafely(root, saved) {
+function addSavedCaseSafely(root, saved, seedTest) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
   if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
@@ -991,7 +1186,12 @@ function addSavedCaseSafely(root, saved) {
   if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
     return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
   }
-  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const candidates = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path));
+  const seededStory = seedTest?.storyPath === story;
+  const target = seededStory ? candidates.find(item => item.path === seedTest.path)
+    : saved?.original_path ? candidates.find(item => item.path === saved.original_path) : candidates[0];
+  if (seededStory && !target) return `not added: the original test ${cleanText(seedTest.path)} is missing or no longer belongs to ${cleanText(story)}. Restore it before importing the case.`;
+  if (saved?.original_path && !target) return 'not added: the original test file is missing or its Story changed.';
   if (!target) {
     // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
     const folder = statOrNull(join(root, 'tests'));
@@ -1043,7 +1243,7 @@ async function collectSavedTests(context, tryId) {
   for (const saved of reply.json.tests) {
     const key = typeof saved?.id === 'string' ? saved.id : null;
     if (!key || done[key]) continue;
-    const said = addSavedCase(root, saved);
+    const said = addSavedCase(root, saved, context.seedTest);
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
     line(ports.stdout, said);
@@ -1105,4 +1305,43 @@ async function watchSavedTests(context, tryId, wait, story) {
       }
     }
   } finally { answers?.close(); }
+}
+
+
+// The doors use the same gh identity, private store, one-shot dispatch and owner-scoped ledger as Try.
+export const saveDoorCase = (root, saved) => addSavedCase(root, saved);
+export async function runDoorCall(descriptor, input, givenPorts = {}) {
+  const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
+  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+  if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
+  if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved runtime address is invalid.');
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
+  if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
+  const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  store.posted(store.folder('tries'), id);
+  const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+  if (reply.status && ![200, 202].includes(reply.status)) {
+    throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
+  }
+  const end = ports.now() + 900_000;
+  let answer = null;
+  for (;;) {
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+    if (answer && (answer.id !== id || answer.command !== 'call' || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.');
+    if (answer && ENDED.has(answer.state)) {
+      store.write(join(store.folder('tries'), `${id}.json`), answer);
+      if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
+        const why = answer.result?.refusals?.[0];
+        throw new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]));
+      }
+      return { id, result: answer.result.program_result, inputWorld: answer.result.report.input_world, world: answer.result.report.world };
+    }
+    if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
+    await ports.sleep(ports.pollMs, ports.signal);
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+    const read = await runtime.get(id);
+    if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
+    answer = [200, 202].includes(read.status) ? read.json : null;
+  }
 }

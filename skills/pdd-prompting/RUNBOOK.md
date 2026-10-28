@@ -4,8 +4,8 @@
 
 The runtime runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
 The runtime checks the **prompt**, not the code. The repo's own tests check the code.
-You need a GitHub login (`gh auth status`). A check sends every file that Git shows (max 10 MiB and 10,000 files).
-`pdd check --files` lists them. Never put secrets in the repo.
+You need a GitHub login (`gh auth status`). A check sends relevant source selected from Git-visible files (max 10 MiB and 10,000 files).
+`pdd check --files` lists the selected files and byte sizes without a network call (section 2). Never put secrets in the repo.
 
 The order of work: story → prompt (`"status": "draft"`) → test → `pdd check --fill-hash` → `pdd check <story>` →
 offer `pdd try <story>` → the person tries it and approves → PR 1 with the one-line result (section 15).
@@ -72,6 +72,21 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
   or an extra key gives `invalid-context` at `context[N]`. Never give the story, a test or expected values as context:
   the program would see the answers. Patterns for tests: section 18.
 
+**Scoped uploads.** A check selects its tests, their stories, entry prompts and explicit test context. It recursively
+follows prompt call targets, local links in `## Dependencies` and Markdown images in selected Markdown files.
+A selected app map adds its prompt paths and stylesheets. Unrelated repository files are not uploaded.
+`pdd check --files [STORY...]` lists exactly which files the same selection uploads, with byte sizes and no network
+call. With no Story, it selects all discovered tests. Add `--app-map PATH` to inspect the selection for a Try map.
+
+For extra source, put an include list in the repository root's `pdd-source.json`:
+```json
+{"include": ["docs/shared-rules.md", "assets/menu.css"]}
+```
+This file contains only `include`, an array of repository-relative file paths, not globs or directories. These files
+are added to the test and dependency selection. Included Markdown and prompts also have their dependencies followed.
+The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
+Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
+
 ## 3. Schema rules
 
 These rules apply to every `input_schema` and `result_schema`, to each resource `arguments_schema` and `result_schema`,
@@ -91,6 +106,11 @@ and no field name. So check every schema against ALL the rules before the first 
    object: `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties`. All types: `enum`,
    `const`, `title`, `description`, `default`, `examples`, `format`. All others are refused: `$ref`, `$defs`, `anyOf`, `if` …
 8. Each `enum` value has the right type and comes one time. A `default` must match its own schema.
+
+Integer bounds in schemas (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`) must lie
+within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range integer bound is refused. The refusal
+names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
+and the supported range (`supported_integer_range`).
 
 For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Try form shows
 `oneOf` only as a raw JSON box, and pdd cannot check that input before it sends. A correct schema (`read` is optional):
@@ -142,6 +162,7 @@ In the test, `initial_world` is the saved data before step 1. `simulation` conne
 
 ## 6. Command-line programs (`cli`)
 
+Name the program in the prompt’s first heading, for example `# tipjar` (a single safe command name; `pdd`, `node`, `gh` and `git` are reserved).
 Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdout` and `stderr` come out. In full:
 ```json
 "input_schema": {"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}}, "required": ["argv"], "additionalProperties": false},
@@ -150,6 +171,7 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 "conventions": [{"path": "/entries/0/input_schema", "convention": "cli"}, {"path": "/entries/0/result_schema", "convention": "cli"}]
 ```
 - Input: one item for each word, as a shell splits them. `todo add Walk the dog` is `{"argv": ["add", "Walk", "the", "dog"]}`.
+- An optional string `stdin` property receives piped UTF-8 text. Program exit code 125 is reserved for `pdd try` wrapper failures; use another code for program errors.
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
@@ -229,6 +251,8 @@ the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
 A failed check shows the criterion, the path, the expected value and the answer: `AC1  result /totalCents  expected 899, got 900`.
+The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
+the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
 In a person's terminal, `pdd check` waits until every check ends and prints `Still running: …` every 30 s. In an
 agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd check --read` about every
@@ -454,7 +478,7 @@ saved data and call counts. It cannot see CSS layout, sizes, animation or whethe
 A page or a screen is never "browser-only": what it shows and what each tap does are results. Give it an app map
 (section 13). A page with no mockup gets a `render` operation that returns `{"html": …}` plus the facts it shows,
 for example `{"html": "…", "emptyMessage": "No books yet", "rows": 3}`. Check the facts with `equals` or `count`
-on those fields (`/emptyMessage`), not on the html. Only what the runtime truly cannot see (CSS layout, sizes,
+on those fields (`/emptyMessage`); use structured HTML checks for markup (section 20). Only what the runtime truly cannot see (CSS layout, sizes,
 animation) goes in a story with no runtime test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
 Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
 repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
@@ -478,3 +502,81 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 - The app really replays a list of moves: one operation takes the list. Make all moves in that one AI call: link the
   rule prompt (`board.prompt.md`) under `## Dependencies` with no `calls` entry, so the AI reads its rules. A `calls`
   entry with `max_calls: 30` makes every step of the prompt need 61 calls (section 10).
+
+## 19. Use a Try from your terminal or curl
+
+`pdd try STORY --cli` prints a shim path and a PATH line. Copy the PATH line, then run the program normally.
+`--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
+`pdd try --save-last` appends the last command and its observed result to the original test file; review the
+recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
+**pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
+
+`pdd try STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
+route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
+one method and path. Supported methods are GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS. Use literal path
+segments or `:id` parameters declared as string input fields (directly or under a `params` object). Duplicate
+method/path patterns are refused. The `http.prompt` simulation binding handles outbound resource
+calls inside a graph; a route title only selects an existing admitted entry.
+
+For a query entry, an optional string input `read` receives `?read=false` as `{"read":"false"}`. Declared
+boolean and number inputs receive typed values; repeated query fields require arrays. Request-shaped entries
+may instead declare `method`, `path`, `query`, `params`, `headers` and `body`. Only declared fields are forwarded.
+A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still must match the entry schema.
+
+Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
+result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
+come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
+route returns 404 without an AI call. Runtime or wrapper trouble returns 502 with a plain **pdd try:** reason.
+The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
+local server while the Try keeps its data. Use curl or fetch for API routes; browser page, image, script and
+stylesheet loads cannot spend calls through an API route.
+
+When the Story has an app map, open `http://127.0.0.1:8080/` for the actual Screen. If it has not been drawn,
+click **Open the app**; opening and taps use the same Try budget and saved data. Loading the page alone uses
+no AI call. The Screen reuses the hosted renderer, styles and declared click/form/key targets. It keeps an action
+ID before sending and reads that same ID after a lost reply or reload; it never sends the action twice. Unknown
+outcomes block new taps until recovered. Screen-only Stories need no named HTTP route; startup says **Screen only (no named HTTP routes)**.
+If a saved Try has no app map, use the printed `--new --app-map PATH` command to start one with the selected map.
+A Story with neither an app map nor named routes gets a plain message describing both options. An app map reserves
+GET/HEAD `/` and `/__pdd/screen/`; move conflicting named routes. Credentials stay in pdd, outside the page.
+
+## 20. HTML checks and Try rendering
+
+A structured HTML check selects a result string with `target: "result"` and a JSON Pointer such as `/html`.
+Its `html` object names a selector and a kind. The selector matches a lowercase tag and optional exact attribute
+values; it is not a CSS selector. For example:
+```json
+{"criterion_id": "AC1", "target": "result", "path": "/html", "op": "equals", "value": "Done",
+ "html": {"selector": {"tag": "button", "attributes": {"id": "finish"}}, "kind": "text"}}
+```
+- `kind: "element"` supports `exists` only. Its boolean value defaults to `true`; `false` asserts no matches.
+- `kind: "attribute"` also names `attribute`, such as `"attribute": "aria-current"`. It supports `exists`, `equals`,
+  `not_equals`, `one_of` and `contains`.
+- `kind: "text"` supports the same operations on concatenated descendant text, without whitespace normalization.
+  Text `exists` tests for nonempty text; attribute `exists` tests presence. Both default to `true`.
+  Other operations compare strings; `one_of` takes a list of strings and `contains` a nonempty substring.
+
+Attribute and text assertions must hold for every matched element and fail if none match. A missing attribute
+cannot satisfy `not_equals`. Raw HTML is validated before sanitization: at most 256 KiB of UTF-8 HTML, 4,096 elements,
+64 nested non-void elements, 64 attributes per element, 64 selector attributes and 256 KiB of text. Duplicate
+attributes, unmatched or misnested closing tags, closing tags for void elements, unclosed elements and unterminated
+markup fail the check. Parser and size failures appear as `invalid_html` diagnostics.
+
+**One rendering contract.** Structured HTML checks and Try share the sanitizer. Checks select elements and read
+attributes and text from the same sanitized HTML that Try displays. The renderer derives interactive target markers
+after sanitization. Reported attribute values describe the retained subset, with sensitive values redacted.
+Assert only on elements, attributes and style declarations that survive.
+
+The supported HTML subset includes ordinary text and sections, headings, lists, tables, forms and controls.
+Allowed attributes include `id`, `class`, `role`, `title`, form attributes such as `name`, `value`, `type` and `disabled`,
+and accessibility attributes including `aria-label`, `aria-expanded`, `aria-checked`, `aria-selected` and `aria-current`.
+Inline CSS supports physical and logical sizing (`width`, `height`, `inline-size`, `block-size` and their `min-`/`max-`
+forms), `overflow-wrap`, `background-color`, color, borders, margin, padding, fonts, text, display, visibility,
+opacity, overflow, flex and grid layout. Non-active `text-decoration` such as `line-through` survives.
+
+The sanitizer removes `background` shorthand, `list-style`, `aria-pressed`, event handlers, unknown attributes and
+CSS properties, scripts and active content. Embedded `<style>` elements are removed; admitted app stylesheets
+provide stylesheet rules. External URLs are removed; retained URL attributes must be repository-local, without a
+scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
+Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
+filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.

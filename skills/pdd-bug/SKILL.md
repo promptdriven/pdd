@@ -28,3 +28,5 @@ Each area is one main chat. Step briefs are in `steps/`. `?` = optional.
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
 - When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
 - When the person approves in their own words, run `<pdd> workflow approve N`. Never approve for them.
+
+To try a CLI, run `pdd try <story> --cli`, then run the command.

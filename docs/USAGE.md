@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.7 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.8 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -75,7 +75,8 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
-pdd --version   # prints 0.1.7
+"$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
+pdd --version   # prints 0.1.8
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -92,14 +93,16 @@ Important:
 
 The `main` branch of this repository and PyPI have the older Python `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
+Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+
 See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.7
+pdd --version   # PDD Alpha prints 0.1.8
 ```
 
-Remove the old one with the tool that installed it:
+If you choose to remove the Python installation, use the tool that installed it:
 
 ```sh
 uv tool uninstall pdd-cli     # if you used uv
@@ -114,6 +117,16 @@ If you want to keep the old one, call PDD Alpha by its full path:
 ```sh
 "$(npm prefix -g)/bin/pdd" --version
 ```
+
+Activating an environment later, for example `conda activate pdd`, can reorder PATH and shadow Alpha again. Activate the environment first, then prepend the directory containing Alpha’s `pdd` command and clear the shell cache:
+
+```sh
+conda activate pdd
+export PATH="$(npm prefix -g)/bin:$PATH"
+hash -r
+```
+
+Use the absolute Node-plus-Alpha command printed by the diagnostic when the environment selects a different Node installation or Alpha is running from a source checkout.
 
 The agents that PDD starts always get the full path of PDD Alpha. They are not affected by your PATH. Only the commands that you type are.
 
@@ -194,7 +207,7 @@ In a chat, the work stays in your folder: no worktree and no automatic PR. To tu
 
 - Use a clone of a GitHub repository that you can push to. The `origin` remote must point to it.
 - The issue must be in that same repository. It must be an issue, not a PR.
-- Run `git fetch origin` first. PDD starts the new branch from your last fetch of `origin`'s default branch (for example `origin/main`). PDD does not fetch for you.
+- PDD fetches `origin`'s default branch (for example `origin/main`) and starts the new issue branch there. If that default fetch fails, it warns and uses the last fetched commit. Add `--base BRANCH` to select an existing origin topic branch; an explicit base must fetch successfully before startup.
 - If the default branch on GitHub changed, also run `git remote set-head origin -a`, so Git knows the new one.
 - The project needs a way to test the change. The agents find and run the project's tests.
 - Your own checkout can have uncommitted work. PDD does not touch it.
@@ -210,6 +223,14 @@ pdd workflow run small-change 42
 ```
 
 ISSUE is the issue number (`42`). Add `--agent claude` to use Claude Code for the whole run. NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](#8-make-your-own-workflow).
+
+To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
+
+```sh
+pdd workflow run bug 2 --base feature/checkout
+```
+
+PDD fetches that exact branch and starts the issue worktree from its commit. A failed fetch or missing branch stops the run; it does not use a local or default branch instead. Startup prints the selected base. The PR targets that saved base, and PDD pushes only its new issue branches. It does not change the repository's default branch. For two PRs, PR 2 stacks on an open PR 1; after PR 1 merges, PR 2 starts from and targets the saved base.
 
 The command returns at once. It prints where the run is and the commands to open and approve it. **You can close the terminal now. There are no time limits.**
 
@@ -296,7 +317,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 The PR 1 body is short. For a bug, it starts with the verdict line (for example "Verdict: the bug is in the PROMPT …") and the `Before ✗ … → after ✓ …` line with both report links. Then comes one `Runtime check (<story>)` line for each Story. With more than one Story, pdd adds them up in a `Runtime check (all Stories)` line. A `Report (<story>)` link follows for each Story. Then come `Part of #42`, a line that names any prompts that are still `draft`, and one short line for each step. PR 1 has no `verify.md` and no Try links.
 
 - **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first.
-- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the default branch.
+- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the run’s saved base branch.
 - If PR 1 says "Draft prompts: …", approve each one with `pdd approve prompts/NAME.prompt.md` before you merge ([section 7.1](#71-approve-a-prompt)). An agent never sets `approved`. The code is built only from approved prompts, so pdd offers the code PR only after that. It prints the lines to run: `pdd approve` in the run's worktree, then `pdd workflow approve 42`. pdd then commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area. If you committed in the worktree yourself, pdd pushes those commits to PR 1 too, so they do not end up in PR 2.
 - If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
 
@@ -338,11 +359,26 @@ Each issue gets its own branch, worktree and Herdr tab. You can start several ru
 
 The PDD runtime runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd check` sends your prompts, Stories and tests there and checks each answer against its test. `pdd try` makes a link where a person can use the prompt by hand.
 
-Both commands sign in with your GitHub login (`gh auth status`). They send every file that Git shows (tracked and new, not ignored), at most 10 MB, and refuse secret file names. pdd keeps run state in `~/.pdd/runtime`, never in your repo.
+Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; secret names, symlinks and non-regular files are refused. Unrelated source files are not sent. pdd keeps run state in `~/.pdd/runtime`, never in your repo.
+
+The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links in each prompt's `## Dependencies`. A dependency list item may instead begin with a backticked file path, such as ``- `data/menu.json`: required runtime context``. Schema labels, code examples, installation paths and backticked names in descriptions do not declare extra files. Markdown context may declare its own Dependencies. Paths in links are relative to their declaring file; repository-root spellings also work when Git names them. A linked fragment includes the whole file. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
+
+Dependencies ends at the next level-one or level-two Markdown heading, or a collapsible section headed `Required rules`, `Required module rules`, `Required interface reference` or `Decision path`. These summary labels ignore case and balanced `strong`, `em`, `b` or `i` emphasis tags (including quoted attributes), allow omitting `Required`, and may have a colon with a description. Unknown or malformed summary markup keeps later dependency declarations and their safety checks in scope. Literal HTML section examples inside code or comments do not end Dependencies. Source/test filenames and navigation links in later rule/reference sections do not add upload context. Other collapsible blocks may contain genuine dependency declarations; their context and file-safety checks still apply. The full prompt and its image links are retained.
+
+Try includes a valid default `app-map.json` (else `app/app-map.json`), including screen, router, handler and after-operation prompts and stylesheets. Check and lint use no app map. To preview a Try with a custom map, run `pdd check --files place-order --app-map app/custom-map.json` before `pdd try place-order --app-map app/custom-map.json`.
+
+For extra files, add `pdd-source.json` at the repository root:
+
+```json
+{"include": ["docs/shared-policy.md", "data/menu.json"]}
+```
+
+`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. Try keeps the original test paths: Save as test appends cases to the authored test file that launched the Try, even when a Story has several test files. Reopening that Try keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
 
 ```sh
 pdd check --fill-hash     # fill the hash of draft interfaces; sends nothing
-pdd check --files         # list the files a check would send; sends nothing
+pdd check --files         # exact upload manifest and byte sizes for all Stories; offline
+pdd check --files place-order  # preview only this Story; offline
 pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story
@@ -355,7 +391,7 @@ In a terminal, `pdd check` waits until every check ends. When an agent runs it (
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
 
-Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls.
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It requests complete diagnostics (`complete: true`), uses 0 AI calls and shows the problems the server reports, including each schema pointer and Story/test diagnostic. A selected test refused by complete lint is refused even when its prompt admission passed. The preliminary lint before Check or Try keeps its ordinary admission request. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd check --files` and `pdd check --fill-hash` send nothing. Those checks are not a server lint pass. See [Offline review and Runtime boundaries](runtime-boundaries.md). With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
@@ -371,6 +407,8 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
 The runtime address is set in one place in pdd. You do not need to set it.
+
+Factories and method-bearing instances can bind through Runtime interface v2 handles and collections. Put injected I/O and callbacks behind ports, and use the declared SQL, blob and compute simulations. Preserve the public API and report native effects as unbound. See [Factories and simulated resources](runtime-boundaries.md#native-factories-and-json-operations).
 
 ### 7.1 Approve a prompt
 
@@ -388,7 +426,7 @@ pdd shows the prompt's runtime interface in plain words: each input, result and 
 
 ### 7.2 Try a Story
 
-`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`.
+`pdd try STORY` makes a Try link and opens it in your browser. On the Try page, you use the prompt by hand. The link ends after 24 hours, or with `pdd try --stop STORY`. If an idle Try is paused, run `pdd try STORY` again: pdd asks the server to reopen that same Try and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
 
 In your terminal, `pdd try` keeps waiting while the page is open:
 
@@ -506,7 +544,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.7` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.8` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -515,6 +553,7 @@ This is an alpha. These limits are known today:
 | `run` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
 | `run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
 | `run` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
+| Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |
 | `status` says "the chat stopped" | No agent runs in the chat. Run `pdd workflow open N` to start it again. If it stops again at once, read the error in the chat. |
 | `approve` says that pdd sees an agent environment | Your terminal runs inside Claude Code or Codex. Run `pdd workflow approve N` in a normal terminal, or answer the gate question in the chat. |
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |
@@ -540,3 +579,21 @@ This is an alpha. These limits are known today:
 - what you expected, and what happened.
 
 Do not paste tokens, passwords or private code.
+
+## Use your program for real with pdd try
+
+Run `pdd try <story> --cli`. Copy the printed PATH line, then type your program's commands in your
+own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
+Each command runs the prompt on the runtime with your gh login; saved data stays in the same Try session.
+`--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
+the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd try:`
+and use reserved code 125. Calls can take a while because they run AI.
+
+Run `pdd try --save-last` to append the last command and its observed answer to the original test file.
+Review that recording before treating it as an expected answer. Stop the session with `pdd try --stop <story>`.
+
+For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/books`, then run
+`pdd try <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
+HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
+When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
+if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.md §19 for details.

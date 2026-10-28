@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0724eca6a9e431356febadb002b4e8dbaa2580a7e61677ea9dd990ff35bd339b).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 4d3530be9e2b8615b0e7d920117b989c2a37cc01cb7357d013e5e36af130ce66).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -9,13 +9,14 @@ import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { setupSkills } from './skills-install.mjs';
+import { pathDiagnostic } from './path-diagnostic.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 const RUNNER_ROUTES = {
-  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex' }],
+  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
@@ -41,6 +42,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
+  if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
+    try {
+      const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
+      for (const message of pathDiagnostic({ packageRoot, cwd, env, mode })) line(stderr, message);
+    } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
+  }
   switch (plan.local) {
     case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;
     case 'version':
@@ -63,6 +70,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         line(stderr, 'The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.');
         return 1;
       }
+    }
+    case 'workflow-view': {
+      try {
+        const { viewRun } = await import('./workflow-view.mjs');
+        const result = await viewRun({ ref: plan.operands[0], cwd });
+        line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch { line(stderr, 'The saved run could not be read. Check pdd workflow status.'); return 1; }
     }
     case 'setup': {
       let code = 0;

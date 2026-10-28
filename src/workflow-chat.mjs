@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 8076d2464447993bb81993777ea4c436613d0db1cb67eb6c906e158426d18842).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b19ba100609dbae1953738d5f57c427afa3be17be39e067676a898e88e394336).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync } from 'node:fs';
@@ -86,9 +86,15 @@ export async function startChat({ run, area, message }, ports = {}) {
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
   const startedAt = now();
-  await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]);
-  return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+  const chat = { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
     label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile };
+  try { await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]); }
+  catch (error) {
+    const failed = problem(error.code ?? 'herdr_failed', error.message);
+    failed.chat = { ...chat, startUnconfirmed: true };
+    throw failed;
+  }
+  return chat;
 }
 
 export async function sendToChat(chat, text, ports = {}) {
@@ -101,7 +107,7 @@ export async function chatSession(chat, ports = {}) {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
     return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
-  } catch (error) { return { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed' }; }
+  } catch (error) { return { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed', message: error.message }; }
 }
 
 function attachSession() {
@@ -119,11 +125,19 @@ export async function openChat({ run, chat }, ports = {}) {
   try { await herdr(['tab', 'get', chat.tabId]); }
   catch (error) {
     if (error.code !== 'tab_not_found') throw error;
+    if (chat.startUnconfirmed) {
+      const observed = await chatSession(chat, ports);
+      if (!observed.alive && ['agent_not_found', 'pane_not_found'].includes(observed.code)) return { restartAvailable: true };
+      throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
+    }
     const created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']);
     if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
     chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id;
   }
   const live = await chatSession(chat, ports);
+  if (!live.alive && live.code !== 'agent_not_found') throw problem(live.code ?? 'herdr_status_unknown', live.message ?? 'Herdr could not confirm this chat; no native launch or resume was sent.');
+  if (!live.alive && chat.startUnconfirmed) throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed. Inspect this same Herdr tab before starting another agent.');
+  if (live.alive) delete chat.startUnconfirmed;
   if (live.sessionId) chat.session = { agent: chat.agent ?? run.agent, id: live.sessionId };
   let resumed = false;
   if (!live.alive) {
@@ -134,7 +148,8 @@ export async function openChat({ run, chat }, ports = {}) {
       if (found.length !== 1 || !validSessionId(found[0].id)) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
       id = found[0].id; chat.session = { agent: run.agent, id };
     }
-    await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir })]);
+    try { await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir })]); }
+    catch (error) { chat.startUnconfirmed = true; throw error; }
     // Herdr sees the agent only after it starts; status counts the start from here.
     chat.resumedAt = now(); resumed = true;
   }
