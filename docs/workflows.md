@@ -37,8 +37,8 @@ What each step does:
 | change | Makes only the approved change. If a prompt owns the behavior, it changes the prompt first. Adds a test. |
 | reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
-| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. |
-| prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
+| visual? | For a visible interface, sketches 2 or 3 options, with empty and error states. For a screen, it also writes the app map and its SVG mockups from the chosen design, so the Try page shows the real screen (the Screen tab). For a feature with a screen, the chat recommends this step. |
+| prompt-story | Reads the full Prompting guide and `RUNBOOK.md` sections 2 to 4, then the sections that fit: a CLI, a prompt that calls another, check paths, money and dates, a screen, AI calls and test patterns. Writes or changes the smallest prompt that owns the behavior, each Story in the person's words, and one `tests/<story>.json` for each Story. Takes the expected results from the requirement, not from the code. |
 | check | Runs `pdd check` once for all Stories as `RUNBOOK.md` says, when the `pdd-prompting` skill has that file. After a fix, it checks again only the Stories that failed, by name. Puts one `Runtime check` line and one report link for each Story in its summary. Else it reviews the prompt and the cases by hand with the review rules. |
 | try? | Makes a `pdd try` link for each Story that you want to try, as `RUNBOOK.md` says. Else it shows the plan or the bug in a safe local preview or demo. |
 | build | Builds only what you approved. Tests through the public interface. |
@@ -78,7 +78,7 @@ you     review and merge on GitHub
 1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It does not write code itself.
-4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets a short brief and file paths, not the chat history.
+4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets its full brief at once, with file paths, not the chat history. Then the chat waits for it.
 5. After each step, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
@@ -87,6 +87,8 @@ you     review and merge on GitHub
 10. You merge the PRs on GitHub. `pdd workflow status` reads the PR state. When the last PR is merged, the run is completed.
 
 ### Try before PR 1
+
+The check comes first, then the Try. At the story gate, the chat can offer a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when visual made an app map.
 
 After the check and try steps, the chat shows one `Runtime check` line for each Story (✓ or ✗) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
