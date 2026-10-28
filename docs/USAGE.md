@@ -216,7 +216,7 @@ The command returns at once. It prints where the run is and the commands to open
 
 1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`.
 2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each repo has a workspace with the repo's name. Each run has a tab with the repo name, the issue and the workflow, for example `my-app#42 small-change`. If two repos have the same name, pdd uses `owner/repo`. pdd does not touch your default Herdr session.
-3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets a short brief and file paths, not the chat history.
+3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets its full brief at once, with file paths, not the chat history.
 4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
 5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
 6. When you approve, pdd starts a new chat for the next area. That chat gets the results of the area that you approved.
@@ -235,7 +235,7 @@ The areas of the three workflows (you act at the **bold** ones):
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
 
-**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' to go on, or tell me what to change." You can answer, for example:
+**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve 42`, or tell me what to change." You can answer, for example:
 
 - "Make it one Story."
 - "Split part 5."
@@ -271,7 +271,9 @@ Rules:
 
 ### 6.6 Optional steps
 
-`visual` and `try` are optional. The chat asks you about them. They are questions, not stops. Answer in the chat.
+`visual` and `try` are optional. Before each one, the chat asks you, for example "Do you want a visual design step? yes/no", and waits for your answer. They are not gates: answer in the chat.
+
+For a page or a screen, the chat recommends `visual`. It writes the app map, so the Try page shows the real screen and your keys or taps work. A page with no visual step still gets an app map and a `render` operation that returns its HTML, so you can try it, and its tests check what the page shows. At the story gate, you can open a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when there is an app map. The check still runs first in the prompt PR area.
 
 ### 6.7 The PRs and the merge
 

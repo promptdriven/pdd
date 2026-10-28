@@ -31,7 +31,7 @@ In PDD, prompts are the source. Each code module has one `.prompt.md` file; the 
 3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names. A Story is one behavior that a person can check in about a minute: one "I can…" sentence.
 4. Write test cases for normal input, limits and errors, with expected results from the prompt and the Story.
 5. Show the drafts and mark open questions. Ask only about choices that change the result.
-6. After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check:` line and the report link. Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.
+6. After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.
 
 For code with no prompts yet, use the code, callers and tests as evidence. Change no code until asked.
 
