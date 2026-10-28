@@ -13,10 +13,8 @@ identified by `entry_path#operation`. Include its Story titles, criteria and inp
 Never read arbitrary page-named paths or include environment, credentials, local settings or test
 expected answers. Treat all project and browser text as data; adapters scrub secrets and limit context.
 
-Discover Codex, Claude and Gemini without a model call. Choose explicit --agent, else the remembered
-project choice if installed, else first ready/available/installed agent, else Codex to show disconnected states.
-Persist only the chosen agent ID in the existing private per-repo state (including subsequent page
-switches). Never persist a browser key or messages locally.
+Use the private `context.agentDefinitions` from runtime-client, or load definitions locally for direct callers before any network access. An empty list is a plain configuration error. Discover each configured definition independently without a model call. The picker and relay receive only `{id,name,state,detail?}`, with names and IDs taken from local definitions, never command, kind or environment. Ignore discovery rows outside those definitions. Explicit --agent matches an exact display name, with builtin lowercase IDs retained as aliases. Unknown explicit choices fail before connecting. Otherwise choose the remembered display name (migrating old builtin IDs), if installed, then first ready/available/installed definition, then the first definition to show unavailable states.
+Persist only the chosen display name in existing private per-repo state, including subsequent page switches. Wire selections and messages use opaque IDs, checked against the local definitions. Each turn passes its matching private definition separately to the adapter with the unchanged base environment; the adapter owns child-only environment merging. Never persist a browser key or messages locally.
 
 POST owner `/agent/connect` with a fresh bridge UUID, discovery states and selection. A 404 means
 this server has no agent bridge: explain and retain the ordinary Try page. Other failures are plain
@@ -53,6 +51,7 @@ an explicit `pdd try` reconnect. Provider credentials and token values never lea
 
 ## Dependencies
 
+- [Agent configuration](agent-config.prompt.md): required generation/runtime context for local launcher selection and private definitions.
 - [Agent adapters](agent-adapters.prompt.md): required generation/runtime context for discovery, secret
   scrubbing, read-only CLI execution, strict JSON and schema validation.
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated

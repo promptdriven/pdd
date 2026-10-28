@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
+import { renderCompletion } from '../src/completion.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -143,4 +144,18 @@ test('ALPHA8: runner argument failures and invalid replies are finite without a 
   }
   let calls = 0;
   assert.equal(await runPdd(['workflow','open','7'], { stdout: capture(), stderr: capture(), workflowRunner: { openRun: async () => { calls++; throw Error('possible effect'); } } }), 1); assert.equal(calls, 1);
+});
+
+
+test('Try accepts named local launchers while workflow agent choices stay bounded', () => {
+  for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
+    const plan=parseArgv(['try','my-story','--agent',name]);
+    assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
+  }
+  for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const shell of ['bash','zsh']) {
+    const completion=renderCompletion(shell);
+    assert.doesNotMatch(completion,/try:--agent\)/);
+    assert.match(completion,/workflow:--agent\)/);
+  }
 });

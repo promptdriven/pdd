@@ -608,6 +608,20 @@ pdd try my-story
 pdd try my-story --agent claude
 ```
 
+Many accounts? List your agents in `~/.config/pdd/agents.json`:
+
+```json
+{
+  "agents": [
+    { "name": "Claude (work3)", "kind": "claude", "command": "claude-work3" },
+    { "name": "Codex (work5)", "kind": "codex", "command": "codex", "env": { "CODEX_HOME": "~/.pdd-codex/work5" } }
+  ],
+  "include_defaults": true
+}
+```
+
+Use `pdd try my-story --agent "Codex (work5)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. A repo can provide `.pdd/agents.json`; when the user file exists, it wins instead of merging the repo list. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
 If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.

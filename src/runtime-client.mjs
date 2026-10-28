@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: adf1dd7c06c5980913e699ba038a541d892da0335abab5038d18af73b8c1dff4).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cd12ae32bfa9f19c15623aca171101629105528e252c9e70304e2b9e0ecf69c9).
+import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -919,7 +920,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
-    if (options['--agent'] !== undefined && (!['codex','claude','gemini'].includes(options['--agent']) || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses Codex, Claude or Gemini for an ordinary connected pdd try; omit --no-wait and door modes.');
+    if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
@@ -932,6 +933,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
     const { root, found, normalized } = localSetup(cwd, words), store = stateFor(ports.env, root);
+    if (!options['--no-wait'] && !options['--cli'] && !options['--serve'] && ports.agentBridge !== false) {
+      try { context.agentDefinitions = loadAgentDefinitions({cwd:root,env:ports.env}); }
+      catch (error) { throw new Stop(2,error.message); }
+      if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
+      if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
+    }
     const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });

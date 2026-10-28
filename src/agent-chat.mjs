@@ -1,8 +1,8 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: 5509e41bb6322a27811ea88b5c5d58a78275999aee5f922610b922d5d478896c).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 04ba5c67ade73f96e92e3d339be86062b6c85b94bca28ef6f84c9b8d79c0154a).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
+import {loadAgentDefinitions} from './agent-config.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
-const known=id=>['codex','claude','gemini'].includes(id);
 const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
 const json=body=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -14,15 +14,22 @@ function scrub(value,secrets){
  return value;
 }
 export async function createAgentBridge(context,test,tryId,options={},link){
+ const definitions=context.agentDefinitions??loadAgentDefinitions({cwd:context.root,env:context.ports.env});
+ if(!definitions.length)throw Error('No agents are configured. Add an agent or enable defaults in agents.json.');
+ const known=id=>definitions.some(d=>d.id===id),byChoice=value=>definitions.find(d=>d.name===value)??definitions.find(d=>['codex','claude','gemini'].includes(d.id)&&d.id===value);
+ const explicit=options['--agent']!==undefined?byChoice(options['--agent']):null;
+ if(options['--agent']!==undefined&&!explicit)throw Error('Unknown agent name. Choose a name from agents.json or an enabled default.');
  const {ports,root,store,runtime}=context,prefix=`/v1/try/${tryId}`,bridge_id=ports.randomUUID();
  const modelReply=await runtime.send(`${prefix}/model`,{method:'GET'},30000);
  if(modelReply.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error('Could not read the owner’s Try model for agent chat.');
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema}));
- let agents=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env}),choice=options['--agent']??store.repo(root).agent_choice;
- if(!known(choice)||(!options['--agent']&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??'codex';
- const remember=id=>{if(!known(id))return;choice=id;const saved=store.repo(root);if(saved.agent_choice!==id)store.saveRepo(root,{...saved,agent_choice:id});};
+ const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
+ let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
+ let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
+ if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
+ const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
  const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice}),30000);
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error('Could not connect your agent to this Try. Run pdd try again.');
@@ -37,7 +44,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  async function answer(message){
   const agent=agents.find(a=>a.id===message.agent);let result;
   if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else result=await (ports.askAgent??askAgent)({agent:agent.id,cwd:root,env:ports.env,entries,signal:controller.signal,
+  else result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,
    context:scrub({message:message.text,story:test.story,stories:model.stories??[],entries,current:message.context??{}},context.secrets)});
   if(controller.signal.aborted)return;
   if(result.error)agents=agents.map(a=>a.id===message.agent?{...a,state:result.error.state,detail:result.error.message}:a);

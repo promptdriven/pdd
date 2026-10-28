@@ -1,9 +1,10 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 4925960de0287e6bb857d77243e52143184827214d115f739b11a3a5e9177877).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: e5e220b193bf0ada30c13c132233bfd1f14a551a5fa48fd4ae936f467723a4c5).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { loadAgentDefinitions } from './agent-config.mjs';
 import { checkInput } from './runtime-preflight.mjs';
 const AGENTS = [['codex','Codex'],['claude','Claude'],['gemini','Gemini']];
 const SECRET = /token|password|secret|api[_-]?key|authorization|cookie|credential/i;
@@ -12,9 +13,9 @@ const fail = (state, message) => ({say:message,fill:null,error:{state,message}})
 const MESSAGES = {signed_out:'This agent is signed out. Sign in at your terminal, or choose another agent.',quota:'This agent has reached its usage limit. Choose another agent or try later.',not_installed:'This agent is not installed. Choose another agent.'};
 function stateOf(text) { return /rate.?limit|usage.?limit|quota|credits|capacity/i.test(text)?'quota':/not logged|not signed|sign.?in|login required|unauthorized|authentication/i.test(text)?'signed_out':'error'; }
 function scrub(value,env) {
- const values=Object.entries(env).filter(([k,v])=>SECRET.test(k)&&typeof v==='string'&&v.length>=6).map(([,v])=>v);
+ const values=Object.entries(env).filter(([k,v])=>SECRET.test(k)&&typeof v==='string'&&v.length>0).map(([,v])=>v);
  const clean=x=>{
-  if(typeof x==='string'){for(const v of values)x=x.split(v).join('[redacted]');return x.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted]').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g,'[redacted]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(token|password|secret|api[_-]?key|authorization|cookie|credential)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'$1=[redacted]').replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[redacted]@');}
+  if(typeof x==='string'){for(const v of values)x=x.split(v).join('[redacted]');return x.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g,'[redacted]').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g,'[redacted]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(token|password|secret|api[_-]?key|authorization|cookie|credential)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,'$1=[redacted]').replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi,'$1[redacted]@');}
   if(Array.isArray(x))return x.map(clean);
   if(object(x))return Object.fromEntries(Object.entries(x).map(([k,v])=>[k,SECRET.test(k)?'[redacted]':clean(v)]));
   return x;
@@ -32,8 +33,7 @@ function logDiagnostic(agent,text,env) {
   writeFileSync(fd,`[${new Date().toISOString()}] ${agent}\n${diagnostic(text,env)}\n`);return file;
  }catch{return null;}finally{if(fd!==undefined)closeSync(fd);}
 }
-function failedInvocation(agent,text,env,state=stateOf(text)) {
- const name=AGENTS.find(([id])=>id===agent)?.[1]??'Agent';
+function failedInvocation(agent,text,env,state=stateOf(text),name=AGENTS.find(([id])=>id===agent)?.[1]??'Agent') {
  const line=diagnostic(text,env).split(/\r?\n/).map(x=>x.trim()).find(Boolean)?.slice(0,500)||'The CLI exited without an error message.';
  const log=logDiagnostic(name,text,env),prefix=state==='error'?`${name} could not start`:MESSAGES[state];
  return fail(state,`${prefix}${state==='error'?': ': ' '}${line}. ${log?`Details: ${log}`:'Local diagnostic log unavailable.'}`);
@@ -61,17 +61,18 @@ export function runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=
   child.stdout.on('data',c=>data('stdout',c));child.stderr.on('data',c=>data('stderr',c));child.on('error',e=>finish(e));child.on('close',code=>{if(!stopping)clearTimeout(killTimer);finish(null,code);});child.stdin.on('error',()=>{});child.stdin.end(input);
  });
 }
-export async function discoverAgents({cwd,env=process.env,run=runAgentProcess}={}) {
+export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runAgentProcess,definitions}={}) {
  const result=[];
- for(const [id,name] of AGENTS){
+ for(const {id,name,kind,command,env:overrides} of definitions??loadAgentDefinitions({cwd,env})){
+  const childEnv={...env,...overrides},opts={cwd,env:childEnv,timeoutMs:10000,maxBytes:131072};
   try{
-   const help=await run(id,['--help'],{cwd,env,timeoutMs:10000,maxBytes:131072});
+   const help=await run(command,['--help'],opts);
    if(help.code!==0){result.push({id,name,state:'error',detail:'The agent help command failed.'});continue;}
-   if(id==='gemini'){const version=await run(id,['--version'],{cwd,env,timeoutMs:10000,maxBytes:1024});const verified=version.code===0&&version.stdout.trim()==='0.66.0';result.push({id,name,state:verified?'available':'error',detail:verified?'Installed; sign-in is checked when you send a message.':'This Gemini version has no verified read-only adapter yet.'});continue;}
-   const flags=id==='codex'?['--sandbox']:['--safe-mode','--tools','--permission-prompts'];
+   if(kind==='gemini'){const version=await run(command,['--version'],{...opts,maxBytes:1024});const verified=version.code===0&&version.stdout.trim()==='0.66.0';result.push({id,name,state:verified?'available':'error',detail:verified?'Installed; sign-in is checked when you send a message.':'This Gemini version has no verified read-only adapter yet.'});continue;}
+   const flags=kind==='codex'?['--sandbox']:['--safe-mode','--tools','--permission-prompts'];
    if(flags.some(f=>!help.stdout.includes(f))){result.push({id,name,state:'error',detail:'Update this agent to a version with the required read-only controls.'});continue;}
-   const auth=await run(id,id==='codex'?['login','status']:['auth','status','--json'],{cwd,env,timeoutMs:10000,maxBytes:16384});
-   let ready=false;if(id==='claude'){try{ready=JSON.parse(auth.stdout).loggedIn===true;}catch{}}
+   const auth=await run(command,kind==='codex'?['login','status']:['auth','status','--json'],{...opts,maxBytes:16384});
+   let ready=false;if(kind==='claude'){try{ready=JSON.parse(auth.stdout).loggedIn===true;}catch{}}
    else ready=auth.code===0&&/logged in/i.test(auth.stdout+' '+auth.stderr)&&!/not logged/i.test(auth.stdout+' '+auth.stderr);
    result.push({id,name,state:ready?'ready':'signed_out'});
   }catch(e){result.push({id,name,state:e.code==='ENOENT'?'not_installed':'error'});}
@@ -94,7 +95,9 @@ function validFill(fill,entries){
  const entry=entries.find(e=>e.entry===fill.entry);if(!entry)return false;
  const result=checkInput(fill.input,entry.input_schema,0);return !result.refusals.length&&!result.warnings.length;
 }
-export async function askAgent({agent,cwd,env=process.env,context={},entries=[],signal,run=runAgentProcess,timeoutMs=120000}={}) {
+export async function askAgent({agent,definition,cwd,env=process.env,context={},entries=[],signal,run=runAgentProcess,timeoutMs=120000}={}) {
+ const command=definition?.command??agent,name=definition?.name??AGENTS.find(([id])=>id===agent)?.[1];
+ agent=definition?.kind??agent;env={...env,...definition?.env};
  if(!AGENTS.some(([id])=>id===agent))return fail('error','Choose Codex, Claude or Gemini.');
  if(signal?.aborted)return fail('error','The agent request was cancelled.');
  try{
@@ -103,23 +106,23 @@ export async function askAgent({agent,cwd,env=process.env,context={},entries=[],
   if(Buffer.byteLength(input)>65536)return fail('error','The project context is too large for this agent request.');
   const opts={cwd,env,input,signal,timeoutMs,maxBytes:131072};
   let args,overlay;
-  if(agent==='gemini'){const version=await run(agent,['--version'],{cwd,env,signal,timeoutMs:10000,maxBytes:1024});if(version.code!==0||version.stdout.trim()!=='0.66.0')return fail('error','This Gemini version has no verified read-only adapter. Choose another agent.');overlay=geminiOverlay(env);opts.env=overlay.env;}
+  if(agent==='gemini'){const version=await run(command,['--version'],{cwd,env,signal,timeoutMs:10000,maxBytes:1024});if(version.code!==0||version.stdout.trim()!=='0.66.0')return fail('error','This Gemini version has no verified read-only adapter. Choose another agent.');overlay=geminiOverlay(env);opts.env=overlay.env;}
   if(agent==='codex'){
    args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}'];
    for(const feature of ['hooks','plugins','apps','browser_use','browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','multi_agent_v2','shell_tool','unified_exec','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
    args.push('-');
   }else if(agent==='gemini')args=['--extensions','none','--allowed-mcp-server-names',`pdd-disabled-${randomUUID()}`,'-p','Answer the supplied Try question as strict JSON.','--approval-mode','default','--admin-policy',overlay.policy,'--output-format','json'];
   else args=['-p','--safe-mode','--tools','Read,Grep,Glob','--permission-mode','plan','--permission-prompts','none','--strict-mcp-config','--no-chrome','--no-session-persistence','--output-format','json'];
-  let answer;try{answer=await run(agent,args,opts);if(agent==='codex'&&answer.code!==0){const flag=unknownFeature(answer,args);if(flag){logDiagnostic('Codex',answer.stderr||answer.stdout,env);const index=args.indexOf(flag);args.splice(index-1,2);answer=await run(agent,args,opts);}}}finally{overlay?.cleanup();}
-  if(answer.code!==0)return failedInvocation(agent,answer.stderr||answer.stdout,env,stateOf(answer.stdout+' '+answer.stderr));
+  let answer;try{answer=await run(command,args,opts);if(agent==='codex'&&answer.code!==0){const flag=unknownFeature(answer,args);if(flag){logDiagnostic(name,answer.stderr||answer.stdout,env);const index=args.indexOf(flag);args.splice(index-1,2);answer=await run(command,args,opts);}}}finally{overlay?.cleanup();}
+  if(answer.code!==0)return failedInvocation(agent,answer.stderr||answer.stdout,env,stateOf(answer.stdout+' '+answer.stderr),name);
   let parsed=JSON.parse(answer.stdout);
   // Claude's JSON transport wraps the textual final answer; it is not the chat schema.
   if(agent==='claude'&&object(parsed)&&typeof parsed.result==='string'){
-   if(parsed.is_error)return failedInvocation(agent,parsed.result,env);parsed=JSON.parse(parsed.result);
+   if(parsed.is_error)return failedInvocation(agent,parsed.result,env,stateOf(parsed.result),name);parsed=JSON.parse(parsed.result);
   }
   if(agent==='gemini'&&object(parsed)&&typeof parsed.response==='string')parsed=JSON.parse(parsed.response);
   if(!object(parsed)||Object.keys(parsed).sort().join(',')!=='fill,say'||typeof parsed.say!=='string'||!parsed.say.trim()||!validFill(parsed.fill,entries))return fail('error','The agent returned an invalid answer or fields. No fields were applied.');
   const clean=scrub(parsed,env);if(!validFill(clean.fill,entries))return fail('error','The proposed fields contained sensitive data. No fields were applied.');
   return clean;
- }catch(e){if(e instanceof SyntaxError)return fail('error','The agent returned invalid JSON. No fields were applied.');const state=e.code==='ENOENT'?'not_installed':'error';return failedInvocation(agent,e.stderr||e.message,env,state);}
+ }catch(e){if(e instanceof SyntaxError)return fail('error','The agent returned invalid JSON. No fields were applied.');const state=e.code==='ENOENT'?'not_installed':'error';return failedInvocation(agent,e.stderr||e.message,env,state,name);}
 }

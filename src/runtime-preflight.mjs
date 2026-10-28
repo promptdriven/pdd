@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4eb5498687d769e4add98a9ed3ec31f0cfdb55d2b01ea0d54113846a8e65bcac).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 245c00c7e3acbbc421fd04a4de13989024c811f30790efc389185166e633b47e).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -550,7 +550,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
 const SECRET_NAME = /^(?:\.env.*|auth\.json|credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.npmrc|\.netrc|\.git-credentials|\.pypirc|.+\.(?:pem|key|p12|pfx|keystore|tfstate|tfvars))$/;
 const SECRET_PART = new Set(['secrets', '.ssh', '.codex', '.terraform', '.aws']);
 export const isSecretPath = path => SECRET_NAME.test(basename(path)) || path.split('/').some(part => SECRET_PART.has(part))
-  || /(?:^|\/)\.docker\/config\.json$/.test(path);
+  || /(?:^|\/)\.docker\/config\.json$/.test(path)
+  || /(?:^|\/)(?:\.pdd\/agents\.json|\.config\/pdd\/agents\.json)$/i.test(path);
 
 function octal(header, offset, length, value) { header.write(`${value.toString(8).padStart(length - 1, '0')}\0`, offset, length, 'latin1'); }
 function tarHeader(name, size, type) {

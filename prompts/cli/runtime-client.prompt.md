@@ -126,6 +126,8 @@ Request IDs appear only in state files and in `--json`.
 
 ## Dependencies
 
+[Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
+
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
 
 ## Terminal and HTTP doors
@@ -163,7 +165,7 @@ do not mislabel it as an unknown result and do not send a Try. A later explicit 
 
 Ordinary `pdd try STORY` stays running, including when launched in the background, connecting the
 person's local agent to the Try page through the owner-only [agent bridge](agent-chat.prompt.md).
-`--agent codex|claude|gemini` chooses it; otherwise use the project's remembered choice or discovery.
+`--agent NAME` chooses a configured display name; builtin lowercase IDs remain aliases. Otherwise use the project's remembered name or discovery. Before sign-in or network in an ordinary connected Try, load private [agent definitions](agent-config.prompt.md), reject an empty list or unknown explicit name, and keep them in context.agentDefinitions for the bridge. Never upload these definitions. Skip this configuration read for --no-wait, door/stop/save-last modes and the explicit agentBridge:false compatibility test port.
 `--no-wait` explicitly returns without a bridge; it cannot combine with --agent. Agent choice is
 not valid with --stop, --save-last, --cli or --serve. Validate conflicts before sign-in/network.
 Reuse must match the authenticated login/runtime and pinned prompt hashes before connecting; a
