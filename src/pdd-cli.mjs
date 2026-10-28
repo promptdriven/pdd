@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d11568a8774b6758094bbb319011bb3cadc33b7c57dac27297e79d5e2cc9612e).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7849dd4bc44ccb0989dd6643eed3818a98267be78407c51efed4c1fcd116b73a).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -9,6 +9,7 @@ import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { setupSkills } from './skills-install.mjs';
+import { pathDiagnostic } from './path-diagnostic.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -40,6 +41,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
+  }
+  if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
+    try {
+      const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
+      for (const message of pathDiagnostic({ packageRoot, cwd, env, mode })) line(stderr, message);
+    } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
     case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;

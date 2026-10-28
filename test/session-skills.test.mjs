@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { setupSkills, PDD_SKILL_NAMES } from '../src/skills-install.mjs';
@@ -31,12 +31,20 @@ function packageCopy(t) {
 
 // Wrong: an ordinary command writes skill folders into the person's home (only pdd setup may install them).
 test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or CLAUDE_CONFIG_DIR', t => {
-  const { sandbox, home, project, run } = packageCopy(t);
+  const { sandbox, pkg, home, project, run } = packageCopy(t);
   const config = join(sandbox, 'claude config');
+  const alpha = join(sandbox, 'alpha-bin'), legacy = join(sandbox, 'legacy-bin');
+  mkdirSync(alpha); mkdirSync(legacy);
+  symlinkSync(join(pkg, 'bin/pdd.mjs'), join(alpha, 'pdd'));
+  writeFileSync(join(legacy, 'pdd'), '#!/bin/sh\necho "pdd, version 0.0.305"\n', { mode: 0o755 });
+  const path = `${alpha}:${dirname(process.execPath)}:/usr/bin:/bin`;
   for (const args of [['--version'], ['--help'], ['workflow', 'list']]) {
-    const result = run(args, { CLAUDE_CONFIG_DIR: config });
+    const result = run(args, { CLAUDE_CONFIG_DIR: config, PATH: path });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
   }
+  const conflict = run(['--version'], { CLAUDE_CONFIG_DIR: config, PATH: `${legacy}:${path}` });
+  assert.equal(conflict.status, 0); assert.equal(conflict.stdout, `${version()}\n`);
+  assert.match(conflict.stderr, /PATH selects:.*pdd, version 0\.0\.305/);
   assert.deepEqual(readdirSync(home), []); assert.deepEqual(readdirSync(project), []); assert.equal(existsSync(config), false);
 });
 

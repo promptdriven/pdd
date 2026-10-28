@@ -75,6 +75,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 
 ```sh
 npm install -g github:promptdriven/pdd#alpha
+"$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
 pdd --version   # prints 0.1.7
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
@@ -92,6 +93,8 @@ Important:
 
 The `main` branch of this repository and PyPI have the older Python `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
+Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+
 See all of them:
 
 ```sh
@@ -99,7 +102,7 @@ which -a pdd
 pdd --version   # PDD Alpha prints 0.1.7
 ```
 
-Remove the old one with the tool that installed it:
+If you choose to remove the Python installation, use the tool that installed it:
 
 ```sh
 uv tool uninstall pdd-cli     # if you used uv
@@ -114,6 +117,16 @@ If you want to keep the old one, call PDD Alpha by its full path:
 ```sh
 "$(npm prefix -g)/bin/pdd" --version
 ```
+
+Activating an environment later, for example `conda activate pdd`, can reorder PATH and shadow Alpha again. Activate the environment first, then prepend the directory containing Alpha’s `pdd` command and clear the shell cache:
+
+```sh
+conda activate pdd
+export PATH="$(npm prefix -g)/bin:$PATH"
+hash -r
+```
+
+Use the absolute Node-plus-Alpha command printed by the diagnostic when the environment selects a different Node installation or Alpha is running from a source checkout.
 
 The agents that PDD starts always get the full path of PDD Alpha. They are not affected by your PATH. Only the commands that you type are.
 

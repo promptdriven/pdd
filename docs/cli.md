@@ -12,6 +12,8 @@ You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and 
 
 `pdd setup` copies the skills to `~/.agents/skills` (Codex) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds differ from the skills of this pdd, it says so and prints the command that updates them: `npx skills update -g`, or `npx skills update -p` for a copy in the project. After an update of the pdd command, it replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. No other pdd command copies skills. The `pdd-setup` skill writes the same block in a chat. Run it in the top folder of the repo.
 
+Setup also reports the running Alpha executable and version, the `pdd` paths in order, and which path and version a plain `pdd` selects. A PATH conflict report includes the absolute Alpha command and explains that environment activation, such as conda, must come before correcting PATH. It keeps other installations. `--version` preserves its version-only stdout; PATH diagnostics go to stderr. `workflow run` gives a one-line warning when another pdd comes first.
+
 ## Runs on a GitHub issue
 
 | Command | What it does |
