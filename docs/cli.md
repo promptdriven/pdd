@@ -54,7 +54,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | `pdd try --stop [STORY]` | Stop the open Try link of a Story |
 
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
-- Offline-only work uses local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Native installed factories need an explicit JSON contract before a Runtime binding can cover them; see [Runtime boundaries](runtime-boundaries.md).
+- Offline-only work uses local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Runtime boundaries](runtime-boundaries.md).
 - Running `pdd try STORY` for a paused Try explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 - With no test file, `pdd check` says `No tests found` and lists why, for example a `tests/*.json` file without the PDD `schema_version`, or a prompt with no Runtime interface block.

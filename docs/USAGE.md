@@ -408,7 +408,7 @@ Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files
 
 The runtime address is set in one place in pdd. You do not need to set it.
 
-A native factory returning installed owners or process/cleanup ports is not a JSON Runtime operation. Keep its public native contract and mark an unavailable JSON binding incomplete; do not invent an adapter or a successful startup result. See [Native factories and JSON operations](runtime-boundaries.md#native-factories-and-json-operations).
+Factories and method-bearing instances can bind through Runtime interface v2 handles and collections. Put injected I/O and callbacks behind ports, and use the declared SQL, blob and compute simulations. Preserve the public API and report native effects as unbound. See [Factories and simulated resources](runtime-boundaries.md#native-factories-and-json-operations).
 
 ### 7.1 Approve a prompt
 

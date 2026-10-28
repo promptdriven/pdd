@@ -18,21 +18,36 @@ correct them and check again before submitting a behavior check.
 
 ## Native factories and JSON operations
 
-A Runtime operation needs concrete JSON input, result and error contracts. A public factory
-that returns installed owners, callable ports, processes or cleanup methods has a native
-contract. An object with those capabilities is not a JSON result merely because its fields can
-be named in prose.
+Factories, constructors and objects of methods can bind through Runtime interface v2:
+set `schema_version` to `prompt-runtime.interface.v2`. Declare `instance_types` rows with
+`name` and `resource`, where the resource is a declared write-access `collection`.
+A factory or method entry declares `instance` with `kind` (`factory` or `method`), `type`
+and `path`. The factory path selects its result handle; the method path selects its input
+handle. The runtime issues opaque string handles and keeps the instance state in the
+bound collection. Preserve the public factory and method contracts when declaring these
+transports. A `copy_out` list of `path` and `post_schema` rows declares observable updates
+to selected logical input values when the contract requires them.
 
-For an installed worker-configuration factory, keep the real public factory and its native
-return type. Without an available JSON return contract and the installed dependency contracts,
-that Runtime conversion is incomplete. Do not replace the return with `{}`, invent a DTO or
-adapter, or simulate successful worker startup. Missing installed modules remain missing
-context; a dependency link does not supply their declarations.
+Put injected I/O and callbacks behind declared `port` operations. A `port.write` simulation
+records arguments in the scenario world and returns the scenario-declared result. Bind
+these operations to the actual dependency contract and keep expected values owned by the
+Story and test. See [RUNBOOK §5](../RUNBOOK.md#5-saved-data) for saved data and resources.
 
-A real public operation with a JSON contract can be bound within its declared scope. Native
-factory construction, owner wiring, process effects and cleanup remain native test obligations.
-Report exactly what a Runtime check covers and what remains unbound. A passing JSON check does
-not satisfy an unbound native acceptance criterion or approve a workflow gate.
+| Declared simulation | What it covers |
+|---|---|
+| `sql.execute` | Bounded SQL in a real in-memory SQLite connection, including transactions, commit and rollback. It does not open the application's disk database. |
+| `blob.read`, `blob.write`, `blob.stat` | File contents and metadata in a path-keyed scenario world; no host file is opened. |
+| `compute.hash_json`, `compute.hash_utf8` | SHA-256 of canonical JSON (`value`) or exact UTF-8 bytes (`text`). These are deterministic compute operations. |
+| HTTP fixtures | Exact argument/result cases for declared HTTP operations, without a live network request. |
+
+Keyed cryptography and signatures, process and socket lifecycle, Git effects, DOM typing
+and paste, and live effects remain native test obligations. Report those criteria as unbound
+by the Runtime simulation; a simulated result does not establish a live effect.
+
+Never invent a fake API only for a check. Use the module's public operations and available
+dependency contracts, declare the supported instance and resource bindings, and name any
+missing contract or unbound criterion. Report what the Runtime check covers and what the
+native tests cover. Neither a passing check nor a simulation approves a workflow gate.
 
 ## Read call usage as evidence
 

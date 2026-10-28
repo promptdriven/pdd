@@ -28,3 +28,15 @@ test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and No
   assert.doesNotMatch(source,/Node shebang/);
   assert.match(source,/POSIX shell shebang.*absolute Node/);
 });
+
+test('RELEASE13: Runtime guidance binds factories and supported resources without claiming native effects', () => {
+  const boundaries=read('docs/runtime-boundaries.md');
+  for(const name of ['prompt-runtime.interface.v2','instance_types','copy_out','post_schema','port.write','sql.execute','blob.read','blob.write','blob.stat','compute.hash_json','compute.hash_utf8']) assert.ok(boundaries.includes(name),name);
+  assert.match(boundaries,/factory.*method/s);
+  assert.match(boundaries,/Never invent a fake API only for a check/);
+  for(const word of ['Keyed cryptography','signatures','process','socket','Git','DOM typing','paste','live effects','unbound']) assert.ok(boundaries.includes(word),word);
+  for(const file of ['docs/runtime-boundaries.md','docs/USAGE.md','docs/cli.md']) {
+    const source=read(file);
+    assert.doesNotMatch(source,/native factory.*is not a JSON Runtime operation|Native installed factories need an explicit JSON contract|invent a DTO or\s+adapter|mark an unavailable JSON binding incomplete/);
+  }
+});
