@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48d3f4a98e34c0db8c743ad34968667af3bb75b33da4939a7e847faa986f3988).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9768de321984d0e61e699354d17d7026a221cdcc5680f56a126b830ac84583df).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -309,8 +309,11 @@ function judgeLint(answer, rows, root, visible, secrets = []) {
 }
 
 // Hints that make a server refusal readable: the local P9 rule or the P7 status.
-function addHints(row, root, visible) {
+function addHints(row, root, visible, liveHttpRefusal = false) {
   for (const item of row.refusals) {
+    if (row.live && (item.code === 'live-resource-policy' || liveHttpRefusal)) {
+      item.hint = `Live CHECK allows exactly one read: herdr status client --json --session NAME. Check ${row.resource_bindings ?? 'the bindings file'} and ${row.resource_run_config ?? 'the run-config file'}: max_live_calls must be 1, writes disabled, no host paths or environment overrides, and no HTTP, model or SQL profiles. NAME must start with a letter or digit, use only letters, digits, _ or -, and be at most 64 characters. Live is CHECK only and cannot be replayed.`;
+    }
     const index = Number(/^steps\[(\d+)\]/.exec(item.section ?? '')?.[1]), step = row.steps?.[index];
     if (!step) continue;
     const prompt = readPrompt(root, visible, step.entry_path);
@@ -330,7 +333,7 @@ function applyAnswer(row, answer, context) {
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha, provider: view.provider,
-    draft: view.draft ?? row.draft });
+    draft: view.draft ?? row.draft, ...(view.resource_mode === 'live' ? { live: true, resource_mode: 'live' } : {}) });
   if (row.state === 'refused') addHints(row, context.root, context.visible);
   if (ENDED.has(row.state) && row.sent_at && !row.ended_at && !context.reading) row.ended_at = context.ports.now();
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
@@ -356,7 +359,8 @@ function batchRecord(context) {
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
-      engine_sha: row.engine_sha ?? null, draft: !!row.draft })) };
+      engine_sha: row.engine_sha ?? null, draft: !!row.draft,
+      ...(row.live ? { live: true, resource_mode: 'live', resource_bindings: row.resource_bindings, resource_run_config: row.resource_run_config } : {}) })) };
 }
 
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
@@ -370,13 +374,22 @@ async function postJob(context, path, command, request, row, timeoutMs) {
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
+  if (request.resource_mode === 'live' && verdict.kind === 'refused') {
+    const item = reply.json?.error;
+    const details = item?.details ?? reply.json?.details;
+    Object.assign(verdict.refusal, { reason: cleanText(item?.reason, context.secrets) || null,
+      fix: cleanText(item?.fix, context.secrets) || null, cause: cleanText(item?.cause, context.secrets) || null,
+      engine_message: details === undefined ? verdict.refusal.engine_message : cleanText(JSON.stringify(details), context.secrets),
+      where: cleanText(item?.where, context.secrets) || [item?.file, item?.at].map(value => cleanText(value, context.secrets)).filter(Boolean).join(' ') || null });
+  }
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   return verdict;
 }
 
 // POST one check and fold the answer into its row.
 async function sendCheck(context, row) {
-  const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
+  const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls,
+    ...(row.live ? { resource_mode: 'live', resource_bindings: row.resource_bindings, resource_run_config: row.resource_run_config } : {}) };
   const verdict = await postJob(context, '/v1/check', 'check', request, row);
   row.retry_at = null;
   if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
@@ -384,7 +397,10 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'busy') { row.state = 'waiting'; row.retry_at = context.ports.now() + verdict.wait; }
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
-  else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
+  else if (verdict.kind === 'refused') {
+    Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
+    if (row.live) addHints(row, context.root, context.visible, true);
+  }
   // The agent's default limit caps this read too: pdd exits 3 and --read reads the same ID later.
   else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: context.agentLimit ? context.deadline
     : Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
@@ -763,6 +779,8 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   let release = () => {};
   try {
     const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
+    if ((options['--bindings'] !== undefined || options['--run-config'] !== undefined) && options['--live'] !== true)
+      throw new Stop(2, '--bindings and --run-config require pdd check --live.');
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
     if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request'].includes(modes[0]) && words.length)
       || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
@@ -791,11 +809,24 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
+  if (options['--live'] === true && new Set(selected.map(test => test.storyPath || test.path)).size > 1)
+    throw new Stop(2, 'Live checks select one Story at a time. Run pdd check STORY --live.');
+  const extraFiles = [];
+  if (options['--live'] === true) for (const row of rows) {
+    const pathFor = (flag, fallback) => {
+      if (options[flag] === undefined) return join(dirname(row.test), fallback).split(sep).join('/');
+      if (typeof options[flag] !== 'string' || !options[flag].trim()) throw new Stop(2, `${flag} needs a file path.`);
+      return relative(root, resolve(cwd, options[flag])).split(sep).join('/');
+    };
+    Object.assign(row, { live: true, resource_mode: 'live', resource_bindings: pathFor('--bindings', 'runtime-bindings.json'),
+      resource_run_config: pathFor('--run-config', 'runtime-run-config.json') });
+    extraFiles.push(row.resource_bindings, row.resource_run_config);
+  }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null, extraFiles });
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -919,6 +950,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    if (['--live', '--bindings', '--run-config'].some(key => options[key] !== undefined)) throw new Stop(2, 'Live resource options are available only on pdd check.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
     if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
       || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');

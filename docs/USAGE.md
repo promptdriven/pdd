@@ -443,6 +443,21 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 | `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
 | `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
+## Real calls on the server
+
+`pdd check STORY --live` asks the runtime to use a real resource. Today the server permits exactly one read-only command per CHECK: `herdr status client --json --session NAME`. NAME starts with a letter or digit, contains only letters, digits, `_` or `-`, and is at most 64 characters. The server uses a private empty HOME. Writes, host paths, environment overrides and HTTP, model or SQL profiles are refused. Live mode is CHECK only, selects one Story at a time, and live checks cannot be replayed.
+
+Declare the command resource in your prompt's runtime interface and add the runtime's live binding and run-config JSON files to your repository. By default, pdd selects `runtime-bindings.json` and `runtime-run-config.json` beside each selected authored test. To choose files explicitly, use paths from your current directory:
+
+```sh
+pdd check my-story --live
+pdd check my-story --live --bindings runtime/live-resources.json --run-config run-config.json
+```
+
+Both files are uploaded with the selected source; missing files, secret-looking names, symlinks and files outside the repository stop the check before sign-in. The two file options require `--live`. They cannot be combined with `--lint`, `--read`, `--files`, `--fill-hash` or `--request`, and do not apply to `pdd try`.
+
+The result table, report links and `Runtime check` lines say LIVE; JSON adds `live: true` and `resource_mode: "live"`. LIVE identifies the requested mode, including refused or pending runs. DRAFT still means the prompt is not approved. Policy refusals keep the server's reason and explain the allowed read and which config files to fix. `pdd check --read` reads the saved result without sending another check. Without `--live`, resources stay simulated.
+
 ## 8. Make your own workflow
 
 A workflow is a skill folder. Copy one of the PDD workflows as `pdd-NAME`, and edit it. For example, in your repo:

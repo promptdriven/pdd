@@ -19,6 +19,37 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 
 Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json]` (Serhan: runtime logic belongs on the server) runs ONLY the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. Locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 when the lint passes for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, 3 when the lint result is unknown. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
+## Live resource requests
+
+Normal CHECK accepts --live, with optional --bindings FILE and --run-config FILE. File options
+without --live, or any live options with read/request/lint/files/fill-hash, fail exit2 before
+sign-in or network. Try does not accept these options, including direct runTry callers.
+Without --live, request fields and source selection remain simulated and unchanged.
+
+A live invocation selects only one distinct authored story_path (not its basename or displayed slug; a missing story path falls back to the test path); if selection reaches more than one Story, exit2 before sign-in or network, even when no STORY was supplied. Each authored test still becomes its own CHECK.
+
+For each selected authored test, default to runtime-bindings.json and runtime-run-config.json
+beside that test. Explicit FILE paths resolve lexically from the invocation directory and are
+sent as canonical repository-relative POSIX paths. Include both files via captureSource.extraFiles,
+using its existing safety rules before sign-in. No local command or file-defined environment
+is executed. Do not fall back to another directory or silently simulate when files are missing.
+
+Every live CHECK metadata includes resource_mode:"live", resource_bindings:<binding path> and
+resource_run_config:<config path>. Preliminary lint gets the same archive but no live fields.
+Persist these fields and a live marker per row; legitimate pre-dispatch retries retain them,
+and --read retains the marker without sending a new CHECK or requiring local config files.
+Lost replies keep existing same-ID read-only recovery. No new replay or automatic retry of an
+uncertain live operation. Server report resource_mode=live may also identify an existing live run.
+
+The server owns live admission. Preserve its exact sanitized refusal/reason/location/fix, including structured HTTP error fields and details from either error.details or top-level details. Add a
+plain hint for live policy refusals or a live CHECK's422: currently CHECK allows exactly one
+read-only `herdr status client --json --session NAME`, NAME starts alphanumeric and contains
+only letters/digits/_/- (at most64); no writes, host/env overrides or HTTP/model/SQL profiles. Name
+the selected binding/config files to fix. Never change these files or reduce the policy locally.
+The binding/run-config schema belongs to the runtime; the client forwards bytes rather than
+inventing defaults inside the JSON. Text/JSON results mark LIVE independently of DRAFT through
+[runtime output](runtime-output.prompt.md), including refusals, pending results and saved reads.
+
 For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
 For lint-only JSON, `lint_state` summarizes the selected tests after the same reached-prompt judgment as their rows and exit code: `passed` when every selected row passes (exit 0), otherwise `refused` (exit 4). Never substitute the raw overall server job state for this selected result. Keep every returned diagnostic in `problems`, including an unselected dependency refusal; reporting it does not silently change a passing selected row. Unknown/not-run/transport handling stays as specified below.
