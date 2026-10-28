@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 72b255cd7159a5ca2ddb25516d82648d65128d10696c03fba05ce2cd73605dc8).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 8076d2464447993bb81993777ea4c436613d0db1cb67eb6c906e158426d18842).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -15,6 +15,17 @@ const problem = (code, message) => Object.assign(Error(message ?? code), { code 
 export const validSessionId = id => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 // Markers that make a native agent think it runs inside another agent session (Claude then stops saving transcripts).
 const AGENT_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_(?:CHILD_SESSION|SESSION_ID|SESSION_ATTENDED|ENTRYPOINT|MESSAGING_SOCKET|MESSAGING_TOKEN|EXECPATH)|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX[A-Z_]*|HERDR_[A-Z_]+|PDD_AGENT_SESSION)$/;
+
+// The variable that names the agent's config folder (the run keeps its value as configDir).
+export const homeVariable = agent => agent === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+// A leading "~" or "~/" is the home folder: zsh leaves "~" as text in "env CODEX_HOME=~/x pdd …" (0.1.6 tester), and the
+// agent then refuses the folder.
+export function expandHome(dir, env = process.env) {
+  if (typeof dir !== 'string' || !dir) return null;
+  const home = env.HOME || homedir();
+  return dir === '~' ? home : dir.startsWith('~/') ? join(home, dir.slice(2)) : dir;
+}
+export const isFolder = dir => { try { return statSync(dir).isDirectory(); } catch { return false; } };
 
 export function herdrCommand(ports = {}) {
   if (ports.herdr) return ports.herdr;
@@ -73,7 +84,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const messageFile = join(run.runDir, `${area}-start.md`);
   writeFileSync(messageFile, message);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
-  const configDir = run.configDir !== undefined ? run.configDir : (run.agent === 'claude' ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME) || null;
+  const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
   const startedAt = now();
   await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]);
   return { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
@@ -90,7 +101,7 @@ export async function chatSession(chat, ports = {}) {
     const agent = (await herdrCommand(ports)(['agent', 'get', chat.paneId])).result?.agent;
     const value = agent?.agent_session?.kind === 'id' ? agent.agent_session.value : null;
     return { alive: Boolean(agent), status: agent?.agent_status ?? null, sessionId: validSessionId(value) ? value : null };
-  } catch { return { alive: false, status: null, sessionId: null }; }
+  } catch (error) { return { alive: false, status: null, sessionId: null, code: error.code ?? 'herdr_failed' }; }
 }
 
 function attachSession() {
@@ -101,9 +112,9 @@ function attachSession() {
   });
 }
 
-// Returns {resumed, attached}; it may change chat.tabId/paneId/session, and the caller saves the run.
+// Returns {resumed, attached}; it may change chat.tabId/paneId/session/resumedAt, and the caller saves the run.
 export async function openChat({ run, chat }, ports = {}) {
-  const herdr = herdrCommand(ports), env = ports.env ?? process.env, now = ports.now ?? Date.now;
+  const herdr = herdrCommand(ports), env = ports.env ?? process.env, now = ports.now ?? Date.now, configDir = expandHome(chat.configDir, env);
   await ensureServer(herdr, ports);
   try { await herdr(['tab', 'get', chat.tabId]); }
   catch (error) {
@@ -119,12 +130,13 @@ export async function openChat({ run, chat }, ports = {}) {
     let id = validSessionId(chat.session?.id) ? chat.session.id : null;
     if (!id) {
       const found = await (ports.findNativeSessions ?? findNativeSessions)({ agent: run.agent, root: run.root, startedAt: chat.startedAt, endedAt: now() },
-        { env, ...(chat.configDir ? (run.agent === 'claude' ? { claudeConfigDir: chat.configDir } : { codexHome: chat.configDir }) : {}) });
+        { env, ...(configDir ? (run.agent === 'claude' ? { claudeConfigDir: configDir } : { codexHome: configDir }) : {}) });
       if (found.length !== 1 || !validSessionId(found[0].id)) throw problem('native_session_unknown', `The ${chat.area} chat ended and pdd cannot tell which ${run.agent} session it was. Start ${run.agent} in the tab yourself.`);
       id = found[0].id; chat.session = { agent: run.agent, id };
     }
-    await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir: chat.configDir })]);
-    resumed = true;
+    await herdr(['pane', 'run', chat.paneId, chatCommand({ agent: run.agent, cwd: run.root, resumeId: id, configDir })]);
+    // Herdr sees the agent only after it starts; status counts the start from here.
+    chat.resumedAt = now(); resumed = true;
   }
   await herdr(['tab', 'focus', chat.tabId]);
   const attach = (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
