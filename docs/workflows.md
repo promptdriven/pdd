@@ -110,7 +110,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 |---|---|
 | Code now: say it in the chat, or run `pdd workflow approve N` | The code area starts in a new chat. It works on top of PR 1. PR 2 is stacked on PR 1's branch. Merge PR 1 first |
 | Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
-| Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the default branch |
+| Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the saved base branch (`--base BRANCH`, else the repository default) |
 
 PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
 

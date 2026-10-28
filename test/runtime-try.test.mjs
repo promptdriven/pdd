@@ -238,11 +238,11 @@ test('RUNTIME-TRY10: GET 404/410 counts as ended and DELETE 404/410 as stopped; 
 
 // Wrong: the note about other files reads like an alarm, or prints twice (runtime session, real check of b61547c).
 test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are not prompt, story or test files', async t => {
-  const setup = harbor(t), fake = await fakeRuntime(t, trying());
+  const setup = harbor(t, repo => writeFileSync(join(repo, 'pdd-source.json'), JSON.stringify({ include: ['README.md'] }))), fake = await fakeRuntime(t, trying());
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(result.code, 0);
   const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
-  assert.deepEqual(said, ['Sent 6 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
+  assert.deepEqual(said, ['Sent 4 files (1 is not prompt, story or test files; run `pdd check --files` to see them).']);
 });
 
 const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });

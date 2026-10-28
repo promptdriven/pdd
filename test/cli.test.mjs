@@ -105,6 +105,7 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
   const cases = [
     [['workflow','run','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
     [['workflow','run','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
+    [['workflow','run','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],
@@ -131,7 +132,8 @@ test('ALPHA7: each runner route calls its own export once with parsed values, cw
 // Wrong: malformed references/options reach effects, or an owner failure is retried.
 test('ALPHA8: runner argument failures and invalid replies are finite without a second call', async () => {
   const invalid = [['workflow','run'],['workflow','run','../unknown','1'],['workflow','run','feature','0'],['workflow','run','feature','42','extra'],
-    ['workflow','run','feature','42','--agent','other'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
+    ['workflow','run','feature','42','--agent','other'],['workflow','run','bug','2','--base'],
+    ['workflow','run','bug','2','--base','one','--base','two'],['workflow','done'],['workflow','done','Scope'],['workflow','done','scope','--summary'],
     ['workflow','approve','7','8'],['workflow','approve','a1234567-1234-4123-8123-123456789abc'],['workflow','changes','7'],['workflow','cancel'],
     ['workflow','open'],['workflow','resume','7'],['workflow','attach','7'],['workflow','status','7','--brief'],['workflow','status','--all','--all']];
   for (const args of invalid) assert.equal(await runPdd(args, { stdout: capture(), stderr: capture(), workflowRunner: new Proxy({}, { get: () => assert.fail('No runner') }) }), 2, args.join(' '));

@@ -17,11 +17,13 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 
 ## `pdd check`
 
-Modes: `--fill-hash` and `--files` take no other option or STORY and make no network call. `--lint [STORY...] [--json]` (Serhan: runtime logic belongs on the server) runs ONLY the server's lint, `POST /v1/lint` (0 AI calls), on the captured files and sends no checks. Locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 when the lint passes for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, 3 when the lint result is unknown. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json]` (Serhan: runtime logic belongs on the server) runs ONLY the server's lint, `POST /v1/lint` (0 AI calls), on the captured files and sends no checks. Locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 when the lint passes for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, 3 when the lint result is unknown. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH] [--json]` reads saved results. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+
+For lint-only JSON, `lint_state` summarizes the selected tests after the same reached-prompt judgment as their rows and exit code: `passed` when every selected row passes (exit 0), otherwise `refused` (exit 4). Never substitute the raw overall server job state for this selected result. Keep every returned diagnostic in `problems`, including an unselected dependency refusal; reporting it does not silently change a passing selected row. Unknown/not-run/transport handling stays as specified below.
 
 Order:
-1. [Preflight](runtime-preflight.prompt.md), capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A = for each step, 1 plus the `max_calls` of the calls its entry prompt declares; M = the sum of the tests' `max_calls` (cli 12b).
-2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). One new `crypto.randomUUID()` for lint and for each test. Write `batch.json`. Print to stderr `If pdd stops, read the results with: pdd check --read <batch>` only after lint passes and right before the first check POST (there is nothing to read before), and again at the end of an exit 3.
+1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A = for each step, 1 plus the `max_calls` of the calls its entry prompt declares; M = the sum of the tests' `max_calls` (cli 12b).
+2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). One new `crypto.randomUUID()` for lint and for each test. Write `batch.json`. Print to stderr `If pdd stops, read the results with: pdd check --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256}`, no `paths`; `source` = the tar). Read until terminal, at most 2 min. Judge only the prompts that the tests reach (step `entry_path` and their `calls` targets): a prompt in `result.report.program.refused_prompts`, or with `admission_state` neither `approved` nor `draft`, refuses each test that reaches it. A reached `draft` marks the row as a draft. A lint answer with no program report is a refusal when the state is `refused` with refusals, else lint is unknown: exit 3, no checks sent.
 4. Checks: for each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (4 for each step, 6 to 100). Start all POSTs at the same time. POST timeout 90 s.
 5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the time limit, counted from the lint POST, ends. The limit depends on who waits (Serhan: no timeouts for a person). A person (`interactive`) has no limit. An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool. `--timeout MIN` overrides both. `batch.json` keeps the limit as `timeout_min` (1.5 for 90 s, null for none). While rows are open, in both modes, print ONE progress line to stderr every 30 s after the checks are sent, so an agent that is cut off still has output: `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. A Story is done when all its rows have ended; `Story` when there is one; the AI calls are the sum of the known `usage.calls` of all rows, the running ones too; the time is since the checks were sent, `N s` under a minute, else whole minutes. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
@@ -45,6 +47,51 @@ Order:
 - Save `engine_sha` from each answer. The local rules match engine `eae2202a68d00ab762fcbbf1eba0d8607a132a15` (checked on Oct 27: the rules copied from 7b03d3ea are the same there). Warn only when the server's sha is another engine: it is not this sha and not a prefix of it with at least 7 hex digits (case does not matter). The warning: `Warning: the runtime engine is <first 12 of its sha>, but pdd's local checks copy engine eae2202a68d0. The engine stays the judge.` Show it at most once a day for each engine sha (a stamp in `$PDD_STATE_DIR/engine-warnings.json`).
 - Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3. A waiting row is then not run: `pdd stopped while the runtime was busy.`
 - `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. One GET for each open row, saved JSON for ended rows. It never makes a request ID and never POSTs.
+
+## Retry confirmed lint capacity refusals
+
+For Check's preflight, explicit `--lint`, and Try, a confirmed terminal lint refusal
+`lint-queue-timeout` with literal `details.retryable: true` is busy, never unknown or a prompt
+fault. Read that signal from `result.report.refusal` or `result.refusals`. A direct503
+`lint-queue-full` with the same literal flag is also a confirmed capacity refusal. Never apply
+this exception to a check/paid action, a wrong-ID reply, a nonretryable refusal or a lost result.
+
+Use at most3 total lint attempts for confirmed busy replies, with a fresh saved request ID
+and the same captured archive/options each time. Honor a positive numeric `retry_after` in
+seconds (bound1..30, default5) before retrying. Print `The server is busy. Waiting for a lint
+slot…` before the wait. No attempt or wait starts after interruption or the total lint deadline:
+the earlier existing command deadline and2minutes; agents also keep their90second rule unless
+a Check explicitly sets --timeout. Bound each lint HTTP request/read by the remaining wait.
+A lost reply still reads only that ID; it may retry only after that read confirms the retryable
+terminal capacity refusal. Do not submit checks or create a Try until lint succeeds.
+
+On exhausted attempts/time, return not-run (exit5; door wrappers retain their125 contract),
+0check AI calls, and plain advice that the server stayed busy, no checks ran, and the person
+can run the same command again later. Preserve every prior ID/answer. Unknown outcomes retain
+the existing read-only recovery and unknown wording; do not relabel them as safe capacity.
+
+## Lint still running when the wait ends
+
+A matching lint job whose last confirmed state is `queued` or `running` is pending,
+not an unknown result or a capacity refusal. Keep the command/90-second agent limit;
+queue time, retry backoff and actual lint work share that budget. Save the last lint ID,
+state and pending marker. Return exit 3 with a plain “Lint is still queued/running”
+message, no check/Try dispatch, and zero check AI calls. Check and explicit lint name
+`pdd check --read BATCH`; Try says no Try was created and lint uses no AI calls.
+Lost replies, wrong IDs/commands and explicit unknown states retain unknown handling.
+
+A saved Check read must refresh unresolved lint using only its latest saved ID, or
+use a matching saved terminal answer. This also repairs older batches whose lint
+finished but whose unsent rows still say “lint result is unknown”. Never allocate an
+ID or POST from `--read`. A still-pending lint stays exit 3 with current wording.
+Once terminal, clear obsolete unknown/pending wording: reached prompt refusals are
+refused; a completed lint with no selected refusal leaves the check not-run, because
+no check was sent. Report any global lint refusal and its paths without claiming the
+selected check passed. A fresh Check is an explicit new invocation. A terminal busy
+lint read reports busy without resubmitting. Every row with no check request ID has
+zero check calls, including older saved unknown-lint rows; keep actual posted or
+incompletely accounted check usage unknown. Do not rejudge rows with check IDs or
+local preflight refusals from the lint refresh.
 
 ## State (outside the repo; folders 0700, files 0600; no tar and no token on disk)
 

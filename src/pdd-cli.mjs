@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 0724eca6a9e431356febadb002b4e8dbaa2580a7e61677ea9dd990ff35bd339b).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d11568a8774b6758094bbb319011bb3cadc33b7c57dac27297e79d5e2cc9612e).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -15,7 +15,7 @@ const line = (stream, text) => stream.write(`${text}\n`);
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
 const RUNNER_ROUTES = {
-  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex' }],
+  'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
   'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],

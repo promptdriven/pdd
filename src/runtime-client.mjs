@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: f90902b73ef91d080770005c4e685e0a0ea4547f8b0c5f812fc943efcf1a853e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d80fb6c125bbb3ab30341009840eff39b8014f2c657ddd6e50892ffcfc34f813).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -153,13 +153,13 @@ class Runtime {
       return { status: response.status, headers: response.headers, text, json };
     } catch { return { lost: true }; } finally { clearTimeout(timer); this.signal?.removeEventListener('abort', stop); }
   }
-  post(path, request, tar) {
+  post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
     form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
     form.set('source', new Blob([tar], { type: 'application/x-tar' }), 'source.tar');
-    return this.send(path, { method: 'POST', body: form }, this.ports.postMs);
+    return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
-  get(id) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, GET_MS); }
+  get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
@@ -186,6 +186,7 @@ function judgePost(reply, id, command, secrets) {
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
+  if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null) return { kind: 'busy', wait: lintQueueWait(error) };
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
     return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
@@ -341,13 +342,13 @@ function batchRecord(context) {
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
 function saveAnswer(context, id, json) { if (isObject(json)) context.store.write(join(context.folder, `${id}.json`), json); }
 
-async function postJob(context, path, command, request, row) {
+async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
   if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; }
   saveBatch(context);
-  const reply = await context.runtime.post(path, request, context.capture.tar);
+  const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   return verdict;
@@ -390,31 +391,60 @@ function progressLine(rows, ms) {
     + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
 }
 
-async function runLint(context) {
-  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
+function lintQueueWait(refusal) {
+  if (!['lint-queue-timeout', 'lint-queue-full'].includes(refusal?.code) || refusal.details?.retryable !== true) return null;
+  const seconds = refusal.details.retry_after;
+  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(30, Math.max(1, seconds)) : 5) * 1000;
+}
+
+function pendingLintMessage(context, answer) {
+  return `Lint is still ${answer.state}. No checks were sent. ` + (context.batch
+    ? `Read the result later with: pdd check --read ${context.batch}`
+    : 'No Try was created. Lint uses no AI calls.');
+}
+
+async function runLint(context, complete = false) {
+  const agent = context.agentLimit ?? !context.ports.interactive;
+  const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
+  let attempts = 0;
+  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
+  const pause = async wait => {
+    if (context.interrupted || attempts >= 3 || context.ports.now() + wait >= lintEnd) return false;
+    line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
+    await context.ports.sleep(wait, context.signal);
+    return !context.interrupted && context.ports.now() < lintEnd;
+  };
   for (;;) {
-    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256 };
-    context.lint.request_ids.push(request.requestId);
-    const verdict = await postJob(context, '/v1/lint', 'lint', request, null);
-    if (verdict.kind === 'busy' && context.ports.now() + verdict.wait < lintEnd && !context.interrupted) {
-      line(context.ports.stderr, 'Server busy: lint is waiting for a free slot.');
-      await context.ports.sleep(verdict.wait, context.signal); continue;
-    }
+    if (context.interrupted) return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (context.ports.now() >= lintEnd) return busy();
+    const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
+    context.lint.request_ids.push(request.requestId); attempts++;
+    const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())));
+    if (verdict.kind === 'busy') { if (await pause(verdict.wait)) continue; return busy(); }
     if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
-    if (verdict.kind === 'busy') return { kind: 'not_run', note: { code: 'server-full', message: 'The runtime is busy. Try again later.' } };
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
-    // A lost lint answer is read by the same ID, like a lost check.
-    const readEnd = verdict.kind === 'unknown' && !context.agentLimit ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
+    // Unknown dispatch still reads only this ID; only a confirmed terminal capacity refusal permits another attempt.
+    const readEnd = verdict.kind === 'unknown' && !agent ? Math.max(lintEnd, context.ports.now() + LOST_READ_MS) : lintEnd;
     let answer = verdict.answer ?? null, id = request.requestId, lost = false;
     while (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state) && context.ports.now() < readEnd && !context.interrupted) {
-      await context.ports.sleep(context.ports.pollMs, context.signal);
-      if (context.interrupted) break;
-      const read = judgeGet(await context.runtime.get(id), id, 'lint');
+      await context.ports.sleep(Math.min(context.ports.pollMs, Math.max(0, readEnd - context.ports.now())), context.signal);
+      if (context.interrupted || context.ports.now() >= readEnd) break;
+      const read = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, readEnd - context.ports.now()))), id, 'lint');
       if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? 'Run gh auth login' : 'The runtime opens soon.' } };
+    }
+    if (!lost && answer?.state === 'refused') {
+      const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
+      const wait = refusals.map(lintQueueWait).find(value => value !== null);
+      if (wait !== undefined) { if (await pause(wait)) continue; return busy(); }
+    }
+    if (!lost && ['queued', 'running'].includes(answer?.state)) {
+      Object.assign(context.lint, { state: answer.state, pending: true, unknown: false });
+      saveBatch(context);
+      return { kind: 'pending', answer };
     }
     return lost || !answer ? { kind: 'unknown' } : { kind: 'answer', answer };
   }
@@ -425,9 +455,14 @@ async function checkBatch(context, rows) {
   const lint = await runLint(context);
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
-  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, ...extra }); };
+  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', ...extra }); };
   if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
-  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note }); return; }
+  if (lint.kind === 'pending') {
+    context.lintPending = true;
+    notSent('not_run', { note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
+    return;
+  }
+  if (lint.kind === 'not_run' || lint.kind === 'stop') { notSent('not_run', { note: lint.note, ...(lint.note?.code === 'lint-busy' ? { calls: 0, phase: 'lint' } : {}) }); return; }
   if (lint.kind === 'refused') { notSent('refused', { phase: 'lint', refusals: [lint.refusal] }); return; }
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, sendable, context.root, context.visible, context.secrets) : null;
   if (!verdicts) {
@@ -489,7 +524,7 @@ function firstToday(context, sha) {
 }
 
 function printResult(context, rows, extra = {}) {
-  const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
+  const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode, summaryLine: summaryLine(rows),
@@ -507,11 +542,14 @@ function printResult(context, rows, extra = {}) {
   return exitCode;
 }
 
-function runFiles(root, ports) {
-  const capture = captureSource(root), found = findTests({ root });
+function runFiles(cwd, words, options, ports) {
+  const { root, found, normalized } = localSetup(cwd, words);
+  const tests = select(found, normalized, root).map(test => test.path);
+  const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+  const capture = captureSource(root, { tests, appMap });
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
-  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${formatSize(file.size)}`);
-  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)}. ${other.length} of them are not prompt, story or test files.`);
+  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
+  line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
   return 0;
 }
 
@@ -519,9 +557,10 @@ function runFiles(root, ports) {
 // Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
-  const rows = select(found, normalized, root).map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
+  const selected = select(found, normalized, root);
+  const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
-  const capture = captureSource(root), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null }), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
     secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
   context.folder = context.store.folder('batches', batch);
@@ -529,6 +568,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context);
+  if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer, program = answer?.result?.report?.program;
   const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
@@ -551,7 +591,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   if (context.json) {
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: answer?.state ?? lint.kind, summary_line: summary, problems,
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, problems,
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
     return exitCode;
   }
@@ -581,6 +621,56 @@ function interruptible(context) {
   return context.ports.onInterrupt(() => { context.interrupted = true; controller.abort(); });
 }
 
+async function readUnsentLint(context, rows) {
+  const lint = context.lint, id = lint?.request_ids?.at(-1);
+  if (!id) return;
+  const unresolved = lint.pending || lint.unknown || [null, undefined, 'queued', 'running'].includes(lint.state);
+  const held = rows.filter(row => !row.request_ids?.length && row.state === 'not_run' && (unresolved
+    || row.note?.code === 'lint-pending' || /lint result is unknown/i.test(row.note?.message ?? '')));
+  if (!held.length) return;
+  let answer = context.store.read(join(context.folder, `${id}.json`));
+  if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
+    const read = judgeGet(await context.runtime.get(id), id, 'lint');
+    if (read.kind === 'blocked') throw new Stop(5, read.message);
+    if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
+    if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
+    answer = read.kind === 'state' ? read.answer : null;
+    if (answer) saveAnswer(context, id, answer);
+  }
+  const unknown = () => {
+    Object.assign(lint, { state: answer?.state ?? 'unknown', pending: false, unknown: true });
+    context.lintUnknown = true;
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+      note: { code: null, message: 'The lint result is unknown, so pdd sent no checks.' } });
+  };
+  if (['queued', 'running'].includes(answer?.state)) {
+    Object.assign(lint, { state: answer.state, pending: true, unknown: false });
+    context.lintPending = true;
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+      note: { code: 'lint-pending', message: pendingLintMessage(context, answer) } });
+    return;
+  }
+  if (!answer || answer.state === 'unknown') { unknown(); return; }
+  const rawRefusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
+  const busy = answer.state === 'refused' && rawRefusals.some(item => lintQueueWait(item) !== null);
+  const refusals = projectAnswer(answer, { origin: context.origin, secrets: context.secrets }).refusals;
+  const verdicts = judgeLint(answer, held, context.root, context.visible, context.secrets);
+  if (!busy && !verdicts && !(answer.state === 'refused' && refusals.length)) { unknown(); return; }
+  Object.assign(lint, { state: answer.state, pending: false, unknown: false });
+  for (const row of held) {
+    const problem = verdicts?.get(row);
+    Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], note: null });
+    if (problem || (!verdicts && !busy && refusals.length)) {
+      Object.assign(row, { state: 'refused', refusals: problem ? [problem] : refusals });
+    } else {
+      row.note = busy ? { code: 'lint-busy', message: 'The saved lint could not get a slot. No checks ran. Run the same command again later.' }
+        : { code: 'lint-finished', message: `The saved lint finished${refusals.length ? ' with refusals' : ''}. No checks were sent. `
+          + (refusals.length ? refusals.map(item => item.message || item.code).join(' ') + ' ' : '')
+          + 'Run a fresh pdd check command to start checks.' };
+    }
+  }
+}
+
 async function runRead(context, batchWord) {
   const { store, ports, root } = context;
   const name = batchWord ?? store.repo(root).last_batch;
@@ -593,18 +683,15 @@ async function runRead(context, batchWord) {
   Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [],
+    ...(!row.request_ids?.length && ['not_run', 'refused', 'ready'].includes(row.state) ? { calls: 0, phase: 'local' } : {}) }));
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.
   for (const row of rows) if (['ready', 'sending', 'waiting'].includes(row.state)) {
     if (row.request_ids.length) row.state = 'unknown';
-    else Object.assign(row, { state: 'not_run', note: { code: null, message: 'pdd stopped before sending this check.' } });
+    else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
-  if (context.lint?.unknown) {
-    const id = context.lint.request_ids?.at(-1), read = id ? judgeGet(await context.runtime.get(id), id, 'lint') : { kind: 'missing' };
-    if (read.kind === 'state') { saveAnswer(context, id, read.answer); context.lint.state = read.answer.state; }
-    context.lintUnknown = context.lint.unknown = !['passed', 'failed', 'refused'].includes(context.lint.state);
-  }
+  await readUnsentLint(context, rows);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
     if (!id || row.phase !== 'server') return;
@@ -639,13 +726,13 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   let release = () => {};
   try {
     const modes = ['--read', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
-    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])));
-    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--files', '--request'].includes(modes[0]) && words.length)
-      || (modes[0] === '--read' && words.length > 1)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
+    const others = Object.keys(options).filter(name => !modes.includes(name) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));
+    if (modes.length > 1 || (modes.length && others.length) || (['--fill-hash', '--request'].includes(modes[0]) && words.length)
+      || (modes[0] === '--read' && words.length > 1) || (!modes.length && options['--app-map'] !== undefined)) throw new Stop(2, 'This mix of options does not work together. Run pdd check --help.');
     if (modes[0] === '--request') { release = interruptible(context); return await runRequest(context, options['--request']); }
     const root = repoRoot(cwd);
     if (modes[0] === '--fill-hash') return runFillHash(root, ports);
-    if (modes[0] === '--files') return runFiles(root, ports);
+    if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
     if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
@@ -671,7 +758,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = captureSource(root);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -782,7 +869,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     Object.assign(context, { root, store, origin, visible: found.visible });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
-    const capture = captureSource(root), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -884,6 +971,7 @@ async function stopByName(context, cwd, words, origin) {
 
 async function checkLint(context, rows) {
   const lint = await runLint(context);
+  if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
   const verdicts = lint.kind === 'answer' && ['passed', 'failed', 'refused'].includes(lint.answer.state) ? judgeLint(lint.answer, rows, context.root, context.visible, context.secrets) : null;
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code ? ` (${lint.note.code})` : ''}`);
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
