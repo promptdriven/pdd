@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: cd12ae32bfa9f19c15623aca171101629105528e252c9e70304e2b9e0ecf69c9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c3e177c275a236c1b71b3a877394aed7290509dd4b9939956669344e89e15909).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1269,6 +1269,7 @@ async function collectSavedTests(context, tryId) {
     const said = addSavedCase(root, saved, context.seedTest);
     done[key] = { at: new Date(ports.now()).toISOString(), result: said };
     store.write(path, done);
+    try { context.onAgentCaseSaved?.({ id: key, name: saved.name, story_path: saved.story_path ?? saved.test?.story_path, result: said }); } catch {}
     line(ports.stdout, said);
   }
   return 'ok';

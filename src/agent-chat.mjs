@@ -1,6 +1,7 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: 04ba5c67ade73f96e92e3d339be86062b6c85b94bca28ef6f84c9b8d79c0154a).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 92d53cf33fa0a7c0ec3bf25921738853b46b30d615b2b30b712d2e2c83da5545).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
+import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
 const ready=a=>['ready','available'].includes(a?.state);
@@ -24,7 +25,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  if(modelReply.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error('Could not read the owner’s Try model for agent chat.');
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
-  .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema}));
+  .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema,...Object.fromEntries(['label','name','cli','http'].filter(k=>Object.hasOwn(e,k)).map(k=>[k,e[k]]))}));
  const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
  let agents=definitions.map(d=>{const found=discovered.find(a=>a.id===d.id);return{id:d.id,name:d.name,state:found?.state??'error',...(typeof found?.detail==='string'?{detail:found.detail}:{})};});
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
@@ -34,24 +35,30 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error('Could not connect your agent to this Try. Run pdd try again.');
  remember(choice);
+ const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save'].includes(x)):[];
+ const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
+ const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
+ const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
+ const onSaved=record=>guide.saved(record);context.onAgentCaseSaved=onSaved;
  const ownerUrl=new URL(link);ownerUrl.hash=`agent=${connected.json.browser_key}`;
  let closed=false,task=null,tickTask=null,failed=false;const seen=new Set(),controller=new AbortController();
  const stop=()=>controller.abort();context.signal?.addEventListener('abort',stop,{once:true});
  if(context.signal?.aborted)stop();
- async function close(){if(closed)return;closed=true;stop();context.onAgentChatClose?.();context.signal?.removeEventListener('abort',stop);
+ async function close(){if(closed)return;closed=true;stop();guide.close();if(context.onAgentCaseSaved===onSaved)delete context.onAgentCaseSaved;context.onAgentChatClose?.();context.signal?.removeEventListener('abort',stop);
   try{await (context.agentFinalSend??runtime.send.bind(runtime))(`${prefix}/agent/disconnect`,json({bridge_id}),5000);}catch{}
  }
  async function answer(message){
-  const agent=agents.find(a=>a.id===message.agent);let result;
-  if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,
-   context:scrub({message:message.text,story:test.story,stories:model.stories??[],entries,current:message.context??{}},context.secrets)});
+  const agent=agents.find(a=>a.id===message.agent),turn=guide.prepare(message);let result,asked=false;
+  if(turn.fast)result=turn.fast;
+  else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
+  else {asked=true;result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(result.error)agents=agents.map(a=>a.id===message.agent?{...a,state:result.error.state,detail:result.error.message}:a);
-  else if(agent)agents=agents.map(a=>a.id===message.agent?{...a,state:'ready',detail:undefined}:a);
-  const safe=scrub(result,context.secrets);
-  const reply=await runtime.send(`${prefix}/agent/reply`,json({bridge_id,message_id:message.id,say:safe.say,fill:safe.fill??null,agents}),30000);
+  else if(asked&&agent)agents=agents.map(a=>a.id===message.agent?{...a,state:'ready',detail:undefined}:a);
+  const decorated=guide.decorate(result),safe=guide.wire(decorated);
+  const reply=await runtime.send(`${prefix}/agent/reply`,json({bridge_id,message_id:message.id,...safe,agents:scrub(agents,secrets)}),30000);
   if(!good(reply)||reply.json.ok!==true){failed=true;write(context,'Your agent reply could not be delivered. It will not be run again. Reconnect with pdd try.');stop();}
+  else guide.delivered(message,decorated);
  }
  async function run(onTick){
   write(context,`Ask your agent is connected (${agents.find(a=>a.id===choice)?.name??choice}). Keep pdd running; Ctrl-C disconnects chat and keeps the Try open.`);
@@ -62,7 +69,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
    remember(poll.json.selected);
    const message=poll.json.message;
    if(message!==null&&message!==undefined){
-    if(!object(message)||typeof message.id!=='string'||message.id.length>128||typeof message.text!=='string'||message.text.length>8000||!known(message.agent)){failed=true;write(context,'The server sent an invalid agent message. Reconnect with pdd try.');break;}
+    if(!object(message)||typeof message.id!=='string'||message.id.length>128||typeof message.text!=='string'||message.text.length>8000||!known(message.agent)||(message.kind!==undefined&&!['chat','run','walk','own'].includes(message.kind))){failed=true;write(context,'The server sent an invalid agent message. Reconnect with pdd try.');break;}
     if(!seen.has(message.id)){
      if(task){failed=true;write(context,'Another agent message arrived while one was running. Reconnect with pdd try.');break;}
      seen.add(message.id);task=answer(message).catch(()=>{failed=true;write(context,'Your agent could not finish this message. It will not be run again.');stop();}).finally(()=>{task=null;});

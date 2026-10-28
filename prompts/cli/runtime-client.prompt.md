@@ -177,3 +177,5 @@ one-shot saved-test collection. An older runtime with no bridge gets a plain com
 and the ordinary Try behavior. Other relay errors fail plainly, without a new Try or program call.
 The injected `agentBridge` port may replace bridge setup in tests; production loads the generic
 module. No user configuration, model, global agent settings or login is changed.
+
+For a connected Try guide, report each newly handled saved case’s id/name/Story/result through the optional private context.onAgentCaseSaved callback after addSavedCase returns. Only successful “added to …” outcomes mark guide memory saved; refusals remain refusals. The callback does not change file selection, criteria, append behavior or save authority, and never receives raw saved-test data. A callback exception cannot undo a saved case or prevent collection of later cases.
