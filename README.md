@@ -4,7 +4,7 @@
 
 In PDD, prompts are the source of your software. Your agent writes the prompt, the Story and the test cases first, then the code. You review the prompts and stay in control.
 
-> Looking for the Python `pdd-cli`? It is on the [`main` branch](https://github.com/promptdriven/pdd/tree/main).
+> v1 is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/).
 
 ## Quick start
 
@@ -33,9 +33,11 @@ You can also just ask: "use the pdd-feature skill to …". `pdd-setup` adds a sh
 For runs that open pull requests, and for `pdd check`, also install the `pdd` command:
 
 ```sh
-npm install -g github:promptdriven/pdd#alpha
+npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup
 ```
+
+The `alpha` branch is also available: `npm install -g github:promptdriven/pdd#alpha`.
 
 ## Skills
 
@@ -120,4 +122,4 @@ PDD works with the versions of these tools that you have. It is tested on macOS 
 
 ## License
 
-[MIT](LICENSE). Contributions go to the `alpha` branch. See [CONTRIBUTING.md](CONTRIBUTING.md).
+[MIT](LICENSE). Contributions go to the `main` branch. See [CONTRIBUTING.md](CONTRIBUTING.md).

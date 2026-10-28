@@ -1,9 +1,8 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: f60f10e1dc83290074c5f5bd572e991b59dc564e2d1a1cf8bf04a556f949764d).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 9e8d590b8fe9c8a8f0cc29a83e42cdad18cb104377583c02f39717409ffcce66).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
-// Adapted from pdd-fleet workflow-run-records.mjs's stage-session matcher.
 const sessionFile = /^rollout-[^/]+\.jsonl$/;
 const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const epoch = value => {

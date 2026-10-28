@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.8 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.8 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -57,7 +57,7 @@ Do these steps in this order:
 |---|---|---|
 | 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
 | 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
-| 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check`, `pdd try` and `pdd approve` |
+| 3. Install the pdd command | `npm install -g github:promptdriven/pdd` | Only for runs with PRs, and for `pdd check`, `pdd try` and `pdd approve` |
 
 ### 2.1 Install the skills
 
@@ -74,24 +74,24 @@ This is the standard skills installer. It needs only Node.js. [Section 4](#4-the
 You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd check`, `pdd try` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-runtime)).
 
 ```sh
-npm install -g github:promptdriven/pdd#alpha
+npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
 pdd --version   # prints 0.1.8
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
+npm downloads the repository's default branch from GitHub. You can also install the `alpha` branch with `npm install -g github:promptdriven/pdd#alpha`. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
 
 Important:
 
-- Always install and update with the full `github:promptdriven/pdd#alpha` line.
+- Always install and update with the full `github:promptdriven/pdd` line, or append `#alpha` to select that branch.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace PDD Alpha with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ## 3. If you have the old Python pdd
 
-The `main` branch of this repository and PyPI have the older Python `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
+v1 is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
 Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
@@ -502,7 +502,7 @@ npx skills update        # add -g for the skills of all your projects, -p for th
 Update the pdd command, then let it check the skills:
 
 ```sh
-npm install -g github:promptdriven/pdd#alpha
+npm install -g github:promptdriven/pdd
 pdd --version
 pdd setup
 ```
@@ -564,7 +564,7 @@ This is an alpha. These limits are known today:
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
-| `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd#alpha`, then `pdd setup`. |
+| `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd`, then `pdd setup`. |
 | `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
 | PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |

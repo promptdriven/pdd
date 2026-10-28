@@ -250,7 +250,7 @@ test('RUNTIME-RULES3: default max_calls is 4 per step (6 to 100), and a step may
   assert.equal((await check(repo, home, ['place-order'])).json.rows[0].refusals[0].code, 'invalid-step-model');
 });
 
-// Wrong: a draft prompt is refused before it reaches the runtime (Serhan, Oct 27: drafts may run, marked DRAFT).
+// Wrong: a draft prompt is refused before it reaches the runtime.
 test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and is marked as a draft', async t => {
   const { repo, home } = harbor(t), prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
@@ -401,7 +401,7 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
   assert.equal(result.out.split('is named by 2 prompts').length, 2);
 });
 
-// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found" (Serhan's real test, 0.1.6).
+// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
 test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
   mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);

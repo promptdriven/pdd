@@ -329,7 +329,7 @@ test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 
   assert.equal(block.length, 7);
 });
 
-// Wrong (Serhan's 2048 session, 0.1.6): the brief's `board.prompt` and node tests beat PDD's formats (about 40 min lost),
+// Wrong: the brief's `board.prompt` and node tests beat PDD's formats (about 40 min lost),
 // and the person had to ask where the Story was and what to type to approve.
 test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and the story gate names paths and the approve sentence', () => {
   assert.ok(read('pdd-feature/steps/understand.md').includes("If the person's brief names other file names or test formats than PDD's (for example `*.prompt` or the repo's own test format), say so in one line and use PDD's, unless the person says otherwise."));
@@ -342,7 +342,7 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
   }
 });
 
-// Wrong (Serhan's 2048 test, 0.1.7): the Try page showed only a form, because no step made an app map.
+// Wrong: the Try page showed only a form, because no step made an app map.
 test('SKILLS22: for a page or a screen, visual writes the app map, and the person gets `pdd try <story> --new`', () => {
   const runbook = RUNBOOK();
   assert.ok(runbook.includes('The Try page has a **Screen** tab only when the repo has an app map'));

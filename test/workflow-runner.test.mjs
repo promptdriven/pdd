@@ -966,12 +966,12 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
 
 // ---- 0.1.7: a real tester run of 0.1.6 (round 2, "web", bookshelf, Oct 27) ----
 
-// Tester B2: "env -u CLAUDE_CONFIG_DIR CODEX_HOME=~/.pdd-codex/work4 pdd workflow run feature 3". zsh does not expand "~"
+// Tester B2: "env -u CLAUDE_CONFIG_DIR CODEX_HOME=~/.pdd-codex/profile-test pdd workflow run feature 3". zsh does not expand "~"
 // in an env argument, pdd saved the text, and Codex stopped at once ("CODEX_HOME points to … but that path does not exist").
 test('0.1.7 #1: run expands a leading ~ in CODEX_HOME and CLAUDE_CONFIG_DIR and refuses a folder that does not exist before it starts anything', async t => {
   const f = await fixture(t, { agent: 'codex' });
-  const home = f.ports.env.HOME, folder = join(home, '.pdd-codex', 'work4');
-  f.ports.env = { HOME: home, CODEX_HOME: '~/.pdd-codex/work4' };
+  const home = f.ports.env.HOME, folder = join(home, '.pdd-codex', 'profile-test');
+  f.ports.env = { HOME: home, CODEX_HOME: '~/.pdd-codex/profile-test' };
   const refused = await f.run();
   assert.equal(refused.exitCode, 1);
   assert.equal(refused.message, `CODEX_HOME is "${folder}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4eb5498687d769e4add98a9ed3ec31f0cfdb55d2b01ea0d54113846a8e65bcac).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7dfb210f0d469153f83657f8a5cbc40267acdb2caa176bad131e0538a3bf3c63).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -343,7 +343,7 @@ export function readPrompt(root, visible, path) {
   return { path, text, blocks, interface: value, prose: proseSha256(text) };
 }
 
-// Drafts may run (Serhan, Oct 27); until the server takes them, its refusal gets this plain text.
+// Drafts may run; until the server takes them, its refusal gets this plain text.
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
 const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd check --fill-hash.`;
 export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
@@ -862,7 +862,7 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
 }
 
-// Why a repo has no tests (Serhan's real test, 0.1.6): foreign JSON under tests/, *.prompt names, prompts with no interface.
+// Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.
 export function whyNoTests(root, visible) {
   const files = [...visible].sort(), why = [];
   for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
