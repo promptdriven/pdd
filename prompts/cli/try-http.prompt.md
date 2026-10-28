@@ -65,3 +65,8 @@ new upstream work and interrupts outstanding reads. Print the actual Screen URL 
 - [Preflight](runtime-preflight.prompt.md): required generation/runtime input-schema checking.
 - Engine prompt_runtime/program_door_routes.prompt.md: required route-title contract, supplied as the same method
   and path fields in the owner model; no raw engine import or private credentials are needed in this client.
+
+## Usage for named HTTP routes
+Use authenticated owner model calls.cap/remaining at startup and print the short session usage line on stderr. For each named API response, attach the runtime-output Try usage headers without changing program status, headers outside the reserved usage names, or body. Confirmed calls use normalized call receipt usage/remaining and the known session cap. Wrapper errors retain known receipt usage or unknown when unconfirmed. Local pre-dispatch errors use zero calls and the last known remaining, labeled x-pdd-usage-source:last-known; confirmed receipt headers use runtime. Reserved x-pdd-* usage headers override any program-supplied lookalike. Never make a model call or repeat dispatch for accounting. Screen proxy behavior stays with its existing contract.
+
+Usage normalization/formatting/header names are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.

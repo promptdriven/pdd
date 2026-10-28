@@ -50,3 +50,6 @@ One object: `{batch, repo, exit_code, summary_line, draft, rows: [{story, title,
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. The [runtime client](runtime-client.prompt.md) builds the rows and prints this output.
 
 Saved check JSON includes source_sha256 (full captured upload hash, null when no capture) so workflow evidence can verify it against the exact selected source.
+
+## Try usage
+Export tryUsage(answer, {cap}={}), tryUsageLine(usage, {command=false}={}) and tryUsageHeaders(usage). Normalize only nonnegative safe-integer counts; absent/malformed counts are unknown, never invented zero. Owner model calls.cap/remaining, session.max_calls/remaining_calls and call usage.calls/report.remaining_calls are the existing server fields. Derive cumulative used only from valid cap and remaining <=cap; this is the Try session allowance, not a machine/account/tester allowance. Format a short startup/session line and per-command line that distinguishes this command's calls, session used, remaining and cap, with unknowns explicit. HTTP header names are x-pdd-ai-calls, x-pdd-try-used, x-pdd-try-remaining and x-pdd-try-cap; values are decimal integers or unknown. These headers are owned metadata and cannot come from program result headers.

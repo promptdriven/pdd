@@ -264,7 +264,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
 `pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
-Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Never import pdd's source.
+Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
@@ -524,7 +524,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 
 ## 19. Use a Try from your terminal or curl
 
-`pdd try STORY --cli` prints a shim path and a PATH line. Copy the PATH line, then run the program normally.
+`pdd try STORY --cli` prints a shim path and a PATH line. Startup and every command show a Try AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
 `pdd try --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
@@ -599,3 +599,5 @@ provide stylesheet rules. External URLs are removed; retained URL attributes mus
 scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indirection such as `var()` are filtered.
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
+
+The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.

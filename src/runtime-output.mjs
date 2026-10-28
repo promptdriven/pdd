@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 045daa42a39ef7dcb364d946f1fb9e487c1e6921c6786b7ccc7275c05df2ad68).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 142719d396e2f927a670f8b1ed1f29a8d9d3a061d96903d5e83fb375c3b3fb05).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -214,4 +214,20 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
   const rest = [...warnings, ...rows.filter(row => row.state !== 'failed').flatMap(row => (row.warnings ?? []).map(text => `${text} (${row.test})`))];
   out.push(...rest);
   return `${out.join('\n')}\n`;
+}
+
+// Owner-provided Try accounting is separate from a program's stdout/body and from account-wide allowances.
+export function tryUsage(answer, { cap } = {}) {
+  const number = value => Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
+  const total = number(answer?.calls?.cap ?? answer?.result?.session?.max_calls ?? cap);
+  const remaining = number(answer?.calls?.remaining ?? answer?.result?.session?.remaining_calls ?? answer?.result?.report?.remaining_calls);
+  return { calls: number(answer?.usage?.calls), remaining, cap: total,
+    used: typeof total === 'number' && typeof remaining === 'number' && remaining <= total ? total - remaining : 'unknown' };
+}
+export function tryUsageLine(usage, { command = false } = {}) {
+  return `Try AI usage: ${command ? `${usage.calls} this command · ` : ''}${usage.used} used · ${usage.remaining} remaining (session cap ${usage.cap}).`;
+}
+export function tryUsageHeaders(usage) {
+  return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),
+    'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap) };
 }

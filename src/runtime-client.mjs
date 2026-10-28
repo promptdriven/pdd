@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b35cbf3b8f772c24b218b886d3b0412440535222267a311bd500ad568b752a4b).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 30f8cbca8726cc2c5a8889ad1b5b13693fb198f53fd3ea4c1c55e696221663ac).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, cleanText, exitCodeFor, projectAnswer, renderJson, renderText, summaryLine, tryUsage, validLink } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -366,15 +366,21 @@ function applyAnswer(row, answer, context) {
   row.seconds = !ENDED.has(row.state) ? null : row.sent_at && row.ended_at ? (row.ended_at - row.sent_at) / 1000 : row.server_seconds;
 }
 
-// Before a check of every story (cli 12b): about one AI call for each step plus the calls its prompt may make; the cap is the sum of max_calls.
+// Declared operations estimate possible work; conditional branches may use fewer calls. Caps stay authoritative.
 function costLine(rows, root, visible) {
-  const prompts = new Map(), callsOf = path => {
+  const prompts = new Map();
+  const cost = (path, seen = new Set()) => {
+    if (seen.has(path)) return 0;
     if (!prompts.has(path)) prompts.set(path, readPrompt(root, visible, path));
-    const calls = prompts.get(path)?.interface?.calls;
-    return (Array.isArray(calls) ? calls : []).reduce((sum, call) => sum + (Number.isInteger(call?.max_calls) ? call.max_calls : 0), 0);
+    const iface = prompts.get(path)?.interface;
+    if (!iface) return 1;
+    const next = new Set([...seen, path]);
+    const resources = (iface.resources ?? []).reduce((sum, resource) => sum + (Array.isArray(resource.operations) ? resource.operations.length : 0), 0);
+    const calls = (iface.calls ?? []).reduce((sum, call) => sum + (Number.isInteger(call?.max_calls) ? call.max_calls : 0) * cost(call?.target, next), 0);
+    return 1 + resources + calls;
   };
-  const about = rows.reduce((sum, row) => sum + row.steps.reduce((steps, step) => steps + 1 + callsOf(step?.entry_path), 0), 0);
   const most = rows.reduce((sum, row) => sum + row.max_calls, 0);
+  const about = Math.min(most, rows.reduce((sum, row) => sum + row.steps.reduce((steps, step) => steps + cost(step?.entry_path), 0), 0));
   return `Checking all ${rows.length} ${rows.length === 1 ? 'story' : 'stories'}: about ${about} AI call${about === 1 ? '' : 's'} (at most ${most}).`;
 }
 
@@ -1409,9 +1415,9 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       store.write(join(store.folder('tries'), `${id}.json`), answer);
       if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
         const why = answer.result?.refusals?.[0];
-        throw new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]));
+        throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
       }
-      return { id, result: answer.result.program_result, inputWorld: answer.result.report.input_world, world: answer.result.report.world };
+      return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report.input_world, world: answer.result.report.world };
     }
     if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
     await ports.sleep(ports.pollMs, ports.signal);
