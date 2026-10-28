@@ -376,7 +376,7 @@ In a terminal, `pdd check` waits until every check ends. When an agent runs it (
 
 After the table, `pdd check` prints one `Runtime check` line for each Story that you can paste into a PR, for example `Runtime check (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Runtime check:` line comes last.
 
-Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls.
+Run `pdd check --lint` (or `pdd check --lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It uses 0 AI calls and shows every problem at once, so you can fix them all before you spend AI calls. With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 

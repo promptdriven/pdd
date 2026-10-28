@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e2cbb434cce13447ad999d56a4ce91a61e8cd21e601ef064d074672bfe002770).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: cffd0e8781f8a16e77d025a5cd28172ea9916c40ae54035ecabca4b828879780).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -555,7 +555,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   if (context.json) {
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: answer?.state ?? lint.kind, summary_line: summary, problems,
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, problems,
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
     return exitCode;
   }

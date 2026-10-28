@@ -817,3 +817,45 @@ test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option 
     assert.equal((await check(clean, quiet, [], options)).code, 2, JSON.stringify(options));
   }
 });
+
+// Wrong: a global refused job label overrides passing selected rows in lint JSON (night issue 10).
+test('RUNTIME-LINT3: selected lint JSON reports passed when its admitted rows pass despite an overall refused job', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (request, f) => {
+    assert.equal(request.command, 'lint');
+    const answer = f.lint(request.request.requestId); answer.state = 'refused'; answer.result.exitCode = 4;
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order'], { '--lint': true, '--json': true });
+  assert.equal(result.code, 0); assert.equal(result.json.exit_code, 0);
+  assert.equal(result.json.lint_state, 'passed');
+  assert.deepEqual(result.json.rows.map(row => row.state), ['passed']); assert.deepEqual(result.json.problems, []);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});
+
+// Wrong: an overall passed job label conceals a selected prompt refusal in lint JSON.
+test('RUNTIME-LINT4: selected lint JSON reports refused when its selected prompt is refused despite an overall passed job', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (request, f) => ({ status: 200, json: f.lint(request.request.requestId,
+    [{ path: PLACE, state: 'refused', admission_state: 'refused', interface: null }],
+    [{ path: PLACE, code: 'graph-schema-type-list', section: 'Runtime interface', message: 'type list' }]) }));
+  const result = await check(setup, fake, ['place-order'], { '--lint': true, '--json': true });
+  assert.equal(result.code, 4); assert.equal(result.json.exit_code, 4);
+  assert.equal(result.json.lint_state, 'refused');
+  assert.deepEqual(result.json.rows.map(row => row.state), ['refused']);
+  assert.ok(result.json.problems.some(row => row.path === PLACE && row.code === 'graph-schema-type-list'));
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});
+
+// Wrong: correcting the selected summary hides unselected diagnostics, or lets them refuse selected rows.
+test('RUNTIME-LINT5: passing selected lint JSON preserves unrelated refusal diagnostics without changing the selected verdict', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (request, f) => {
+    const answer = f.lint(request.request.requestId, [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }],
+      [{ path: 'prompts/legacy.prompt.md', code: 'duplicate-interface', section: 'pdd-interface', message: 'duplicate-interface' }]);
+    answer.state = 'refused';
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order'], { '--lint': true, '--json': true });
+  assert.equal(result.code, 0); assert.equal(result.json.exit_code, 0); assert.equal(result.json.lint_state, 'passed');
+  assert.deepEqual(result.json.rows.map(row => row.state), ['passed']);
+  assert.deepEqual(result.json.problems.map(row => [row.path, row.code]), [['prompts/legacy.prompt.md', 'duplicate-interface']]);
+  assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
+});
