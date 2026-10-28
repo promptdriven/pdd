@@ -562,3 +562,20 @@ This is an alpha. These limits are known today:
 - what you expected, and what happened.
 
 Do not paste tokens, passwords or private code.
+
+## Use your program for real with pdd try
+
+Run `pdd try <story> --cli`. Copy the printed PATH line, then type your program's commands in your
+own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
+Each command runs the prompt on the runtime with your gh login; saved data stays in the same Try session.
+`--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
+the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd try:`
+and use reserved code 125. Calls can take a while because they run AI.
+
+Run `pdd try --save-last` to append the last command and its observed answer to the original test file.
+Review that recording before treating it as an expected answer. Stop the session with `pdd try --stop <story>`.
+
+For HTTP, give the prompt entry an input schema title such as `HTTP GET /api/books`, then run
+`pdd try <story> --serve 8080`. Call `curl 'http://127.0.0.1:8080/api/books?read=false'`. The prompt returns the
+HTTP status, headers and body. Unknown routes return 404. The listener stays on loopback; Ctrl-C closes it.
+See RUNBOOK.md §19 for query, body and response schemas. A Story with an app map can still use its hosted Try Screen.

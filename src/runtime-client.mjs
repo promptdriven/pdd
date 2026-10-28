@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e2cbb434cce13447ad999d56a4ce91a61e8cd21e601ef064d074672bfe002770).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 966e1611aebc274e521959387a18b6b0e518a9d00b87012461a36c1af7235165).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -32,11 +32,26 @@ const statOrNull = path => { try { return lstatSync(path); } catch { return null
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clock = ms => new Date(ms).toTimeString().slice(0, 8);
 
+
+// A virtual program named gh must not shadow the real sign-in tool on the printed PATH.
+function authExecutable(env) {
+  for (const folder of (env.PATH || process.env.PATH || '').split(':')) {
+    const path = join(folder, 'gh');
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isFile() && !stat.isSymbolicLink()) continue;
+      if (readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1')) continue;
+      return realpathSync(path);
+    } catch { /* try the next PATH directory */ }
+  }
+  return 'gh';
+}
+
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
-    gh: ports.gh ?? (args => spawnSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
+    env, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    gh: ports.gh ?? (args => spawnSync(ports.ghPath || authExecutable(env), args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })),
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
     interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
@@ -773,9 +788,16 @@ async function stopTry(context, record) {
 
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
-  const ports = withDefaults(givenPorts), context = { ports, interrupted: false };
+  const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
+    if (doorModes.length > 1 || (options['--shell'] && !options['--cli']) || (doorModes.length && options['--stop'])
+      || (options['--save-last'] && (words.length || Object.keys(options).length !== 1))) throw new Stop(2, 'Choose one of --cli, --serve, --save-last or --stop; --shell needs --cli.');
+    if (options['--save-last']) {
+      const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+      return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
+    }
     if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env);
@@ -785,7 +807,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
-    if (row.state === 'refused') { line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4; }
+    if (row.state === 'refused') {
+      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
+      line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
+    }
     const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
@@ -794,6 +819,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     release = interruptible(context);
     context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
     if (record) {
+      if ((options['--cli'] || options['--serve']) && record.login && record.login !== identity.login) throw new Stop(125, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+      if ((options['--cli'] || options['--serve']) && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, 'Run gh auth login');
       if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -818,10 +845,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     await checkLint(context, [row]);
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
-    if (row.state !== 'ready') return printTryProblem(context, row);
+    if (row.state !== 'ready') {
+      if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
+      return printTryProblem(context, row);
+    }
     const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, ...(appMap ? { app_map: appMap } : {}),
-      tab: options['--tab'] ?? (appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin } } });
+      tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
+    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);
     if (note) line(ports.stderr, `Sent ${capture.files.length} files ${note}.`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
@@ -859,6 +889,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
+    if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); }
@@ -900,6 +931,7 @@ const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kin
   'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
 const GENERIC_REFUSAL = /^The runtime refused this job\b/;
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
+  if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The runtime refused this Try.');
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
   const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
     reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
@@ -914,12 +946,17 @@ function trySetupRefused(context, test, appMap, refusals, reportUrl) {
 }
 
 function printTryProblem(context, row) {
+  if (context.doorMode) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || `The Try could not start (${row.state}).`);
   const exitCode = exitCodeFor([row]);
   context.ports.stdout.write(renderText({ rows: [row], exitCode, secrets: context.secrets, recovery: `pdd try ${row.story}` }));
   return exitCode;
 }
 
 async function showTry(context, test, link, options, tryId) {
+  if (options['--cli'] || options['--serve']) {
+    const doors = await import('./try-doors.mjs');
+    return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
+  }
   const { ports } = context, ends = `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
   if (!options['--no-open'] && await ports.openUrl(link)) line(ports.stdout, `Try link for "${test.title}" is open in your browser. ${ends}`);
   else {
@@ -995,7 +1032,9 @@ function addSavedCaseSafely(root, saved) {
   if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
     return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
   }
-  const target = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path))[0];
+  const candidates = found.tests.filter(item => item.storyPath === story && item.doc).sort((a, b) => a.path.localeCompare(b.path));
+  const target = saved?.original_path ? candidates.find(item => item.path === saved.original_path) : candidates[0];
+  if (saved?.original_path && !target) return 'not added: the original test file is missing or its Story changed.';
   if (!target) {
     // A story with no test gets tests/<story>.json (a slug, never a path from the server), as the runbook names test files.
     const folder = statOrNull(join(root, 'tests'));
@@ -1109,4 +1148,43 @@ async function watchSavedTests(context, tryId, wait, story) {
       }
     }
   } finally { answers?.close(); }
+}
+
+
+// The doors use the same gh identity, private store, one-shot dispatch and owner-scoped ledger as Try.
+export const saveDoorCase = (root, saved) => addSavedCase(root, saved);
+export async function runDoorCall(descriptor, input, givenPorts = {}) {
+  const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
+  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+  if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
+  if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved runtime address is invalid.');
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
+  if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
+  const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  store.posted(store.folder('tries'), id);
+  const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+  if (reply.status && ![200, 202].includes(reply.status)) {
+    throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
+  }
+  const end = ports.now() + 900_000;
+  let answer = null;
+  for (;;) {
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+    if (answer && (answer.id !== id || answer.command !== 'call' || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.');
+    if (answer && ENDED.has(answer.state)) {
+      store.write(join(store.folder('tries'), `${id}.json`), answer);
+      if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
+        const why = answer.result?.refusals?.[0];
+        throw new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]));
+      }
+      return { id, result: answer.result.program_result, inputWorld: answer.result.report.input_world, world: answer.result.report.world };
+    }
+    if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
+    await ports.sleep(ports.pollMs, ports.signal);
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+    const read = await runtime.get(id);
+    if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
+    answer = [200, 202].includes(read.status) ? read.json : null;
+  }
 }

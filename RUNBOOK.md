@@ -142,6 +142,7 @@ In the test, `initial_world` is the saved data before step 1. `simulation` conne
 
 ## 6. Command-line programs (`cli`)
 
+Name the program in the prompt’s first heading, for example `# tipjar` (a single safe command name; `pdd`, `node`, `gh` and `git` are reserved).
 Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdout` and `stderr` come out. In full:
 ```json
 "input_schema": {"type": "object", "properties": {"argv": {"type": "array", "items": {"type": "string"}}}, "required": ["argv"], "additionalProperties": false},
@@ -150,6 +151,7 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 "conventions": [{"path": "/entries/0/input_schema", "convention": "cli"}, {"path": "/entries/0/result_schema", "convention": "cli"}]
 ```
 - Input: one item for each word, as a shell splits them. `todo add Walk the dog` is `{"argv": ["add", "Walk", "the", "dog"]}`.
+- An optional string `stdin` property receives piped UTF-8 text. Program exit code 125 is reserved for `pdd try` wrapper failures; use another code for program errors.
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
@@ -478,3 +480,30 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 - The app really replays a list of moves: one operation takes the list. Make all moves in that one AI call: link the
   rule prompt (`board.prompt.md`) under `## Dependencies` with no `calls` entry, so the AI reads its rules. A `calls`
   entry with `max_calls: 30` makes every step of the prompt need 61 calls (section 10).
+
+## 19. Use a Try from your terminal or curl
+
+`pdd try STORY --cli` prints a shim path and a PATH line. Copy the PATH line, then run the program normally.
+`--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
+`pdd try --save-last` appends the last command and its observed result to the original test file; review the
+recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
+**pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
+
+`pdd try STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
+route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
+one method and path. Supported methods are GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS. Use literal path
+segments or `:id` parameters declared as string input fields (directly or under a `params` object). Duplicate
+method/path patterns are refused. The existing `http.prompt` simulation binding still handles outbound resource
+calls inside a graph; a route title only selects an existing admitted entry.
+
+For a query entry, an optional string input `read` receives `?read=false` as `{"read":"false"}`. Declared
+boolean and number inputs receive typed values; repeated query fields require arrays. Request-shaped entries
+may instead declare `method`, `path`, `query`, `params`, `headers` and `body`. Only declared fields are forwarded.
+A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still must match the entry schema.
+
+Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
+result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
+come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
+route returns 404 without an AI call. Runtime or wrapper trouble returns 502 with a plain **pdd try:** reason.
+The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
+local server while the Try keeps its data. When an app map exists, use the hosted Try Screen to click it.

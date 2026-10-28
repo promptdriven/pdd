@@ -76,3 +76,30 @@ Request IDs appear only in state files and in `--json`.
 ## Dependencies
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [CLI](pdd-cli.prompt.md) calls `runCheck` and `runTry`.
+
+## Terminal and HTTP doors
+
+`runTry` also accepts `--cli`, `--shell` (only with --cli), `--serve [PORT]` (default 8080), and `--save-last`.
+These modes share the ordinary Story selection, lint, upload, owner authentication and saved Try.
+Reject incompatible modes before any network effect. A door reuses an open Try only at its recorded origin and
+with its recorded GitHub login. --cli selects terminal on new sessions and delegates local launch behavior to
+[Try doors](try-doors.prompt.md); --serve delegates to [HTTP doors](try-http.prompt.md). Show no browser link and do not open the browser for these modes.
+
+Export `runDoorCall(descriptor, input, ports={})`: descriptor identifies root, session ID, original runtime origin,
+GitHub login, prompt and operation. Sign in again, require the original login, and send exactly one JSON owner call
+with a fresh request ID. Save the ID before sending. A lost POST is recovered only by GET of that same ID;
+never repeat a dispatch. Read queued/running calls for up to 15 minutes, returning the confirmed owner GET's result.program_result verbatim (the display report is sanitized). Read the owner GET even when POST is already complete; absent program_result is an incompatible-server error.
+Refusals, unknown outcomes, stopped sessions and invalid replies throw a plain error; redact credentials.
+No wrapper progress or report text may enter a program's output streams. Session budgets and saved worlds belong
+to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
+
+Export `saveDoorCase(root, saved)`, which applies the same safe append rules as a Try-page saved case, honoring
+its original `path` when it is a discovered test of that Story. This lets --save-last write into the selected
+original test even when another test covers the same Story. It must never create a replacement of that file.
+
+For CLI or HTTP setup every preflight, lint or runtime refusal is a wrapper failure on stderr prefixed `pdd try:`
+and exits 125. Argument combinations alone may exit 2. Session records capture hashes of uploaded prompt files
+and the login. Refuse using a different local prompt against an existing door; --new stops the old session first.
+Door calls can provide a captured absolute gh executable path so a project shim named gh does not shadow sign-in.
+A cancelled door call stops polling promptly and reports an unknown result if dispatch may have occurred. Never
+resend it. Forward cancellation to polling waits so closing a local HTTP server cannot hang for the call deadline.
