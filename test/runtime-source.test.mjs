@@ -352,3 +352,104 @@ test('SOURCE10: explicit missing links, bare file declarations and assets still 
     assert.match(ports.stderr.text, /not a Git-visible file/);
   }
 });
+
+test('SOURCE11: HTML rule and interface sections do not add reference filenames to the offline manifest', async t => {
+  for (const heading of ['Required rules: behavior', 'Required module rules', 'Required interface reference', 'Decision path: publication']) {
+    await t.test(heading, async t => {
+      const setup = harbor(t), { repo } = setup;
+      prompt(repo, PLACE, [
+        '# Entry', '## Dependencies',
+        '- [Policy][policy]', '- `data/menu.json`: required context.',
+        '', '<details>', `<summary><strong>${heading}</strong></summary>`,
+        '- `src/generated.mjs` exports the implementation.',
+        '- `test/native.test.mjs` exercises the installed composition.',
+        '[Rule navigation](../docs/not-a-dependency.md)', '</details>',
+        '![Diagram](views/diagram.ui.svg)',
+        '[policy]: ../docs/policy.md#rule',
+      ].join('\n'));
+      write(repo, 'docs/policy.md', '# Policy\n## Dependencies\n[Shared](shared.md)');
+      write(repo, 'docs/shared.md', '# Shared policy');
+      write(repo, 'data/menu.json', '{"price":900}');
+      write(repo, 'src/generated.mjs', 'Implementation must not become prompt context.');
+      write(repo, 'test/native.test.mjs', 'Native test must not become prompt context.');
+      write(repo, 'prompts/views/diagram.ui.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>');
+      const expected = [PLACE, ORDER, STORY, 'docs/policy.md', 'docs/shared.md', 'data/menu.json', 'prompts/views/diagram.ui.svg'].sort();
+      const { ports } = offline(setup);
+      assert.equal(await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports), 0, ports.stderr.text);
+      const captured = captureSource(repo, { tests: [ORDER] });
+      assert.deepEqual(names(captured.tar), expected);
+      assert.deepEqual(ports.stdout.text.trimEnd().split('\n').slice(0, -1).map(line => line.trim().split(/\s{2,}/)[0]), expected);
+      assert.equal(captured.bytes, expected.reduce((sum, path) => sum + readFileSync(join(repo, path)).length, 0));
+    });
+  }
+});
+
+test('SOURCE12: collapsible dependency context retains recursive declarations and selected-file safety', async t => {
+  for (const [path, edit, refusal] of [
+    ['data/menu.json', r => write(r, 'data/menu.json', '{"price":900}'), null],
+    ['data/missing.json', () => {}, /not a Git-visible file/],
+    ['data/auth.json', r => write(r, 'data/auth.json', '{}'), /name looks like a secret/],
+    ['data/link.json', r => { write(r, 'data/real.json', '{}'); symlinkSync('real.json', join(r, 'data/link.json')); }, /symbolic link/],
+  ]) {
+    await t.test(path, async t => {
+      const setup = harbor(t), { repo } = setup;
+      prompt(repo, PLACE, [
+        '# Entry', '## Dependencies', '<details><summary>Required generation context</summary>',
+        '- [Policy](../docs/policy.md)', '<details><summary>Additional dependency data</summary>',
+        `- \`${path}\`: required runtime data.`, '</details>', '</details>',
+        '<details open><summary><strong>required interface reference: exports</strong></summary>',
+        '- `src/not-a-dependency.mjs` exports the module.', '</details>',
+      ].join('\n'));
+      write(repo, 'docs/policy.md', '# Policy\n## Dependencies\n- [Shared][shared]\n\n[shared]: shared.md');
+      write(repo, 'docs/shared.md', '# Shared policy');
+      edit(repo);
+      const { ports } = offline(setup);
+      const code = await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports);
+      if (refusal) {
+        assert.equal(code, 4); assert.match(ports.stderr.text, refusal);
+        assert.ok(ports.stderr.text.includes(PLACE) && ports.stderr.text.includes(path), ports.stderr.text);
+      } else {
+        assert.equal(code, 0, ports.stderr.text);
+        assert.deepEqual(names(captureSource(repo, { tests: [ORDER] }).tar), [PLACE, ORDER, STORY, 'docs/policy.md', 'docs/shared.md', path].sort());
+      }
+    });
+  }
+});
+
+test('SOURCE13: literal HTML section examples cannot hide required dependency files or their refusals', async t => {
+  const marker = '<details><summary>Required rules</summary>\n</details>';
+  for (const [label, example] of [
+    ['backtick fence', '```html\n' + marker + '\n```'],
+    ['tilde fence', '~~~html\n' + marker + '\n~~~'],
+    ['shorter internal fence', '````html\n```\n' + marker + '\n````'],
+    ['HTML comment', '<!--\n' + marker + '\n-->'],
+  ]) {
+    for (const mode of ['regular', 'missing', 'symlink']) {
+      await t.test(`${label}, ${mode}`, async t => {
+        const setup = harbor(t), { repo } = setup;
+        prompt(repo, PLACE, [
+          '# Entry', '## Dependencies', example,
+          '- [Required policy](../docs/policy.md)',
+          'The comment opener `<!--` is a literal example.',
+          '<details><summary>Required interface reference</summary>',
+          '[Not a dependency](../docs/not-a-dependency.md)', '</details>',
+        ].join('\n'));
+        if (mode === 'regular') write(repo, 'docs/policy.md', '# Required policy');
+        if (mode === 'symlink') {
+          write(repo, 'docs/real.md', '# Real policy');
+          symlinkSync('real.md', join(repo, 'docs/policy.md'));
+        }
+        const { ports } = offline(setup);
+        const code = await runCheck({ cwd: repo, words: ['place-order'], options: { '--files': true } }, ports);
+        if (mode === 'regular') {
+          assert.equal(code, 0, ports.stderr.text);
+          assert.deepEqual(names(captureSource(repo, { tests: [ORDER] }).tar), [PLACE, ORDER, STORY, 'docs/policy.md'].sort());
+        } else {
+          assert.equal(code, 4, ports.stdout.text);
+          assert.match(ports.stderr.text, mode === 'missing' ? /not a Git-visible file/ : /symbolic link/);
+          assert.ok(ports.stderr.text.includes('docs/policy.md'), ports.stderr.text);
+        }
+      });
+    }
+  }
+});

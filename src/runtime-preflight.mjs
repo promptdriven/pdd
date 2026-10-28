@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2ad8266c2aecdc504c0eceb108f5343c1a25ddf87c0b6c563902b658e96decd4).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 17e5cdbca2209004792c5370fa6ff46178322471f64bd3e4d558fbe76ee0d944).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -651,6 +651,37 @@ function markdownLinks(text, definitions, imagesOnly = false) {
   return paths;
 }
 
+// Only section detection uses this mask; capture and dependency/image parsing keep original bytes.
+function markdownSectionText(text) {
+  const tokens = /^ {0,3}(`{3,}|~{3,})[^\r\n]*|`+|<!--/gm, parts = [];
+  let copied = 0;
+  for (let match; (match = tokens.exec(text));) {
+    let end;
+    if (match[1]) {
+      const fence = match[1];
+      // A backtick fence's info string cannot itself contain a backtick.
+      if (fence[0] === '`' && match[0].trimStart().slice(fence.length).includes('`')) continue;
+      const closing = new RegExp('^ {0,3}' + fence[0] + '{' + fence.length + ',}[ \\t]*\\r?$', 'gm');
+      closing.lastIndex = tokens.lastIndex;
+      const close = closing.exec(text);
+      end = close ? close.index + close[0].length : text.length;
+    } else if (match[0] === '<!--') {
+      const close = text.indexOf('-->', tokens.lastIndex);
+      end = close < 0 ? text.length : close + 3;
+    } else {
+      const closing = new RegExp('(?<!`)`{' + match[0].length + '}(?!`)', 'g');
+      closing.lastIndex = tokens.lastIndex;
+      const close = closing.exec(text);
+      if (!close) continue;
+      end = close.index + close[0].length;
+    }
+    parts.push(text.slice(copied, match.index), text.slice(match.index, end).replace(/[^\r\n]/g, ' '));
+    copied = end;
+    tokens.lastIndex = end;
+  }
+  return parts.join('') + text.slice(copied);
+}
+
 function markdownContext(text) {
   const prose = text.replace(INTERFACE, ''), definitions = new Map();
   for (const match of prose.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
@@ -660,7 +691,16 @@ function markdownContext(text) {
   const heading = /^##[ \t]+Dependencies[ \t]*\r?$/im.exec(prose);
   const rest = heading ? prose.slice(heading.index + heading[0].length) : '';
   const end = /^#{1,2}[ \t]+/m.exec(rest);
-  const dependencies = end ? rest.slice(0, end.index) : rest;
+  let dependencies = end ? rest.slice(0, end.index) : rest;
+  // Legacy prompts use collapsible rule/reference sections instead of Markdown headings.
+  // Keep collapsible dependency context; only an explicitly named new section ends it.
+  for (const match of markdownSectionText(dependencies).matchAll(/^ {0,3}<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/gim)) {
+    const title = match[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    if (/^(?:(?:required )?(?:module )?rules|(?:required )?interface reference|decision path)(?:\s*:|$)/i.test(title)) {
+      dependencies = dependencies.slice(0, match.index);
+      break;
+    }
+  }
   const paths = [...markdownLinks(dependencies, definitions), ...markdownLinks(prose, definitions, true)];
   // A bare filename is shorthand for a dependency item, not every code span in its description.
   for (const match of dependencies.matchAll(/^ {0,3}(?:[-+*]|[0-9]+[.)])[ \t]+`([^`\n]+)`(?=[ \t:]|$)/gm)) {
