@@ -39,7 +39,7 @@ You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and 
 
 | Command | What it does |
 |---|---|
-| `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files, then print one table with a report link for each test, one `Runtime check` line for each Story and the overall line |
+| `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files and wait until every check ends, with one progress line every 30 s (`--timeout MIN` sets a limit). Then print one table with a report link for each test, one `Runtime check` line for each Story and the overall line |
 | `pdd check --read [BATCH] [--json]` | Show saved check results again. Sends no check |
 | `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files` | List the files a check would send. No network |

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 0cd92f5d563f9e07bc329a0742e3f71071401ff375a2a3e6772ca34cecd0aab9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b1e2c24778ba5ac29569c28bba9c9fe582b8443534b1828cccc59b6c51b2813a).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -16,10 +16,12 @@ const JOB_STATES = new Set(['queued', 'running', 'passed', 'failed', 'refused', 
 const ENDED = new Set(['passed', 'failed', 'refused', 'unknown', 'not_run']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
-// pdd's local rules copy this engine build (spec OPEN 9: warn when the runtime runs another one).
-const ENGINE_SHA = '7b03d3ea8cc047ed0c58905075321e59e62b02f1';
-const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8;
-// Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for at least 5 min.
+// pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
+const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+// The same engine: the full sha or a prefix of it with at least 7 hex digits.
+const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
+const POST_MS = 90_000, GET_MS = 30_000, LINT_MS = 120_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
+// Under load a POST can time out and its job appear 3 to 4 min later: read a lost answer's ID for 5 min.
 const LOST_READ_MS = 300_000;
 
 class Stop extends Error { constructor(exitCode, message) { super(message); this.exitCode = exitCode; } }
@@ -360,7 +362,8 @@ async function sendCheck(context, row) {
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
-  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true, read_until: Math.max(context.deadline, context.ports.now() + LOST_READ_MS) });
+  else Object.assign(row, { state: 'unknown', why: verdict.why, lost: true,
+    read_until: Math.max(Number.isFinite(context.deadline) ? context.deadline : 0, context.ports.now() + LOST_READ_MS) });
 }
 
 // GET one open row once.
@@ -374,6 +377,15 @@ async function readRow(context, row) {
 }
 
 const isOpen = row => OPEN_STATES.has(row.state) || (row.state === 'unknown' && row.lost);
+
+// One line every 30 s while checks run (Serhan: no timeouts, so pdd shows that it still waits).
+function progressLine(rows, ms) {
+  const stories = new Map();
+  for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && ENDED.has(row.state) && !isOpen(row));
+  const done = [...stories.values()].filter(Boolean).length, calls = rows.reduce((sum, row) => sum + (typeof row.calls === 'number' ? row.calls : 0), 0);
+  return `Still running: ${done} of ${stories.size} ${stories.size === 1 ? 'Story' : 'Stories'} done · ${calls} AI call${calls === 1 ? '' : 's'} so far · `
+    + `${ms < 60_000 ? `${Math.floor(ms / 1000)} s` : `${Math.floor(ms / 60_000)} min`}`;
+}
 
 async function runLint(context) {
   const lintEnd = Math.min(context.deadline, context.startedAt + LINT_MS);
@@ -431,12 +443,14 @@ async function checkBatch(context, rows) {
   await Promise.all(toSend.map(row => sendCheck(context, row)));
   saveBatch(context);
   if (context.blocked && !toSend.some(isOpen)) throw new Stop(5, context.blocked);
-  let waitingShown = -1;
-  // Read open rows until the timeout; a row whose POST answer was lost is read for at least 5 min.
-  const readable = row => isOpen(row) && (ports.now() < context.deadline || ports.now() < (row.read_until ?? 0));
+  let waitingShown = -1, shownAt = ports.now();
+  const sentAt = shownAt;
+  // Read open rows until they end (or --timeout); a row whose POST answer was lost is read for 5 min, or until --timeout if later.
+  const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? 0 : Math.max(context.deadline, row.read_until ?? 0));
   while (!context.interrupted && !context.readStop) {
     const waiting = ports.now() < context.deadline ? toSend.filter(row => row.state === 'waiting') : [], open = toSend.filter(readable);
     if (!waiting.length && !open.length) break;
+    if (ports.now() - shownAt >= PROGRESS_MS) { shownAt = ports.now(); line(ports.stderr, progressLine(rows, shownAt - sentAt)); }
     if (waiting.length !== waitingShown) {
       if (waiting.length) line(ports.stderr, `Server busy: ${open.length} checks running, ${waiting.length} waiting for a free slot.`);
       waitingShown = waiting.length;
@@ -451,9 +465,12 @@ async function checkBatch(context, rows) {
     else for (const row of toSend.filter(row => row.state === 'waiting')) Object.assign(row, { state: 'not_run', note: context.stopped });
     saveBatch(context);
   }
+  const stoppedEarly = context.interrupted || !!context.readStop;
   for (const row of toSend) {
-    if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full', message: 'The runtime stayed busy until the timeout.' } });
-    if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run before the timeout.';
+    if (row.state === 'waiting') Object.assign(row, { state: 'not_run', note: { code: 'server-full',
+      message: stoppedEarly ? 'pdd stopped while the runtime was busy.' : 'The runtime stayed busy until the timeout.' } });
+    if (row.state === 'unknown' && row.lost) row.why ??= stoppedEarly ? 'pdd stopped before it could read this run.'
+      : Number.isFinite(context.deadline) ? 'pdd could not read this run before the timeout.' : 'pdd could not read this run for 5 min after its answer was lost.';
   }
 }
 
@@ -469,8 +486,8 @@ function firstToday(context, sha) {
 
 function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown });
-  const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && sha !== ENGINE_SHA))].filter(sha => firstToday(context, sha));
-  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 8)}. The engine stays the judge.`)];
+  const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
+  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, rows, exitCode, summaryLine: summaryLine(rows),
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
@@ -567,7 +584,7 @@ async function runRead(context, batchWord) {
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? 10,
+  Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [] }));
@@ -638,7 +655,8 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  context.timeoutMin = Number(options['--timeout'] ?? 10);
+  // No time limit unless --timeout MIN (Serhan: no timeouts).
+  context.timeoutMin = options['--timeout'] === undefined ? null : Number(options['--timeout']);
   const selected = select(found, normalized, root);
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
@@ -651,7 +669,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
-  Object.assign(context, { capture, identity, batch, startedAt, deadline: startedAt + context.timeoutMin * 60_000, rows,
+  Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
   saveBatch(context);

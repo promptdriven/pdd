@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9f8841331048280758e903eb148fdfa86ef8df0f200cb5de40c5d9cd5c2c4541).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 86bbebab2813e47dbc7cea105823d5d4bb0a7489b47cd9ae673322158335c7ec).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -40,7 +40,7 @@ const routes = [
     options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 100 }, { name: '--read', kind: 'flag' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
-    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends your Git files, then prints one table with report links.'),
+    forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends your Git files, waits until every check ends (a progress line every 30 s; --timeout MIN sets a limit), then prints one table with report links.'),
       form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files', 'List the files a check would send; no network.'),

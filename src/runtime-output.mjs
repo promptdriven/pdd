@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 31950901b783bbac888f3427cd803ad039e81f78abfd01bf33ca9ba9cebeecd5).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 9485a2edb26b89fa4d360e070ec790b3354b32147b35767c7b168b03f6d6e551).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -140,7 +140,7 @@ function localRefusals(rows) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = 10, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
   out.push(...table(rows), ...storyLines(rows).map(([, text]) => text), summaryLine(rows));
@@ -157,7 +157,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
     out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
-    out.push(`STILL RUNNING${reading ? '' : interrupted ? ' when pdd stopped reading' : ` after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
+    out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${timeoutMin} min`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider)) {
     out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));

@@ -346,6 +346,8 @@ pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```
 
+`pdd check` waits until every check ends. It has no time limit. While checks run, it prints one line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Press Ctrl-C to stop waiting: the checks keep running on the server, and `pdd check --read` shows their results. To set a limit, use `--timeout MIN` (1 to 120 minutes).
+
 After the table, `pdd check` prints one `Runtime check:` line that you can paste into a PR, for example `Runtime check: ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`.
 
 With many Stories, `pdd check` prints one `Runtime check` line for each Story, then the overall line.
@@ -360,7 +362,7 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
 | 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
 | 5 | not run | Sign-in, a busy server, no AI room, a login that is not invited, or an old pdd. Read the one line that pdd prints. |
-| 3 | unknown | Run `pdd check --read` later. Never send it again. |
+| 3 | unknown or still running | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
 
 Your agent reads [RUNBOOK.md](../RUNBOOK.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
