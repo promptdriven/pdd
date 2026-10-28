@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ad376b045908e28aa663e8088b1b537cc439dac4b30e4ab93475fb2a08979636).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c6d8bf6f2815744561a039d61f9acb4b3b6d5372a266b5d5d85ad5de2ba3e548).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -13,6 +13,7 @@ import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mj
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { interfaceBlocks } from './runtime-preflight.mjs';
+import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -30,6 +31,18 @@ const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
 const ended = run => ['cancelled', 'completed'].includes(run.state);
 const isAgentSession = env => Boolean(env.PDD_AGENT_SESSION || env.CLAUDECODE || env.CODEX_THREAD_ID);
+// About max characters at a word end, never inside a URL: a URL that crosses the end stays whole (0.1.6 tester: status
+// showed "report https://ru").
+function clip(text, max) {
+  if (text.length <= max) return text;
+  const url = [...text.matchAll(/https?:\/\/\S+/g)].find(match => match.index < max && match.index + match[0].length > max);
+  const end = url ? url.index + url[0].length : /\s/.test(text[max]) ? max : text.slice(0, max).replace(/\s+\S*$/, '').length;
+  // A space keeps the "…" out of a link that ends the cut text.
+  return end >= text.length ? text : `${text.slice(0, end).trimEnd()}${url ? ' ' : ''}…`;
+}
+// The chat's open question. One asked before the current gate opened was answered when that gate opened (0.1.6 tester:
+// status showed "Do you approve … so PDD can open PR 1?" after PR 1 was open).
+const openQuestion = run => run.question && !(run.gate && run.question.at < run.gate.at) ? run.question : null;
 const listed = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0];
 // A plain approval sent with changes (0.1.6 tester: "I approve. The Story and the prompt look good now." reached the chat as
 // a change request, and the chat could not approve with it). An approval word with a change word is a change request.
@@ -116,7 +129,7 @@ async function draftPrompts(run, p, branch, base) {
 }
 const draftLine = drafts => `Draft prompts: ${drafts.join(', ')}. Approve them before you merge.`;
 // How the person approves PR 1's draft prompts before the code PR (0.1.6: pdd asked "Make the code PR now?" and then refused).
-// pdd approve works in the run worktree; approve then carries the approval to PR 1 (carryApprovals).
+// pdd approve works in the run worktree; approve then carries the approval to PR 1 (syncPr1).
 const approveFirst = (run, drafts) => `Approve the prompt${drafts.length > 1 ? 's' : ''} first: cd ${shell(run.root)} && ${drafts.map(path => `pdd approve ${shell(path)}`).join(' && ')}. Then run pdd workflow approve ${run.number} to start the code PR.`;
 
 // What PR 1 holds, read from the worktree before pdd opens it (files the chat did not commit count, because pdd commits
@@ -154,7 +167,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return 'cancelled';
-  if (run.question && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
+  if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
   if (run.state === 'completed' && run.gate?.kind === 'ask-code') return `done at PR 1 (merged: ${pr1?.url}). ${codeLater(run)}`;
@@ -287,7 +300,7 @@ function storyCount(run) {
   return { pass: counted.filter(line => line.pass).length, total: counted.length, failing: counted.filter(line => !line.pass && line.story).map(line => line.story) };
 }
 const storyText = count => `${count.pass} of ${count.total} Stories pass`;
-const shortLine = text => text.length <= 200 ? text : `${text.slice(0, 199).replace(/\s+\S*$/, '')}…`;
+const shortLine = text => clip(text, 199);
 // Report links in a check summary, each once: "Report (<story>): <url>" keeps the Story name; a bare link has none.
 function reportLinks(text, env) {
   const links = new Map();
@@ -295,6 +308,43 @@ function reportLinks(text, env) {
     if (hasReportLink(url, env) && !links.has(url)) links.set(url, story && story.trim().toUpperCase() !== 'DRAFT' ? story.trim() : null);
   }
   return [...links].map(([url, story]) => `Report${story ? ` (${story})` : ''}: ${url} (report links expire after 7 days)`);
+}
+
+// The verdict line (RUNBOOK §14) and the "Before ✗ … → after ✓ …" line (or "Before: no prompt → …") of a bug check summary,
+// one per line or joined with "; ". "; " inside the verdict sentence stays.
+const verdictLine = text => String(text).match(/\bVerdict:[^\n]*?(?=;?\s*(?:\n|\bBefore\s*[✗✓:]|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
+const changeLine = text => String(text).match(/\bBefore\s*[✗✓:][^\n]*?(?=;?\s*(?:\n|\bVerdict:|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
+
+// verify.md in the PR body (0.1.6 tester: 100 lines of shell came before the vector table). pdd drops a leading "# Verify"
+// (the PR has "## Verify"), nests the "## " headings one level down, and folds each code block of more than 15 lines that is
+// not inside a <details> block into a closed one. When verify.md has no <details> of its own, the text before the first
+// heading stays on top, then come the sections about vectors or results, the Formal check, other sections with a table,
+// and the rest.
+function verifyBody(text) {
+  const lines = String(text).split('\n');
+  while (lines.length && !lines[0].trim()) lines.shift();
+  if (/^#\s+verify\s*$/i.test(lines[0] ?? '')) lines.shift();
+  const own = /<details\b/i.test(text), sections = [{ heading: '', lines: [], table: false }];
+  let details = 0;
+  for (let at = 0; at < lines.length; at++) {
+    const line = lines[at], fence = line.trim().match(/^(`{3,}|~{3,})(\S*)/), section = sections.at(-1);
+    if (fence) {
+      let end = at + 1;
+      while (end < lines.length && !lines[end].trim().startsWith(fence[1])) end++;
+      const block = lines.slice(at, end + 1), inner = Math.min(end, lines.length) - at - 1;
+      const label = /^(?:sh|bash|zsh|shell|console)$/i.test(fence[2]) ? 'Commands' : 'Output';
+      section.lines.push(...(!details && inner > 15 ? [`<details><summary>${label} (${inner} lines)</summary>`, '', ...block, '', '</details>'] : block));
+      at = end; continue;
+    }
+    if (/<details\b/i.test(line)) details++;
+    if (/<\/details>/i.test(line)) details = Math.max(0, details - 1);
+    if (/^##\s/.test(line) && !details && !own) { sections.push({ heading: line, lines: [`#${line}`], table: false }); continue; }
+    section.lines.push(/^##\s/.test(line) ? `#${line}` : line);
+    if (/^\s*\|.*\|\s*$/.test(line)) section.table = true;
+  }
+  const rank = section => !section.heading ? -1 : /vector|result/i.test(section.heading) ? 0 : /formal/i.test(section.heading) ? 1 : section.table ? 2 : 3;
+  return sections.map((section, index) => ({ section, index })).sort((a, b) => rank(a.section) - rank(b.section) || a.index - b.index)
+    .map(({ section }) => section.lines.join('\n').trim()).filter(Boolean).join('\n\n');
 }
 
 function prBody(run, area, env, drafts = [], tests = true) {
@@ -319,13 +369,18 @@ function prBody(run, area, env, drafts = [], tests = true) {
   // The check step's result wins; else the latest step that reports a Runtime check. One line per Story (0.1.6), then the overall line.
   // Lines are read from the summary as stored, with its line breaks.
   const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
-  const reports = checked ? reportLinks(checked, env) : [];
-  const report = reports[0] ?? null;
+  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Runtime check
+  // lines, and their report links are not listed again.
+  const sources = [raw.check, ...Object.values(raw).reverse()].filter(Boolean);
+  const verdict = sources.map(text => verdictLine(text)).find(Boolean), change = sources.map(text => changeLine(text)).find(Boolean);
+  const shown = change?.match(/https?:\/\/[^\s;]+/g) ?? [];
+  const reports = checked ? reportLinks(checked, env).filter(row => !shown.some(url => row.includes(` ${url} `))) : [];
+  const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
-  const top = [...failing, ...runtime];
+  const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   return hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
-    ...(!report && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
-    ...(verify !== null ? ['', '## Verify', '', verify] : []), ''].join('\n'), run);
+    ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
+    ...(verify !== null ? ['', '## Verify', '', verifyBody(verify)] : []), ''].join('\n'), run);
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
@@ -467,22 +522,52 @@ function missingHome(run, env) {
   return dir && !isFolder(dir) ? `This run uses ${variable} "${dir}", but that folder does not exist. Make that folder, or cancel the run (pdd workflow cancel ${run.number}) and start it again with the right ${variable}.` : null;
 }
 
-// pdd approve writes the prompt in the run worktree and commits nothing. At the code gate of an open PR 1, pdd commits each
-// PR 1 draft prompt that is approved there now, and pushes it to PR 1, so PR 1 and the code PR hold the approved prompts.
-async function carryApprovals(run, p, drafts) {
-  const pr1 = prOf(run, askArea(run).name);
-  const approved = run.state === 'completed' || run.branch !== pr1?.branch ? [] : drafts.filter(path => {
+// At the code gate of an open PR 1, PR 1 must hold what the person approved (0.1.6 testers: pdd approve commits nothing,
+// and an approval committed by hand went to PR 2 while PR 1 still said "Draft prompts"). pdd commits each PR 1 draft prompt
+// that is approved in the worktree now, pushes the worktree's new commits to PR 1 (a fast-forward only; pdd never forces),
+// and updates the "Draft prompts" line of PR 1's description. When it cannot, it says the exact commands to run.
+async function syncPr1(run, p) {
+  const pr1 = prOf(run, askArea(run).name), before = await pr1Drafts(run, p);
+  if (run.state === 'completed' || !pr1 || run.branch !== pr1.branch) return { drafts: before, lines: [] };
+  if ((await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state !== 'open') return { drafts: before, lines: [] };
+  const approved = before.filter(path => {
     try { const found = statuses(readFileSync(join(run.root, path), 'utf8')); return found.includes('approved') && !found.includes('draft'); } catch { return false; }
   });
-  if (!approved.length) return { drafts, lines: [] };
-  try {
-    await git(p, run.root, 'commit', '-q', '-m', `Approve ${approved.join(', ')} (#${run.number})`, '--', ...approved);
-    await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root });
-  } catch {
-    return { failed: `pdd could not commit and push your approval of ${listed(approved)} to PR 1. Commit and push it in ${run.root}, then run pdd workflow approve ${run.number} again.` };
+  const go = `cd ${shell(run.root)} && `, again = `Then run pdd workflow approve ${run.number} again.`, what = approved.length ? `your approval of ${listed(approved)}` : null;
+  if (approved.length) {
+    try { await git(p, run.root, 'commit', '-q', '-m', `Approve ${approved.join(', ')}`, '--', ...approved); }
+    catch { return { failed: `pdd could not commit ${what}. Run: ${go}git commit -m ${shell(`Approve ${approved.join(', ')}`)} -- ${approved.map(shell).join(' ')}\n${again}` }; }
   }
-  return { drafts: drafts.filter(path => !approved.includes(path)), lines: [`pdd committed your approval of ${listed(approved)} and pushed it to PR 1.`] };
+  try { await p.execFile('git', ['fetch', 'origin', run.branch], { cwd: run.root }); } catch { /* The last fetched PR 1 head decides. */ }
+  const remote = `refs/remotes/origin/${run.branch}`;
+  let ahead = 0, behind = false;
+  try { ahead = Number(await git(p, run.root, 'rev-list', '--count', `${remote}..HEAD`)) || 0; behind = Number(await git(p, run.root, 'rev-list', '--count', `HEAD..${remote}`)) > 0; } catch { ahead = 0; }
+  if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
+  if (!ahead || behind) return { drafts: approved.length ? await pr1Drafts(run, p) : before, lines: [] };
+  try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
+  catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
+  const drafts = await pr1Drafts(run, p);
+  return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
 }
+
+// PR 1's description names its draft prompts; after a push to PR 1 that line must say the new truth. A failure only warns.
+async function draftDescription(run, pr1, drafts, p) {
+  try {
+    const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
+    const old = String(body).split('\n').find(line => line.startsWith('Draft prompts: '));
+    if (!old || old === (drafts.length ? draftLine(drafts) : null)) return [];
+    const file = join(run.runDir, `pr-${pr1.stage}-description.md`);
+    writeFileSync(file, drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, ''));
+    await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', file], { cwd: run.root });
+    return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
+  } catch (error) { return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
+}
+
+// A terminal in the run's own chat pane (Herdr session pdd) belongs to the chat; a person's other Herdr tab does not.
+const chatPane = (run, env) => env.HERDR_PANE_ID && /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1] === PDD_HERDR_SESSION
+  ? (run.chats ?? []).find(chat => chat.paneId === env.HERDR_PANE_ID) ?? null : null;
+// The evidence result in plain words (approval-evidence names "native sessions").
+const noReply = (evidence, who) => evidence?.code === 'user_message_missing' ? `there is no reply from ${who} after the gate question` : 'pdd could not read this chat';
 
 // Claude Code's ! prefix runs a person's command with CLAUDECODE=1 (0.1.6 tester), so pdd names what it sees.
 const agentMarker = env => env.CLAUDECODE ? `CLAUDECODE=${env.CLAUDECODE}` : env.CODEX_THREAD_ID ? 'CODEX_THREAD_ID is set' : 'stdin is not a terminal';
@@ -504,11 +589,11 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
-  const agent = isAgentSession(p.env), viaChat = agent || !p.isTTY;
+  const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let carried = [];
   if (askCode && run.gate?.kind === 'ask-code') {
     // The code is built only from approved prompts; pdd never approves them itself.
-    const carry = await carryApprovals(run, p, await pr1Drafts(run, p));
+    const carry = await syncPr1(run, p);
     if (carry.failed) return fail(carry.failed);
     if (carry.drafts.length) return fail(approveFirst(run, carry.drafts));
     carried = carry.lines;
@@ -528,12 +613,13 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     const evidence = await read({ stage: { agent: run.agent, root: run.root, startedAt: chat.startedAt, endedAt: p.now(), ...(chat.session?.id ? { sessionId: chat.session.id } : {}) },
       gateAskedAt: run.gate.at, decision: 'approve', ignorePrefixes: [CHANGE_PREFIX, ANSWER_PREFIX] },
     { env: p.env, now: p.now, ...(configDir ? (run.agent === 'claude' ? { claudeConfigDir: configDir } : { codexHome: configDir }) : {}) });
-    const why = oneLine(evidence?.message) || 'no chat evidence';
-    // The chat's own agent gets the words meant for it; a person in an agent-like terminal learns how to approve.
-    if (evidence?.ok !== true && p.env.PDD_AGENT_SESSION) return fail(`Only the person can approve. Ask them in this chat and wait for their answer, then run this again. Or the person runs "pdd workflow approve ${run.number}" in a terminal. (${why})`);
-    if (evidence?.ok !== true) return fail([`pdd sees an agent environment (${agentMarker(p.env)}), so it cannot ask you y/N here.`,
-      `No approval was found in the ${area.name} chat: ${why}`,
-      `To approve, run pdd workflow approve ${run.number} in a normal terminal. Or answer the gate question in the ${area.name} chat: pdd workflow open ${run.number}`].join('\n'));
+    // The chat's own agent gets plain words to tell the person (0.1.6 tester: the chat said "PDD rejected recording your
+    // earlier "Go on""); a person in an agent-like terminal or in the chat's pane learns how to approve.
+    if (evidence?.ok !== true && p.env.PDD_AGENT_SESSION) return fail([`Only the person can approve, with a reply after your gate question. pdd found none: ${noReply(evidence, 'the person')}.`,
+      `Do not explain this check to the person. Tell them plainly: "I still need your approval for this step. Reply "I approve" here, or run pdd workflow approve ${run.number} in your terminal." Then stop and wait.`].join('\n'));
+    if (evidence?.ok !== true) return fail([`pdd sees ${pane ? `the ${area.name} chat's own Herdr pane (${pane.paneId})` : `an agent environment (${agentMarker(p.env)})`}, so it cannot ask you y/N here.`,
+      `No approval was found in the ${area.name} chat: ${noReply(evidence, 'you')}.`,
+      `To approve, run pdd workflow approve ${run.number} in ${pane ? 'another terminal tab' : 'a normal terminal'}. Or answer the gate question in the ${area.name} chat: pdd workflow open ${run.number}`].join('\n'));
     if (askCode && !beforePr && !YES_WORDS.test(evidence.userMessage ?? '')) return fail(`Not sure you approved. Run \`pdd workflow approve ${run.number}\` in your terminal.`);
     record = { via: 'chat', text: evidence.userMessage, sessionId: evidence.sessionId, at: evidence.userMessageAt };
     if (!chat.session?.id && evidence.sessionId) chat.session = { agent: run.agent, id: evidence.sessionId };
@@ -550,7 +636,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     const at = p.now(), url = prOf(run, area.name).url;
     run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at, ...(record.text !== undefined ? { text: record.text } : {}) });
     run.approvalRecord = { kind: record.via, area: area.name, at, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
-    run.state = 'waiting'; run.gate = askCode ? { area: area.name, at, kind: 'ask-code' } : null; writeRun(run, p);
+    run.state = 'waiting'; run.gate = askCode ? { area: area.name, at, kind: 'ask-code' } : null; run.question = null; writeRun(run, p);
     const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
@@ -574,7 +660,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   const now = p.now();
   run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at: now, ...(record.text !== undefined ? { text: record.text } : {}) });
   run.approvalRecord = { kind: record.via, area: area.name, at: now, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
-  run.gate = null; run.area++; run.state = 'running'; run.doneAt = null; writeRun(run, p);
+  run.gate = null; run.question = null; run.area++; run.state = 'running'; run.doneAt = null; writeRun(run, p);
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
@@ -606,7 +692,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
   const run = found.run, area = run.areas[run.area], chat = currentChat(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   // After pdd workflow ask the text is the person's answer; otherwise it is a change request.
-  const request = oneLine(text), answer = Boolean(run.question);
+  const request = oneLine(text), answer = Boolean(openQuestion(run));
   if (request && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. To approve, run: pdd workflow approve ${run.number}\nNothing was sent to the chat.` };
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
   if (!request) return fail('Write the change request after the issue number.');
@@ -618,7 +704,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
   const now = p.now();
   run.changes.push({ stage: area.name, round: run.changes.filter(change => change.stage === area.name).length + 1, text: request, at: now, ...(answer ? { answer: true } : {}) });
   if (answer) { run.question = null; if (!run.gate) run.state = 'running'; }
-  else if (run.gate) run.gate.at = now;
+  else if (run.gate) { run.gate.at = now; run.question = null; }
   writeRun(run, p);
   return done(answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
     : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
@@ -672,7 +758,7 @@ function detail(run, chat = null, facts = {}) {
   const drafts = facts.drafts ?? [];
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
-  const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${oneLine(run.done[step].summary).slice(0, 120)}")` : ''}`);
+  const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
   const next = run.gate?.kind === 'ask-code' && drafts.length ? `cd ${shell(run.root)} && ${drafts.map(path => `pdd approve ${shell(path)}`).join(' && ')}, then pdd workflow approve ${run.number} (make the code PR)`
     : run.gate?.kind === 'ask-code' ? `pdd workflow approve ${run.number}  (make the code PR)   or stop here and merge PR 1`
     : run.gate ? `pdd workflow approve ${run.number}   or   pdd workflow changes ${run.number} "what to change"`
@@ -691,13 +777,13 @@ function detail(run, chat = null, facts = {}) {
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
-  const writing = Boolean(run.gate) && !run.question && chat === 'working';
+  const question = openQuestion(run), writing = Boolean(run.gate) && !question && chat === 'working';
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : writing ? 'working'
-    : run.gate || run.question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
+    : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? 'cancelled'
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
-    : run.question ? `waiting for you: ${run.question.text.split('\n')[0]}`
+    : question ? `waiting for you: ${question.text.split('\n')[0]}`
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
