@@ -42,3 +42,16 @@ test('scoped pinned model seed retains remaining source rules and normalizes bin
 test('reused raw IDs for different criterion texts stay incomplete with no false pass',()=>{const a=structuredClone(scenario),b=structuredClone(scenario);b.criteria[0].text='A different rule.';const guide=setup(['run_events'],{ports:{readAgentScenarios:()=>[{path:'a.json',doc:a},{path:'b.json',doc:b}],readAgentStoryCriteria:()=>storyRows([scenario.criteria[0].text,'A different rule.'])}});const got=guide.prepare(runMessage('ambiguous-identity'));assert.equal(got.fast,null);assert.ok(got.context.progress.items.every(x=>x.state!=='pass'));assert.equal(got.context.coverage.fullyTried,false);assert.match(got.context.coverage.line,/incomplete/);});
 test('Story source identity refreshes local-copy state even when scenario and card hashes stay fixed',()=>{let source=[scenario.criteria[0].text];const guide=setup([],{ports:{readAgentStoryCriteria:()=>storyRows(source)}});assert.equal(guide.prepare(message()).context.changed,false);source=[scenario.criteria[0].text,'New authored rule.'];const context=guide.prepare(message()).context;assert.equal(context.changed,true);assert.deepEqual(context.criteria.map(c=>c.id),['AC1','ac-2']);assert.equal(context.progress.items.find(c=>c.id==='ac-2').state,'todo');});
 test('duplicate exact Story texts never yield a guessed pass or official mark',()=>{const guide=setup(['run_events'],{ports:{readAgentStoryCriteria:()=>storyRows([scenario.criteria[0].text,scenario.criteria[0].text]),buildProjectCard:()=>({text:'Next step: Finish the Try.',sourceFingerprint:'fixed',fingerprint:'fixed',productRules:[],latestCheck:{rows:[{story:'tool',criterion_results:[{criterion_id:'ac-1',status:'passed'}]}]}})}});const got=guide.prepare(runMessage('duplicate-source'));assert.equal(got.fast,null);assert.ok(got.context.progress.items.every(item=>item.state!=='pass'&&!item.check_passed));assert.equal(got.context.coverage.fullyTried,false);});
+test('run metadata is negotiated, manual-only and bound to final valid applied fill',()=>{
+ const reply={say:'Preparing the requested action.',fill:{entry,input:{argv:['--help']}},apply:true,run:true};
+ for(const features of [[],['apply'],['run'],['apply','run']]){
+  const guide=setup(features);guide.prepare(message('Run it'));
+  const wire=guide.wire(guide.decorate(reply));assert.equal(wire.run,features.includes('apply')&&features.includes('run')?true:undefined);
+ }
+ const guide=setup(['apply','run']);
+ for(const kind of ['chat','own','walk']){guide.prepare(message('Try it',{kind}));assert.equal(guide.wire(guide.decorate(reply)).run,true);}
+ for(const kind of ['run','unknown']){guide.prepare(message('Run it',{kind}));assert.equal(guide.wire(guide.decorate(reply)).run,undefined);}
+ guide.prepare(message('Run it'));
+ for(const extra of [{apply:false},{fill:null},{fill:{entry:'unknown',input:{}}},{run:'yes'}])assert.equal(guide.wire(guide.decorate({...reply,...extra})).run,undefined);
+ const ctx=guide.prepare(message('Run it',{kind:'run'})).context;assert.equal(ctx.requestKind,'run');
+});

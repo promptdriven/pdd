@@ -36,7 +36,7 @@ local turn runs at a time. Remember received IDs before execution; never run a d
 uncertain turn/reply. Every poll adopts a valid selection and remembers it; each message's server-assigned
 agent wins for that message. A user switch affects following messages, without rerunning the old one.
 
-POST `/agent/reply` with bridge_id/message_id/say/fill and updated discovery states. Negotiate optional apply/progress/run_events/expect/save from a bounded string-array connect response; ignore unknown features. Absent features use the legacy say/fill payload only and a manual Fill fields then Run prompt variant. Preserve strict
+POST `/agent/reply` with bridge_id/message_id/say/fill and updated discovery states. Negotiate optional apply/progress/run_events/expect/save/run from a bounded string-array connect response; ignore unknown features. Absent features use the legacy say/fill payload only and a manual Fill fields then Run prompt variant. Preserve strict
 adapter validation; a failure yields a plain assistant message and that agent's signed-out/quota/error
 state. No automatic provider switch. Never call a missing or non-ready agent; explain its current state.
 Bound reply text and IDs, strip credentials from diagnostics and output. Missing/failed/malformed poll
@@ -67,3 +67,9 @@ After a successful relay reply, call delivered with its accepted person/reply pa
   scrubbing, read-only CLI execution, strict JSON and schema validation.
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated
   transport, repository state, safe source capture, cancellation and Try lifecycle; it owns invocation.
+
+Advertised run is passed as supportsRun to the adapter and retained for guide wire
+projection. Only the current manual person's request can authorize the agent's run flag;
+interpret intent in any wording, never a fixed word list. Automatic run observations
+cannot authorize another action. The bridge never dispatches it; the negotiated page
+uses its ordinary funded action path and guards. Without run capability, omit the field.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 9cccb655f1448bfae629900046c6073ecf7e6ee71936579f23c5f72e5db73c13).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 8c25ed3c1eb724b1ff31142cc8e3f1f19eaab04f179c62a34d7a7c5fcc188598).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
@@ -96,14 +96,14 @@ function validFill(fill,entries){
  const entry=entries.find(e=>e.entry===fill.entry);if(!entry)return false;
  const result=checkInput(fill.input,entry.input_schema,0);return !result.refusals.length&&!result.warnings.length;
 }
-export async function askAgent({agent,definition,cwd,env=process.env,context={},entries=[],supportsApply=false,signal,run=runAgentProcess,timeoutMs=120000}={}) {
+export async function askAgent({agent,definition,cwd,env=process.env,context={},entries=[],supportsApply=false,supportsRun=false,signal,run=runAgentProcess,timeoutMs=120000}={}) {
  const command=definition?.command??agent,name=definition?.name??AGENTS.find(([id])=>id===agent)?.[1];
  agent=definition?.kind??agent;env={...env,...definition?.env};
  if(!AGENTS.some(([id])=>id===agent))return fail('error','Choose Codex, Claude or Gemini.');
  if(signal?.aborted)return fail('error','The agent request was cancelled.');
  try{
   const safe=scrub({context,entries},env);
-  const input=buildAgentInput({context:safe.context,entries:safe.entries,supportsApply});
+  const input=buildAgentInput({context:safe.context,entries:safe.entries,supportsApply,supportsRun});
   const opts={cwd,env,input,signal,timeoutMs,maxBytes:131072};
   let args,overlay;
   if(agent==='gemini'){const version=await run(command,['--version'],{cwd,env,signal,timeoutMs:10000,maxBytes:1024});if(version.code!==0||version.stdout.trim()!=='0.66.0')return fail('error','This Gemini version has no verified read-only adapter. Choose another agent.');overlay=geminiOverlay(env);opts.env=overlay.env;}
@@ -121,11 +121,12 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
    if(parsed.is_error)return failedInvocation(agent,parsed.result,env,stateOf(parsed.result),name);parsed=JSON.parse(parsed.result);
   }
   if(agent==='gemini'&&object(parsed)&&typeof parsed.response==='string')parsed=JSON.parse(parsed.response);
-  if(!object(parsed)||Object.keys(parsed).some(key=>!['say','fill','apply','criterion','expect','save','next'].includes(key))||typeof parsed.say!=='string'||!parsed.say.trim())return fail('error','The agent returned an invalid answer. No fields were applied.');
+  if(!object(parsed)||Object.keys(parsed).some(key=>!['say','fill','apply','criterion','expect','save','next','run'].includes(key))||typeof parsed.say!=='string'||!parsed.say.trim())return fail('error','The agent returned an invalid answer. No fields were applied.');
   const clean=scrub(parsed,env),result={say:clean.say,fill:null};
   const fillValid=validFill(clean.fill??null,entries);
   if(fillValid)result.fill=clean.fill??null;
   if(typeof clean.apply==='boolean'&&fillValid&&(result.fill!==null||!clean.apply))result.apply=clean.apply;
+  if(typeof clean.run==='boolean'&&supportsRun&&supportsApply&&['chat','own','walk'].includes(context.requestKind??'chat')&&(!clean.run||(result.apply===true&&result.fill!==null)))result.run=clean.run;
   const known=new Set((Array.isArray(context.criteria)?context.criteria:[]).map(c=>c.id));
   if(clean.criterion===null||known.has(clean.criterion))result.criterion=clean.criterion;
   if(clean.next===null)result.next=null;

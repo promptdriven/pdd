@@ -120,3 +120,16 @@ test('deterministic pass needs no available agent and preserves signed-out state
  let polls=0;const s=setup((c,{controller})=>{if(c.path.endsWith('/connect'))return{...connect(c),json:{...connect(c).json,features:['progress','run_events']}};if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'claude',message:{id:'pass1',kind:'run',text:'Run finished',agent:'claude',context:{last_answer:{id:'action1',entry:{entry_path:entry.entry_path,operation:'main'},input:{argv:['--help']},lossless:true,report:{program_result:{stdout:'help\n'}}}}}}};}return{status:200,json:{ok:true}};},{askAgent:async()=>{throw Error('No provider needed');},guidePorts:{readAgentScenarios:()=>[{path:'tests/tool.json',doc:{schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/tool.md',initial_world:{},criteria:[{id:'AC1',text:'Help prints help'}],steps:[{step_id:'help',entry_path:entry.entry_path,operation:'main',input:{argv:['--help']},checks:[{criterion_id:'AC1',target:'result',path:'/stdout',op:'equals',value:'help\n'}]}]}}],buildProjectCard:()=>({text:'Try guide',fingerprint:'x',sourceFingerprint:'x',productRules:[]})}});
  const b=await createAgentBridge(s.context,{storyPath:'user_stories/tool.md',path:'tests/tool.json'},ID,{'--agent':'claude'},'https://runtime.example/s/abc/');await b.run();const posted=s.calls.find(c=>c.path.endsWith('/reply')).body;assert.match(posted.say,/AC1.*pass/);assert.equal(posted.agents.find(a=>a.id==='claude').state,'signed_out');
 });
+test('negotiated run reaches adapter and reply only for current manual requests',async()=>{
+ for(const kind of ['chat','run']){
+ let polls=0,captured;
+ const s=setup((c,{controller})=>{
+ if(c.path.endsWith('/connect'))return{...connect(c),json:{...connect(c).json,features:['apply','run']}};
+ if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'codex',message:{id:ID,kind,text:'Please execute that action',agent:'codex',context:{}}}};}
+ return{status:200,json:{ok:true}};
+ },{askAgent:async options=>{captured=options;return{say:'Preparing action',fill:{entry:'prompts/main.prompt.md#main',input:{argv:['list']}},apply:true,run:true};}});
+ const bridge=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await bridge.run();
+ assert.equal(captured.supportsRun,true);assert.equal(captured.context.requestKind,kind);
+ assert.equal(s.calls.find(c=>c.path.endsWith('/reply')).body.run,kind==='chat'?true:undefined);
+ }
+});

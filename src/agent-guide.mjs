@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 1d5180572aa4300ed01e1fc7721dcb543ceaa0e2ac077db82621e5f5a2fea9b5).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 762868e85137d7c6a71bb0fc2fbf5f37861fb8e64477901c6db7c4bc9cdc2c8f).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios,readAgentStoryCriteria} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
@@ -107,14 +107,14 @@ function observed(current){const last=current.last_answer;if(!object(last)||type
  return run;
 }
 export function createTryGuide({root,env={},model,test={},features=[],secrets=[],ports={}}){
- let closed=false,mode='chat',conversation=[],runs=[],ownCases=[],pending=null,lastContext=null,card=null,sourceAtConnect=null,scenarios=[],scenarioHash=null,scenarioAtConnect=null,judges=[],coverage=null,count=0,savedCount=0;
+ let closed=false,mode='chat',conversation=[],runs=[],ownCases=[],pending=null,lastContext=null,requestKind=null,card=null,sourceAtConnect=null,scenarios=[],scenarioHash=null,scenarioAtConnect=null,judges=[],coverage=null,count=0,savedCount=0;
  const seen=new Set(),savedIds=new Set(),surfaceEvidence=new Map();let coverageHash=null;const entries=(model.entries??[]).map(e=>({...e,entry:entryId(e)}));
  const storyPath=test.storyPath??model.seed?.story_path??null;
  let modelStories=Array.isArray(model.stories)?model.stories:Object.values(model.stories??{}),identityMaps=new Map(),viewModel=model;
  const currentStory=()=>storyPath??scenarios.find(s=>s.path===test.path)?.doc.story_path??modelStories[0]?.path??null;
  const validFill=fill=>{if(!object(fill)||!object(fill.input))return false;const e=entries.find(e=>e.entry===fill.entry);if(!e)return false;const checked=checkInput(fill.input,e.input_schema,0);return !checked.refusals.length&&!checked.warnings.length;};
  const safe=x=>clean(x,secrets);
- const finalFills=value=>{if(own(value,'fill')&&!validFill(value.fill)){value.fill=null;if(value.apply===true)delete value.apply;}if(object(value.next)&&own(value.next,'fill')&&!validFill(value.next.fill))delete value.next.fill;return value;};
+ const finalFills=value=>{if(own(value,'run')&&(typeof value.run!=='boolean'||!features.includes('run')||!features.includes('apply')||!['chat','own','walk'].includes(requestKind)||(value.run===true&&(value.apply!==true||!validFill(value.fill)))))delete value.run;if(own(value,'fill')&&!validFill(value.fill)){value.fill=null;if(value.apply===true)delete value.apply;}if(object(value.next)&&own(value.next,'fill')&&!validFill(value.next.fill))delete value.next.fill;return value;};
  function refresh(){
   const parsed=normalizeScenarios((ports.readAgentScenarios??readAgentScenarios)({root}));
   const identity=criterionIdentities(parsed,model,(ports.readAgentStoryCriteria??readAgentStoryCriteria)({root}));
@@ -138,6 +138,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
  function ensureOwn(name){let current=ownCases.at(-1);if(!current||current.state==='saved'){current={id:`own-${++count}`,name:safe(clip(name||`Own case ${count}`,100)),state:'planned'};ownCases.push(current);ownCases=ownCases.slice(-32);}return current;}
  function prepare(message){
   if(closed)throw Error('The Try guide is closed.');
+  requestKind=message.kind??'chat';
   const rawCurrent=object(message.context)?message.context:{},current=safe(rawCurrent);refresh();
   if(message.kind==='own'){mode='own case';pending=null;ownCases.push({id:`own-${++count}`,name:`Own case ${count}`,state:'planned'});ownCases=ownCases.slice(-32);}
   else if(message.kind==='walk'||/walk me through/i.test(message.text))mode='walk';else if(/^\s*(?:stop|stop walking|exit walk|stop the walkthrough)[.!]?\s*$/i.test(message.text))mode='chat';
@@ -164,7 +165,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   if(mode==='walk'&&items.length&&items.every(x=>x.state==='pass'))mode='chat';
   const fields={entry:current.entry??null,input:current.input??null,preloaded:runs.length===0&&conversation.every(c=>!c.fill),...(mode==='own case'?{source:'blank: the person pressed + Your own case'}:{})};
   const changed=scenarioHash!==scenarioAtConnect||(card.sourceFingerprint??card.fingerprint)!==sourceAtConnect;const project=clipBytes((changed?'Local copy changed: checks use your current local Story/test copy, which changed after this Try opened.\n':'')+card.text,1536);
-  lastContext=safe({project,coverage:coverageView,productRules:card.productRules??[],criteria,progress:p,world:current.world,runs,fields,mode,conversation,message:message.text,changed,ownCases,current});
+  lastContext=safe({requestKind,project,coverage:coverageView,productRules:card.productRules??[],criteria,progress:p,world:current.world,runs,fields,mode,conversation,message:message.text,changed,ownCases,current});
   let fast=null;
   if(message.kind==='run'&&features.includes('run_events')&&verdict?.state==='pass'&&!ownCases.some(c=>c.state!=='saved')){
    const ids=[...new Set(verdict.items.filter(i=>i.state==='pass').map(i=>i.id).filter(x=>/^AC\d+$/.test(x)))];
@@ -174,8 +175,8 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   return{context:clone(lastContext),fast};
  }
  function decorate(reply){const result=safe(clone(reply));result.progress={...(lastContext?.progress??progress([])),coverage:lastContext?.coverage};if(object(result.next))delete result.next.fill;if(result.next?.criterion){const b=bindings().find(x=>x.id===result.next.criterion);const candidate=b?safe({entry:b.entry,input:clone(b.input)}):null;if(candidate&&validFill(candidate))result.next={...result.next,fill:candidate};}return finalFills(safe(result));}
- function wire(reply){const out={say:clip(reply.say,14000),fill:validFill(reply.fill)?reply.fill:null};if(features.includes('apply')&&typeof reply.apply==='boolean')out.apply=reply.apply;if(features.includes('progress')){for(const key of ['criterion','next','progress'])if(own(reply,key))out[key]=reply[key];}else if(reply.progress?.line)out.say=clip(out.say,13500)+'\n'+reply.progress.line;if(features.includes('expect')&&own(reply,'expect'))out.expect=reply.expect;if(features.includes('save')&&own(reply,'save'))out.save=reply.save;return finalFills(safe(out));}
- function delivered(message,reply){if(closed)return;const visible=wire(reply);const row=safe({person:clip(message.text,500),say:clip(visible.say,500),...Object.fromEntries(['fill','expect','save','next'].filter(k=>own(visible,k)).map(k=>[k,visible[k]])),...(typeof visible.apply==='boolean'?{apply:visible.apply}:{})});conversation.push(row);conversation=conversation.slice(-6);
+ function wire(reply){const out={say:clip(reply.say,14000),fill:validFill(reply.fill)?reply.fill:null};if(features.includes('apply')&&typeof reply.apply==='boolean')out.apply=reply.apply;if(features.includes('run')&&typeof reply.run==='boolean')out.run=reply.run;if(features.includes('progress')){for(const key of ['criterion','next','progress'])if(own(reply,key))out[key]=reply[key];}else if(reply.progress?.line)out.say=clip(out.say,13500)+'\n'+reply.progress.line;if(features.includes('expect')&&own(reply,'expect'))out.expect=reply.expect;if(features.includes('save')&&own(reply,'save'))out.save=reply.save;return finalFills(safe(out));}
+ function delivered(message,reply){if(closed)return;const visible=wire(reply);const row=safe({person:clip(message.text,500),say:clip(visible.say,500),...Object.fromEntries(['fill','expect','save','next','run'].filter(k=>own(visible,k)).map(k=>[k,visible[k]])),...(typeof visible.apply==='boolean'?{apply:visible.apply}:{})});conversation.push(row);conversation=conversation.slice(-6);
   if(reply.expect&&validFill(reply.fill)){const c=ensureOwn(reply.save?.name);pending={caseId:c.id,fill:safe(clone(reply.fill)),expect:safe(clone(reply.expect)),...(own(lastContext?.current,'world')?{world_before:clone(lastContext.current.world)}:{})};}
   if(visible.save){const c=ensureOwn(visible.save.name);c.name=safe(clip(visible.save.name,100));c.offered=true;}
  }

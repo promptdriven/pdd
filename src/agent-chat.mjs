@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: 92d53cf33fa0a7c0ec3bf25921738853b46b30d615b2b30b712d2e2c83da5545).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: ed3121812961ccf24b02d8d9203b7841b7a1efcf7169d0c9b5c89a007e09ea61).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
@@ -35,7 +35,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error('Could not connect your agent to this Try. Run pdd try again.');
  remember(choice);
- const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save'].includes(x)):[];
+ const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save','run'].includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
  const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
@@ -51,7 +51,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   const agent=agents.find(a=>a.id===message.agent),turn=guide.prepare(message);let result,asked=false;
   if(turn.fast)result=turn.fast;
   else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else {asked=true;result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),context:turn.context});}
+  else {asked=true;result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(result.error)agents=agents.map(a=>a.id===message.agent?{...a,state:result.error.state,detail:result.error.message}:a);
   else if(asked&&agent)agents=agents.map(a=>a.id===message.agent?{...a,state:'ready',detail:undefined}:a);

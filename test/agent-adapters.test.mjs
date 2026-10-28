@@ -64,3 +64,12 @@ test('own expectations and save offers are independently validated',async()=>{
  const noFill=await askAgent({agent:'claude',entries,context,run:fake({...valid,fill:null})});assert.equal(noFill.expect,undefined);assert.deepEqual(noFill.save,save);
 });
 test('new-rule save metadata proposes one sentence only without an existing criterion',async()=>{const context={criteria:[{id:'AC1'}],message:'save my own case'},save={name:'Own case',criterion:null,checks:[{target:'result',path:'/stdout'}],proposed_criterion:'Searching with no matches prints an empty array.'};const got=await askAgent({agent:'claude',entries,context,run:fake({...reply,save})});assert.deepEqual(got.save,save);for(const bad of [{...save,criterion:'AC1'},{...save,proposed_criterion:''},{...save,proposed_criterion:'Two\nlines'},{...save,proposed_criterion:'x'.repeat(501)}]){const response=await askAgent({agent:'claude',entries,context,run:fake({...reply,save:bad})});assert.equal(response.save,undefined);assert.equal(response.say,reply.say);}});
+test('optional run requires negotiated capability and a valid manual applied fill',async()=>{
+ const wanted={...reply,apply:true,run:true};
+ for(const supportsRun of [false,true]){
+ const got=await askAgent({agent:'claude',entries,supportsApply:true,supportsRun,context:{message:'Run it',requestKind:'chat'},run:fake(wanted)});
+ assert.equal(got.run,supportsRun?true:undefined);assert.equal(got.say,reply.say);
+ }
+ for(const requestKind of ['run','unknown'])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{requestKind,message:'Run it'},run:fake(wanted)})).run,undefined);
+ for(const extra of [{apply:false},{fill:null},{run:'yes'}])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{message:'Run it'},run:fake({...wanted,...extra})})).run,undefined);
+});
