@@ -418,3 +418,31 @@ test('RUNTIME-TRY20: pdd try prints the update-required message as one line, exi
   assert.equal(result.code, 5); assert.equal(result.out, ''); assert.equal(result.err.trimEnd().split('\n').at(-1), 'Please update pdd.');
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
+
+// Wrong: a refused Try setup prints a check table and "pdd check" advice, and hides what was refused (runtime team live proof, Oct 27).
+test('RUNTIME-TRY21: a refused Try setup says what was refused, why and the fix, in two plain lines, exit 4', async t => {
+  const withMap = harbor(t, repo => writeFileSync(join(repo, 'app-map.json'), `${APP_MAP}\n`));
+  const generic = 'The runtime refused this job. See the reported reason.';
+  const refusing = refusals => async (entry, f) => {
+    if (entry.method === 'GET' && !entry.url.endsWith('/tests')) {
+      const id = entry.url.split('/').at(-1);
+      return { status: 200, json: f.job(id, 'try', 'refused', { exitCode: 1, refusals, report: { verdict: 'refused', refusal: { code: refusals[0].code } }, session: { id, state: 'stopped' } }) };
+    }
+    return trying()(entry, f);
+  };
+  const map = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'ambiguous-handler', message: generic, engine_message: null, section: null }])), ['place-order']);
+  assert.equal(map.code, 4, map.err + map.out);
+  assert.deepEqual(map.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (ambiguous-handler: on one screen, all taps of one kind must match by the same key).',
+    'Fix app-map.json (RUNBOOK §13), then run pdd try place-order --new.']);
+  assert.doesNotMatch(map.out + map.err, /Runtime check|pdd check(?! --files)|Story +Test|REFUSED/);
+  const told = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'template-reference-schema', message: generic,
+    reason: 'the field id gets /event/target but has a minLength', fix: 'Make id a plain {"type": "string"} in prompts/place_order.prompt.md.' }])), ['place-order']);
+  assert.deepEqual(told.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (template-reference-schema: the field id gets /event/target but has a minLength).',
+    'Make id a plain {"type": "string"} in prompts/place_order.prompt.md. Then run pdd try place-order --new.']);
+  const plain = harbor(t), posted = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
+    ? { status: 422, json: { error: { code: 'invalid-seed', message: 'The seed is not a test file.' } } } : trying()(entry, f));
+  const seed = await tryStory(plain, posted, ['place-order']);
+  assert.equal(seed.code, 4);
+  assert.deepEqual(seed.out.trimEnd().split('\n'), ['The Try could not start: the server refused it (invalid-seed: The seed is not a test file.).',
+    'Fix what it names, then run pdd try place-order --new.']);
+});

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a92c9056fa0a5863a92b00452cca816622b9760b87e95da3c5910ea27d210662).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c614dda25700e8b20f28c23b96475f91c10e50a5a3e117a9cd7cd9646cc74ace).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
@@ -825,7 +825,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (verdict.kind !== 'accepted') {
       if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
       if (reply.status === 429) throw new Stop(5, 'Too many Try links are open. Stop one with pdd try --stop');
-      if (verdict.kind === 'refused') { Object.assign(row, { state: 'refused', phase: 'server', refusals: [verdict.refusal] }); return printTryProblem(context, row); }
+      if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
       if (verdict.blocked) throw new Stop(5, verdict.note.message);
       if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
       throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
@@ -847,6 +847,12 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     applyAnswer(row, done.answer, context);
     delete repoState.tries[test.path];
     store.saveRepo(root, repoState);
+    if (row.state === 'refused') {
+      const report = isObject(done.answer.result?.report?.refusal) ? done.answer.result.report.refusal : null, given = done.answer.result?.refusals;
+      const refusals = (Array.isArray(given) && given.length ? given : report ? [report] : []).filter(isObject)
+        .map(item => ({ ...item, ...(report?.code === item.code ? { reason: item.reason ?? report.reason, fix: item.fix ?? report.fix } : {}) }));
+      return trySetupRefused(context, test, appMap, refusals, row.report_url);
+    }
     return printTryProblem(context, row);
   } catch (error) {
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
@@ -883,6 +889,24 @@ async function checkLint(context, rows) {
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
   if (!verdicts) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd try again later.');
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
+}
+
+// A refused Try setup is not a check (runtime team, Oct 27): two plain lines with what was refused, why and the fix; no table.
+const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kind must match by the same key',
+  'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
+const GENERIC_REFUSAL = /^The runtime refused this job\b/;
+function trySetupRefused(context, test, appMap, refusals, reportUrl) {
+  const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
+  const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
+    reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
+    fix: text(item.fix) }));
+  const mapped = !!appMap && items.some(item => Object.hasOwn(APP_MAP_RULES, item.code) || /^app-map-/.test(item.code) || /app[-_]map/i.test(item.section));
+  const why = items.map(item => item.reason ? `${item.code}: ${item.reason}` : item.code).join('; '), fix = items.find(item => item.fix)?.fix;
+  const again = `run pdd try ${test.story} --new.`;
+  line(context.ports.stdout, `The Try could not start: ${mapped ? 'the app map was refused' : 'the server refused it'} (${why}).`);
+  line(context.ports.stdout, fix ? `${fix} Then ${again}` : mapped ? `Fix ${appMap} (RUNBOOK §13), then ${again}`
+    : `Fix what it names, then ${again}${reportUrl ? ` Details: ${reportUrl}` : ''}`);
+  return 4;
 }
 
 function printTryProblem(context, row) {
