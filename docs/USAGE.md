@@ -536,6 +536,7 @@ This is an alpha. These limits are known today:
 | `run` says that the issue already has a run | Use `pdd workflow open N` or `status N`. To start again, run `pdd workflow cancel N` first. |
 | `run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
 | `run` says that `CODEX_HOME` or `CLAUDE_CONFIG_DIR` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
+| Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |
 | `status` says "the chat stopped" | No agent runs in the chat. Run `pdd workflow open N` to start it again. If it stops again at once, read the error in the chat. |
 | `approve` says that pdd sees an agent environment | Your terminal runs inside Claude Code or Codex. Run `pdd workflow approve N` in a normal terminal, or answer the gate question in the chat. |
 | The agent cannot approve for you | pdd found no message from you after the gate. Write your approval in the chat yourself, or run `pdd workflow approve N` in a terminal. |

@@ -1483,3 +1483,159 @@ test('BASE5: explicit base failure preserves a cancelled run, worktree and issue
   assert.ok(readFileSync(recordFile).equals(record)); assert.ok(readFileSync(claimFile).equals(claim));
   assert.ok(existsSync(old.root)); assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 2);
 });
+
+const closedChannel = () => Object.assign(Error('request handling failed: receiving on a closed channel'), { code: 'server_unavailable' });
+
+// Wrong: a failed first start saves running/no chat, so public status invents agent progress.
+test('CHATFAIL1: closed-channel startup and open failures stay waiting on the same explicit base and recover only after a real start', async t => {
+  const f = await fixture(t, { name: 'bug', agent: 'codex' }), base = topicBase(f, 'round3/tipjar-workflow-base');
+  const healthy = f.ports.herdr;
+  f.ports.herdr = async () => { throw closedChannel(); };
+  f.ports.spawnServer = () => assert.fail('Do not restart a server whose request failed');
+  const start = await startRun({ name: 'bug', issue: '17', agent: 'codex', base: base.name, cwd: f.source, packageRoot }, f.ports);
+  assert.equal(start.exitCode, 1, start.message);
+  const before = f.record(), claimFile = join(f.source, '.git/pdd/worktree-assignments/issues/17.json'), claim = readFileSync(claimFile);
+  assert.equal(before.state, 'waiting'); assert.equal(before.chatFailure.code, 'server_unavailable');
+  assert.equal(before.chatFailure.phase, 'start'); assert.equal(before.chats.length, 0); assert.equal(before.stageAgent, null);
+  assert.deepEqual(before.waitingFor.decisions, []); assert.match(before.waitingFor.what, /server_unavailable/);
+  assert.equal(before.baseBranch, base.name); assert.equal(before.baseSha, base.sha);
+  for (const input of [{ ref: '17' }, {}, { all: true }]) {
+    const out = await runStatus({ ...input, json: true, cwd: f.source }, f.ports);
+    const row = JSON.parse(out.message).runs[0];
+    assert.equal(row.group, 'waiting'); assert.match(row.words, /server_unavailable/);
+    assert.doesNotMatch(row.words, /agent working/); assert.match(row.words, /workflow open 17/);
+  }
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /State:.*server_unavailable/);
+  const again = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(again.exitCode, 1); assert.equal(f.record().state, 'waiting');
+  assert.equal(f.record().runId, before.runId); assert.equal(f.record().root, before.root);
+  assert.ok(readFileSync(claimFile).equals(claim)); assert.equal(f.fetches, 1);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record();
+  assert.equal(after.state, 'running'); assert.equal(after.chatFailure ?? null, null); assert.equal(after.chats.length, 1);
+  assert.equal(after.runId, before.runId); assert.equal(after.root, before.root); assert.equal(after.baseSha, base.sha);
+  assert.equal(after.decisions.length, 0); assert.ok(readFileSync(claimFile).equals(claim)); assert.equal(f.fetches, 1);
+});
+
+// Wrong: a later-area start failure loses the approved transition or still claims work in the new area.
+test('CHATFAIL2: an approved transition keeps its decision and worktree when the next chat fails, then open starts only that area', async t => {
+  const f = await fixture(t); await f.run(); const before = f.record();
+  await stepDone({ step: 'scope', summary: 'Scope approved by the person next', cwd: before.root }, f.agentPorts());
+  const healthy = f.ports.herdr; f.ports.herdr = async () => { throw closedChannel(); };
+  const approved = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(approved.exitCode, 1);
+  const failed = f.record(); assert.equal(failed.area, 1); assert.equal(failed.state, 'waiting');
+  assert.equal(failed.decisions.length, 1); assert.ok(failed.done.scope); assert.equal(failed.chats.length, 1);
+  assert.equal(failed.chatFailure.area, 'build'); assert.equal(failed.gate, null);
+  assert.equal(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].group, 'waiting');
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record(); assert.equal(after.chats.length, 2); assert.equal(after.chats[1].area, 'build');
+  assert.equal(after.decisions.length, 1); assert.equal(after.area, 1); assert.equal(after.root, before.root);
+  assert.equal(after.chatFailure ?? null, null); assert.equal(after.state, 'running');
+});
+
+// Wrong: an unavailable inspection is treated as no agent, causing a second native launch/resume.
+test('CHATFAIL3: closed-channel inspection cannot resume a chat; status is unavailable until confirmed recovery', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  const healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'agent') throw closedChannel(); return healthy(args); };
+  const unknown = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(unknown.group, 'waiting'); assert.match(unknown.words, /unavailable/i);
+  const out = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(out.exitCode, 1); assert.equal(pane.commands.length, 1); assert.equal(f.record().chatFailure.phase, 'open');
+  pane.agent = null; f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.equal(pane.commands.length, 2); assert.match(pane.commands[1], /--resume/);
+  assert.equal(f.record().chats.length, 1); assert.equal(f.record().chatFailure ?? null, null);
+});
+
+// Wrong: a lost launch reply discards the original pane identity and open starts another agent/tab.
+test('CHATFAIL4: a lost launch reply retains the prepared chat, and open reuses its observed live agent', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(); assert.equal(before.chats.length, 1); assert.equal(before.chats[0].startUnconfirmed, true);
+  const pane = f.herdr.paneOf(before.chats[0]), count = f.herdr.tabs.length;
+  assert.equal(pane.commands.length, 1);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const after = f.record(); assert.equal(after.chats.length, 1); assert.equal(after.chats[0].paneId, before.chats[0].paneId);
+  assert.equal(after.chats[0].startUnconfirmed ?? false, false); assert.equal(after.chatFailure ?? null, null);
+  assert.equal(f.herdr.tabs.length, count); assert.equal(pane.commands.length, 1); assert.equal(after.state, 'running');
+});
+
+// Wrong: after an uncertain launch, missing agent inspection automatically sends the first prompt again.
+test('CHATFAIL5: an unconfirmed launch without a live agent refuses another launch and cancellation still wins', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return healthy(args); };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(); assert.equal(before.chats.length, 1);
+  const tabs = f.herdr.tabs.length; f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.equal(f.record().chats.length, 1); assert.equal(f.herdr.tabs.length, tabs);
+  assert.equal(f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 0);
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const row = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(row.group, 'cancelled'); assert.equal(row.words, 'cancelled'); assert.deepEqual(f.record().waitingFor, { decisions: [], what: null });
+});
+
+// Wrong: older failed-start records with no chat still fall through to agent-working forever.
+test('CHATFAIL6: legacy no-chat active records report unconfirmed startup without attempting Herdr recovery', async t => {
+  const f = await fixture(t); f.ports.herdr = async () => { throw closedChannel(); }; await f.run();
+  const run = f.record(); delete run.chatFailure; run.state = 'running';
+  writeFileSync(join(run.runDir, 'status.json'), JSON.stringify(run));
+  f.ports.herdr = () => assert.fail('Status must not launch or probe a chat identity it does not have');
+  const row = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
+  assert.equal(row.group, 'waiting'); assert.match(row.words, /startup.*not confirmed/i); assert.doesNotMatch(row.words, /agent working/);
+});
+
+// Wrong: recovering the chat accidentally approves a gate or clears a person's outstanding question.
+test('CHATFAIL7: chat recovery preserves a waiting approval gate or person question', async t => {
+  for (const kind of ['gate', 'question']) {
+    const f = await fixture(t); await f.run(); const run = f.record();
+    if (kind === 'gate') await stepDone({ step: 'scope', summary: 'Ready for review', cwd: run.root }, f.agentPorts());
+    else await askPerson({ text: 'Which color?', cwd: run.root }, f.agentPorts());
+    const waiting = f.record(), healthy = f.ports.herdr;
+    f.ports.herdr = async () => { throw closedChannel(); };
+    assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+    assert.deepEqual(f.record().gate, waiting.gate); assert.deepEqual(f.record().question, waiting.question);
+    f.ports.herdr = healthy;
+    assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+    const recovered = f.record(); assert.equal(recovered.state, 'waiting'); assert.equal(recovered.decisions.length, 0);
+    assert.deepEqual(recovered.gate, waiting.gate); assert.deepEqual(recovered.question, waiting.question);
+    assert.equal(recovered.chatFailure ?? null, null);
+    assert.deepEqual(recovered.waitingFor.decisions, kind === 'gate' ? ['approve', 'changes'] : ['changes']);
+  }
+});
+
+// Wrong: a lost resume reply causes open to issue the resume command twice.
+test('CHATFAIL8: a lost resume reply marks the existing chat unconfirmed and a later open only observes it', async t => {
+  const f = await fixture(t); await f.run(); const run = f.record(), pane = f.herdr.paneOf(run.chats[0]);
+  pane.agent = null; const healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.equal(pane.commands.length, 2); assert.equal(f.record().chats[0].startUnconfirmed, true);
+  f.ports.herdr = healthy;
+  assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  assert.equal(pane.commands.length, 2); assert.equal(f.record().chats.length, 1);
+  assert.equal(f.record().chatFailure ?? null, null); assert.equal(f.record().chats[0].startUnconfirmed ?? false, false);
+});
+
+// Wrong: recovery replaces a missing unconfirmed tab and persists new IDs, losing the original launch identity.
+test('CHATFAIL9: a missing tab after an unconfirmed launch preserves the original identity without creating a replacement', async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => { const reply = await healthy(args); if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return reply; };
+  assert.equal((await f.run()).exitCode, 1);
+  const before = f.record(), chat = before.chats[0], pane = f.herdr.paneOf(chat);
+  f.herdr.tabs = f.herdr.tabs.filter(tab => tab.tab_id !== chat.tabId);
+  const tabs = f.herdr.tabs.length; f.ports.herdr = healthy;
+  const out = await openRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(out.exitCode, 1); assert.match(out.message, /saved tab.*unavailable/i);
+  const after = f.record(); assert.equal(after.chats.length, 1);
+  assert.equal(after.chats[0].tabId, chat.tabId); assert.equal(after.chats[0].paneId, chat.paneId);
+  assert.equal(after.chats[0].startUnconfirmed, true); assert.equal(after.state, 'waiting');
+  assert.equal(after.root, before.root); assert.equal(after.baseSha, before.baseSha);
+  assert.equal(f.herdr.tabs.length, tabs); assert.equal(pane.commands.length, 1);
+});

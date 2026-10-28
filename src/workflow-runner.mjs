@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4fd5b49a6dcc1f4b7dfbe9abe9379c316c1587e7c9b560ee09fcad3b99bb44a5).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 628d8eb79d90443c271481bb11360e7d2d07034693fd520f544ad53ba8860729).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -160,6 +160,26 @@ async function pr1Drafts(run, p) {
   return pr1 ? draftPrompts(run, p, pr1.branch, pr1.base) : [];
 }
 
+// A failed chat request pauses the same run; it never authorizes another allocation or approval.
+const activeChatFailure = run => !ended(run) && run.chatFailure?.area === run.areas[run.area]?.name ? run.chatFailure : null;
+const chatFailureWords = run => {
+  const failure = activeChatFailure(run);
+  return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failure.code}: ${failure.message}). Run pdd workflow open ${run.number} after Herdr is available.`;
+};
+const chatStatusWords = (run, chat) => activeChatFailure(run) ? chatFailureWords(run)
+  : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
+  : `chat startup is not confirmed. Run pdd workflow open ${run.number} after Herdr is available.`;
+function recordChatFailure(run, error, phase, p) {
+  run.chatFailure = { area: run.areas[run.area].name, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
+  if (!ended(run)) run.state = 'waiting';
+  writeRun(run, p);
+}
+function clearChatFailure(run) {
+  if (!run.chatFailure) return;
+  delete run.chatFailure;
+  if (!ended(run) && !run.gate && !openQuestion(run)) run.state = 'running';
+}
+
 // A gate whose chat still works: after a change request it revises, else it writes the gate message (0.1.6 tester: status
 // said "waiting for you" about a minute before the chat had asked).
 const revising = run => { const last = run.changes?.at(-1); return Boolean(last && !last.answer && last.stage === run.gate.area && last.at >= run.gate.at); };
@@ -167,6 +187,7 @@ const revising = run => { const last = run.changes?.at(-1); return Boolean(last 
 function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], pr1 = askArea(run) && prOf(run, askArea(run).name);
   if (run.state === 'cancelled') return 'cancelled';
+  if (activeChatFailure(run) || ['unconfirmed', 'unavailable'].includes(chat)) return chatStatusWords(run, chat);
   if (openQuestion(run) && run.state !== 'completed') return `waiting for you: ${run.question.text.split('\n')[0]}`;
   if (chat === 'blocked' && run.state === 'running') return `waiting for you: the chat asks a question in its window (pdd workflow open ${run.number})`;
   if (chat === 'stopped' && run.state === 'running') return `the chat stopped. Run pdd workflow open ${run.number} to start it again.`;
@@ -244,10 +265,10 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   mkdirSync(runDir, { recursive: true });
   writeRun(run, p);
   const first = workflow.areas[0];
-  try { run.chats.push(await startChat({ run, area: first.name, message: await areaMessage(run, 0, p, packageRoot) }, p)); }
+  try { await startNextChat(run, p, packageRoot); }
   catch (error) {
-    run.warnings.push(`The ${first.name} chat did not start (${error.code ?? 'error'}).`); writeRun(run, p);
-    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat did not start (${error.code ?? 'error'}: ${oneLine(error.message)}).`,
+    run.warnings.push(`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`); writeRun(run, p);
+    return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code ?? 'error'}: ${oneLine(error.message)}).`,
       `Start it with: pdd workflow open ${number}`].join('\n'));
   }
   writeRun(run, p);
@@ -597,9 +618,16 @@ const agentMarker = env => env.CLAUDECODE ? `CLAUDECODE=${env.CLAUDECODE}` : env
 
 async function startNextChat(run, p, packageRoot) {
   const area = run.areas[run.area];
-  run.chats.push(await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, p));
-  writeRun(run, p);
-  return run.chats.at(-1);
+  try {
+    run.chats.push(await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, p));
+    clearChatFailure(run);
+    writeRun(run, p);
+    return run.chats.at(-1);
+  } catch (error) {
+    if (error.chat?.area === area.name) run.chats.push(error.chat);
+    recordChatFailure(run, error, 'start', p);
+    throw error;
+  }
 }
 
 export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
@@ -687,7 +715,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
-  catch (error) { return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat did not start (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
+  catch (error) { return fail(`${carried.map(line => `${line}\n`).join('')}Approved the ${area.name} area of ${label}.${said} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`); }
   return done([...carried, `Approved the ${area.name} area of ${label}.${said}${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, ...(agent ? ['This chat\'s work is done. Stop here.'] : [])].join('\n'));
@@ -763,10 +791,17 @@ async function refreshPr(run, p) {
 const STOPPED = new Set(['agent_not_found', 'server_not_running']);
 const START_GRACE_MS = 30_000;
 async function chatState(run, p) {
-  const chat = run.state === 'running' || run.gate && !ended(run) ? currentChat(run) : null;
-  if (!chat) return null;
+  if (ended(run)) return null;
+  const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
+  if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
+  if (!(run.state === 'running' || run.gate || failure)) return null;
   const live = await chatSession(chat, p);
-  if (live.alive) return ['blocked', 'working'].includes(live.status) ? live.status : null;
+  if (live.alive) {
+    if (failure || chat.startUnconfirmed) { clearChatFailure(run); delete chat.startUnconfirmed; writeRun(run, p); }
+    return ['blocked', 'working'].includes(live.status) ? live.status : null;
+  }
+  if (failure) return 'unconfirmed';
+  if (live.code === 'server_unavailable') return 'unavailable';
   return STOPPED.has(live.code) && p.now() - Math.max(chat.startedAt ?? 0, chat.resumedAt ?? 0) >= START_GRACE_MS ? 'stopped' : null;
 }
 
@@ -782,7 +817,8 @@ function detail(run, chat = null, facts = {}) {
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
-  const next = run.gate?.kind === 'ask-code' && drafts.length ? `cd ${shell(run.root)} && ${drafts.map(path => `pdd approve ${shell(path)}`).join(' && ')}, then pdd workflow approve ${run.number} (make the code PR)`
+  const next = activeChatFailure(run) || ['unconfirmed', 'unavailable'].includes(chat) ? `pdd workflow open ${run.number}`
+    : run.gate?.kind === 'ask-code' && drafts.length ? `cd ${shell(run.root)} && ${drafts.map(path => `pdd approve ${shell(path)}`).join(' && ')}, then pdd workflow approve ${run.number} (make the code PR)`
     : run.gate?.kind === 'ask-code' ? `pdd workflow approve ${run.number}  (make the code PR)   or stop here and merge PR 1`
     : run.gate ? `pdd workflow approve ${run.number}   or   pdd workflow changes ${run.number} "what to change"`
     : ended(run) ? null : prOf(run, area?.name) ? `Review and merge ${run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch ? 'PR 1, then PR 2,' : 'the PR'} on GitHub. pdd never merges.` : `pdd workflow open ${run.number}`;
@@ -800,12 +836,14 @@ function detail(run, chat = null, facts = {}) {
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
-  const question = openQuestion(run), writing = Boolean(run.gate) && !question && chat === 'working';
-  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : writing ? 'working'
+  const problem = activeChatFailure(run) || ['unconfirmed', 'unavailable'].includes(chat);
+  const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
+  const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
     : run.gate || question || running && ['blocked', 'stopped'].includes(chat) ? 'waiting' : prOf(run, area?.name) ? 'pr-open' : 'working';
   const step = area?.steps.find(item => !run.done[item]);
   const words = group === 'cancelled' ? 'cancelled'
     : group === 'done' ? (run.gate?.kind === 'ask-code' ? 'done at PR 1' : 'done')
+    : problem ? chatStatusWords(run, chat)
     : question ? `waiting for you: ${question.text.split('\n')[0]}`
     : !run.gate && running && chat === 'blocked' ? `waiting for you: the chat asks a question in its window`
     : !run.gate && running && chat === 'stopped' ? `the chat stopped: run pdd workflow open ${run.number}`
@@ -862,11 +900,13 @@ export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   try {
     if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
     const opened = await openChat({ run, chat }, p);
+    clearChatFailure(run);
     writeRun(run, p);
     const where = `Herdr session pdd, tab "${chat.label}"`;
     return done([started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
+    recordChatFailure(run, error, chat ? 'open' : 'start', p);
     return fail(`pdd could not open the ${run.areas[run.area].name} chat (${error.code ?? 'error'}: ${oneLine(error.message)}).`);
   }
 }
