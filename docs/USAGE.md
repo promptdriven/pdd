@@ -443,6 +443,8 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 |---|---|
 | `No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".` | pdd also says why for each near miss: a `tests/*.json` file without that `schema_version`, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
 | `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
+| `Your GitHub account has no PDD Cloud access yet. Sign up at https://promptdriven.ai/login …` | Sign up at https://promptdriven.ai/login with GitHub. You can use the runtime when your account is approved. Exit code 5. |
+| `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |
 | `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
@@ -570,6 +572,7 @@ This is an alpha. These limits are known today:
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
+| `pdd check` or `pdd try` says that your account has no PDD Cloud access | Sign up at https://promptdriven.ai/login with GitHub, and wait for approval. |
 | `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd#alpha`, then `pdd setup`. |
 | `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
 | PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |

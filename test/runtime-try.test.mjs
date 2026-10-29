@@ -434,6 +434,24 @@ test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, an
   assert.equal(reuse.code, 5); assert.ok(reuse.err.includes(line), reuse.err); assert.equal(now.posts.length, 0);
 });
 
+// Wrong: pdd try waits on a PDD Cloud refusal, then hides it behind an unknown lint (Oct 29).
+test('RUNTIME-TRY22: pdd try shows the PDD Cloud answers at once, exit 5, and makes no Try', async t => {
+  const refused = error => ({ requestId: null, command: 'lint', state: 'refused', job_created: false, dispatch: 'not_started', error });
+  const noAccess = { status: 403, json: { code: 'update-required', message: 'Sign up first.', ...refused({ code: 'no-cloud-access', message: 'Your GitHub account has no PDD Cloud access yet. Sign up at https://promptdriven.ai/login or ask the team.' }) } };
+  const down = { status: 503, json: refused({ code: 'cloud-unavailable', message: 'PDD Cloud sign-in is slow to answer. pdd retries this; try again in a minute.', details: { retryable: true, retry_after: 60 } }) };
+  for (const [reply, said] of [[noAccess, /no PDD Cloud access yet\. Sign up at https:\/\/promptdriven\.ai\/login/], [down, /PDD Cloud could not confirm your access\. Try again in a minute\./]]) {
+    const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : trying()(entry, f));
+    const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
+    assert.equal(result.code, 5); assert.equal(result.out, ''); assert.match(result.err, said); assert.doesNotMatch(result.err, /update pdd|pdd retries this|unknown/i);
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint']); assert.equal(fake.gets.length, 0); assert.deepEqual(result.opened, []);
+    const open = harbor(t), first = await fakeRuntime(t, trying());
+    assert.equal((await tryStory(open, first, ['place-order'], { '--no-open': true })).code, 0);
+    const now = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? reply : trying()(entry, f));
+    const reuse = await tryStory(open, now, ['place-order'], { '--no-open': true });
+    assert.equal(reuse.code, 5); assert.match(reuse.err, said); assert.equal(now.posts.length, 0);
+  }
+});
+
 // Wrong: pdd try hides "update required" behind a Try message (0.1.6).
 test('RUNTIME-TRY20: pdd try prints the update-required message as one line, exit 5, and makes no Try', async t => {
   const said = { status: 426, json: { code: 'update-required', message: 'Please update pdd.' } };

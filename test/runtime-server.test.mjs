@@ -711,6 +711,73 @@ test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check i
   assert.equal(opens.code, 5); assert.match(opens.out + opens.err, /The runtime opens soon\./);
 });
 
+// The live PDD Cloud answers (prompt-runtime server/access.py, Oct 29): code and message sit under error.
+const refusedBody = error => ({ requestId: null, command: 'lint', state: 'refused', job_created: false, dispatch: 'not_started', error });
+const NO_CLOUD_SAID = 'Your GitHub account has no PDD Cloud access yet. Sign up at https://promptdriven.ai/login or ask the team.';
+const CLOUD_DOWN = { status: 503, headers: { 'Retry-After': '60' }, json: refusedBody({ code: 'cloud-unavailable',
+  message: 'PDD Cloud sign-in is slow to answer. pdd retries this; try again in a minute.', details: { retryable: true, retry_after: 60 } }) };
+const START = Date.parse('2026-10-27T16:27:47Z');
+
+// Wrong: a GitHub account without PDD Cloud access waits a minute for "The lint result is unknown", exit 3, and never learns to sign up (Oct 29).
+test('RUNTIME-CLOUD1: 403 no-cloud-access stops at once with the sign-up line in each body shape, exit 5, no reads', async t => {
+  const setup = harbor(t);
+  for (const [json, said] of [[refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID, details: { retryable: false } }), NO_CLOUD_SAID],
+    [{ code: 'no-cloud-access', message: NO_CLOUD_SAID }, NO_CLOUD_SAID],
+    // The server shim for pdd 0.1.9: a top-level update-required over error.code no-cloud-access is the access answer.
+    [{ code: 'update-required', message: 'Sign up at https://promptdriven.ai/login with GitHub.', ...refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID }) }, NO_CLOUD_SAID],
+    [refusedBody({ code: 'no-cloud-access' }), /does not have PDD runtime access yet\. Sign up at https:\/\/promptdriven\.ai\/login with GitHub/]]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 403, json } : f.normal(entry));
+    for (const options of [{}, { '--lint': true }]) {
+      const result = await check(setup, fake, [], options), why = JSON.stringify({ json, options });
+      assert.equal(result.code, 5, why); assert.equal(result.out, '', why);
+      if (typeof said === 'string') assert.ok(result.err.trimEnd().split('\n').includes(said), result.err); else assert.match(result.err, said);
+      assert.doesNotMatch(result.err, /update pdd|unknown|If pdd stops/i, why);
+      assert.equal(result.clock.now, START, why);
+    }
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
+  }
+  const later = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { status: 403, json: refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID }) } : f.normal(entry));
+  const viaCheck = await check(setup, later, ['place-order']);
+  assert.equal(viaCheck.code, 5); assert.ok(viaCheck.err.includes(NO_CLOUD_SAID), viaCheck.err); assert.equal(later.gets.length, 0);
+});
+
+// Wrong: when PDD Cloud cannot check the account, pdd polls silently for a minute and then says the result is unknown (Oct 29).
+test('RUNTIME-CLOUD2: 503 cloud-unavailable says at once to try again in a minute, with no silent wait', async t => {
+  const setup = harbor(t), again = /PDD Cloud could not confirm your access\. Try again in a minute\./;
+  for (const reply of [CLOUD_DOWN, { status: 503, json: { code: 'cloud-unavailable', message: 'slow' } }]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
+    for (const options of [{}, { '--lint': true }]) {
+      const result = await check(setup, fake, [], options);
+      assert.equal(result.code, 5); assert.match(result.err, again); assert.doesNotMatch(result.err, /pdd retries this|unknown/i);
+      assert.equal(result.clock.now, START);
+    }
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
+  }
+  const atCheck = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? CLOUD_DOWN : f.normal(entry));
+  const posted = await check(setup, atCheck, ['place-order']);
+  assert.equal(posted.code, 5); assert.match(posted.err, again);
+  assert.deepEqual(atCheck.posts.map(post => post.command), ['lint', 'check']); assert.equal(atCheck.gets.length, 0);
+  // A check that the server took keeps running: pdd stops reading, says why, and names the --read line.
+  const atRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? CLOUD_DOWN : f.normal(entry));
+  const reading = await check(setup, atRead, ['place-order']);
+  assert.equal(reading.code, 3); assert.match(reading.err, again); assert.match(reading.err, /pdd check --read /);
+  assert.equal(atRead.gets.length, 1); assert.deepEqual(atRead.posts.map(post => post.command), ['lint', 'check']);
+});
+
+// Wrong: the error-first read of the PDD Cloud answers breaks the old answers (0.1.6 update-required, Oct 27 not-invited).
+test('RUNTIME-CLOUD3: update-required still says to update pdd, and not-invited keeps its line in each shape', async t => {
+  const setup = harbor(t);
+  for (const [reply, said] of [[{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /^Please update pdd\.$/m],
+    [{ status: 426, json: { code: 'update-required', error: { code: 'update-required', message: 'Please update pdd now.' } } }, /^Please update pdd now\.$/m],
+    [{ status: 426, json: { code: 'update-required' } }, /^Please update pdd: npm install -g github:promptdriven\/pdd#alpha$/m],
+    [NOT_INVITED, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m],
+    [{ status: 403, json: refusedBody({ code: 'not-invited', message: 'not invited', details: { login: 'octo' } }) }, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m]]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
+    const result = await check(setup, fake, [], { '--lint': true });
+    assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.equal(fake.gets.length, 0);
+  }
+});
+
 // Wrong: the read line shows before lint, when there is nothing to read yet (lead, Oct 27).
 test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the checks are sent', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));

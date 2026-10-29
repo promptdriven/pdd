@@ -91,7 +91,7 @@ pdd try            # get a link to use the prompt by hand
 
 To approve a prompt, run `pdd approve prompts/NAME.prompt.md` in your terminal (or click **Approve** on the Try page while `pdd try` runs). Only a person can approve.
 
-The runtime is invite-only. If `pdd check` says your GitHub login is not on the invite list, ask the PDD team.
+To use the runtime, sign up at https://promptdriven.ai/login with GitHub. pdd tells you when your account has no access yet. If `pdd check` says your GitHub login is not on the invite list, ask the PDD team.
 
 ## Requirements
 
