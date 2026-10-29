@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: baa01a444e9fda71e3dc890da1185997840d113dab3af2e3099fe6647a6fd581).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b1a8e400407f8d92b5939ac07a2b001e999a6e3fe838b7c23cdb42ad553279fc).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -709,6 +709,7 @@ function printResult(context, rows, extra = {}) {
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd check --retry ${context.batch}`);
   if (context.readStop) line(ports.stderr, context.readStop);
+  if (context.continuationNotice) line(ports.stderr, context.continuationNotice);
   if (context.stopped && !context.json) line(ports.stderr, context.stopped.message);
   const scrub = text => (context.secrets ?? []).reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value, text);
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
@@ -870,7 +871,7 @@ async function readUnsentLint(context, rows) {
       Object.assign(row, { state: 'refused', refusals: problem ? [problem] : refusals });
     } else {
       row.note = busy ? { code: 'lint-busy', message: 'The saved lint could not get a slot. No checks ran. Run the same command again later.' }
-        : { code: 'lint-finished', message: `The saved lint finished${refusals.length ? ' with refusals' : ''}. No checks were sent. `
+        : { code: 'lint-finished', message: `The saved lint finished${refusals.length ? ' with refusals' : ''}. This check was not sent. `
           + (refusals.length ? refusals.map(item => item.message || item.code).join(' ') + ' ' : '')
           + 'Run a fresh pdd check command to start checks.' };
     }
@@ -909,7 +910,7 @@ async function continueHeld(context, candidates, saved) {
   if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
     || (saved.intent === undefined && !candidates.every(validSavedCheck))
     || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0)) {
-    context.readStop = 'No checks were sent: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
+    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
     return;
   }
   if (context.lintPending || context.lintUnknown) return;
@@ -922,10 +923,10 @@ async function continueHeld(context, candidates, saved) {
   try { capture = captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null }); }
   catch (error) {
     if (!(error instanceof PreflightError)) throw error;
-    context.readStop = `No checks were sent: the saved source cannot be verified. ${error.message}`;
+    context.continuationNotice = `No checks were sent for the lint-held rows: the saved source cannot be verified. ${error.message}`;
     return;
   }
-  if (capture.sha256 !== saved.source_sha256) { context.readStop = 'No checks were sent: the saved source no longer matches: source changed. Start a fresh selected pdd check instead.'; return; }
+  if (capture.sha256 !== saved.source_sha256) { context.continuationNotice = 'No checks were sent for the lint-held rows: the saved source no longer matches: source changed. Start a fresh selected pdd check instead.'; return; }
   if (context.interrupted || context.ports.now() >= context.deadline) return;
   Object.assign(context, { capture, reading: false });
   const selected = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);

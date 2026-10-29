@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
-import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
+import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
 
 // Native replay of the approved Story's case table. There are no executable Runtime
 // vectors for this native boundary (#2548); this suite does not claim a Runtime pass.
@@ -243,6 +243,52 @@ for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'c
   assert.equal(next.code, 4); assert.equal(next.json.rows.length, 2);
   assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, 'tests/place-order.json');
   assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+});
+
+for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'legacy' : 'current'} held proof does not stop independent busy retry`, async t => {
+  const r = await setup(t, { multiple: true }); const { batch, code } = await r.first();
+  assert.equal(code, 3); assert.equal(paid(r).length, 0);
+  r.state.lint = 'passed';
+  const s = saved(r, batch), [held, busy] = s.doc.rows;
+  if (legacy) delete s.doc.intent;
+  held.calls = 'unknown';
+  Object.assign(busy, { state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
+    retry_at: null, note: { code: 'check-busy', message: 'Held locally; this check was not sent. Retry this batch later.' } });
+  writeFileSync(s.path, JSON.stringify(s.doc));
+
+  const next = await recovery(r, batch, true);
+  assert.equal(paid(r).length, 1, 'independent authorized busy row must POST despite refused held proof');
+  assert.equal(next.code, 5, 'the held row remains not run beside the passing retry');
+  assert.equal(next.clock.uuids, 1, 'only the busy row receives a new ID');
+  assert.equal(next.json.batch, batch); assert.equal(next.json.source_sha256, s.doc.source_sha256);
+  const post = paid(r)[0], id = post.request.requestId;
+  assert.equal(post.request.scenario, busy.test); assert.equal(post.request.max_calls, busy.max_calls);
+  assert.equal(post.request.source_sha256, s.doc.source_sha256);
+  assert.ok(post.tar.equals(r.f.posts.find(p => p.command === 'lint').tar), 'retry preserves original source multipart');
+  assert.equal(r.f.posts.filter(p => p.command === 'lint').length, 1);
+  assert.deepEqual([...r.f.authorization], ['Bearer ' + TOKEN]);
+  assert.equal(next.json.rows.find(row => row.test === busy.test).state, 'passed');
+  assert.equal(next.json.rows.find(row => row.test === busy.test).request_id, id);
+  const visibleHeld = next.json.rows.find(row => row.test === held.test);
+  assert.equal(visibleHeld.state, 'not_run'); assert.equal(visibleHeld.request_id, null); assert.equal(visibleHeld.calls, 0);
+  assert.match(visibleHeld.reason.message, /This check was not sent/);
+  for (const retry of [true, false]) {
+    const again = await recovery(r, batch, retry);
+    assert.equal(again.code, 5); assert.equal(again.clock.uuids, 0); assert.equal(paid(r).length, 1);
+    assert.equal(again.json.rows.find(row => row.test === held.test).request_id, null);
+    assert.equal(again.json.rows.find(row => row.test === busy.test).request_id, id);
+    assert.equal(again.ports.stderr.text.split('\n').filter(line => /zero-call lint-held proof/.test(line)).length, 1);
+  }
+  const retained = saved(r, batch).doc;
+  for (const key of ['root', 'login', 'user_id', 'origin', 'source_sha256']) assert.equal(retained[key], s.doc[key]);
+  assert.deepEqual(retained.rows.find(row => row.test === busy.test).request_ids, [id]);
+  assert.equal(retained.rows.find(row => row.test === held.test).calls, 'unknown', 'retain raw uncertain proof on disk');
+  assert.deepEqual(retained.rows.find(row => row.test === held.test).request_ids, []);
+  const heldClaim = createHash('sha256').update(held.test).digest('hex') + '.0.dispatch.json';
+  assert.ok(!readdirSync(join(r.h.state, 'batches', batch)).includes(heldClaim));
+  assert.equal(next.ports.stderr.text.split('\n').filter(line => /zero-call lint-held proof/.test(line)).length, 1);
+  assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:/);
+  assert.doesNotMatch(next.ports.stderr.text, /No checks were sent[.:]|no checks ran|pdd check --retry/i);
 });
 
 test('CONTINUATION: two real CLI read processes send the original held check exactly once', { timeout: 30000 }, async t => {
