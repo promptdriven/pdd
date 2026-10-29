@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 83676e372e6e57d59b7b0ae36e06b23565ae154b69b60c07958bc23b8adc2aec).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: e72dcf6cadff8c4e958243025546d203cb589c0dd7347e7ceb7e6f2984bac095).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -112,7 +112,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-try':
       try {
         const runtime = await import('./runtime-client.mjs');
-        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr });
+        return await runtime[plan.local === 'runtime-check' ? 'runCheck' : 'runTry']({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.${reason(error)}`);
         return 3;

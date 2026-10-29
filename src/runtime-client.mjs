@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 38f5576e454de0ba2c8f2fbf50e634c1fc589cd798befc69afb5de6cc6c8ff6d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e3b9ed5d2ca461be9becf88c6bd200e007a0f428e104cde799275ecb8b98eb8f).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -11,6 +11,8 @@ import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInp
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
+import { lintSvgLayouts } from './svg-layout.mjs';
+import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -672,7 +674,11 @@ async function runLintOnly(context, cwd, words, setRelease) {
   context.coverage = bindingCoverage({ root, found, selected });
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
-  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null }), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
+  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
+  context.warnings = [...svgWarnings, ...found.warnings];
+  if (!context.json) for (const warning of svgWarnings) line(ports.stderr, warning);
+  const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
     secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
   context.folder = context.store.folder('batches', batch);
@@ -721,7 +727,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   if (context.json) {
     line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, coverage: context.coverage, problems,
-      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
+      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: context.warnings }));
     return exitCode;
   }
   const out = [];
@@ -928,6 +934,30 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    // Local modes dispatch before repository runtime state, origin or sign-in.
+    if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
+      if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd check --screen URL --drawing PATH [--json], without other options or Stories.');
+      try {
+        const report = await compareScreen({ url: options['--screen'], drawingPath: options['--drawing'], cwd, chromePath: ports.env.PDD_CHROME_PATH }, { env: ports.env, browser: givenPorts.screenBrowser });
+        const exitCode = report.passed ? 0 : 1;
+        line(ports.stdout, context.json ? JSON.stringify({ ...report, exit_code: exitCode }) : formatScreenComparison(report));
+        return exitCode;
+      } catch (error) { throw new Stop(error.exitCode === 2 ? 2 : 5, `Screen comparison: ${causeText(error.message) || 'browser execution failed'}`); }
+    }
+    if (options['--local'] !== undefined) {
+      if (options['--local'] !== true || options['--lint'] !== true || Object.keys(options).some(name => !['--lint', '--local', '--json'].includes(name))) throw new Stop(2, '--local requires --lint and accepts only Story words and --json.');
+      try {
+        const root = repoRoot(cwd), files = gitFiles(root);
+        let promptPaths;
+        if (words.length) {
+          const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
+          promptPaths = captureSource(root, { tests: selected.map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+        }
+        const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
+        line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
+        return 0;
+      } catch (error) { throw new Stop(2, error.message); }
+    }
     requestedCalls(options['--max-calls']);
     const modes = ['--read', '--retry', '--fill-hash', '--files', '--request', '--lint'].filter(name => options[name] !== undefined);
     const others = Object.keys(options).filter(name => !modes.includes(name) && !(modes[0] === '--retry' && ['--json', '--details', '--timeout'].includes(name)) && !(name === '--json' && ['--read', '--request', '--lint'].includes(modes[0])) && !(name === '--app-map' && modes[0] === '--files'));

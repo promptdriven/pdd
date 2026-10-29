@@ -207,7 +207,9 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
   const help = pdd('check', '--help');
   assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\|CALL_ID\]/);
-  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/); assert.doesNotMatch(help.stdout, /--local/);
+  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
+  assert.match(help.stdout, /pdd check --lint --local \[STORY\.\.\.\] \[--json\]/);
+  assert.match(help.stdout, /pdd check --screen URL --drawing PATH \[--json\]/);
   assert.doesNotMatch(help.stdout, /--request/);
   assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);

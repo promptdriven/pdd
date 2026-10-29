@@ -822,7 +822,7 @@ test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option 
     const result = await check(clean, fake, [], { '--lint': true });
     assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
   }
-  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true }]) {
+  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true, '--details': true }, { '--local': true }]) {
     assert.equal((await check(clean, quiet, [], options)).code, 2, JSON.stringify(options));
   }
 });

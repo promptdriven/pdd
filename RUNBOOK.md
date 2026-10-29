@@ -338,6 +338,30 @@ Then make sure that every criterion still has a check, and run `pdd check <story
 
 ## 13. Give your app a screen (app map)
 
+### The drawing is the layout spec
+
+When a screen prompt links a `.ui.svg`, that drawing is authoritative for its visible parts, words, spatial order, stable ids and named state. It is a comparison reference, not an optional illustration. Prose and drawing must describe the same parts; prose owns behavior and the sources of dynamic values. Declare the state and viewport beside the view and name each region/control id in the appearance rules. Mark unowned surroundings `data-context-only="true"` or class `context-only`. Keep DOM/focus order in accessibility prose; SVG source order does not set it.
+
+Before building, run `pdd check --lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd check --lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
+
+Build reads the linked drawing as the layout spec and implements its parts, words, ids, order and state. After building, serve the real page in the reference state and run:
+
+```sh
+pdd check --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
+```
+
+This uses installed headless Chrome/Chromium at the SVG viewport, no AI or runtime calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
+
+Verification must put a **Screen vs drawing** table in `verify.md` and the code PR body (PR 2 in a two-PR run):
+
+| Part | Drawing | Screen | Result |
+|---|---|---|---|
+| Named id or visible text | Expected state/region | Observed state/region | Pass or concrete failure |
+
+Keep actual rows and the command's exit code. A missing/hidden part, wrong region or inverted order fails verify like a failing test. A missing browser, page or reference leaves verify unproved; never mark it passed. Return to build and compare again until the screen matches; never remove required parts from the reference to obtain a pass. A failing table remains a failure if workflow retry limits are reached. Include every linked reference state affected by the change. A 2048 screen without the drawing's score box, seed box or READY bar must fail even when behavior tests pass.
+
+### App map
+
 The Try page has a **Screen** tab only when the repo has an app map: a JSON file that connects prompt operations to
 screens. It holds no code. Without it, the person uses forms (or a terminal for `cli`).
 - `pdd try` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
