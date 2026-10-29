@@ -4,7 +4,7 @@ As a tester using a local checkout or GitHub branch, I can identify that build i
 
 ## Acceptance criteria
 
-1. Running `pdd --version` from the approved checkout or branch build prints the package version with a `-dev.<branch>.<sha>` suffix, such as `0.1.9-dev.feature-2455-bd781e7d.5a45a2c8b`, followed by one newline and no package-name prefix.
+1. Running `pdd --version` from a checkout or branch build runs `git symbolic-ref --short HEAD`, replaces every `/` in that branch with `-` while leaving letters, digits, `.`, `_` and `-` unchanged, takes the first 9 hexadecimal characters from `git rev-parse HEAD`, and prints the package version followed by exactly `-dev.<encoded-branch>.<sha9>` (for example `0.1.9-dev.feature-2455-bd781e7d.5a45a2c8b`), one newline, and no package-name prefix.
 2. Running `pdd --version` from the published release continues to print only the release version, such as `0.1.9`, followed by one newline.
 
 ## Documentation deliverable
@@ -13,6 +13,6 @@ Repository usage documentation explains how to test a fix before release. It sho
 
 ## Rules to check
 
-- The branch and commit identify the exact checkout build; the approved branch encoding and SHA length remain to be decided before implementation.
+- The checkout suffix is deterministic: `git symbolic-ref --short HEAD` supplies the branch, every `/` becomes `-`, letters, digits, `.`, `_` and `-` remain unchanged, and `git rev-parse HEAD` supplies the first 9 hexadecimal characters. The format is exactly `-dev.<encoded-branch>.<sha9>`.
 - PATH diagnostics and stale-skill diagnostics stay on stderr and do not change the version-only stdout contract.
 - The documentation commands reflect existing npm behavior; they do not define a new installer or managed state.
