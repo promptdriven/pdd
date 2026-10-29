@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.9 from the `alpha` branch of `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.9 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -57,7 +57,7 @@ Do these steps in this order:
 |---|---|---|
 | 1. Install the skills | `npx skills add promptdriven/pdd` | Always. Add `-g` for all your projects |
 | 2. Set up the repo | The `pdd-setup` skill in Codex or Claude Code | Once for each repo |
-| 3. Install the pdd command | `npm install -g github:promptdriven/pdd#alpha` | Only for runs with PRs, and for `pdd check`, `pdd try` and `pdd approve` |
+| 3. Install the pdd command | `npm install -g github:promptdriven/pdd` | Only for runs with PRs, and for `pdd check`, `pdd try` and `pdd approve` |
 
 ### 2.1 Install the skills
 
@@ -74,24 +74,24 @@ This is the standard skills installer. It needs only Node.js. [Section 4](#4-the
 You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd check`, `pdd try` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-runtime)).
 
 ```sh
-npm install -g github:promptdriven/pdd#alpha
+npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
 pdd --version   # prints 0.1.9
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the `alpha` branch from GitHub. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
+npm downloads the repository's default branch from GitHub. You can also install the `alpha` branch with `npm install -g github:promptdriven/pdd#alpha`. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
 
 Important:
 
-- Always install and update with the full `github:promptdriven/pdd#alpha` line.
+- Always install and update with the full `github:promptdriven/pdd` line, or append `#alpha` to select that branch.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace PDD Alpha with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ## 3. If you have the old Python pdd
 
-The `main` branch of this repository and PyPI have the older Python `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
+v1 is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
 Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
@@ -402,7 +402,7 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 0 | passed | Nothing. |
 | 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
 | 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
-| 5 | not run | Sign-in, a busy server, no AI room, a login that is not invited, or an old pdd. Read the one line that pdd prints. |
+| 5 | not run | Sign-in, a busy server, no AI room, a GitHub account that PDD Cloud has not approved, or an old pdd. Read the one line that pdd prints. |
 | 3 | unknown or still running | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
 
@@ -442,7 +442,8 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 | pdd prints | What to do |
 |---|---|
 | `No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".` | pdd also says why for each near miss: a `tests/*.json` file without that `schema_version`, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
-| `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
+| `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
+| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is a slow PDD Cloud sign-in. Wait 1 minute, then run the command again. Exit code 3. |
 | `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
@@ -507,7 +508,7 @@ This replaces the PDD skills, also a copy that `pdd setup` made. Start a new age
 Update the pdd command, then let it check the skills:
 
 ```sh
-npm install -g github:promptdriven/pdd#alpha
+npm install -g github:promptdriven/pdd
 pdd --version
 pdd setup
 ```
@@ -569,8 +570,8 @@ This is an alpha. These limits are known today:
 | `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
-| `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
-| `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd#alpha`, then `pdd setup`. |
+| `pdd check` says that your GitHub account does not have PDD runtime access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
+| `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd`, then `pdd setup`. |
 | `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
 | PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
@@ -619,14 +620,14 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 ```json
 {
   "agents": [
-    { "name": "Claude (work3)", "kind": "claude", "command": "claude-work3" },
-    { "name": "Codex (work5)", "kind": "codex", "command": "codex", "env": { "CODEX_HOME": "~/.pdd-codex/work5" } }
+    { "name": "Claude (account-a)", "kind": "claude", "command": "claude-account-a" },
+    { "name": "Codex (account-b)", "kind": "codex", "command": "codex", "env": { "CODEX_HOME": "~/.pdd-codex/account-b" } }
   ],
   "include_defaults": true
 }
 ```
 
-Use `pdd try my-story --agent "Codex (work5)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
+Use `pdd try my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
 
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini CLI 0.66.0 uses a verified configuration with tools disabled; other Gemini versions are refused until their safety controls are verified. When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
