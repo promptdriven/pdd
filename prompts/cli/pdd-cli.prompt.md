@@ -51,7 +51,7 @@ with external effects is invoked; no runtime resource is needed for that path.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "8ff19e25796686bbf81f5a2eba1f68ae3d8c91c36ee84f609de21b2f2d6b1af0",
   "entries": [{
     "operation": "runPdd",
