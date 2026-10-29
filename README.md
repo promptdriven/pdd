@@ -203,7 +203,7 @@ The [CLI reference](docs/cli.md) has every command and option.
 
 ## Access
 
-`pdd check` and `pdd try` use the hosted PDD runtime. The hosted runtime is in early access. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses, or [open an access request](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your GitHub login. Access follows PDD Cloud accounts soon.
+`pdd check` and `pdd try` use the hosted PDD runtime. The runtime lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your GitHub login.
 
 The skills and the other commands run on your computer.
 
@@ -211,7 +211,7 @@ The skills and the other commands run on your computer.
 
 | You see | What to do |
 |---|---|
-| `Your GitHub login NAME is not on the PDD runtime invite list yet.` | The PDD team must add your GitHub login. [Open an access request](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your login. See [Access](#access). |
+| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is access: PDD Cloud has not approved your GitHub account, or the PDD Cloud sign-in was slow. Make sure that PDD Cloud approved the GitHub account that `gh` uses. See [Access](#access). Then wait 1 minute and run the command again. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
 | `REFUSED` (exit code 4) | Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
