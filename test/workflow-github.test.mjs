@@ -447,7 +447,12 @@ test('an early stdin failure becomes recovery_required without an unhandled EPIP
   const f = await fixture(t), intent = await f.prepare();
   const bin = await mkdtemp(join(tmpdir(), 'pdd-gh-bin-')), gh = join(bin, 'gh');
   t.after(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(gh, '#!/bin/sh\nexec 0<&-\nkill -PIPE $\n'); await chmod(gh, 0o755);
+  await writeFile(gh, String.raw`#!/bin/sh
+if [ "$1" = repo ]; then printf '%s\n' '{"nameWithOwner":"Acme/Project","defaultBranchRef":{"name":"main"},"url":"https://github.com/Acme/Project"}'; exit 0; fi
+if [ "$1" = pr ] && [ "$2" = list ]; then printf '[]\n'; exit 0; fi
+exec 0<&-
+kill -PIPE $$
+`); await chmod(gh, 0o755);
   const original = f.ports.execFile;
   f.ports.execFile = (file, args, options) => file === 'gh'
     ? promisify(execFile)(file, args, { ...options, env: { ...f.ports.env, PATH: `${bin}:${process.env.PATH}` } })
