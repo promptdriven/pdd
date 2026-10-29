@@ -25,3 +25,5 @@ Option kind `integer` takes decimal digits with no sign, within the option's `mi
 Option kind `optional-integer` consumes the following word only when it is decimal digits; validate against
 min/max and store it as a string. With no number, store the catalog's default as a string. A subsequent option
 or Story operand remains available for ordinary parsing. This supports --serve [PORT].
+
+Accept the catalog's `pdd mcp` route without operands or options; normal local help forms apply. Parsing never starts the server or registers it.

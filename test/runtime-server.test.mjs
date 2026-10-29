@@ -225,7 +225,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(fake.posts.length, 2);
 });
 
-// Wrong: pdd gives up on a slow check after 10 min, or waits in silence (Serhan: no timeouts).
+// Wrong: pdd gives up on a slow check after 10 min, or waits in silence.
 test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
   const setup = harbor(t), sent = new Map();
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
@@ -402,7 +402,7 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
   }
 });
 
-// Wrong: the PR line hides a failure, or --json lacks the line an agent pastes (Serhan, Oct 27).
+// Wrong: the PR line hides a failure, or --json lacks the line an agent pastes.
 test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
   const setup = harbor(t);
   const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
@@ -426,14 +426,23 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
   assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
-// Wrong: the runtime address is written in more than one place, so a move needs many edits (Serhan, Oct 27).
+// Wrong: the runtime address is written in more than one place, so a move needs many edits.
 test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIME_URL overrides it', async () => {
   const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime-client.mjs');
   const host = new URL(DEFAULT_RUNTIME_URL).host;
   // This test names the hosts on purpose; every other tracked file must not.
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
-  assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  // Fixed report evidence in the two runbooks is not a runtime configuration value.
+  const evidenceOnly = hit => {
+    const match = /^(RUNBOOK\.md|skills\/pdd-prompting\/RUNBOOK\.md):[0-9]+:(.*)$/.exec(hit);
+    if (!match) return false;
+    const report = new RegExp(`\\[[^\\]\\n]+\\]\\(https://${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\)`, 'g');
+    return !match[2].replace(report, '').includes(host);
+  };
+  assert.equal(evidenceOnly(`RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`), true);
+  for (const bad of [`RUNBOOK.md:1:PDD_RUNTIME_URL=${DEFAULT_RUNTIME_URL}`, `docs/cli.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`, `RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/latest)`]) assert.equal(evidenceOnly(bad), false);
+  assert.deepEqual(hits.filter(hit => !evidenceOnly(hit)).map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
   assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
   assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', '34\\.72\\.131\\.98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
@@ -590,7 +599,7 @@ test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and f
   assert.doesNotMatch(old.out, /Where:|Fix:|Your test is fine/);
 });
 
-// Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
+// Wrong: the engine warning repeats on every run.
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: '7b03d3ea8cc047ed' } } : f.normal(entry));
@@ -610,7 +619,7 @@ const draftRepo = t => harbor(t, repo => {
 const draftLint = (entry, f) => entry.method === 'POST' && entry.command === 'lint'
   ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'draft', admission_state: 'draft', interface: { calls: [] } }]) } : null;
 
-// Wrong: a draft run looks like an approved one in the table, the links, the PR line or --json (Serhan, Oct 27).
+// Wrong: a draft run looks like an approved one in the table, the links, the PR line or --json.
 test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary line and --json says DRAFT', async t => {
   const setup = draftRepo(t), fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
@@ -650,7 +659,7 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
   assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
 });
 
-// Wrong: the runtime runs on a bare IP (Serhan, Oct 27), and pdd refuses its own links or accepts a link to another host.
+// Wrong: the runtime runs on a bare IP, and pdd refuses its own links or accepts a link to another host.
 test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links on the old IP or any other host, port or scheme fail', async () => {
   const { runtimeOrigin } = await import('../src/runtime-client.mjs');
   const origin = runtimeOrigin({}), host = 'https://runtime.promptdriven.ai';
@@ -711,6 +720,73 @@ test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check i
   assert.equal(opens.code, 5); assert.match(opens.out + opens.err, /The runtime opens soon\./);
 });
 
+// The live PDD Cloud answers (prompt-runtime server/access.py, Oct 29): code and message sit under error.
+const refusedBody = error => ({ requestId: null, command: 'lint', state: 'refused', job_created: false, dispatch: 'not_started', error });
+const NO_CLOUD_SAID = 'Your GitHub account has no PDD Cloud access yet. Sign up at https://promptdriven.ai/login or ask the team.';
+const CLOUD_DOWN = { status: 503, headers: { 'Retry-After': '60' }, json: refusedBody({ code: 'cloud-unavailable',
+  message: 'PDD Cloud sign-in is slow to answer. pdd retries this; try again in a minute.', details: { retryable: true, retry_after: 60 } }) };
+const START = Date.parse('2026-10-27T16:27:47Z');
+
+// Wrong: a GitHub account without PDD Cloud access waits a minute for "The lint result is unknown", exit 3, and never learns to sign up (Oct 29).
+test('RUNTIME-CLOUD1: 403 no-cloud-access stops at once with the sign-up line in each body shape, exit 5, no reads', async t => {
+  const setup = harbor(t);
+  for (const [json, said] of [[refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID, details: { retryable: false } }), NO_CLOUD_SAID],
+    [{ code: 'no-cloud-access', message: NO_CLOUD_SAID }, NO_CLOUD_SAID],
+    // The server shim for pdd 0.1.9: a top-level update-required over error.code no-cloud-access is the access answer.
+    [{ code: 'update-required', message: 'Sign up at https://promptdriven.ai/login with GitHub.', ...refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID }) }, NO_CLOUD_SAID],
+    [refusedBody({ code: 'no-cloud-access' }), /does not have PDD runtime access yet\. Sign up at https:\/\/promptdriven\.ai\/login with GitHub/]]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 403, json } : f.normal(entry));
+    for (const options of [{}, { '--lint': true }]) {
+      const result = await check(setup, fake, [], options), why = JSON.stringify({ json, options });
+      assert.equal(result.code, 5, why); assert.equal(result.out, '', why);
+      if (typeof said === 'string') assert.ok(result.err.trimEnd().split('\n').includes(said), result.err); else assert.match(result.err, said);
+      assert.doesNotMatch(result.err, /update pdd|unknown|If pdd stops/i, why);
+      assert.equal(result.clock.now, START, why);
+    }
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
+  }
+  const later = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? { status: 403, json: refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID }) } : f.normal(entry));
+  const viaCheck = await check(setup, later, ['place-order']);
+  assert.equal(viaCheck.code, 5); assert.ok(viaCheck.err.includes(NO_CLOUD_SAID), viaCheck.err); assert.equal(later.gets.length, 0);
+});
+
+// Wrong: when PDD Cloud cannot check the account, pdd polls silently for a minute and then says the result is unknown (Oct 29).
+test('RUNTIME-CLOUD2: 503 cloud-unavailable says at once to try again in a minute, with no silent wait', async t => {
+  const setup = harbor(t), again = /PDD Cloud could not confirm your access\. Try again in a minute\./;
+  for (const reply of [CLOUD_DOWN, { status: 503, json: { code: 'cloud-unavailable', message: 'slow' } }]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
+    for (const options of [{}, { '--lint': true }]) {
+      const result = await check(setup, fake, [], options);
+      assert.equal(result.code, 5); assert.match(result.err, again); assert.doesNotMatch(result.err, /pdd retries this|unknown/i);
+      assert.equal(result.clock.now, START);
+    }
+    assert.deepEqual(fake.posts.map(post => post.command), ['lint', 'lint']); assert.equal(fake.gets.length, 0);
+  }
+  const atCheck = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'check' ? CLOUD_DOWN : f.normal(entry));
+  const posted = await check(setup, atCheck, ['place-order']);
+  assert.equal(posted.code, 5); assert.match(posted.err, again);
+  assert.deepEqual(atCheck.posts.map(post => post.command), ['lint', 'check']); assert.equal(atCheck.gets.length, 0);
+  // A check that the server took keeps running: pdd stops reading, says why, and names the --read line.
+  const atRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? CLOUD_DOWN : f.normal(entry));
+  const reading = await check(setup, atRead, ['place-order']);
+  assert.equal(reading.code, 3); assert.match(reading.err, again); assert.match(reading.err, /pdd check --read /);
+  assert.equal(atRead.gets.length, 1); assert.deepEqual(atRead.posts.map(post => post.command), ['lint', 'check']);
+});
+
+// Wrong: the error-first read of the PDD Cloud answers breaks the old answers (0.1.6 update-required, Oct 27 not-invited).
+test('RUNTIME-CLOUD3: update-required still says to update pdd, and not-invited keeps its line in each shape', async t => {
+  const setup = harbor(t);
+  for (const [reply, said] of [[{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /^Please update pdd\.$/m],
+    [{ status: 426, json: { code: 'update-required', error: { code: 'update-required', message: 'Please update pdd now.' } } }, /^Please update pdd now\.$/m],
+    [{ status: 426, json: { code: 'update-required' } }, /^Please update pdd: npm install -g github:promptdriven\/pdd$/m],
+    [NOT_INVITED, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m],
+    [{ status: 403, json: refusedBody({ code: 'not-invited', message: 'not invited', details: { login: 'octo' } }) }, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m]]) {
+    const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
+    const result = await check(setup, fake, [], { '--lint': true });
+    assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.equal(fake.gets.length, 0);
+  }
+});
+
 // Wrong: the read line shows before lint, when there is nothing to read yet (lead, Oct 27).
 test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the checks are sent', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
@@ -766,13 +842,13 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
   const bare = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 400, json: { error: { code: 'update-required' } } } : f.normal(entry));
   const fallback = await check(setup, bare, ['place-order']);
-  assert.equal(fallback.code, 5); assert.ok(fallback.err.includes('Please update pdd: npm install -g github:promptdriven/pdd#alpha'), fallback.err);
+  assert.equal(fallback.code, 5); assert.match(fallback.err, /^Please update pdd: npm install -g github:promptdriven\/pdd$/m);
   const onRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? said : f.normal(entry));
   const reading = await check(setup, onRead, ['place-order']);
   assert.ok(reading.err.includes(said.json.message), reading.err);
 });
 
-// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules (Serhan: runtime logic on the server).
+// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
 test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
@@ -813,7 +889,7 @@ test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option 
     const result = await check(clean, fake, [], { '--lint': true });
     assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
   }
-  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true }]) {
+  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true, '--details': true }, { '--local': true }]) {
     assert.equal((await check(clean, quiet, [], options)).code, 2, JSON.stringify(options));
   }
 });

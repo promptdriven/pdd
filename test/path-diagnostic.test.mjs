@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
@@ -11,15 +11,16 @@ const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pdd-path ' proof-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const old = join(root, 'conda-bin'), alpha = join(root, 'alpha-bin'), home = join(root, 'home'), cwd = join(root, 'project');
-  for (const path of [old, alpha, home, cwd]) mkdirSync(path);
+  const old = join(root, 'conda-bin'), alpha = join(root, 'alpha-bin'), nodeBin = join(root, 'node-bin'), home = join(root, 'home'), cwd = join(root, 'project');
+  for (const path of [old, alpha, nodeBin, home, cwd]) mkdirSync(path);
+  symlinkSync(process.execPath, join(nodeBin, 'node'));
   const legacy = '#!/bin/sh\nprintf "pdd, version 0.0.305.dev214\\n"\n';
   writeFileSync(join(old, 'pdd'), legacy, { mode: 0o755 });
   symlinkSync(bin, join(alpha, 'pdd'));
-  const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: '', PATH: [old, alpha, dirname(process.execPath), '/usr/bin', '/bin'].join(':') };
+  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: '', PATH: [old, alpha, nodeBin, '/usr/bin', '/bin'].join(':') };
   delete env.PDD_PATH_PROBE;
   const run = (...args) => spawnSync(process.execPath, [bin, ...args], { cwd, env, encoding: 'utf8', timeout: 10000 });
-  return { root, old, alpha, cwd, env, run, legacy };
+  return { root, old, alpha, nodeBin, cwd, env, run, legacy };
 }
 
 test('PATH1: setup and version identify the running Alpha, selected legacy version, all paths and activation order', t => {
@@ -39,7 +40,7 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
 
 test('PATH2: PATH correction selects Alpha and a second version check terminates without recursive probes', t => {
   const f = fixture(t);
-  f.env.PATH = [f.alpha, f.old, dirname(process.execPath), '/usr/bin', '/bin'].join(':');
+  f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
   assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, /PATH selects:.*PDD Alpha/);
