@@ -292,9 +292,10 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
   };
   const stable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order']);
   assert.equal(stable.code, 1);
-  assert.match(stable.out, /Runtime check \(place-order\): ✗ [^\n]*5 AI calls \(2 AI calls for reruns\)/);
-  assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\. 2 more AI calls\./);
-  assert.match(stable.out, /Rerun: passed 2 of 2 reruns\./);
+  assert.match(stable.out, /Runtime check \(place-order\): ✗ [^\n]*5 AI calls \(2 for reruns\)/);
+  assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
+  assert.doesNotMatch(stable.out, /passed 2 of 2 reruns/);
+  assert.equal((stable.out.match(/Rerun:/g) ?? []).length, 2); assert.doesNotMatch(stable.out, /more AI calls/);
   assert.match(stable.out, /AC3  step second-step[\s\S]*Rerun: failed 1 of 3 \(unstable\)\. Make the rule in the prompt firmer\./);
   const stableJson = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order'], { '--json': true });
   assert.equal(stableJson.code, 1); assert.equal(stableJson.json.rows[0].rerun.calls, 2);
@@ -309,8 +310,25 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
 
   const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order']);
   assert.match(skippedText.out, /Rerun: skipped \(more-than-3-failed-steps\)\./);
-  const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order'], { '--json': true });
-  assert.equal(skipped.json.rows[0].rerun.skipped, 'more-than-3-failed-steps');
+  const skipReasons = ['more-than-3-failed-steps', 'not-failed', 'budget', 'live-resources'];
+  for (const reason of skipReasons) {
+    const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order']);
+    assert.ok(skippedText.out.includes(`Rerun: skipped (${reason}).`));
+    const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order'], { '--json': true });
+    assert.equal(skipped.json.rows[0].rerun.skipped, reason);
+  }
+  const missingUsage = await check(setup, await fakeRuntime(t, (entry, f) => {
+    const reply = answerFor({ calls: 2, steps: [{ step_id: 'first-step', runs: 3, failed: 3, stable: true }] }, 5, false)(entry, f);
+    return Promise.resolve(reply).then(result => { if (result.json?.usage) delete result.json.usage; return result; });
+  }), ['place-order']);
+  assert.doesNotMatch(missingUsage.out, /0 AI calls/); assert.match(missingUsage.out, /2 for reruns/);
+  const invalid = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    answer.result.report.rerun = { calls: -1, steps: [{ step_id: 'first-step', runs: '3', failed: -1, stable: true }] };
+    return { status: 200, json: answer };
+  }), ['place-order'], { '--json': true });
+  assert.equal(invalid.json.rows[0].rerun.calls, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].runs, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].failed, undefined);
 });
 
 test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
@@ -398,7 +416,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
