@@ -1195,7 +1195,7 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   const approval = f.git(run.root, 'rev-parse', 'HEAD');
   const capture = join(f.base, 'gh-body.txt'), gh = join(f.base, 'gh'), gitShim = join(f.base, 'git'), bodyFile = join(f.base, 'gh-pr-body.txt');
   writeFileSync(bodyFile, f.prs[0].body);
-  const realGit = execFileSync('command', ['-v', 'git'], { encoding: 'utf8' }).trim();
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
   writeFileSync(gitShim, '#!/bin/sh\ncase "$1" in fetch|push) exit 0;; esac\nexec "' + realGit + '" "$@"\n'); chmodSync(gitShim, 0o755);
   writeFileSync(gh, '#!/bin/sh\nif [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = view ]; then if [ "$4" = body ]; then cat "$GH_PR_BODY_FILE"; else echo "{\"state\":\"OPEN\"}"; fi; exit 0; fi\nexit 0\n'); chmodSync(gh, 0o755);
   const oldPath = process.env.PATH, oldCap=process.env.GH_CAPTURE, oldBody=process.env.GH_PR_BODY_FILE; process.env.PATH = `${f.base}:${oldPath}`; process.env.GH_CAPTURE=capture; process.env.GH_PR_BODY_FILE=bodyFile;
