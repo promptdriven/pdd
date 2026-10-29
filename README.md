@@ -166,8 +166,8 @@ On the **Screen** tab, click **Open the app**. The runtime draws the 2048 board 
 | Your program | Command | What you do |
 |---|---|---|
 | A web app or a screen | `pdd try STORY` | Use the **Screen** tab. It needs an app map. The agent writes one for a page or a screen. |
-| A command line | `pdd try STORY --cli` | Copy the PATH line that pdd prints. Then run your program as usual. |
-| An API | `pdd try STORY --serve 8080` | Send requests to `http://127.0.0.1:8080`, for example with `curl`. Press Ctrl-C to stop the server. The prompt names its routes ([RUNBOOK §19](RUNBOOK.md#19-use-a-try-from-your-terminal-or-curl)). |
+| A command line | `pdd try STORY --cli` | Copy the PATH line that pdd prints. Then run your program as usual. See [The virtual CLI and the virtual API](#the-virtual-cli-and-the-virtual-api). |
+| An API | `pdd try STORY --serve 8080` | Send requests to `http://127.0.0.1:8080`, for example with `curl`. Press Ctrl-C to stop the server. The prompt names its routes. See [The virtual CLI and the virtual API](#the-virtual-cli-and-the-virtual-api) and [RUNBOOK §19](RUNBOOK.md#19-use-a-try-from-your-terminal-or-curl). |
 | Anything else | `pdd try STORY` | Use the **Form** tab: fill the fields and press **Run**. |
 
 **Ask your agent.** While `pdd try` runs in your terminal, the **Ask your agent** panel on the Try page talks to a coding agent on your computer. Ask it what to try, ask it to fill the fields from your words, or ask it to explain an answer. It only reads, and it never presses **Run** for you. It uses your agent's own sign-in and allowance, not the AI calls of the Try. To choose the agent, add `--agent NAME`. `pdd try --help` shows the agents that pdd can connect.
@@ -202,6 +202,80 @@ In the 2048 project, the pull request for prompt space held the 3 prompts, the 5
 You can also stop in prompt space: merge that pull request, and make the pull request for code space later with `pdd workflow approve 42`. pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
 
 To see where a run is, run `pdd workflow status 42`. To open its chat, run `pdd workflow open 42`.
+
+## The virtual CLI and the virtual API
+
+A Try can also run your program in your terminal: as a command line (the virtual CLI), or as an HTTP API on your computer (the virtual API). There is no code. The PDD runtime runs each command and each request from the prompts. The example is a bookmarks program. Its prompt describes the `bm` commands and 3 routes: `GET /api/bookmarks`, `GET /api/bookmarks/:id` and `POST /api/bookmarks`.
+
+**The virtual CLI.** In terminal 1, start the Try:
+
+```sh
+pdd try shared-bookmarks --cli
+```
+
+pdd prints a PATH line with the full path to your repo:
+
+```
+Try is ready: bm
+export PATH=/path/to/your-repo/.pdd/try/bin:"$PATH"
+```
+
+Copy that line and run it. pdd cannot change the PATH of your terminal, so you do this step. Then run the program's own commands:
+
+```console
+$ bm --help
+Usage: bm add <url> [--tag <tag>]
+       bm list [--tag <tag>]
+       bm search <word>
+       bm --help
+$ bm add https://example.com/Gamma --tag news
+{"id":"b1","url":"https://example.com/Gamma","tag":"news"}
+$ bm list --tag news
+[{"id":"b1","url":"https://example.com/Gamma","tag":"news"}]
+$ echo $?
+0
+```
+
+The exit code is the program's exit code. Each command also writes its AI calls to stderr, for example `Try AI usage: 3 this command · 4 used · 396 remaining (session cap 400).`
+
+**The virtual API.** In terminal 2, start a server for the same Try. Keep it running:
+
+```sh
+pdd try shared-bookmarks --serve 8091
+```
+
+```
+Try is serving at http://127.0.0.1:8091
+  POST /api/bookmarks
+  GET /api/bookmarks/:id
+  GET /api/bookmarks
+Ctrl-C closes this server. The Try session keeps its saved data.
+```
+
+In terminal 1, list, add and get one:
+
+```console
+$ curl 'http://127.0.0.1:8091/api/bookmarks?tag=news'
+[{"id":"b1","tag":"news","url":"https://example.com/Gamma"}]
+$ curl -X POST http://127.0.0.1:8091/api/bookmarks \
+    -H 'Content-Type: application/json' \
+    -d '{"url":"https://example.org/Delta","tag":"news"}'
+{"id":"b2","tag":"news","url":"https://example.org/Delta"}
+$ curl http://127.0.0.1:8091/api/bookmarks/b2
+{"id":"b2","tag":"news","url":"https://example.org/Delta"}
+```
+
+The CLI and the API use the same Try data. The API finds `b1`, which `bm add` saved. After the POST, `bm list --tag news` shows `b1` and `b2`. An unknown ID gets the answer that the prompt describes: status 404 and `{"error":"Bookmark not found"}`.
+
+**What to expect.**
+
+- The PDD runtime runs each command and each request, with no code. Each one takes about 10 to 20 seconds.
+- Each one uses AI calls from the Try budget (1 to 3 calls in this example). The API answers have the headers `x-pdd-ai-calls` and `x-pdd-try-remaining`.
+- A Try runs one command at a time. A second command at the same time stops with `This Try session is busy.` and exit code 125.
+- The Try covers the commands and the routes that the prompt describes.
+- To stop the server, press Ctrl-C. To close the Try, run `pdd try --stop shared-bookmarks`.
+
+**For agents.** Your coding agent can use these commands like any program in its terminal, after the same PATH line. Run the agent with network access and without a sandbox that blocks files outside the repo: `bm` connects to the PDD runtime and uses files that pdd keeps outside the repo.
 
 ## The commands
 
