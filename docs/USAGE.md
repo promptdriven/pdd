@@ -402,7 +402,7 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 0 | passed | Nothing. |
 | 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
 | 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
-| 5 | not run | Sign-in, a busy server, no AI room, a login that is not invited, or an old pdd. Read the one line that pdd prints. |
+| 5 | not run | Sign-in, a busy server, no AI room, a GitHub account that PDD Cloud has not approved, or an old pdd. Read the one line that pdd prints. |
 | 3 | unknown or still running | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
 
@@ -442,7 +442,8 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 | pdd prints | What to do |
 |---|---|
 | `No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".` | pdd also says why for each near miss: a `tests/*.json` file without that `schema_version`, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
-| `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
+| `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
+| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is a slow PDD Cloud sign-in. Wait 1 minute, then run the command again. Exit code 3. |
 | `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
@@ -569,7 +570,7 @@ This is an alpha. These limits are known today:
 | `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
 | The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
-| `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
+| `pdd check` says that your GitHub account does not have PDD runtime access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd`, then `pdd setup`. |
 | `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
 | PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |
