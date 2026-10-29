@@ -2,10 +2,16 @@
 import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { causeText } from './runtime-output.mjs';
 
-const execute = promisify(execFile);
+const execute = (file, args, options) => new Promise((resolve, reject) => {
+  const { input, ...execOptions } = options;
+  const child = execFile(file, args, execOptions, (error, stdout, stderr) => {
+    if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
+    else resolve({ stdout, stderr });
+  });
+  if (input !== undefined) { child.stdin.end(input); }
+});
 const fields = 'number,url,state,headRefName,baseRefName,headRefOid,mergeCommit,body,isCrossRepository,headRepository,headRepositoryOwner';
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(value);
 const text = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
