@@ -782,7 +782,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   const local = `${run.root}/test/x.test.mjs`;
   writeFileSync(join(run.runDir, 'verify.md'), `Old notes from ${run.runDir}/check.md\n`);
   f.tick();
-  const done = await stepDone({ step: 'check', summary: `Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls; Report: https://rt.example.test/r/d379-42; ran from ${local} with /Users/someone/pocket/node/bin/node and /home/ci/bin/node ${'and a very long tail of words that keeps going '.repeat(8)}`, cwd: run.root }, f.agentPorts());
+  const done = await stepDone({ step: 'check', summary: `Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls; Report: https://rt.example.test/r/d379-42; ran from ${local} with /Users/someone/toolbox/node/bin/node and /home/ci/bin/node ${'and a very long tail of words that keeps going '.repeat(8)}`, cwd: run.root }, f.agentPorts());
   assert.equal(done.exitCode, 0, done.message);
   f.tick(); await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); f.ports.confirm = async () => false;
