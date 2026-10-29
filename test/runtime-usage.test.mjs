@@ -27,9 +27,9 @@ test('issue 13: pending lint has zero calls, but saved unknown usage refuses con
   saved.rows[0].calls='unknown';saved.rows[0].phase='server';writeFileSync(file,JSON.stringify(saved));
   ready=true;const reads=fake.gets.length;
   const again=await run(setup,fake,{'--read':first.json.batch});
-  // Recovery can now dispatch held Checks, so present unknown usage must fail proof
-  // before allocating an ID; the former read-only exit5/zero-call projection is unsafe.
-  assert.equal(again.code,2);assert.match(again.err,/zero-call lint-held proof/);
+  assert.equal(again.code,5);assert.match(again.err,/zero-call lint-held proof/);
+  assert.equal(again.json.rows.length,1);assert.equal(again.json.rows[0].calls,0);
+  assert.equal(again.json.rows[0].request_id,null);assert.doesNotMatch(again.json.summary_line,/\+ \d+ unknown/);
   assert.equal(again.clock.uuids,0);
   assert.equal(fake.posts.length,1);assert.equal(fake.gets.length,reads+1,'only the outstanding lint is read');
   for (let attempt=0;attempt<2;attempt++) {
@@ -37,7 +37,7 @@ test('issue 13: pending lint has zero calls, but saved unknown usage refuses con
     assert.equal(retained.rows[0].calls,'unknown','refusal preserves the raw evidence');
     assert.deepEqual(retained.rows[0].request_ids,[]);
     const repeat=await run(setup,fake,{'--read':first.json.batch});
-    assert.equal(repeat.code,2);assert.match(repeat.err,/zero-call lint-held proof/);
+    assert.equal(repeat.code,5);assert.equal(repeat.json.rows.length,1);assert.equal(repeat.json.rows[0].calls,0);assert.equal(repeat.json.rows[0].request_id,null);assert.doesNotMatch(repeat.json.summary_line,/\+ \d+ unknown/);assert.match(repeat.err,/zero-call lint-held proof/);
     assert.equal(repeat.clock.uuids,0);assert.equal(fake.posts.length,1);
   }
   assert.equal(JSON.parse(readFileSync(file,'utf8')).rows[0].calls,'unknown');

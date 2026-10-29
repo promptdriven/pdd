@@ -421,6 +421,7 @@ function batchRecord(context) {
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
+      ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
@@ -694,6 +695,7 @@ function firstToday(context, sha) {
 }
 
 function printResult(context, rows, extra = {}) {
+  rows = rows.map(row => heldForLint(row) && !row.dispatchIncomplete ? { ...row, calls: 0 } : row);
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
@@ -898,17 +900,26 @@ async function continueHeld(context, candidates, saved) {
   if (saved.intent === 'lint-only') return;
   candidates = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
   if (!candidates.length) return;
-  if (saved.version !== 1 || saved.intent !== undefined && saved.intent !== 'check' || !saved.rows.every(validSavedCheck)
-    || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0))
-    throw new Stop(2, 'The saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.');
+  if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
+    || (saved.intent === undefined && !candidates.every(validSavedCheck))
+    || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0)) {
+    context.readStop = 'No checks were sent: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
+    return;
+  }
   if (context.lintPending || context.lintUnknown) return;
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   if (!sameJob(lint, lintId, 'lint') || lint.state !== 'passed') return;
   const globalRefusals = projectAnswer(lint, { origin: context.origin, secrets: context.secrets }).refusals;
   const verdicts = judgeLint(lint, candidates, context.root, context.visible, context.secrets);
   if (!verdicts || verdicts.size || globalRefusals.length) return;
-  const capture = captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null });
-  if (capture.sha256 !== saved.source_sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');
+  let capture;
+  try { capture = captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null }); }
+  catch (error) {
+    if (!(error instanceof PreflightError)) throw error;
+    context.readStop = `No checks were sent: the saved source cannot be verified. ${error.message}`;
+    return;
+  }
+  if (capture.sha256 !== saved.source_sha256) { context.readStop = 'No checks were sent: the saved source no longer matches: source changed. Start a fresh selected pdd check instead.'; return; }
   if (context.interrupted || context.ports.now() >= context.deadline) return;
   Object.assign(context, { capture, reading: false });
   const selected = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
@@ -932,7 +943,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));

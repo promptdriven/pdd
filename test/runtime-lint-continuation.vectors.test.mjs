@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, readdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, copyFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
@@ -12,12 +14,14 @@ import { harbor, fakeRuntime, portsFor, PLACE } from './runtime-fake.mjs';
 const START = Date.parse('2026-10-27T16:27:47Z');
 async function setup(t, { mode = 'check', interactive = false, timeout, multiple = false } = {}) {
   const h = harbor(t, repo => {
-    for (let i = 1; i < (multiple === true ? 2 : multiple || 1); i++) copyFileSync(join(repo, 'tests/place-order.json'), join(repo, `tests/second-${i}.json`));
+    if (multiple === 'mixed') { const doc = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'))); doc.steps = []; writeFileSync(join(repo, 'tests/second-1.json'), JSON.stringify(doc)); }
+    for (let i = 1; multiple !== 'mixed' && i < (multiple === true || multiple === 'mixed' ? 2 : multiple || 1); i++) copyFileSync(join(repo, 'tests/place-order.json'), join(repo, `tests/second-${i}.json`));
   });
   const state = { lint: 'running', checks: 'passed', lost: false, clock: null, readyAt: Infinity };
-  const f = await fakeRuntime(t, (e, f) => {
+  const f = await fakeRuntime(t, async (e, f) => {
     if (e.method === 'POST') {
       if (e.command === 'lint') return { status: 202, json: f.job(e.request.requestId, 'lint', 'queued') };
+      if (state.checkDelay) await new Promise(resolve => setTimeout(resolve, state.checkDelay));
       assert.ok(e.tar.length > 0, 'every check keeps the source multipart');
       if (state.lost) return { destroy: true };
       if (e.command === 'try') return { status: 200, json: f.tryJob(e.request.requestId) };
@@ -46,7 +50,7 @@ async function setup(t, { mode = 'check', interactive = false, timeout, multiple
   const options = mode === 'try' ? { '--no-open': true, '--no-wait': true } : { '--json': true, ...(mode === 'lint' ? { '--lint': true } : { '--max-calls': 6 }), ...(timeout ? { '--timeout': timeout } : {}) };
   return { h, state, f, env, p, options, mode,
     async first() {
-      const code = await (mode === 'try' ? runTry : runCheck)({ cwd: h.repo, words: multiple ? ['tests/place-order.json', ...Array.from({ length: (multiple === true ? 2 : multiple) - 1 }, (_, i) => `tests/second-${i + 1}.json`)] : ['place-order'], options }, p.ports);
+      const code = await (mode === 'try' ? runTry : runCheck)({ cwd: h.repo, words: multiple ? ['tests/place-order.json', ...Array.from({ length: (multiple === true || multiple === 'mixed' ? 2 : multiple) - 1 }, (_, i) => `tests/second-${i + 1}.json`)] : ['place-order'], options }, p.ports);
       const batch = mode === 'try' ? null : readdirSync(join(h.state, 'batches'), { withFileTypes: true }).find(e => e.isDirectory())?.name;
       return { code, batch };
     } };
@@ -112,7 +116,7 @@ for (const change of ['owner', 'repo', 'source']) test(`CONTINUATION native tabl
   if (change === 'source') writeFileSync(join(r.h.repo, PLACE), readFileSync(join(r.h.repo, PLACE), 'utf8') + '\nChanged.\n');
   const extra = change === 'owner' ? { gh: args => ({ status: 0, stdout: args[0] === 'auth' ? 'token' : 'other 123' }) } : {};
   const next = await recovery(r, batch, false, extra);
-  assert.ok([2, 5].includes(next.code)); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
+  if (change === 'source') { assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.match(next.ports.stderr.text, /No checks were sent.*source changed/); } else assert.ok([2, 5].includes(next.code)); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
 });
 for (const lint of ['running', 'wrong-id', 'wrong-command', 'unknown', 'missing', 'reached', 'global']) test(`CONTINUATION native table: ${lint} lint never authorizes checks`, async t => {
   const r = await setup(t); const { batch } = await r.first(); r.state.lint = lint;
@@ -147,7 +151,7 @@ for (const bad of ['positive', 'unknown', 'null', 'cap', 'criteria', 'steps', 'i
   if (bad === 'version') s.doc.version = 2;
   if (bad === 'incomplete') s.doc.rows[0].calls = {};
   writeFileSync(s.path, JSON.stringify(s.doc)); const next = await recovery(r, batch);
-  assert.equal(next.code, 2); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0); assert.match(next.ports.stderr.text, /intent|proof/i);
+  assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0); assert.match(next.ports.stderr.text, /intent|proof/i);
 });
 test('CONTINUATION native table: saved origin and selected source only', async t => {
   const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
@@ -201,7 +205,7 @@ test('CONTINUATION native table: posted completed/running/lost/unknown IDs remai
 for (const broken of [null, {}, { criterion_id: '' }]) test(`CONTINUATION native table: malformed legacy authored check ${JSON.stringify(broken)}`, async t => {
   const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch); delete s.doc.intent; s.doc.rows[0].steps[0].checks = [broken]; writeFileSync(s.path, JSON.stringify(s.doc));
-  const next = await recovery(r, batch); assert.equal(next.code, 2); assert.equal(paid(r).length, 0); assert.equal(next.clock.uuids, 0);
+  const next = await recovery(r, batch); assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(paid(r).length, 0); assert.equal(next.clock.uuids, 0);
 });
 
 test('CONTINUATION native table: parsed remote lint timeout and parsed recovery timeout reach public boundary', async t => {
@@ -229,4 +233,46 @@ test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims
   assert.equal(paid(r).length, 1); assert.ok(replies.every(reply => reply.code === 0));
   const final = saved(r, batch).doc.rows[0];
   assert.deepEqual(final.request_ids, [oldId, paid(r)[0].request.requestId]);
+});
+
+for (const legacy of [false, true]) test(`CONTINUATION: ${legacy ? 'legacy' : 'current'} batch local refusal does not block valid held row`, async t => {
+  const r = await setup(t, { multiple: 'mixed' }); const { batch } = await r.first(); r.state.lint = 'passed';
+  assert.equal(saved(r, batch).doc.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+  if (legacy) { const s = saved(r, batch); delete s.doc.intent; writeFileSync(s.path, JSON.stringify(s.doc)); }
+  const next = await recovery(r, batch);
+  assert.equal(next.code, 4); assert.equal(next.json.rows.length, 2);
+  assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, 'tests/place-order.json');
+  assert.equal(next.json.rows.find(row => row.test === 'tests/second-1.json').state, 'refused');
+});
+
+test('CONTINUATION: two real CLI read processes send the original held check exactly once', { timeout: 30000 }, async t => {
+  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  r.state.checkDelay = 250; // Keep the winning POST in flight while the other process adopts its claim.
+  const bin = join(r.h.sandbox, 'bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = auth ]; then echo local-fake-token; else echo "octo 4242"; fi\n', { mode: 0o755 });
+  const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
+  const child = () => new Promise((resolve, reject) => {
+    const proc = spawn(process.execPath, [cli, 'check', '--read', batch, '--json'], { cwd: r.h.repo, env: { ...process.env, ...r.env, PATH: bin + ':' + process.env.PATH } });
+    t.after(() => { if (proc.exitCode === null) proc.kill(); });
+    let stdout = '', stderr = ''; proc.stdout.on('data', chunk => stdout += chunk); proc.stderr.on('data', chunk => stderr += chunk);
+    proc.on('error', reject); proc.on('close', code => resolve({ code, stdout, stderr }));
+  });
+  const replies = await Promise.all([child(), child()]);
+  assert.equal(paid(r).length, 1);
+  const id = paid(r)[0].request.requestId;
+  for (const reply of replies) { assert.equal(reply.code, 0, reply.stderr); assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id); }
+  assert.deepEqual(saved(r, batch).doc.rows[0].request_ids, [id]);
+  const repeat = await recovery(r, batch); assert.equal(repeat.code, 0); assert.equal(repeat.clock.uuids, 0);
+  assert.equal(repeat.json.rows[0].request_id, id); assert.equal(paid(r).length, 1);
+});
+
+test('CONTINUATION: deleting a selected test preserves saved rows and refuses before UUID', async t => {
+  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  unlinkSync(join(r.h.repo, 'tests/place-order.json'));
+  for (let i = 0; i < 2; i++) {
+    const next = await recovery(r, batch);
+    assert.equal(next.code, 5); assert.equal(next.json.rows.length, 1); assert.equal(next.json.rows[0].state, 'not_run');
+    assert.equal(next.clock.uuids, 0); assert.equal(paid(r).length, 0);
+    assert.match(next.ports.stderr.text, /No checks were sent.*saved source cannot be verified/);
+  }
 });
