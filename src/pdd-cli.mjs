@@ -1,8 +1,9 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcf80ff95fe3f5bdf3d88e6ac3d8fabf8acc6d40d2848e6df30e0824516afcac).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 82f54994ac19f60091ce85a3370e314f5d79afd487d59b96aad4b0922a79ab15).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
 import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
@@ -18,6 +19,17 @@ const line = (stream, text) => stream.write(`${text}\n`);
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
 const skillCount = folders => `${folders.length} PDD skill${folders.length === 1 ? '' : 's'}`;
 const skillNames = folders => folders.map(folder => basename(folder)).join(', ');
+const checkoutVersion = (version, packageRoot) => {
+  try {
+    const git = args => execFileSync('git', args, { cwd: packageRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const branch = git(['symbolic-ref', '--short', 'HEAD']).trim();
+    const sha = git(['rev-parse', 'HEAD']).trim();
+    if (!branch || !/^[0-9a-f]{9}/i.test(sha)) return version;
+    return `${version}-dev.${branch.replaceAll('/', '-')}.${sha.slice(0, 9)}`;
+  } catch {
+    return version;
+  }
+};
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
 const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd#alpha${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 const RUNNER_ROUTES = {
@@ -60,7 +72,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
-        line(stdout, metadata.version);
+        line(stdout, checkoutVersion(metadata.version, packageRoot));
         try {
           for (const result of findSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR }))
             if (result.found && result.stale === 'older') line(stderr, staleLine(result, metadata.version, cwd));

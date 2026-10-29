@@ -33,6 +33,60 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
   }
 });
 
+test('ALPHA-VERSION: checkout builds identify their branch and commit, while non-checkouts stay release versions', async t => {
+  const checkout = temp(t);
+  writeFileSync(join(checkout, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  execFileSync('git', ['init', '-q', '-b', 'feature/2455-checkout'], { cwd: checkout });
+  execFileSync('git', ['config', 'user.email', 'pdd@example.test'], { cwd: checkout });
+  execFileSync('git', ['config', 'user.name', 'PDD Test'], { cwd: checkout });
+  execFileSync('git', ['add', 'package.json'], { cwd: checkout });
+  execFileSync('git', ['commit', '-q', '-m', 'test'], { cwd: checkout });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, encoding: 'utf8' }).trim().slice(0, 9);
+  const run = async (packageRoot, env = {}) => { const stdout = capture(), stderr = capture(); return { code: await runPdd(['--version'], { packageRoot, cwd: packageRoot, env: { ...process.env, ...env }, stdout, stderr }), stdout: stdout.text, stderr: stderr.text }; };
+  const answer = await run(checkout);
+  assert.equal(answer.code, 0);
+  assert.equal(answer.stdout, `0.1.9-dev.feature-2455-checkout.${sha}\n`);
+  assert.equal(answer.stderr, '');
+  const release = temp(t);
+  writeFileSync(join(release, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  const fallback = await run(release);
+  assert.equal(fallback.code, 0);
+  assert.equal(fallback.stdout, '0.1.9\n');
+  assert.equal(fallback.stderr, '');
+
+  // A repository with a symbolic branch name gets the development suffix.
+  const symbolic = temp(t);
+  writeFileSync(join(symbolic, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  execFileSync('git', ['init', '-q', '-b', 'feature/symbolic'], { cwd: symbolic });
+  execFileSync('git', ['config', 'user.email', 'pdd@example.test'], { cwd: symbolic });
+  execFileSync('git', ['config', 'user.name', 'PDD Test'], { cwd: symbolic });
+  execFileSync('git', ['add', 'package.json'], { cwd: symbolic });
+  execFileSync('git', ['commit', '-q', '-m', 'test'], { cwd: symbolic });
+  const symbolicSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: symbolic, encoding: 'utf8' }).trim().slice(0, 9);
+  const symbolicAnswer = await run(symbolic);
+  assert.equal(symbolicAnswer.stdout, `0.1.9-dev.feature-symbolic.${symbolicSha}\n`);
+
+  // Detached checkouts are release builds even though the package is inside a Git worktree.
+  execFileSync('git', ['checkout', '--detach', '-q', 'HEAD'], { cwd: symbolic });
+  const detached = await run(symbolic);
+  assert.equal(detached.stdout, '0.1.9\n');
+
+  // A package nested in an unrelated parent repository is not that repository's checkout.
+  const parent = temp(t), nested = join(parent, 'nested');
+  mkdirSync(nested);
+  writeFileSync(join(parent, 'README.md'), 'parent\n');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: parent });
+  execFileSync('git', ['config', 'user.email', 'pdd@example.test'], { cwd: parent });
+  execFileSync('git', ['config', 'user.name', 'PDD Test'], { cwd: parent });
+  writeFileSync(join(nested, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  const nestedAnswer = await run(nested);
+  assert.equal(nestedAnswer.stdout, '0.1.9\n');
+
+  // Ambient GIT_DIR must not redirect detection away from the package's own checkout.
+  const gitDirAnswer = await run(checkout, { GIT_DIR: join(parent, '.git') });
+  assert.equal(gitDirAnswer.stdout, `0.1.9-dev.feature-2455-checkout.${sha}\n`);
+});
+
 // Wrong: source-only smoke passes while packed dependencies, bin mappings or bundled guidance fail in a clean consumer.
 test('ALPHA4: actual packed package runs every advertised local command without private Host network or auth', t => {
   const sandbox = temp(t), home = join(sandbox, 'home'), consumer = join(sandbox, 'consumer'), project = join(sandbox, 'project');
