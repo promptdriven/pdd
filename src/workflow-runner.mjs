@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8958580af958c50b3b1313132484c1dd5c703e411f359b5f45a5004d990316d0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8cca4a3ac83b1c0c05f87c744b6abbcf6fe4fb4779dbc67168c9dc5cc858f784).
 import { execFile as execFileCallback } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -12,8 +12,9 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
+import { captureSource, findTests, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
+import { sourceFingerprint, freezeReplayVectors, readCodeReplay, codeReplayLine } from './code-replay.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 
@@ -109,6 +110,7 @@ async function areaMessage(run, index, p, packageRoot) {
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
+    ...(area.replayEvidence === 'code-replay-v1' ? ['Read RUNBOOK §17. Original vector hashes are in replay-baseline.json in the run folder. Write agent-reported native execution evidence to code-replay.json there; missing evidence appears as BLOCKED in the code PR.'] : []),
     `Read the PDD skills (pdd-prompting too) from ${join(packageRoot ?? PACKAGE_ROOT, 'skills')}: an installed copy with the same name may be older.`,
   ].join('\n') + '\n';
 }
@@ -274,6 +276,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
   mkdirSync(runDir, { recursive: true });
+  freezeAreaReplay(run, workflow.areas[0]);
   writeRun(run, p);
   const first = workflow.areas[0];
   try { await startNextChat(run, p, packageRoot); }
@@ -345,18 +348,8 @@ function runtimeTop(text) {
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
 // Content identity includes uncommitted and untracked Git-visible source, independent of commit SHA.
-function gitFingerprint(root) {
-  try {
-    const files = gitFiles(root).sort().map(path => {
-      const full = join(root, path);
-      let stat; try { stat = lstatSync(full); } catch (error) { if (error.code === 'ENOENT') return [path, 'missing']; throw error; }
-      if (stat.isSymbolicLink()) return [path, 'link', readlinkSync(full)];
-      if (!stat.isFile()) throw Error('Not a regular source file');
-      return [path, stat.mode & 0o111, createHash('sha256').update(readFileSync(full)).digest('hex')];
-    });
-    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
-  } catch { return null; }
-}
+const gitFingerprint = sourceFingerprint;
+
 function matchesSource(record, root, fingerprint) {
   const source = record.source;
   if (!source?.sha256) return false;
@@ -509,7 +502,8 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const reports = checked ? reportLinks(checked, env).filter(row => !shown.some(url => row.includes(` ${url} `))) : [];
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
-  const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  const replay = area.replayEvidence === 'code-replay-v1' ? readCodeReplay({ root: run.root, runDir: run.runDir, baseline: run.replayBaseline }) : null;
+  const top = [...(replay ? [codeReplayLine(replay)] : []), ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
@@ -526,17 +520,28 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+  const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
+  const writeBody = async () => {
+    const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
+    writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
+    return tests;
+  };
   if (existing) {
     p.say(`Pushing ${run.branch} to ${label}…`);
     try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
+    if (area.replayEvidence === 'code-replay-v1') {
+      await writeBody();
+      try {
+        const reply = await p.execFile('gh', ['pr', 'edit', existing.url, '--body-file', bodyFile], { cwd: run.root });
+        if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR description update failed'), { stderr: reply.stderr, code: reply.code });
+      } catch (error) { return fail([...lines, `Pushed ${label}, but its replay description could not be updated (${causeOf(error)}). ${retry}.`].join('\n')); }
+    }
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
-  const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
   // PR 1 says "tests" only when it has a test file (0.1.6 tester: a browser-only Story had none).
-  const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
-  writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
+  const tests = await writeBody();
   let intent;
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
@@ -570,6 +575,11 @@ async function askCodeLines(run, area, p) {
 
 async function finishPr(run, area, step, p, lines) {
   const label = prLabel(run, area), existing = prOf(run, area.name);
+  if (area.replayEvidence === 'code-replay-v1') {
+    run.codeReplay = readCodeReplay({ root: run.root, runDir: run.runDir, baseline: run.replayBaseline });
+    writeRun(run, p);
+    lines.push(codeReplayLine(run.codeReplay));
+  }
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
@@ -581,6 +591,12 @@ async function finishPr(run, area, step, p, lines) {
   }
   run.state = 'waiting'; run.gate = null; writeRun(run, p);
   return done([...lines, `${label === 'the PR' ? 'PR' : label}: ${prOf(run, area.name).url}`, `Tell the person ${label} is open. pdd never merges. Stop here.`].join('\n'));
+}
+
+function freezeAreaReplay(run, area) {
+  if (area?.replayEvidence !== 'code-replay-v1' || run.replayBaseline) return;
+  run.replayBaseline = freezeReplayVectors(run.root, { committed: true });
+  writeFileSync(join(run.runDir, 'replay-baseline.json'), JSON.stringify(run.replayBaseline, null, 2) + '\n');
 }
 
 // Record saved Runtime evidence without progressing the workflow or contacting external services.
@@ -845,6 +861,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     try { based = await codeBranch(run, area, p); }
     catch (error) { return fail(`${oneLine(error.message)} Nothing changed. Check PR 1, then run pdd workflow approve ${run.number} again.`); }
   }
+  freezeAreaReplay(run, run.areas[run.area + 1]);
   const now = p.now();
   run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at: now, ...(record.text !== undefined ? { text: record.text } : {}) });
   run.approvalRecord = { kind: record.via, area: area.name, at: now, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };

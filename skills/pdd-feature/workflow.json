@@ -1,4 +1,4 @@
 {"version":2,"areas":[
 {"name":"story","steps":["understand","visual","prompt-story"],"optional":["visual"],"gate":"approve"},
 {"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","before":"approve","then":"ask-code"},
-{"name":"code","steps":["build","verify","formal"],"optional":[],"gate":"pr"}]}
+{"name":"code","replayEvidence":"code-replay-v1","steps":["build","verify","formal"],"optional":[],"gate":"pr"}]}

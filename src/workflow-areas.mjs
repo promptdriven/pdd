@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 3883b0c345cd5238f1b1ee1e894fec01571232ae4f8dcc8366ad976789e1a668).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 59a2b2cd8508eb3fd449cfc6f9e09ff77ddb6e899ccb0e98ed3a9bda650177e5).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -32,11 +32,13 @@ function parse(name, file) {
     const askCode = !last && area?.gate === 'pr' && area.then === 'ask-code';
     if (area?.before !== undefined && !(area.before === 'approve' && area.gate === 'pr'))
       throw invalid(`area ${index + 1} may have "before":"approve" only with gate "pr"`);
+    if (area?.replayEvidence !== undefined && (area.replayEvidence !== 'code-replay-v1' || area.gate !== 'pr'))
+      throw invalid('replayEvidence needs code-replay-v1 on a PR area');
     if (!word(area?.name) || !Array.isArray(area.steps) || !area.steps.length || !area.steps.every(word)
       || !Array.isArray(area.optional ?? []) || !(area.optional ?? []).every(step => area.steps.includes(step))
       || !(last ? area.gate === 'pr' && area.then === undefined : area.gate === 'approve' && area.then === undefined || askCode))
       throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? '"pr"' : '"approve", or "pr" with "then":"ask-code"'}`);
-    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}) };
+    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(area.replayEvidence ? { replayEvidence: area.replayEvidence } : {}), ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}) };
   });
 }
 
