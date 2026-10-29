@@ -145,7 +145,6 @@ Each run has a run folder: `.git/pdd/runs/N/` in your clone, where N is the issu
 | `AREA-start.md` (one for each area) | The start message of that area's chat |
 | `STEP.md` (one for each step) | The notes of that step |
 | `verify.md` | The exact test commands and their real output |
-| `pr-body.md` | The PR body that pdd writes |
 
 The code that the steps write is committed on the run's branch, in the run's worktree.
 
