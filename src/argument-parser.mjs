@@ -44,6 +44,9 @@ function parseRoute(route, words) {
       }
     } else operands.push(word);
   }
+  if (route.id === 'workflow.run' && /^[1-9][0-9]*$/.test(operands[0] ?? '')) {
+    throw new CommandInputError(`Name the workflow: pdd workflow run small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
+  }
   const minimum = route.operands.filter(item => !item.optional).length;
   if (operands.length < minimum || !route.operands.at(-1)?.repeat && operands.length > route.operands.length) fail();
   for (let index = 0; index < operands.length; index++) {
