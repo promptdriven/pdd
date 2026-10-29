@@ -5,10 +5,20 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 ## Files
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped.
-- A test is a Git-visible `*.json` file of at most 1 MiB with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1.
+- A test is a Git-visible `*.json` file with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1.
 - A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning.
 - No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible `*.json` under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Exit 2.
-- Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. An unknown word is a command error that lists the stories with tests.
+- Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. A conclusively unknown word is a command error that lists the stories with tests; unresolved oversized discovery follows the rule below.
+
+## Oversized discovery
+
+Preserve the public `findTests({root, files = gitFiles(root)})` and `selectTests(found, words = [])` bindings, including `found.visible` as a Set and ordinary selection aliases. Discovery and execution eligibility differ. The execution test-file allowance remains 1,048,576 UTF-8 bytes, inclusive; source capture's separate safety limits remain unchanged.
+
+For a Git-visible JSON file above that allowance, inspect at most 1,048,576 bytes using safe regular-file reads. Top-level schema and Story keys may be late; a marker inside data is not scenario identity. A top-level non-object root can establish non-scenario identity. A partial object, including an early non-scenario schema value that a later duplicate key could replace, cannot establish unrelatedness. Retain a diagnosed oversized candidate whenever bounded inspection cannot conclusively establish non-scenario JSON. Conservative refusal of unclassified large data is allowed; never present uncertainty as complete discovery.
+
+An oversized candidate is never executed or uploaded as an eligible test. Its diagnostic names the repository-relative path, actual file byte size and the 1,048,576-byte test-file allowance, distinguishing confirmed scenario identity from unclassified JSON. Refuse selection with source-limit exit 4 before sign-in, network or AI calls whenever it includes such a candidate. With no selection words, include every diagnosed candidate in that refusal; do not print an apparently complete all-Story count or successful file manifest omitting it.
+
+An explicit test path naming an oversized candidate reports this source-limit reason, never `Unknown story`. Match a Story name/path when bounded inspection establishes its identity. If an otherwise unknown Story word could belong to an unclassified candidate, report unresolved discovery with the candidate's source-limit diagnostic rather than asserting that the Story does not exist. Conclusively unrelated JSON remains outside Story selection; size alone does not make it a scenario. Ordinary unknown selections remain command errors when discovery is conclusive.
 
 ## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
