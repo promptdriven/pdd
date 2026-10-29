@@ -2,7 +2,7 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from '../src/workflow-github.mjs';
@@ -414,10 +414,10 @@ test('real local Git proves absent remote branch, recovers one original publicat
   await writeFile(join(cwd, 'source.txt'), 'Committed actual source\n'); await git('add', 'source.txt'); await git('commit', '-m', 'Actual topic');
   const actualSha = (await git('rev-parse', 'HEAD')).stdout.trim(), calls = []; let rows = [], pushed = false;
   const ports = { async execFile(file, args, options) {
-    assert.equal(options.cwd, cwd); if (options.input !== undefined) state.input = options.input; calls.push({ file, args: [...args] });
+    assert.equal(options.cwd, cwd); calls.push({ file, args: [...args] });
     if (file === 'git') {
-      if (args[0] === 'push') { pushed = true; return { stdout: '' }; }
-      if (args[0] === 'ls-remote' && pushed) return { stdout: `${actualSha}\trefs/heads/topic/real-recovery\n` };
+      if (args[0] === 'push') { pushed = true; return execute('git', ['push', remote, `HEAD:refs/heads/topic/real-recovery`], { cwd, encoding: 'utf8' }); }
+      if (args[0] === 'ls-remote' && pushed) return execute('git', ['ls-remote', remote, 'refs/heads/topic/real-recovery'], { cwd, encoding: 'utf8' });
       if (args[0] === 'ls-remote') {
         const localArgs = args.map((arg, i) => arg === 'origin' && i > 0 ? remote : arg);
         return execute('git', localArgs, { cwd, encoding: 'utf8' });
@@ -433,7 +433,7 @@ test('real local Git proves absent remote branch, recovers one original publicat
   const intent = await prepareWorkflowPr({ cwd, runId: 'real-original', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main' }, ports);
   const saved = JSON.stringify(intent), body = `<!-- ${intent.marker} -->\n`; calls.length = 0;
   assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
-  assert.equal(effects(calls).length, 1);
+  assert.equal(effects(calls).length, 2);
   calls.length = 0;
   assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
   assert.equal(effects(calls).length, 0);
@@ -445,12 +445,14 @@ test('real local Git proves absent remote branch, recovers one original publicat
 
 test('an early stdin failure becomes recovery_required without an unhandled EPIPE', async t => {
   const f = await fixture(t), intent = await f.prepare();
+  const bin = await mkdtemp(join(tmpdir(), 'pdd-gh-bin-')), gh = join(bin, 'gh');
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  await writeFile(gh, '#!/bin/sh\nexit 1\n'); await chmod(gh, 0o755);
   const original = f.ports.execFile;
-  f.ports.execFile = async (file, args, options) => {
-    if (file === 'gh' && args[0] === 'pr' && args[1] === 'create') throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
-    return original(file, args, options);
-  };
-  const result = await f.publish(intent, { body: `<!-- ${intent.marker} -->\n${'é'.repeat(65_000)}` });
+  f.ports.execFile = (file, args, options) => file === 'gh'
+    ? promisify(execFile)(file, args, { ...options, env: { ...f.ports.env, PATH: `${bin}:${process.env.PATH}` } })
+    : original(file, args, options);
+  const result = await f.publish(intent, { body: `<!-- ${intent.marker} -->\n${'é'.repeat(70_000)}` });
   assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
 });
 

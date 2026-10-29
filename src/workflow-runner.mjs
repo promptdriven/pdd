@@ -26,6 +26,17 @@ const YES_WORDS = /\b(?:yes|approved?|build the code|go ahead|code pr now|contin
 // Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
 const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
 const ordinary = promisify(execFileCallback);
+function execute(file, args, { cwd, input, ...options } = {}) {
+  if (input === undefined) return ordinary(file, args, { cwd, ...options });
+  return new Promise((resolve, reject) => {
+    const child = execFileCallback(file, args, { cwd, ...options }, (error, stdout, stderr) => {
+      if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); return; }
+      resolve({ stdout, stderr });
+    });
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+    child.stdin.end(input);
+  });
+}
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 // A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
@@ -55,7 +66,7 @@ const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text
 
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const execFile = ports.execFile ?? ((file, args, { cwd, input }) => ordinary(file, args, { cwd, input, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
