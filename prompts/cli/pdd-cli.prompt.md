@@ -36,7 +36,7 @@ Pass the runner a `say` port that writes one line to stderr, so slow workflow st
 <summary>Runtime interface</summary>
 
 ```json
-{"status":"draft","prose_sha256":"db2b66cfc32eb62526e3604bd52f5fd20992dbf2d586cf9f2f1bec846ee38e95","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":3},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]}
+{"status":"approved","prose_sha256":"db2b66cfc32eb62526e3604bd52f5fd20992dbf2d586cf9f2f1bec846ee38e95","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":3},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]}
 ```
 
 </details>
