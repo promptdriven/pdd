@@ -1,0 +1,2609 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-prove.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With a committed changed test, a nonzero old-code exit containing the literal \"defect-x\" and a zero new-code exit produce a successful old-code proof and exit 0."
+    },
+    {
+      "id": "AC2",
+      "text": "If the old code passes, or fails with \"other-error\" instead of \"defect-x\", the report distinguishes \"old-passes\" from \"wrong-reason\", includes the observed wrong-reason excerpt and exits 1."
+    },
+    {
+      "id": "AC3",
+      "text": "If the new code fails, the report says \"head-fails\" and exits 1 even when the old code fails with \"defect-x\"."
+    },
+    {
+      "id": "AC4",
+      "text": "Each phase requests a 120-second limit, a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and signals have distinct unsuccessful reports and exit 1."
+    },
+    {
+      "id": "AC5",
+      "text": "No changed test gives \"no-changed-tests\"; missing commits, unsafe overlay setup and known missing-fixture/import failures give \"setup-error\" even when their output contains \"defect-x\"; none exits 0."
+    },
+    {
+      "id": "AC6",
+      "text": "The proof selects committed regular added, modified or renamed tests and supplemental files under the documented test/fixture convention, ignores deleted files and implementation, and uses separate base and head snapshots."
+    },
+    {
+      "id": "AC7",
+      "text": "The saved result keeps run/base/head identity, the exact command and expectation, selected paths, both phase exits, final output lines and the observed error excerpt even when it precedes those final lines; allocated snapshots are cleaned up even after a failed comparison."
+    },
+    {
+      "id": "AC8",
+      "text": "The quoted command \"node --test test/new.test.mjs\" and expectation \"defect x\" reach the proof unchanged; missing, duplicate or blank options and extra operands exit 2 before proof execution."
+    }
+  ],
+  "initial_world": {
+    "host_readRun": [
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/proved"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-proved",
+            "runDir": "/runs/proved",
+            "root": "/repo/proved",
+            "baseSha": "0000000000000000000000000000000000000001"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/old-passes"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-old-passes",
+            "runDir": "/runs/old-passes",
+            "root": "/repo/old-passes",
+            "baseSha": "0000000000000000000000000000000000000002"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/wrong-reason"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-wrong-reason",
+            "runDir": "/runs/wrong-reason",
+            "root": "/repo/wrong-reason",
+            "baseSha": "0000000000000000000000000000000000000003"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/head-fails"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-head-fails",
+            "runDir": "/runs/head-fails",
+            "root": "/repo/head-fails",
+            "baseSha": "0000000000000000000000000000000000000004"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/base-timeout"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-base-timeout",
+            "runDir": "/runs/base-timeout",
+            "root": "/repo/base-timeout",
+            "baseSha": "0000000000000000000000000000000000000005"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/head-timeout"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-head-timeout",
+            "runDir": "/runs/head-timeout",
+            "root": "/repo/head-timeout",
+            "baseSha": "0000000000000000000000000000000000000006"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/output-limit"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-output-limit",
+            "runDir": "/runs/output-limit",
+            "root": "/repo/output-limit",
+            "baseSha": "0000000000000000000000000000000000000007"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/signalled"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-signalled",
+            "runDir": "/runs/signalled",
+            "root": "/repo/signalled",
+            "baseSha": "0000000000000000000000000000000000000008"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/no-tests"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-no-tests",
+            "runDir": "/runs/no-tests",
+            "root": "/repo/no-tests",
+            "baseSha": "0000000000000000000000000000000000000009"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/missing-base"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-missing-base",
+            "runDir": "/runs/missing-base",
+            "root": "/repo/missing-base",
+            "baseSha": "000000000000000000000000000000000000000a"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/unsafe-overlay"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-unsafe-overlay",
+            "runDir": "/runs/unsafe-overlay",
+            "root": "/repo/unsafe-overlay",
+            "baseSha": "000000000000000000000000000000000000000b"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/missing-fixture"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-missing-fixture",
+            "runDir": "/runs/missing-fixture",
+            "root": "/repo/missing-fixture",
+            "baseSha": "000000000000000000000000000000000000000c"
+          },
+          "error": ""
+        }
+      }
+    ],
+    "host_snapshot": [
+      {
+        "request": {
+          "root": "/repo/proved",
+          "baseSha": "0000000000000000000000000000000000000001"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000065",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/old-passes",
+          "baseSha": "0000000000000000000000000000000000000002"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000066",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason",
+          "baseSha": "0000000000000000000000000000000000000003"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000067",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-fails",
+          "baseSha": "0000000000000000000000000000000000000004"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000068",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/base-timeout",
+          "baseSha": "0000000000000000000000000000000000000005"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000069",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-timeout",
+          "baseSha": "0000000000000000000000000000000000000006"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006a",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/output-limit",
+          "baseSha": "0000000000000000000000000000000000000007"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006b",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/signalled",
+          "baseSha": "0000000000000000000000000000000000000008"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006c",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/no-tests",
+          "baseSha": "0000000000000000000000000000000000000009"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006d",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-base",
+          "baseSha": "000000000000000000000000000000000000000a"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006e",
+            "baseAvailable": false,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/unsafe-overlay",
+          "baseSha": "000000000000000000000000000000000000000b"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "000000000000000000000000000000000000006f",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-fixture",
+          "baseSha": "000000000000000000000000000000000000000c"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000070",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": ""
+          }
+        }
+      }
+    ],
+    "host_createWorktree": [
+      {
+        "request": {
+          "root": "/repo/proved",
+          "commit": "0000000000000000000000000000000000000001",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/proved/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/proved",
+          "commit": "0000000000000000000000000000000000000065",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/proved/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/old-passes",
+          "commit": "0000000000000000000000000000000000000002",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/old-passes/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/old-passes",
+          "commit": "0000000000000000000000000000000000000066",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/old-passes/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason",
+          "commit": "0000000000000000000000000000000000000003",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/wrong-reason/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason",
+          "commit": "0000000000000000000000000000000000000067",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/wrong-reason/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-fails",
+          "commit": "0000000000000000000000000000000000000004",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/head-fails/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-fails",
+          "commit": "0000000000000000000000000000000000000068",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/head-fails/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/base-timeout",
+          "commit": "0000000000000000000000000000000000000005",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/base-timeout/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/base-timeout",
+          "commit": "0000000000000000000000000000000000000069",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/base-timeout/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-timeout",
+          "commit": "0000000000000000000000000000000000000006",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/head-timeout/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-timeout",
+          "commit": "000000000000000000000000000000000000006a",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/head-timeout/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/output-limit",
+          "commit": "0000000000000000000000000000000000000007",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/output-limit/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/output-limit",
+          "commit": "000000000000000000000000000000000000006b",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/output-limit/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/signalled",
+          "commit": "0000000000000000000000000000000000000008",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/signalled/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/signalled",
+          "commit": "000000000000000000000000000000000000006c",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/signalled/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/unsafe-overlay",
+          "commit": "000000000000000000000000000000000000000b",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/unsafe-overlay/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/unsafe-overlay",
+          "commit": "000000000000000000000000000000000000006f",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/unsafe-overlay/head",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-fixture",
+          "commit": "000000000000000000000000000000000000000c",
+          "phase": "base"
+        },
+        "reply": {
+          "worktree": "/snap/missing-fixture/base",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-fixture",
+          "commit": "0000000000000000000000000000000000000070",
+          "phase": "head"
+        },
+        "reply": {
+          "worktree": "/snap/missing-fixture/head",
+          "error": ""
+        }
+      }
+    ],
+    "host_overlay": [
+      {
+        "request": {
+          "root": "/repo/proved",
+          "headSha": "0000000000000000000000000000000000000065",
+          "worktree": "/snap/proved/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/old-passes",
+          "headSha": "0000000000000000000000000000000000000066",
+          "worktree": "/snap/old-passes/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason",
+          "headSha": "0000000000000000000000000000000000000067",
+          "worktree": "/snap/wrong-reason/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-fails",
+          "headSha": "0000000000000000000000000000000000000068",
+          "worktree": "/snap/head-fails/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/base-timeout",
+          "headSha": "0000000000000000000000000000000000000069",
+          "worktree": "/snap/base-timeout/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-timeout",
+          "headSha": "000000000000000000000000000000000000006a",
+          "worktree": "/snap/head-timeout/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/output-limit",
+          "headSha": "000000000000000000000000000000000000006b",
+          "worktree": "/snap/output-limit/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/signalled",
+          "headSha": "000000000000000000000000000000000000006c",
+          "worktree": "/snap/signalled/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/unsafe-overlay",
+          "headSha": "000000000000000000000000000000000000006f",
+          "worktree": "/snap/unsafe-overlay/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": "unsafe symlink ancestry"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-fixture",
+          "headSha": "0000000000000000000000000000000000000070",
+          "worktree": "/snap/missing-fixture/base",
+          "paths": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      }
+    ],
+    "host_runProcess": [
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/proved/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/proved/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/old-passes/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/old-passes/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/wrong-reason/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "code: other-error\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\nnoise\n",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/wrong-reason/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/head-fails/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/head-fails/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/base-timeout/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": null,
+            "signal": "SIGKILL",
+            "timedOut": true,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/base-timeout/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/head-timeout/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/head-timeout/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": null,
+            "signal": "SIGKILL",
+            "timedOut": true,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/output-limit/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": null,
+            "signal": "SIGKILL",
+            "timedOut": false,
+            "outputLimited": true,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/output-limit/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/signalled/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": null,
+            "signal": "SIGTERM",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/signalled/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/missing-fixture/base",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 1,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "defect-x",
+            "stderr": "",
+            "error": "",
+            "setupError": "missing fixture"
+          }
+        }
+      },
+      {
+        "request": {
+          "command": "node --test test/new.test.mjs",
+          "cwd": "/snap/missing-fixture/head",
+          "timeoutMs": 120000,
+          "killGraceMs": 2000,
+          "outputLimitBytes": 1048576
+        },
+        "reply": {
+          "result": {
+            "exitCode": 0,
+            "signal": "",
+            "timedOut": false,
+            "outputLimited": false,
+            "stdout": "",
+            "stderr": "",
+            "error": "",
+            "setupError": ""
+          }
+        }
+      }
+    ],
+    "host_cleanup": [
+      {
+        "request": {
+          "root": "/repo/proved",
+          "worktrees": [
+            "/snap/proved/base",
+            "/snap/proved/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/old-passes",
+          "worktrees": [
+            "/snap/old-passes/base",
+            "/snap/old-passes/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason",
+          "worktrees": [
+            "/snap/wrong-reason/base",
+            "/snap/wrong-reason/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-fails",
+          "worktrees": [
+            "/snap/head-fails/base",
+            "/snap/head-fails/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/base-timeout",
+          "worktrees": [
+            "/snap/base-timeout/base",
+            "/snap/base-timeout/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-timeout",
+          "worktrees": [
+            "/snap/head-timeout/base",
+            "/snap/head-timeout/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/output-limit",
+          "worktrees": [
+            "/snap/output-limit/base",
+            "/snap/output-limit/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/signalled",
+          "worktrees": [
+            "/snap/signalled/base",
+            "/snap/signalled/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/unsafe-overlay",
+          "worktrees": [
+            "/snap/unsafe-overlay/base",
+            "/snap/unsafe-overlay/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing-fixture",
+          "worktrees": [
+            "/snap/missing-fixture/base",
+            "/snap/missing-fixture/head"
+          ]
+        },
+        "reply": {
+          "error": ""
+        }
+      }
+    ],
+    "saved": [],
+    "dispatches": []
+  },
+  "simulation": {
+    "host.readRun": {
+      "action": "collection.get",
+      "world_pointer": "/host_readRun",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.snapshot": {
+      "action": "collection.get",
+      "world_pointer": "/host_snapshot",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.createWorktree": {
+      "action": "collection.get",
+      "world_pointer": "/host_createWorktree",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.overlay": {
+      "action": "collection.get",
+      "world_pointer": "/host_overlay",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.runProcess": {
+      "action": "collection.get",
+      "world_pointer": "/host_runProcess",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.cleanup": {
+      "action": "collection.get",
+      "world_pointer": "/host_cleanup",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "host.saveProof": {
+      "action": "port.write",
+      "world_pointer": "/saved",
+      "result_template": {
+        "error": ""
+      }
+    },
+    "dispatch.prove": {
+      "action": "port.write",
+      "world_pointer": "/dispatches",
+      "result_template": {
+        "exitCode": 0,
+        "message": "Old-code proof: synthetic reply."
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "proved",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/proved",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✓ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" fail on the old code with \"defect-x\" and pass on the new code."
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/saved/0/record/outcome",
+          "op": "equals",
+          "value": "proved"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/0/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-createWorktree",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/0",
+          "op": "equals",
+          "value": {
+            "runDir": "/runs/proved",
+            "record": {
+              "v": 1,
+              "origin": "pdd.workflow-prove.v1",
+              "runId": "run-proved",
+              "baseSha": "0000000000000000000000000000000000000001",
+              "headSha": "0000000000000000000000000000000000000065",
+              "test": "node --test test/new.test.mjs",
+              "expect": "defect-x",
+              "paths": [
+                "test/new.test.mjs",
+                "test/fixtures/seed.json",
+                "tests/renamed.test.mjs"
+              ],
+              "base": {
+                "exitCode": 1,
+                "signal": "",
+                "timedOut": false,
+                "outputLimited": false,
+                "stdoutTail": [
+                  "defect-x"
+                ],
+                "stderrTail": [],
+                "expectedFound": true,
+                "error": "",
+                "setupError": "",
+                "observedError": "defect-x"
+              },
+              "head": {
+                "exitCode": 0,
+                "signal": "",
+                "timedOut": false,
+                "outputLimited": false,
+                "stdoutTail": [],
+                "stderrTail": [],
+                "expectedFound": false,
+                "error": "",
+                "setupError": "",
+                "observedError": "no output"
+              },
+              "outcome": "proved",
+              "cleanupError": "",
+              "setupError": ""
+            }
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "old-passes",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/old-passes",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" pass on the old code too. It does not show the bug."
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/saved/1/record/outcome",
+          "op": "equals",
+          "value": "old-passes"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "wrong-reason",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/wrong-reason",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" fail on the old code, but not with \"defect-x\" (got \"code: other-error\")."
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/saved/2/record/outcome",
+          "op": "equals",
+          "value": "wrong-reason"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/saved/2/record/base/observedError",
+          "op": "equals",
+          "value": "code: other-error"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/saved/2/record/base/stdoutTail",
+          "op": "equals",
+          "value": [
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/2/record/base/observedError",
+          "op": "equals",
+          "value": "code: other-error"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/2/record/base/stdoutTail",
+          "op": "equals",
+          "value": [
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise",
+            "noise"
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "head-fails",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/head-fails",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ head-fails."
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/saved/3/record/outcome",
+          "op": "equals",
+          "value": "head-fails"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "base-timeout",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/base-timeout",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ base-timeout."
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/saved/4/record/outcome",
+          "op": "equals",
+          "value": "base-timeout"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "head-timeout",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/head-timeout",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ head-timeout."
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/saved/5/record/outcome",
+          "op": "equals",
+          "value": "head-timeout"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "output-limit",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/output-limit",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ output-limit."
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/saved/6/record/outcome",
+          "op": "equals",
+          "value": "output-limit"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "signalled",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/signalled",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ signalled."
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/saved/7/record/outcome",
+          "op": "equals",
+          "value": "signalled"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "no-tests",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/no-tests",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ no-changed-tests."
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/saved/8/record/outcome",
+          "op": "equals",
+          "value": "no-changed-tests"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-base",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/missing-base",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ setup-error."
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/saved/9/record/outcome",
+          "op": "equals",
+          "value": "setup-error"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "unsafe-overlay",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/unsafe-overlay",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ setup-error."
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/saved/10/record/outcome",
+          "op": "equals",
+          "value": "setup-error"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-fixture",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/missing-fixture",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ setup-error."
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "world",
+          "path": "/saved/11/record/outcome",
+          "op": "equals",
+          "value": "setup-error"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-runProcess",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "quoted-cli",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "workflow",
+          "prove",
+          "2594",
+          "--test",
+          "node --test test/new.test.mjs",
+          "--expect",
+          "defect x"
+        ],
+        "cwd": "/repo/cli"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": "Old-code proof: synthetic reply.\n"
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "world",
+          "path": "/dispatches",
+          "op": "equals",
+          "value": [
+            {
+              "ref": "2594",
+              "test": "node --test test/new.test.mjs",
+              "expect": "defect x",
+              "cwd": "/repo/cli"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-option",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "workflow",
+          "prove",
+          "2594",
+          "--test",
+          "node --test test/new.test.mjs"
+        ],
+        "cwd": "/repo/cli"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stderr",
+          "op": "equals",
+          "value": "pdd workflow prove requires nonblank --test and --expect.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "duplicate-option",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "workflow",
+          "prove",
+          "2594",
+          "--test",
+          "node --test test/new.test.mjs",
+          "--expect",
+          "defect x",
+          "--expect",
+          "x"
+        ],
+        "cwd": "/repo/cli"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "blank-option",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "workflow",
+          "prove",
+          "2594",
+          "--test",
+          " ",
+          "--expect",
+          "x"
+        ],
+        "cwd": "/repo/cli"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "extra-operand",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {
+        "argv": [
+          "workflow",
+          "prove",
+          "2594",
+          "--test",
+          "node --test test/new.test.mjs",
+          "--expect",
+          "defect x",
+          "extra"
+        ],
+        "cwd": "/repo/cli"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/exit_code",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "result",
+          "path": "/stdout",
+          "op": "equals",
+          "value": ""
+        },
+        {
+          "criterion_id": "AC8",
+          "target": "calls",
+          "path": "/resources/pdd-cli-dispatch-prove",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

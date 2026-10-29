@@ -1,0 +1,426 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-pr-labels.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Both PRs show nonblank \"Not fixed yet:\", \"Defect:\", \"Not caught because:\", \"Proof (defect fixed):\", \"Proof (gap closed):\" and \"Review:\" lines in that order, with machine proof between the Proof lines and Review on the code PR."
+    },
+    {
+      "id": "AC2",
+      "text": "Distinct lines from the latest known-step summaries and direct notes are retained in workflow step order within each label; exact repeats and blank labels are omitted."
+    },
+    {
+      "id": "AC3",
+      "text": "Indented labels, different case, labels inside other text, unknown-step notes and agent-written machine proof or inventory lines are not lifted."
+    },
+    {
+      "id": "AC4",
+      "text": "When \"Not fixed yet:\" has a nonblank payload, both PRs use \"Refs #2594\"; otherwise PR 1 keeps \"Part of #2594\" and the code PR keeps \"Closes #2594\". Missing labels create no empty placeholders."
+    }
+  ],
+  "initial_world": {
+    "publication_currentHead": [
+      {
+        "request": {
+          "root": "/repo/all-code"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/empty-code"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      }
+    ],
+    "publication_readStepNotes": [
+      {
+        "request": {
+          "runDir": "/pub/all-pr1",
+          "steps": [
+            "understand",
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Defect: direct note\nDefect: real defect"
+            },
+            {
+              "step": "verify",
+              "text": "Review: approved latest note"
+            },
+            {
+              "step": "unknown",
+              "text": "Defect: forbidden unknown step"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/all-code",
+          "steps": [
+            "understand",
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Defect: direct note\nDefect: real defect"
+            },
+            {
+              "step": "verify",
+              "text": "Review: approved latest note"
+            },
+            {
+              "step": "unknown",
+              "text": "Defect: forbidden unknown step"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/empty-pr1",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/empty-code",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      }
+    ],
+    "publication_readOldCodeProof": [
+      {
+        "request": {
+          "runDir": "/pub/all-code"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/empty-code"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      }
+    ]
+  },
+  "simulation": {
+    "publication.currentHead": {
+      "action": "collection.get",
+      "world_pointer": "/publication_currentHead",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readStepNotes": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readStepNotes",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readOldCodeProof": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readOldCodeProof",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "all-pr1",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-all-pr1",
+          "runDir": "/pub/all-pr1",
+          "root": "/repo/all-pr1",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+            },
+            {
+              "step": "verify",
+              "summary": "Defect: second distinct defect"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Refs #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "all-code",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-all-code",
+          "runDir": "/pub/all-code",
+          "root": "/repo/all-code",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+            },
+            {
+              "step": "verify",
+              "summary": "Defect: second distinct defect"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Old-code proof: not run.",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Old-code proof: not run.",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Defect: real defect",
+            "Defect: direct note",
+            "Defect: second distinct defect",
+            "Not caught because: missing regression",
+            "Proof (defect fixed): observed fix",
+            "Proof (gap closed): regression added",
+            "Old-code proof: not run.",
+            "Review: 2 must-fix",
+            "Review: approved latest note"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Refs #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "empty-pr1",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-empty-pr1",
+          "runDir": "/pub/empty-pr1",
+          "root": "/repo/empty-pr1",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not fixed yet:  \nDefect:\nReview:  "
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "empty-code",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-empty-code",
+          "runDir": "/pub/empty-code",
+          "root": "/repo/empty-code",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not fixed yet:  \nDefect:\nReview:  "
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

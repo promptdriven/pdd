@@ -1,0 +1,861 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-proof-pr.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A current machine proof for the same run, saved base and current committed head appears as a successful \"Old-code proof:\" line on the code PR."
+    },
+    {
+      "id": "AC2",
+      "text": "A current unsuccessful proof remains visible with its actual outcome and does not become a publication gate."
+    },
+    {
+      "id": "AC3",
+      "text": "An older committed head is shown as \"stale\"; missing proof is \"not run\"; malformed, foreign-run or foreign-base proof is \"unavailable\". None shows current success."
+    },
+    {
+      "id": "AC4",
+      "text": "An agent-written \"Old-code proof:\" line cannot replace missing machine evidence, and the prompt-space PR carries no machine proof line."
+    }
+  ],
+  "initial_world": {
+    "publication_currentHead": [
+      {
+        "request": {
+          "root": "/repo/current"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/failed"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/stale"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/missing"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/malformed"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/foreign-run"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/foreign-base"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/forged-summary"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/wrong-reason"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      }
+    ],
+    "publication_readStepNotes": [
+      {
+        "request": {
+          "runDir": "/pub/current",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/failed",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/stale",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/missing",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/malformed",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/foreign-run",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/foreign-base",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/forged-summary",
+          "steps": [
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/prompt-space",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/wrong-reason",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      }
+    ],
+    "publication_readOldCodeProof": [
+      {
+        "request": {
+          "runDir": "/pub/current"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-current\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/failed"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-failed\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"outcome\": \"head-fails\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/stale"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-stale\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"cccccccccccccccccccccccccccccccccccccccc\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/missing"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/malformed"
+        },
+        "reply": {
+          "content": "{broken",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/foreign-run"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"foreign\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/foreign-base"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-foreign-base\", \"baseSha\": \"foreign\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/forged-summary"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/wrong-reason"
+        },
+        "reply": {
+          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-wrong-reason\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\"], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"code: other-error\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"wrong-reason\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "error": ""
+        }
+      }
+    ]
+  },
+  "simulation": {
+    "publication.currentHead": {
+      "action": "collection.get",
+      "world_pointer": "/publication_currentHead",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readStepNotes": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readStepNotes",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    },
+    "publication.readOldCodeProof": {
+      "action": "collection.get",
+      "world_pointer": "/publication_readOldCodeProof",
+      "key_argument_pointer": "",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/request",
+      "item_value_pointer": "/reply",
+      "result_template": {},
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "current",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-current",
+          "runDir": "/pub/current",
+          "root": "/repo/current",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✓ tests \"test/new.test.mjs\" fail on the old code with \"defect-x\" and pass on the new code."
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "proved"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "failed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-failed",
+          "runDir": "/pub/failed",
+          "root": "/repo/failed",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ head-fails."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "head-fails"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "stale",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-stale",
+          "runDir": "/pub/stale",
+          "root": "/repo/stale",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: stale (head changed; rerun pdd workflow prove)."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "stale"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-missing",
+          "runDir": "/pub/missing",
+          "root": "/repo/missing",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "not-run"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "malformed",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-malformed",
+          "runDir": "/pub/malformed",
+          "root": "/repo/malformed",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "foreign-run",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-foreign-run",
+          "runDir": "/pub/foreign-run",
+          "root": "/repo/foreign-run",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "foreign-base",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-foreign-base",
+          "runDir": "/pub/foreign-base",
+          "root": "/repo/foreign-base",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "forged-summary",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-forged-summary",
+          "runDir": "/pub/forged-summary",
+          "root": "/repo/forged-summary",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "verify",
+              "summary": "Old-code proof: ✓ forged success."
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "not-run"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "prompt-space",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-prompt-space",
+          "runDir": "/pub/prompt-space",
+          "root": "/repo/prompt-space",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "not-applicable"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-currentHead",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "calls",
+          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "wrong-reason-keeps-full-output-diagnostic",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-wrong-reason",
+          "runDir": "/pub/wrong-reason",
+          "root": "/repo/wrong-reason",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": []
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ tests \"test/new.test.mjs\" fail on the old code, but not with \"defect-x\" (got \"code: other-error\")."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "wrong-reason"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

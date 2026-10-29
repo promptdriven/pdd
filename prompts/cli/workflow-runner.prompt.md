@@ -1,6 +1,6 @@
 # Workflow runner (area chats)
 
-Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. pdd does not watch the agent, run tests, wait with a timeout or merge.
+Own `src/workflow-runner.mjs`. It runs a workflow for one GitHub issue as a few area chats. pdd has four jobs: start, gates, PR and status. The agent does the work. pdd does not watch the agent, run tests automatically, wait with a workflow timeout or merge. The explicit local [old-code proof](workflow-prove.prompt.md) command is the sole bounded supplied-command execution exception; this runner never executes a command from notes or evidence.
 
 ## Base selection
 
@@ -20,13 +20,13 @@ Only a successful start/open or positive observation of the same current chat cl
 
 ## Commands
 
-Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
+Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
 
 - `startRun({name, issue, agent, base, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. After a cancelled run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
 - `stepDone({step, summary, cwd})`: only the agent calls this, from the worktree. Find the run from cwd. Record the step with its summary and time. The stored summary keeps its line breaks (each line's spaces collapsed, blank lines dropped); every place that shows a summary on one line (status, the code question, the PR step list) collapses it. An unknown or out-of-order step prints a warning and is still recorded. A step that runs again after later steps of its area (for example `build` after `verify` when vectors fail) prints a warning and clears those later steps, so they run again; the area's PR opens only after its last step. Then print one of:
   - the next step of the area and the exact `done` command (an optional step is a question to the person, and "skipped" is a valid summary);
   - at an `approve` gate: show the result, ask the person, stop, never approve for them; how they approve; how to handle changes (revise here, run done again, ask again);
-  - after the last step of a `pr` area: "pdd opens the PR now". Commit any uncommitted files (with a warning), push and open the PR for this area. The body (0.1.4 #18, 0.1.6) starts with the Runtime check lines of that summary (the check step's, else the latest step that reports one): every "Runtime check (<story>)…: …" line, one per Story (a Story that appears again keeps its place and takes its latest line), then, with two or more Stories, a total that pdd adds up itself: "Runtime check (all Stories)[ (DRAFT)]: ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls" (sum the criteria, the checks and the AI calls, each only when every Story line has it; ✓ only when every Story passes, else ✗; DRAFT when any Story line is DRAFT). A pasted overall "Runtime check: …" line is dropped when Story lines exist, because it can cover only the Stories checked last; a summary with no overall line works the same. Without Story names, keep the Runtime check lines as written. Then "Report (<story>): URL (report links expire after 7 days)" for each distinct report link, in summary order (the Story name comes from a "Report (<story>): URL" entry; a bare link or "Report: URL" or "Report (DRAFT): URL" has no name). The chat pastes the lines that `pdd check` prints into the check step's summary, one per line (with a `Report:` line per Story) or joined with "; " (with one "Report (<story>): URL" per report row); a result ends at a line break, ";", a `Report` entry, a link or the next `Runtime check`. Read these lines from the stored summary, before it is collapsed. Above the Runtime check lines go the verdict line and the before → after line of a bug check (0.1.7): the first "Verdict: …" and the first "Before ✗ …" / "Before ✓ …" / "Before: no prompt …" in the step summaries (the check step's first, then the newest step), each up to its line break, or up to a "; " that starts "Before", "Runtime check" or "Report" (a "; " inside the verdict sentence stays). A report link in the before → after line gets " (report links expire after 7 days)" and is not listed again as a "Report" line. Then the PR head ("Part of #N" / "Closes #N" …), then one line per step since the previous PR, cut to about 200 characters at a word end and never inside a URL (a URL that crosses the end stays whole, and " …" follows it). Only a PR that covers a verify step carries `<run folder>/verify.md`, under "## Verify" (0.1.6 tester: 100 lines of shell before the vector table): drop a leading "# Verify" line, write each "## " heading as "### ", and fold each fenced block of more than 15 lines that is not inside a `<details>` block into `<details><summary>Commands (N lines)</summary>` (sh, bash, zsh, shell or console blocks) or `Output (N lines)`. When verify.md has no `<details>` of its own, keep the text before its first heading on top, then its sections whose heading names vectors or results, then the Formal check, then other sections with a table, then the rest, each group in file order. GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report; every retry failed the same way), so the whole body stays at most 60,000 characters (Unicode code points), which leaves room for the marker and for GitHub's own count. When verify.md does not fit in the room that the rest of the body leaves, the body keeps a summary of it. First each `<details>` block (long commands and output) becomes one line, `- <its summary text>: not shown here.` If it is still too long, keep its first lines that fit, cut at a line end (never inside a link) with an open code fence closed, and then list the lines of the cut part that report a failure (`✗`, or the word fail, fails, failed or failing) under `Lines that report a failure, from the part not shown:`, as many as fit. End the summary with: `_The full verify report has N characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: WHAT. The PR author has the full report: verify.md in the run folder._` (WHAT: `the long blocks are not shown`, or `its first N lines; M more lines are not shown, and K of them report a failure`, with `reports` when K is 1). Before collapsing details (authored or generated from long fenced output), retain their failure lines and report references outside the collapsed block. If truncation is still required, consider failures and report references from all omitted content, including collapsed blocks. Keep whole evidence lines and links while room allows; explicitly count omitted failures and report references when they cannot all fit. The full verify.md stays byte-for-byte in the run folder. Failures are never dropped in silence. Local paths never appear: the worktree path becomes repo-relative, the run folder "<run folder>", any other `/Users/…`, `/home/…`, `/private/…`, `/var/folders/…` or `/tmp/…` path "<local path>". Before writing a PR body, replace every Try link (a URL whose path has `/s/<token>`) in the step summaries and verify.md with "(Try link removed)"; report links (`/r/`) stay. When the first line of verify.md starts with "✗" (for example "✗ 2 vectors fail"), that line is also the first line of the PR body. When the body has a runtime report link, add "Runtime report links expire after 7 days." A report link is a URL with a `/r/` path segment, or a URL that starts with `PDD_RUNTIME_URL` when it is set. Never fix a runtime host in the code. When the PR exists already, push the new commits only. When the PR does not open, print the message of the [GitHub](workflow-github.prompt.md) result: it names GitHub's own reason when GitHub refused the PR, and says unconfirmed only for a real doubt. A retry builds the same intent again (same run, area, marker, branch and SHA when nothing new was committed) and does not push again. Print the PR URL and "pdd never merges".
+  - after the last step of a `pr` area: "pdd opens the PR now". Commit any uncommitted files (with a warning), push and open the PR for this area. The body (0.1.4 #18, 0.1.6) starts with the Runtime check lines of that summary (the check step's, else the latest step that reports one): every "Runtime check (<story>)…: …" line, one per Story (a Story that appears again keeps its place and takes its latest line), then, with two or more Stories, a total that pdd adds up itself: "Runtime check (all Stories)[ (DRAFT)]: ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls" (sum the criteria, the checks and the AI calls, each only when every Story line has it; ✓ only when every Story passes, else ✗; DRAFT when any Story line is DRAFT). A pasted overall "Runtime check: …" line is dropped when Story lines exist, because it can cover only the Stories checked last; a summary with no overall line works the same. Without Story names, keep the Runtime check lines as written. Then "Report (<story>): URL (report links expire after 7 days)" for each distinct report link, in summary order (the Story name comes from a "Report (<story>): URL" entry; a bare link or "Report: URL" or "Report (DRAFT): URL" has no name). The chat pastes the lines that `pdd check` prints into the check step's summary, one per line (with a `Report:` line per Story) or joined with "; " (with one "Report (<story>): URL" per report row); a result ends at a line break, ";", a `Report` entry, a link or the next `Runtime check`. Read these lines from the stored summary, before it is collapsed. Above the Runtime check lines go the verdict line and the before → after line of a bug check (0.1.7): the first "Verdict: …" and the first "Before ✗ …" / "Before ✓ …" / "Before: no prompt …" in the step summaries (the check step's first, then the newest step), each up to its line break, or up to a "; " that starts "Before", "Runtime check" or "Report" (a "; " inside the verdict sentence stays). A report link in the before → after line gets " (report links expire after 7 days)" and is not listed again as a "Report" line. Then the PR head ("Part of #N" / "Closes #N" …), then one line per step since the previous PR, cut to about 200 characters at a word end and never inside a URL (a URL that crosses the end stays whole, and " …" follows it). Only a PR that covers a verify step carries `<run folder>/verify.md`, under "## Verify" (0.1.6 tester: 100 lines of shell before the vector table): drop a leading "# Verify" line, write each "## " heading as "### ", and fold each fenced block of more than 15 lines that is not inside a `<details>` block into `<details><summary>Commands (N lines)</summary>` (sh, bash, zsh, shell or console blocks) or `Output (N lines)`. When verify.md has no `<details>` of its own, keep the text before its first heading on top, then its sections whose heading names vectors or results, then the Formal check, then other sections with a table, then the rest, each group in file order. GitHub refuses a PR description over 65,536 characters (0.1.7 tester: a 105,489-character verify report; every retry failed the same way), so the whole body stays at most 60,000 characters (Unicode code points), which leaves room for the marker and for GitHub's own count. When verify.md does not fit in the room that the rest of the body leaves, the body keeps a summary of it. First each `<details>` block (long commands and output) becomes one line, `- <its summary text>: not shown here.` If it is still too long, keep its first lines that fit, cut at a line end (never inside a link) with an open code fence closed, and then list the lines of the cut part that report a failure (`✗`, or the word fail, fails, failed or failing) under `Lines that report a failure, from the part not shown:`, as many as fit. End the summary with: `_The full verify report has N characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: WHAT. The PR author has the full report: verify.md in the run folder._` (WHAT: `the long blocks are not shown`, or `its first N lines; M more lines are not shown, and K of them report a failure`, with `reports` when K is 1). Before collapsing details (authored or generated from long fenced output), retain their failure lines and report references outside the collapsed block. If truncation is still required, consider failures and report references from all omitted content, including collapsed blocks. Keep whole evidence lines and links while room allows; explicitly count omitted failures and report references when they cannot all fit. The full verify.md stays byte-for-byte in the run folder. Failures are never dropped in silence. Local paths never appear: the worktree path becomes repo-relative, the run folder "<run folder>", any other `/Users/…`, `/home/…`, `/private/…`, `/var/folders/…` or `/tmp/…` path "<local path>". Before writing a PR body, replace every Try link (a URL whose path has `/s/<token>`) in the step summaries and verify.md with "(Try link removed)"; report links (`/r/`) stay. When the first line of verify.md starts with "✗" (for example "✗ 2 vectors fail"), that line is also the first line of the PR body. When the body has a runtime report link, add "Runtime report links expire after 7 days." A report link is a URL with a `/r/` path segment, or a URL that starts with `PDD_RUNTIME_URL` when it is set. Never fix a runtime host in the code. When the PR exists already, push the new commits and refresh the label/proof top block as required below. When the PR does not open, print the message of the [GitHub](workflow-github.prompt.md) result: it names GitHub's own reason when GitHub refused the PR, and says unconfirmed only for a real doubt. A retry builds the same intent again (same run, area, marker, branch and SHA when nothing new was committed) and does not push again. Print the PR URL and "pdd never merges".
   A cancelled or completed run prints that the agent must stop.
 - Try before PR 1 (0.1.4 #13): a `pr` area with `"before":"approve"` does not open its PR after the last step. `done` sets the gate kind `approve-pr` and tells the chat to show the Runtime check line with its report link and the Try link, ask the person to try it and approve or ask for changes, and stop. Status: "waiting for you: try it, then approve to open PR 1". When there is nothing to try (no step of the area left a Try link, and the try step was skipped or the worktree changes no test file), the gate text says "There is nothing to try. Ask them to approve or ask for changes." and status drops "try it, then " (0.1.6 tester: a browser-only Story). For PR 1 the gate text also gives the chat the words for what PR 1 holds, read from the worktree's changes against the run base (uncommitted files count): "Tell the person what PR 1 holds, in these words: "PR 1 is ready with the approved Story[, the approved prompt X][, the draft prompt Y][, the prompt Z] and the tests."", with "the approved Stories" for two or more Stories under `user_stories/`, and without "and the tests" plus " It has no test file." when no test file (a `*.json` with `prompt-runtime.program-scenario`) changed. Only the Story area was approved, so a draft prompt is never called approved (0.1.6 tester). `approve` here works like an area gate (chat evidence: any message from the person; terminal: "Approve the AREA area and open PR 1 for …? (y/N)"); it records the decision and opens the PR. With `then: ask-code` the run moves to the code-or-stop gate (new gate time): from the chat, the reply tells the chat to ask the code question; from the terminal, when PR 1 has draft prompts, pdd does not ask about the code PR: it prints PR 1's link and the approve-first line (see Draft prompts) and sends the chat "pdd opened PR 1: URL. … Tell them exactly: "PR 1 is open: URL. <approve-first line>" Then stop."; else pdd asks "Make the code PR now …? (y/N)" — no sends PR 1's link and the stop into the chat and prints "To make the code PR later, run `pdd workflow approve N`."; yes goes on as the code gate (the code branch and chat). A PR that cannot open leaves the gate open; run approve again.
 - Two PRs (bug and feature): an area with gate `pr` and `then: ask-code` opens **PR 1** (title "ISSUE TITLE (prompt, Story and tests)" and body line "PR 1 of this run: the prompt, Story and test cases. …" when the worktree changes a test file, else "ISSUE TITLE (prompt and Story)" and "PR 1 of this run: the prompt and the Story. …"; body "Part of #N"). Then `done` prints the PR 1 link, the step summaries (Runtime check line, Try link) and tells the chat to ask "Do you want the code PR now, or stop here and merge PR 1 first?" and stop. This is a gate. When the chat pushes more commits to an open PR 1 at this gate (for example the prompt approval the person asked for), the gate keeps its time, so the person's earlier yes still counts; `changes` moves it. `approve` (terminal y/N "Make the code PR now…", or the person's own words in the chat) starts the code area in a NEW chat on a new branch `<branch>-code`: from PR 1's head when PR 1 is `open` (PR 2 is stacked: base = PR 1's branch), or from the fetched saved base branch when PR 1 is `merged` (base = the run’s selected base). When PR 1 is `closed` or its state is `unknown`, refuse: make no branch, change no run field, and tell the person to check PR 1 and run `approve N` again. The last area opens **PR 2** (title "ISSUE TITLE (code)", body "Closes #N" and "Builds on PR 1: URL"). If PR 1 merges while the run waits at this gate, `status` ends the run as "done at PR 1"; `approve` still starts the code area later.
@@ -42,7 +42,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 
 ## Rules
 
-- No timeouts, no polling loop, no foreground controller and no test runs. Source fingerprints below bind evidence; they do not create execution snapshots.
+- No workflow timeouts, no polling loop, no foreground controller and no automatic test runs. Explicit old-code proof has its own bounded execution contract. Source fingerprints below bind evidence; they do not create execution snapshots.
 - Light checks warn and never break the run. Errors that stop a command say what to do next.
 - Never merge. Never push to the default branch. Never touch the person's default Herdr session.
 - Messages to the agent are short. The first message of an area chat is about 10 lines: "Use the pdd-NAME skill: <the SKILL.md path that the lookup chose>" (an installed copy with the same name may be older), the issue number, title and URL, the worktree, the run folder, the area and its steps, the `done` rule, the gate rule, and "Read the PDD skills (pdd-prompting too) from <absolute package>/skills: an installed copy with the same name may be older." (an `npx skills add` or `pdd setup` copy is not updated with pdd). Never paste the guide or the workflow text.
@@ -51,6 +51,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 ## Dependencies
 
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
+- [Old-code proof](workflow-prove.prompt.md): required generation/runtime/verification context for machine result schema, classification and provenance; runner consumes results without executing proof.
 - [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
 
@@ -64,7 +65,7 @@ Before creating PR 2's code branch, fetch its chosen remote branch with the expl
 
 For Story counts, prefer the newest timestamped Runtime-check evidence across completed steps (including verify) and explicit evidence records, rather than always preferring check. Break equal timestamps by record order. A later partial summary updates only its named Stories; retain compatible earlier Stories and their report provenance. UNKNOWN/running/busy/not-run remain unknown, never failing. Only explicit ✗ names a failing Story. Show unknown names/counts in detail, list and JSON.
 
-Bind each new step containing Runtime-check lines to the current Git-visible source content (paths, file bytes, executable bits and symlink targets; not commit identity alone). Recompute before using it, so uncommitted edits invalidate old evidence and byte-identical commits remain compatible. Legacy unbound or unreadable/stale evidence may identify Stories but cannot assert current passes or failures: show unknown with a source warning. Preserve prior records when steps are replaced/cleared, without changing step/gate semantics. Existing PR bodies are unchanged by this status/evidence change.
+Bind each new step containing Runtime-check lines to the current Git-visible source content (paths, file bytes, executable bits and symlink targets; not commit identity alone). Recompute before using it, so uncommitted edits invalidate old evidence and byte-identical commits remain compatible. Legacy unbound or unreadable/stale evidence may identify Stories but cannot assert current passes or failures: show unknown with a source warning. Preserve prior records when steps are replaced/cleared, without changing step/gate semantics. The status/runtime-evidence change alone does not rewrite existing PR bodies; label/old-code proof publication refresh remains required below.
 
 Export `recordEvidence({ref, summaryFile, cwd})` for `pdd workflow evidence ISSUE --summary FILE`. FILE must be saved JSON from `pdd check ... --json` or `pdd check --read BATCH --json`, with repository, nonempty unique rows/test paths, per-Story Runtime-check lines and a full source_sha256. Verify repository/worktree ownership and recapture exactly those selected tests; require the identical source SHA. Reject malformed, foreign, missing-identity or stale evidence before writing. Each row Story must match its selected test; validate per-Story summary lines against structured row states, criteria, checks and usage rather than trusting a free-form pass mark. Preserve the original supplied summary/provenance and timestamp it as newly recorded; store its selected test paths and runtime source identity. Subsequent status recomputes that capture. A record may retain an older byte-identical receipt; do not demand a new run or spend models. Missing or stale source never overrides compatible evidence.
 
@@ -103,13 +104,259 @@ publication, including retries and updates of an existing code PR. The canonical
 Runtime check, prose PASS claim or verify.md and retains assertion/formal failure lines. Missing, stale or
 malformed reports publish as BLOCKED/NOT REPLAYED, never PASS. Real assertion failures remain publishable;
 the policy qualifies evidence rather than preventing every failing review. The report and RUNBOOK explicitly
-state the CLI's structure/identity trust boundary; pdd never executes tests or supplied commands.
+state the CLI's structure/identity trust boundary; replay validation never executes tests or supplied commands; explicit old-code proof is separate.
 
 For a previously opened opted-in code PR, replace its body with a prominent BLOCKED publication-pending
 report before pushing changed source, then set the final newly validated report after a successful push.
 If either description update fails, report the exact failure and retry command; never push new source while
-the description still asserts an old PASS. Preserve ordinary non-opted existing-PR push-only behavior.
+the description still asserts an old PASS. For non-opted existing PRs, refresh the label/proof top block as required below while preserving their remaining publication behavior.
 Preserve the single canonical workflow ownership marker on both descriptions, rejecting stray supplied markers.
 Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
+
+## PR labels and current old-code proof
+
+Export module function `preparePrEvidence({run, isCode}, ports = {}) -> {lines, issueReference, proofStatus}`. This is the production evidence-preparation boundary: both PR creation and updates must call it from the real body/publication path. Existing exports and callers stay compatible. It reads notes and machine proof through actual injected ports; it does not execute a test, publish, approve or advance a step. `run.steps` is the workflow's known step order with each latest saved summary, including earlier areas; the caller derives it from the saved workflow/run, never arbitrary directory entries.
+
+For each known step in workflow order, scan its latest stored summary, then the current direct `<runDir>/<step>.md` if present. Read no recursive logs, JSON, archived notes, foreign files or arbitrary summary-file paths. Missing notes contribute nothing. Edited notes replace their previous contents; replaced summaries use only the latest record. Lift only column-zero lines starting exactly with `Not fixed yet:`, `Defect:`, `Not caught because:`, `Proof (defect fixed):`, `Proof (gap closed):`, `Review:`. Trim payload ends and emit `LABEL PAYLOAD`; retain internal spaces, drop blank payloads, deduplicate identical normalized full lines, and retain distinct lines in source order within each label. Do not lift indented/case-varied labels or agent-authored `Old-code proof:`/`Tests vs base:`.
+
+Order the top evidence block: Not fixed yet, Defect, Not caught because, Proof (defect fixed), Proof (gap closed), machine Old-code proof (code PR only), integration-owned Tests vs base when supplied, Review. The inventory position is reserved for integration; this module does not implement #2570 or invent inventory text. Both PRs retain all applicable known-step labels across area boundaries. With a nonempty Not fixed yet line use `Refs #N` for every runner-owned issue reference on either PR; introduce no `Closes #N`. Otherwise retain `Part of #N` for PR 1 and `Closes #N` for code/small-change. `isCode` means code or single small-change publication; prompt-space uses false.
+
+For code publication obtain current committed head through `ports.currentHead({root})`, never from summary text or a passed head claim. Read only `<runDir>/old-code-proof.json` via `ports.readOldCodeProof({runDir})`. Accept a result only with the exact complete schema from the prove owner, matching runId, baseSha and Git-observed headSha, and an outcome consistent with saved phase facts/expectedFound/setupError/cleanupError. Missing records produce `Old-code proof: not run.` / proofStatus `not-run`; valid older-head records produce `Old-code proof: stale (head changed; rerun pdd workflow prove).` / `stale`. Malformed, foreign-run/base, inconsistent or unreadable records and unavailable current head produce `Old-code proof: unavailable.` / `unavailable`. Accepted current records use the prove owner's exact outcome message and outcome as proofStatus. Summary text cannot replace or upgrade it. No missing/stale/failed proof blocks publication. Local file provenance is a trust boundary; this is not tamper-proof attestation or behavioral equivalence.
+
+`lines` contains the ordered evidence lines (with no inventory line until integration supplies it); `issueReference` is the issue line; `proofStatus` is `not-applicable` on prompt-space PRs, which do not read head/proof. `readStepNotes({runDir,steps})` returns only existing regular direct known-step files, preserving their text; unknown reply steps are ignored. `currentHead` uses local Git and returns an empty error on success. `readOldCodeProof` returns original JSON text plus empty error, `missing` for no file, or a finite read error. Defaults perform real local reads. These callbacks map directly to resource publication operations below.
+
+Insert this block above ordinary verdict/runtime/step prose, while keeping structured replay BLOCKED/NOT REPLAYED/publication-pending and vector failure warnings ahead of it. Every lifted/machine line goes through existing marker rejection, Try-link removal, local-path redaction, report-reference retention and 60000-code-point body budget; never truncate into a false success. If lifted evidence itself exceeds available body room, retain whole lines in contract order and explicitly count omitted labels, failures and report references under the existing bounded-description policy. Compute Refs safety from all accepted labels before shortening; never restore Closes because a warning line did not fit. An overlong machine line may be replaced only by an explicit unavailable/omitted-result notice, never a shortened success claim. A failed old-code proof remains visible and publishable. Existing opted-in PRs still receive the replay publication-pending description before pushing source and retain pending on final-description failure. For non-opted code PRs, replace the old proof line with publication-pending before pushing changed source, then replace it with newly prepared current evidence; if either edit fails, report it, and never push source while an old success remains. Relevant PR 1 updates refresh labels too. The final body keeps exactly one canonical ownership marker and existing approval/stacking semantics. Native lifecycle tests must establish these effects; helper Runtime checks alone do not prove them.
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "",
+  "entries": [
+    {
+      "operation": "preparePrEvidence",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "runDir": {
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "baseSha": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "summary"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "runId",
+              "runDir",
+              "root",
+              "baseSha",
+              "number",
+              "steps"
+            ],
+            "additionalProperties": false
+          },
+          "isCode": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run",
+          "isCode"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "issueReference": {
+            "type": "string"
+          },
+          "proofStatus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lines",
+          "issueReference",
+          "proofStatus"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "publication",
+      "kind": "port",
+      "access": "write",
+      "operations": [
+        {
+          "name": "currentHead",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "headSha": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "headSha",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readStepNotes",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "runDir",
+              "steps"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "notes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readOldCodeProof",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "runDir": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runDir"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 5,
+    "max_model_calls": 5
+  },
+  "conventions": []
+}
+```
+
+</details>
