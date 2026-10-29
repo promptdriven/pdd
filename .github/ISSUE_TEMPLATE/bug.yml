@@ -1,0 +1,101 @@
+name: Report a problem with pdd v2
+description: The pdd command, a PDD skill, the PDD runtime or the docs fails or gives a wrong result.
+title: "[alpha] "
+labels: ["alpha"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for a problem with pdd v2 (version 0.1.x). [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md) explains each field. Agents follow the same guide.
+
+        - Run `pdd --version`. It must print `0.1.` and a number. A version that starts with `0.0.` is the retired Python pdd. Do not report it here. Install pdd v2 from the [README](https://github.com/promptdriven/pdd#install).
+        - Search the [open issues](https://github.com/promptdriven/pdd/issues) first. If an issue has the same problem, add a comment to it.
+        - In the title, write what fails for you, in your words. Do not write a guessed cause.
+        - Write one problem in each issue. Never paste tokens, Try links, private repo links or personal data.
+  - type: input
+    id: version
+    attributes:
+      label: pdd version
+      description: The output of `pdd --version`. It starts with `0.1.`.
+      placeholder: "0.1.9"
+    validations:
+      required: true
+  - type: textarea
+    id: did
+    attributes:
+      label: What you did
+      description: What you tried to do, in one sentence. Then the exact command.
+      placeholder: |
+        I tried to lint my first Story.
+        pdd check --lint
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: The exact output, copied as text. Add the exit code (run `echo $?` directly after the command).
+      placeholder: |
+        The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.
+        Exit code: 3
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What you expected to see.
+    validations:
+      required: true
+  - type: textarea
+    id: link
+    attributes:
+      label: Runtime link or run id
+      description: The report link that `pdd check` printed, a request ID, or for a workflow run the output of `pdd workflow status N`. Never paste a Try link. Anyone with a Try link can use it.
+    validations:
+      required: false
+  - type: textarea
+    id: example
+    attributes:
+      label: Smallest example
+      description: The smallest repo or file shape that shows the problem. For example, one prompt, one Story with 2 criteria and its test file.
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.3
+    validations:
+      required: false
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: The output of `node -v`.
+      placeholder: v22.20.0
+    validations:
+      required: false
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      description: The agent that ran pdd, and its version. Write "none" when you typed the command.
+    validations:
+      required: false
+  - type: textarea
+    id: cause
+    attributes:
+      label: Suspected cause
+      description: Only when you have a guess. Say why you think so. Keep the facts in the fields above.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the open issues. No open issue has this problem.
+          required: true
+        - label: The text has no tokens, Try links, private repo links or personal data.
+          required: true
