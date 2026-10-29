@@ -233,8 +233,9 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `/internal/store--op-add--hex-616464` counts the calls of `add`.
 - Two prompt files with the same file name get other node names. Give each prompt its own file name.
 - `got {"missing": true}` means that the path names no node. The path is wrong, not the prompt: fix only the path.
-  For the `error` target it means something else: the step returned a normal result and no error (pdd prints
-  `got no error`). The path is right. The prompt did not refuse this input.
+  For the `error` target, pdd prints `got no error (a normal result)` when the step returned a result and no error.
+  Then the path is right, and the prompt did not refuse this input. If pdd still prints `got {"missing": true}` on
+  `error`, an error came back without that field: compare the path with the prompt's declared errors.
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
@@ -310,7 +311,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 |---|---|---|
 | The prompt is wrong | The Story and the step input give the expected value; the prompt does something else | Fix the prompt. Check that Story once. |
 | The program needs a tool | Only a hash, a digest or exact math shows the right answer | Declare a `compute` resource (section 21, "Hash exact bytes"). Check once. |
-| The test path is wrong | `got {"missing": true}` on `result`, `world` or `calls` (section 8) | Fix only the path. |
+| The test path is wrong | `got {"missing": true}` on `result` or `world` (section 8) | Fix only the path. |
 | The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
 | The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
 | The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
