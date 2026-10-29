@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link, chmod } from 'node:fs/promises';
@@ -450,7 +450,7 @@ test('an early stdin failure becomes recovery_required without an unhandled EPIP
   t.after(() => rm(directory, { recursive: true, force: true }));
   const cwd = join(directory, 'repo'), remote = join(directory, 'remote.git'), bin = join(directory, 'bin');
   await mkdir(cwd); await mkdir(bin);
-  const realGit = '/usr/bin/git';
+  const realGit = execFileSync('command', ['-v', 'git'], { encoding: 'utf8' }).trim();
   const gitShim = join(bin, 'git');
   await writeFile(gitShim, `#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ]; then\n  if [ "$3" = --push ] || [ "$4" = --push ]; then echo "$PDD_PUSH_URL"; else echo "https://github.com/Acme/Project.git"; fi; exit 0; fi\nif [ "$1" = ls-remote ]; then exec ${realGit} ls-remote "$PDD_REMOTE" "${'refs/heads/topic/epipe'}"; fi\nif [ "$1" = push ]; then exit 0; fi\nexec ${realGit} "$@"\n`); await chmod(gitShim, 0o755);
   await writeFile(join(bin, 'gh'), `#!/bin/sh\nif [ "$1" = repo ]; then echo '{"nameWithOwner":"Acme/Project","defaultBranchRef":{"name":"main"},"url":"https://github.com/Acme/Project"}'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = list ]; then echo '[]'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = create ]; then exec 0<&-; : > "$PDD_READY"; while [ ! -f "$PDD_GO" ]; do sleep 0.01; done; kill -KILL $$; fi\nexit 1\n`); await chmod(join(bin, 'gh'), 0o755);
