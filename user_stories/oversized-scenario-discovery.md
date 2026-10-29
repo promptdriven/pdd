@@ -1,0 +1,33 @@
+# See oversized scenarios before checking Stories
+
+I can see why a detected scenario cannot be checked and how to split it, while unrelated large JSON leaves my normal Story checks usable.
+
+## Acceptance criteria
+
+1. Valid scenario JSON files of 1,048,575 and 1,048,576 bytes remain selectable by default, Story name, Story path and test path, with ordinary full-file JSON behavior.
+2. A scenario detected in the first 65,536 bytes of a file above 1,048,576 bytes makes default Check and --files refuse with exit 4 before sign-in, network or AI calls, even alongside multiple normal scenarios. The message identifies a PDD test, its path, actual byte size and the 1,048,576-byte test-file allowance, and says "split it into smaller test files".
+3. Selecting that oversized test by test path or test basename, or by a Story name or path established in the prefix, gives the same limit reason rather than "Unknown story". Selecting it in Try also refuses before sign-in, network or AI calls.
+4. A detected scenario containing an actual 1,048,576-byte ASCII input plus JSON overhead receives the oversized diagnostic. Sizes count serialized UTF-8 bytes, not characters, and execution and source limits stay unchanged.
+5. Oversized discovery uses only complete actual top-level declarations in the bounded prefix: escaped keys and string values count after decoding; nested keys, array elements and marker text inside strings do not. An early declaration survives a truncated body, and the last complete duplicate value in the prefix decides identity and Story aliases.
+6. Oversized JSON whose deciding prefix schema value is absent or non-PDD is silently skipped, including unrelated objects and files whose schema is only later in the file. This applies at every size above the execution allowance, including above 10 MiB; skipped files add no warning or no-tests detail and may still be included as ordinary source when existing safety and total limits allow.
+7. An explicit normal Story still works when oversized tests are unselected. A word with no known alias remains "Unknown story", exit 2; large files never create speculative Story matches or uncertainty refusals.
+8. Unrelated non-regular JSON entries at or below 1,048,576 bytes by their own metadata are skipped without following links or reading targets. Default Check, --files and Try keep ordinary selection and no-tests guidance. Unsafe oversized inspection and unreadable or unstable regular files still give explicit errors; selected payload and dependency symlinks remain refused.
+
+## Rules to check
+
+- The execution allowance is inclusive: 1,048,576 serialized UTF-8 bytes including JSON overhead. Files at or below it keep full-document parsing and last-key semantics. Every regular JSON file above it gets at most the first 65,536 bytes of discovery reading, independent of total size. Existing total-source byte/file/tar limits remain unchanged; 10,485,760 bytes is a source limit, not a discovery inspection allowance.
+- Prefix identity requires an object root and a complete top-level `schema_version` string whose decoded value starts with `prompt-runtime.program-scenario`. Unsupported family versions are still detected oversized tests. Complete non-string duplicates (null, Boolean, number, array or object) replace earlier values and are non-PDD. A later incomplete duplicate leaves the last complete value; bytes outside the prefix are ignored.
+- Keys and string values need complete quotes and escapes within the prefix; containers need their matching close; numbers and literals need complete JSON tokens and a visible JSON delimiter or whitespace. A cut UTF-8 sequence cannot complete a token. The prefix establishes neither whole-document validity nor final keys outside it. A non-object root or absent/non-PDD declaration is silently excluded.
+- Story path/name aliases require the last complete top-level `story_path` value in the prefix to be a string; a complete non-string removes that alias, and an incomplete later duplicate leaves the last complete value. Test path/basename aliases remain usable without a Story declaration. No unseen alias is guessed.
+- Default selection must never silently omit a detected oversized PDD test or print a successful manifest that excludes it. The refusal names actual file bytes and the actual 1 MiB execution allowance with the split-smaller-files next step. It must occur before authentication, network or AI effects. A PDD schema outside the prefix is explicitly allowed to remain undetected.
+- Discovery's small non-regular-file exception does not weaken selected payload/dependency safety. Preserve bounded regular-file reads, existing before/after path and descriptor observations, unreadable-file errors, changed-file exit 5 and unsafe oversized-entry errors. Discovery adds no retry loop; source capture keeps its existing bounded retries.
+
+## Native verification cases
+
+Use isolated Git repositories and the actual CLI plus native discovery/selection bindings. Derive expectations from the rules before execution. Materialize cap-1, cap, cap+1 and 10 MiB+1 files; include early, absent, ordinary, nested/string/array decoy, late, escaped, duplicate, boundary-cut and truncated declarations. Exercise default Check, --files, Try, test and Story aliases, explicit normal selection and unknown words. Verify the 65,536-byte read bound separately from file size and prove zero authentication/network/AI effects on oversized refusal.
+
+Use a minimal prompt whose input genuinely accepts a string, rather than an unknown field in a closed schema. Materialize real ASCII padding and multibyte UTF-8 content, measure serialized bytes and file stat size independently, and use a supplemental round-trip digest. Claimed sizes or hashes never substitute for actual bytes. Check skipped ordinary-source includes within source/tar limits; configuration/dangling symlinks and FIFOs without target reads or blocking; selected unsafe dependencies; and unreadable/unstable regular files. Synthetic symlink-ancestor cases are separate from actual Git enumeration.
+
+## Runtime check
+
+Not run: the owning preflight prompt has no executable Runtime interface or injected Git/filesystem ports. Its native exports read the host filesystem directly; a runtime root string or supplied byte count cannot materialize those files. Concrete discovery, bounded reads and CLI exit/effect evidence require native execution. Executable module binding remains a separate contract decision tracked by https://github.com/promptdriven/pdd/issues/2548. No new Runtime field, repeat-byte primitive or server-cap increase is invented; no Runtime pass or approval is claimed.

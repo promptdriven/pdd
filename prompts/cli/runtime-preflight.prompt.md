@@ -5,10 +5,37 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 ## Files
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped.
-- A test is a Git-visible `*.json` file of at most 1 MiB with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1.
+- Ordinary full-document discovery finds a test in a Git-visible `*.json` file with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1. Above the execution allowance, use only [oversized discovery](#oversized-discovery) instead.
 - A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning.
-- No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible `*.json` under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Exit 2.
-- Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. An unknown word is a command error that lists the stories with tests.
+- No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible regular `*.json` at or below the execution allowance under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Oversized JSON skipped by prefix discovery and skipped non-regular JSON add no diagnostics. Exit 2.
+- Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every discovered test. An unknown word is a command error that lists the stories with tests; oversized discovery supplies only the aliases established below.
+
+## Oversized discovery
+
+Preserve this module's public functions `findTests({root, files = gitFiles(root)})` and `selectTests(found, words = [])`, including `found.visible` as a Set and ordinary selection aliases. Discovery and execution eligibility differ. The execution test-file allowance remains 1,048,576 serialized UTF-8 bytes, inclusive, including JSON overhead. Source capture's separate limits remain unchanged.
+
+| Regular Git-visible JSON file | Discovery outcome |
+|---|---|
+| At or below the execution allowance | Preserve ordinary full-document JSON discovery and last-duplicate-key semantics. |
+| Above the allowance; prefix declares the scenario family | Retain an oversized test candidate, subject to the selection refusal below. |
+| Above the allowance; prefix has no declaration or declares a non-PDD value | Silently skip as non-test JSON. No unclassified candidate is retained. |
+
+These outcomes govern discovery for Check, `--files` and Try. A prefix decision describes only the observed declaration; it never claims whole-document validity or completeness. A schema outside the prefix is explicitly undetected, even if the complete file is a valid scenario. Never silently omit a PDD test detected by these rules from a default selection or a successful file manifest.
+
+<details>
+<summary>Required prefix identity, selection and safe inspection rules</summary>
+
+**Prefix identity.** For every regular JSON file above 1,048,576 bytes, read at most its first 65,536 bytes, regardless of its total size. This is a byte boundary, not a character count; never complete a cut token by reading beyond it. Recognize members only in JSON lexical structure rooted in an object, after JSON whitespace. Nested members, array elements, marker text inside strings and trailing content after the root object are not top-level declarations. Decode JSON escapes in keys and string values before comparison.
+
+Use the last complete top-level `schema_version` value within the prefix. A string declares the scenario family when its decoded value starts with `prompt-runtime.program-scenario`, including unsupported versions. A complete non-string value (null, Boolean, number, array or object) is non-PDD and replaces any earlier declaration. A later incomplete key or value does not replace the last complete value. A string needs its closing quote; a container needs its matching close; a number or literal needs its complete JSON token and a visible JSON delimiter or whitespace. An incomplete escape or UTF-8 sequence cannot complete a token. An early complete declaration survives a later truncated body. No complete declaration, or a non-object root, means silent exclusion. Unseen bytes never alter this prefix decision.
+
+**Selection refusal.** A detected oversized test is never executed or uploaded as an eligible test. Selecting it, including by default alongside normal tests, refuses with exit 4 before authentication, network or AI calls. The diagnostic identifies it as a PDD test and names the repository-relative path, actual byte size, the actual 1,048,576-byte test-file allowance and the next step `split it into smaller test files`. Do not substitute the total-source allowance for the test allowance.
+
+Its test path and ordinary test basename alias remain usable. Story path/name aliases require a complete top-level string `story_path` in the same prefix; use its last complete value with the same duplicate rule (a complete non-string removes the Story alias). Never infer a Story from unseen bytes. An explicit normal Story still works when oversized tests are unselected. A word with no actual known alias remains unknown, exit 2; do not invent a hidden Story or speculative refusal. Skipped JSON can still be included as ordinary source if existing source-capture safety and total limits allow: the test-file allowance applies to scenarios, not every JSON payload.
+
+**Safe inspection.** Never follow symlinks or make an unbounded JSON read. Preserve explicit unsafe oversized-entry errors and unreadable or unstable regular-file errors, preserving existing before/after path and descriptor observations and changed-file exit 5. Discovery adds no retry loop; source capture retains its existing bounded retries. Skip a non-regular JSON entry whose own lstat size is at or below 1,048,576 bytes without reading its target. Such entries (including configuration symlinks, dangling symlinks and FIFOs) must not block default Check, `--files` or Try, hide `No tests found` or override unknown-selection errors. This discovery exception never admits selected payload or dependency symlinks or other unsafe files: source-capture safety still refuses them.
+
+</details>
 
 ## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
