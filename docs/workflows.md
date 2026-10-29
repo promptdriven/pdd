@@ -150,6 +150,14 @@ pdd does not run tests. The agents do.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
 - The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
 
+Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
+`replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
+The PR begins with the validated replay status and exact counts, original vector and current source hashes,
+public-boundary execution coverage, semantic mutation control, and formal result with scope and reason.
+Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
+Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;
+agents execute the tests. A replay status does not independently prove execution or prompt/code equivalence.
+
 Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
 
 <a id="make-your-own-workflow"></a>

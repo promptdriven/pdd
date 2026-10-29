@@ -63,7 +63,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', t => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}) })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}), ...(area === 'code' ? {replay_evidence:'pdd.replay-evidence.v1'} : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -144,12 +144,12 @@ const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'ut
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
 const RUNBOOK_SECTIONS = { 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
   7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 13: 'Give your app a screen (app map)',
-  14: 'Bug workflow', 17: 'The code PR (PR 2): test vectors and the formal check', 18: 'Patterns: a pure function and a state sequence' };
+  14: 'Bug workflow', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
 // Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
 test('SKILLS9: build and verify point to RUNBOOK section 17 for the replay test, and a failure loops back to build twice', () => {
-  for (const word of ['tests/<story>.json', 'Never edit it in PR 2', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since PR 1', '✗ N vectors fail'])
+  for (const word of ['tests/<story>.json', 'Never edit it in code space', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since prompt space', '✗ N vectors fail'])
     assert.ok(section14().includes(word), `RUNBOOK section 17: ${word}`);
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);

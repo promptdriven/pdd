@@ -1821,3 +1821,132 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
 });
+
+// #2530: a prose success cannot stand in for code replay evidence.
+async function replayArea(t) {
+  const f = await fixture(t, {name:'feature',agent:'codex'});
+  const skill=join(f.source,'.agents/skills/pdd-feature');mkdirSync(skill,{recursive:true});
+  writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:[
+    {name:'story',steps:['scope'],optional:[],gate:'approve'},
+    {name:'prompt-pr',steps:['check'],optional:[],gate:'pr',before:'approve',then:'ask-code'},
+    {name:'code',steps:['verify'],optional:[],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'}]}));
+  assert.equal((await f.run()).exitCode,0);
+  const run=f.record();mkdirSync(join(run.root,'tests'));
+  const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
+  writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  await stepDone({step:'scope',summary:'scoped',cwd:run.root},f.agentPorts());f.tick();
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  await stepDone({step:'check',summary:'Runtime check: ✓ 1 of 1 criteria',cwd:run.root},f.agentPorts());f.tick();
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  assert.equal(f.record().areas[f.record().area].name,'code');
+  return {f,run,vector};
+}
+
+test('2530: opted-in code publication marks missing structured evidence BLOCKED above prose pass',async t=>{
+  const {f,run}=await replayArea(t);
+  writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n');
+  const out=await stepDone({step:'verify',summary:'PASS: all tests and replay passed',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,2,'a blocked evidence review can still publish');
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/replay-evidence.json/);
+  assert.match(f.prs[1].body,/validates structure and identity/);
+  assert.ok(f.record().replayBaseline,'original vectors were anchored before code');
+});
+
+async function replayManifest(f,run,vector) {
+  const {sourceFingerprint}=await import('../src/workflow-replay.mjs');
+  const {createHash}=await import('node:crypto');
+  const bytes=readFileSync(join(run.root,'tests/add.json'));
+  const step=vector.steps[0],check=step.checks[0];
+  return {schema_version:'pdd.replay-evidence.v1',run_id:run.runId,source:{kind:'git-content-v1',sha256:sourceFingerprint(run.root)},vectors:[{path:'tests/add.json',sha256:createHash('sha256').update(bytes).digest('hex')}],
+    checks:[{vector:'tests/add.json',step_id:step.step_id,check_index:0,entry_path:step.entry_path,operation:step.operation,criterion_id:check.criterion_id,target:check.target,path:check.path,op:check.op,outcome:'pass'}],
+    operations:[{vector:'tests/add.json',step_id:step.step_id,entry_path:step.entry_path,operation:step.operation,executed:true,outcome:'returned',boundary:{kind:'function',name:'add'},command:'node test/add.vectors.test.mjs',exit_code:0}],
+    counts:{total:1,pass:1,fail:0,blocked:0,not_replayed:0},mutation:{kind:'semantic',description:'Return a wrong total',command:'node test/add.vectors.test.mjs --mutant',exit_code:1,outcome:'assertion_failure',failed_checks:[{vector:'tests/add.json',step_id:step.step_id,check_index:0}]},
+    formal:{result:'not_applicable',scope:'Public wiring',reason:'No additional formal rule',control_outcome:'not_run'}};
+}
+
+test('2530: valid replay and real assertion failures both publish with canonical status',async t=>{
+  for(const outcome of ['pass','fail']){
+    const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    const manifest=await replayManifest(f,run,vector);manifest.checks[0].outcome=outcome;manifest.counts.pass=outcome==='pass'?1:0;manifest.counts.fail=outcome==='fail'?1:0;
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+    const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
+    assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
+    assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
+    if(outcome==='fail')assert.match(f.prs[1].body,/^✗ 1 replay assertions fail/);
+  }
+});
+
+test('2530: vector edits after prompt-space approval cannot replace the saved original hashes',async t=>{
+  const {f,run,vector}=await replayArea(t);const original=f.record().replayBaseline;
+  vector.steps[0].checks[0].value=999;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.deepEqual(f.record().replayBaseline,original);
+});
+
+test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Code replay: PASS/);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const out=await stepDone({step:'verify',summary:'PASS again',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
+  assert.ok(f.prs[1].body.includes(`<!-- pdd-workflow:${run.runId}:code -->`));
+  assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
+});
+
+test('2530: failed description downgrade prevents pushing new source with an old pass',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());const pushes=f.pushes.length;
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
+  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Code replay: PASS/,'unchanged remote source still has its valid report');
+});
+
+test('2530: failed final description update leaves a pushed code PR publication-pending',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const original=f.ports.execFile;let edits=0;
+  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='pr'&&args[1]==='edit'&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,1);assert.match(out.message,/Source was pushed/);assert.match(f.prs[1].body,/Code replay: BLOCKED.*Publication pending/);
+});
+
+test('2530: a failed push leaves an existing code PR pending and never restores pass',async t=>{
+  for(const structured of [false,true]){
+    const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    const original=f.ports.execFile;
+    f.ports.execFile=async(file,args,options)=>{
+      if(file==='git'&&args[0]==='push'){
+        if(structured)return {stdout:'',stderr:'push rejected',code:1};
+        throw Object.assign(Error('push rejected'),{stderr:'push rejected',code:1});
+      }
+      return original(file,args,options);
+    };
+    const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    assert.equal(out.exitCode,1,out.message);assert.match(out.message,/push rejected/);
+    assert.match(f.prs[1].body,/^Code replay: BLOCKED.*Publication pending/);
+  }
+});
+
+test('2530: an unopted saved area retains legacy publication without a manifest',async t=>{
+  const {f,run}=await replayArea(t);const saved=f.record();delete saved.areas.find(a=>a.name==='code').replay_evidence;
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);assert.doesNotMatch(f.prs[1].body,/Code replay:/);
+});
