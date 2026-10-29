@@ -444,21 +444,28 @@ test('real local Git proves absent remote branch, recovers one original publicat
 });
 
 test('an early stdin failure becomes recovery_required without an unhandled EPIPE', async t => {
-  const f = await fixture(t), intent = await f.prepare();
-  const bin = await mkdtemp(join(tmpdir(), 'pdd-gh-bin-')), gh = join(bin, 'gh');
-  t.after(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(gh, String.raw`#!/bin/sh
-if [ "$1" = repo ]; then printf '%s\n' '{"nameWithOwner":"Acme/Project","defaultBranchRef":{"name":"main"},"url":"https://github.com/Acme/Project"}'; exit 0; fi
-if [ "$1" = pr ] && [ "$2" = list ]; then printf '[]\n'; exit 0; fi
-exec 0<&-
-kill -PIPE $$
-`); await chmod(gh, 0o755);
-  const original = f.ports.execFile;
-  f.ports.execFile = (file, args, options) => file === 'gh'
-    ? promisify(execFile)(file, args, { ...options, env: { ...f.ports.env, PATH: `${bin}:${process.env.PATH}` } })
-    : original(file, args, options);
-  const result = await f.publish(intent, { body: `<!-- ${intent.marker} -->\n${'é'.repeat(40_000)}` });
-  assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
+  const directory = await mkdtemp(join(tmpdir(), 'pdd-gh-epipe-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const cwd = join(directory, 'repo'), remote = join(directory, 'remote.git'), bin = join(directory, 'bin');
+  await mkdir(cwd); await mkdir(bin);
+  const realGit = '/usr/bin/git';
+  const gitShim = join(bin, 'git');
+  await writeFile(gitShim, `#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ]; then\n  if [ "$3" = --push ] || [ "$4" = --push ]; then echo "$PDD_PUSH_URL"; else echo "https://github.com/Acme/Project.git"; fi; exit 0; fi\nif [ "$1" = ls-remote ]; then exec ${realGit} ls-remote "$PDD_REMOTE" "${'refs/heads/topic/epipe'}"; fi\nif [ "$1" = push ]; then exit 0; fi\nexec ${realGit} "$@"\n`); await chmod(gitShim, 0o755);
+  await writeFile(join(bin, 'gh'), `#!/bin/sh\nif [ "$1" = repo ]; then echo '{"nameWithOwner":"Acme/Project","defaultBranchRef":{"name":"main"},"url":"https://github.com/Acme/Project"}'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = list ]; then echo '[]'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = create ]; then exec 0<&-; : > "$PDD_READY"; while [ ! -f "$PDD_GO" ]; do sleep 0.01; done; kill -KILL $$; fi\nexit 1\n`); await chmod(join(bin, 'gh'), 0o755);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_REMOTE: remote, PDD_PUSH_URL: 'https://github.com/Acme/Project.git' };
+  const git = (...args) => promisify(execFile)('git', args, { cwd, env, encoding: 'utf8' });
+  await git('init', '--initial-branch=main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid'); await git('commit', '--allow-empty', '-m', 'Base'); await git('init', '--bare', remote); await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git'); await git('update-ref', 'refs/remotes/origin/main', 'HEAD'); await git('switch', '-c', 'topic/epipe'); await git('commit', '--allow-empty', '-m', 'Topic');
+  const oldPath = process.env.PATH, oldRemote = process.env.PDD_REMOTE, oldPush = process.env.PDD_PUSH_URL, oldReady = process.env.PDD_READY, oldGo = process.env.PDD_GO; process.env.PATH = `${bin}:${oldPath}`; process.env.PDD_REMOTE = remote; process.env.PDD_PUSH_URL = 'https://github.com/Acme/Project.git';
+  t.after(() => { process.env.PATH = oldPath; process.env.PDD_REMOTE = oldRemote; process.env.PDD_PUSH_URL = oldPush; process.env.PDD_READY = oldReady; process.env.PDD_GO = oldGo; });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ready = join(directory, `ready-${attempt}`), go = join(directory, `go-${attempt}`); process.env.PDD_READY = ready; process.env.PDD_GO = go;
+    const intent = await prepareWorkflowPr({ cwd, runId: `run-${attempt}`, stageId: 'prompt', repository: 'Acme/Project', baseBranch: 'main' }, undefined);
+    const publishing = publishWorkflowPr({ cwd, intent, body: `<!-- ${intent.marker} -->\n${'😀'.repeat(65_000)}` }, undefined);
+    for (;;) { try { await readFile(ready); break; } catch { await new Promise(resolve => setTimeout(resolve, 5)); } }
+    await writeFile(go, 'go\n');
+    const result = await publishing;
+    assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
+  }
 });
 
 // Wrong (0.1.7 tester, #2518): a 105,489-character body was pushed, GitHub refused it, and pdd said only "unconfirmed".
