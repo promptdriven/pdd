@@ -113,3 +113,15 @@ Preserve the single canonical workflow ownership marker on both descriptions, re
 Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
+
+## Machine-readable status output
+
+`runStatus({all:true, json:true})` returns a JSON document for callers that need to act on every run. Its stable public envelope is:
+
+```json
+{"schema_version":"pdd.workflow-status.v1","runs":[{"ref":"owner/repo#42","repo":"owner/repo","number":42,"workflow":"feature","area":"story","group":"waiting","words":"waiting for you: approve the story","prs":[],"stories":null,"updatedAt":0,"root":"/worktree","runDir":"/git/pdd/runs/42","viewCommand":"pdd workflow view owner/repo#42"}]}
+```
+
+The top-level object has exactly `schema_version` and `runs`; `schema_version` is the literal `pdd.workflow-status.v1`. Every run row has exactly `ref`, `repo`, `number`, `workflow`, `area`, `group`, `words`, `prs`, `stories`, `updatedAt`, `root`, `runDir` and `viewCommand`. `area` and `updatedAt` may be null when the saved run has no current area or timestamp. `prs` is an array of `{number,url,state}` objects. `stories` is null when no compatible Story evidence exists; otherwise it is `{pass,total,failing}` with optional `unknown` and `evidence` fields as described by the Story-count rules. `viewCommand` is the read-only command for that row's `ref`.
+
+The JSON rows contain the same runs, cancellation filtering, grouping order and saved-state words as the human-readable status list. `--cancelled` controls whether cancelled rows are included; it does not change the envelope or row schema. `--json` emits only this document on stdout, with diagnostics and progress remaining outside stdout.

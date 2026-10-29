@@ -43,6 +43,16 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 - No command has a time limit. You can close the terminal at any time.
 - pdd never merges.
 
+### Workflow status JSON
+
+`pdd workflow status --all --json` writes a versioned document with exactly this top-level shape:
+
+```json
+{"schema_version":"pdd.workflow-status.v1","runs":[/* run rows */]}
+```
+
+Each run row has `ref`, `repo`, `number`, `workflow`, `area`, `group`, `words`, `prs`, `stories`, `updatedAt`, `root`, `runDir` and `viewCommand`. Each `prs` item has `number`, `url` and `state`. `stories` is `null` without compatible evidence; otherwise it has `pass`, `total`, `failing` and may have `unknown` and `evidence`. The rows use the same selection, cancellation filter and ordering as text status. `--cancelled` includes cancelled rows without changing the schema. Progress and diagnostics stay out of stdout.
+
 ## Runtime checks and prompt approval
 
 | Command | What it does |

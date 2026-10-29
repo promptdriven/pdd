@@ -1,0 +1,30 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-status-json.md",
+  "criteria": [
+    {"id":"AC1","text":"`pdd workflow status --all --json` prints one JSON object with `schema_version` equal to `pdd.workflow-status.v1` and a `runs` array, with no human-readable status lines mixed into stdout."},
+    {"id":"AC2","text":"Each run in `runs` has exactly the documented fields `ref`, `repo`, `number`, `workflow`, `area`, `group`, `words`, `prs`, `stories`, `updatedAt`, `root`, `runDir` and `viewCommand`; each PR has `number`, `url` and `state`."},
+    {"id":"AC3","text":"The JSON rows contain the same runs in the same waiting, working, PR-open, done and cancelled ordering as text status; cancelled rows remain hidden unless `--cancelled` is supplied."},
+    {"id":"AC4","text":"A row with no compatible Story evidence has `stories: null`; a row with evidence reports `pass`, `total`, `failing` and any applicable `unknown` or `evidence` fields without changing the status words."},
+    {"id":"AC5","text":"JSON mode writes only the versioned document to stdout; progress and diagnostics stay outside stdout."}
+  ],
+  "initial_world": {"kv": {"runs": []}},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "status-json-envelope",
+      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "operation": "runStatus",
+      "input": {"all": true, "json": true, "cancelled": false},
+      "checks": [
+        {"criterion_id":"AC1","target":"result","path":"/schema_version","op":"equals","value":"pdd.workflow-status.v1"},
+        {"criterion_id":"AC1","target":"result","path":"/runs","op":"count","value":0},
+        {"criterion_id":"AC2","target":"result","path":"/runs","op":"count","value":0},
+        {"criterion_id":"AC3","target":"result","path":"/runs","op":"count","value":0},
+        {"criterion_id":"AC4","target":"result","path":"/runs","op":"count","value":0},
+        {"criterion_id":"AC5","target":"result","path":"/schema_version","op":"equals","value":"pdd.workflow-status.v1"}
+      ]
+    }
+  ]
+}
