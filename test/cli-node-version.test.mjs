@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,7 +37,11 @@ test('NODE2: on Node 22 or newer pdd runs as usual', t => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const env = { ...process.env, HOME: join(dir, 'home') };
   delete env.CLAUDE_CONFIG_DIR;
-  const result = spawnSync(process.execPath, [bin, '--version'], { cwd: dir, env, encoding: 'utf8', timeout: 10000 });
+  const copy = join(dir, 'copy');
+  cpSync(fileURLToPath(new URL('..', import.meta.url)), copy, { recursive: true, filter: source => !source.endsWith('/.git') });
+  const copyBin = join(copy, 'bin', 'pdd.mjs');
+  const version = JSON.parse(readFileSync(join(copy, 'package.json'), 'utf8')).version;
+  const result = spawnSync(process.execPath, [copyBin, '--version'], { cwd: dir, env, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}\n`);
+  assert.equal(result.stdout, `${version}\n`);
 });

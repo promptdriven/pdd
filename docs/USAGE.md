@@ -82,6 +82,23 @@ which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 
 npm downloads the repository's default branch from GitHub. You can also install the `alpha` branch with `npm install -g github:promptdriven/pdd#alpha`. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
 
+### Test a checkout fix before release
+
+Install the local checkout as a global link, then check the linked executable:
+
+```sh
+npm install -g .
+node bin/pdd.mjs --version
+pdd --version
+```
+
+The linked checkout prints its development suffix on a symbolic branch. A detached checkout prints the release version. Match the checkout's skills with `npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y`. Restore the release install with:
+
+```sh
+npm uninstall -g pdd
+npm install -g github:promptdriven/pdd
+```
+
 Important:
 
 - Always install and update with the full `github:promptdriven/pdd` line, or append `#alpha` to select that branch.
