@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: 01d551eb64e2c94b35facda415bae17a325fa2892905790b138fceccc5114faf).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 36ddd7ebbc393416fcd6a69a2ef9efbe1097d0d403bd5323c07b096dbe050247).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 
@@ -26,17 +26,24 @@ function safeRead(root, path) {
   return readFileSync(full, 'utf8');
 }
 
+function markupTokens(source) {
+  const tokens = source.match(/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]*>|[^<]+|</g) || [];
+  for (const token of tokens) if (token.startsWith('<!--') && (!token.endsWith('-->') || token.slice(4, -3).includes('--') || token.slice(4, -3).endsWith('-'))) throw Error('malformed or nested markup comment');
+  return tokens;
+}
+
 // An inert XML reader: no document type, entity expansion, execution or resource loading.
 function partsOf(source) {
-  const active = source.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, '');
-  if (/<!DOCTYPE|<!ENTITY|<\?(?!xml\s)|<\s*(?:script|foreignObject|iframe)\b|\son\w+\s*=/i.test(active)) throw Error('unsafe SVG content');
-  const styles = [...source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].flatMap(match => [...match[1].replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(rule => rule[1].split(',').map(selector => ({ selector: selector.trim(), style: rule[2] }))));
+  const tokens = markupTokens(source);
+  const active = tokens.filter(token => !token.startsWith('<!--') && !token.startsWith('<![CDATA[')).join('\n');
+  const styles = [...active.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)].flatMap(match => [...match[1].replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(rule => rule[1].split(',').map(selector => ({ selector: selector.trim(), style: rule[2] }))));
   if (styles.some(rule => !/^(?:[\w-]+|[.#][\w-]+)$/.test(rule.selector))) throw Error('unsupported SVG stylesheet selector in static lint');
-  for (const match of source.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)) if (/@import|url\s*\(/i.test(match[1].replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, ''))) throw Error('external SVG stylesheet resources are not allowed');
-  const stack = [], parts = [], tokens = source.match(/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]*>|[^<]+/g) || [];
+  for (const match of active.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)) if (/@import|url\s*\(/i.test(match[1].replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, ''))) throw Error('external SVG stylesheet resources are not allowed');
+  const stack = [], parts = [];
   let roots = 0;
   for (const token of tokens) {
-    if (token.startsWith('<!--') || token.startsWith('<?')) continue;
+    if (token.startsWith('<!--')) continue;
+    if (token.startsWith('<?')) { if (!/^<\?xml\s[\s\S]*\?>$/.test(token)) throw Error('unsafe SVG processing instruction'); continue; }
     if (token.startsWith('</')) {
       const close = /^<\/([\w:-]+)\s*>$/.exec(token);
       if (!close || stack.pop()?.tag !== close[1]) throw Error('malformed XML closing tag');
@@ -44,12 +51,14 @@ function partsOf(source) {
       const match = /^<([\w:-]+)((?:\s+[\s\S]*?)?)\s*(\/?)>$/.exec(token);
       if (!match) throw Error('malformed XML element');
       const [, tag, raw, self] = match, attrs = {};
+      if (['script', 'foreignobject', 'iframe', 'object', 'embed'].includes(tag.split(':').at(-1).toLowerCase())) throw Error('unsafe SVG content');
       let remainder = raw.trim();
       while (remainder) {
         const attr = /^([\w:-]+)\s*=\s*("[^"]*"|'[^']*')\s*/.exec(remainder);
         if (!attr || attr[1] in attrs) throw Error('malformed XML attributes');
         attrs[attr[1]] = decode(attr[2].slice(1, -1)); remainder = remainder.slice(attr[0].length);
       }
+      if (Object.keys(attrs).some(name => /^on/i.test(name))) throw Error('unsafe SVG content');
       if (!stack.length && (tag !== 'svg' || roots++)) throw Error('expected one SVG root');
       const resourceValues = Object.values(attrs).join(' ').replace(/url\(\s*(['"]?)#[^)'"\s]+\1\s*\)/gi, '');
       if (Object.entries(attrs).some(([name, value]) => /^(?:href|xlink:href|src)$/i.test(name) && !value.startsWith('#')) || /(?:@import|url\s*\()/i.test(resourceValues)) throw Error('external SVG resources are not allowed');
@@ -95,8 +104,8 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
   const warnings = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
   for (const prompt of [...new Set(promptPaths ?? files.filter(path => path.endsWith('.prompt.md')))].sort()) {
     let source;
-    try { source = safeRead(root, prompt); } catch (error) { add(prompt, '(unread)', 'source', error.message); continue; }
-    source = source.replace(/<!--[\s\S]*?-->/g, '').replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
+    try { source = markupTokens(safeRead(root, prompt)).map(token => token.startsWith('<!--') ? '\n' : token).join(''); } catch (error) { add(prompt, '(unread)', 'source', error.message); continue; }
+    source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
     for (const link of links(source).sort()) {
       let drawing;

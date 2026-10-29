@@ -126,3 +126,21 @@ test('CLI rejects local/screen combinations before auth, browser and runtime eff
     assert.equal(p.stdout.text, '');
   }
 });
+
+test('lint ignores valid comments without reconstructing markup and warns on malformed comments', t => {
+  const prose = '![drawing](game.ui.svg)\nVisible\n<!-- Missing -->';
+  assert.deepEqual(lintSvgLayouts(drawing(t, prose, '<svg><!-- <script>unsafe only as active markup</script> --><text>Visible</text></svg>')), []);
+  assert.deepEqual(lintSvgLayouts(drawing(t, '<!-- ![ignored](missing.ui.svg) -->\n' + prose, '<svg><text>Visible</text></svg>')), []);
+  const boundary = lintSvgLayouts(drawing(t, prose, '<svg><scr<!-- harmless -->ipt/></svg>'));
+  assert.match(boundary[0], /malformed|unsafe/);
+  for (const comment of ['<!--outer<!-- nested -->', '<!-- unterminated', '<!-- bad -- content -->', '<!-- trailing --->']) {
+    const badDrawing = lintSvgLayouts(drawing(t, prose, `<svg>${comment}<text>Visible</text></svg>`));
+    assert.equal(badDrawing.length, 1); assert.match(badDrawing[0], /drawing:.*comment|drawing:.*malformed/i);
+    const badPrompt = lintSvgLayouts(drawing(t, `${prose}\n${comment}`, '<svg><text>Visible</text></svg>'));
+    assert.equal(badPrompt.length, 1); assert.match(badPrompt[0], /source:.*comment/i);
+  }
+  const literal = lintSvgLayouts(drawing(t, '![drawing](game.ui.svg)\n<script>', '<svg><text><![CDATA[<script>]]></text></svg>'));
+  assert.deepEqual(literal, []);
+  const active = lintSvgLayouts(drawing(t, prose, '<svg><!-- harmless --><script>alert(1)</script></svg>'));
+  assert.match(active[0], /unsafe/);
+});

@@ -241,3 +241,80 @@ test('public CLI requires effective text paint and literal displayed control lab
     }
   });
 });
+
+test('formatter preserves adversarial content as literal table text', () => {
+  const literal = 'a\\|b <img src=x onerror=alert(1)> &lt;tag&gt; [link](javascript:alert(1)) `*em*';
+  const output = formatScreenComparison({ drawing: literal, viewport: { width: 400, height: 400 }, passed: false, rows: [{ part: literal, kind: 'id', expected: 'a\nb', actual: literal, status: 'missing' }] });
+  assert.ok(output.includes(String.raw`a\\\|b`), output);
+  assert.ok(output.includes(String.raw`&lt;img src=x onerror=alert\(1\)&gt; &amp;lt;tag&amp;gt;`), output);
+  assert.ok(output.includes(String.raw`\[link\]\(javascript:alert\(1\)\)`), output);
+  assert.ok(output.includes('\\`' + String.raw`\*em\*`), output);
+  assert.ok(!output.includes('<img'));
+  assert.equal(output.split('\n').filter(line => line.startsWith('| ')).length, 3);
+  assert.ok(output.includes('a b'));
+});
+
+test('public CLI refuses unestablished SVG geometry and keeps all rendered SVG ids required', { skip: !chrome, timeout: 180000 }, async t => {
+  const wrap = body => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">${body}<text x="20" y="160">READY</text></svg>`;
+  const input = setup(t);
+  let page;
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(`<style>body{margin:0}</style>${page}`); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const check = async (reference, actual = '') => {
+    writeFileSync(join(input.cwd, input.drawingPath), wrap(reference)); page = actual.startsWith('<div') ? actual + wrap('') : wrap(actual);
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['check', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    return { code, stderr: stderr.text, stdout: stdout.text, report: stdout.text ? JSON.parse(stdout.text) : null };
+  };
+  for (const [name, geometry] of [
+    ['horizontal line', '<line id="rule" x1="20" y1="40" x2="180" y2="40"'],
+    ['vertical line', '<line id="rule" x1="40" y1="20" x2="40" y2="180"'],
+    ['horizontal path', '<path id="rule" d="M20 40H180"'],
+    ['vertical polyline', '<polyline id="rule" points="40,20 40,180"'],
+    ['group containing an unlabelled line', '<g id="rule"><line x1="20" y1="40" x2="180" y2="40"'],
+  ]) await t.test(`${name} with visible stroke cannot vanish from the reference`, async () => {
+    const result = await check(`${geometry} fill="none" stroke="black" stroke-width="6"/>${geometry.startsWith('<g') ? '</g>' : ''}`);
+    assert.equal(result.code, 2, result.stderr || result.stdout); assert.match(result.stderr, /unsupported.*geometry|geometry.*unsupported/i);
+  });
+  for (const attrs of ['display="none"', 'visibility="hidden"', 'opacity="0"', 'stroke-opacity="0"', 'stroke="transparent"']) await t.test(`excluded degenerate paint remains excluded: ${attrs}`, async () => {
+    const result = await check(`<line id="rule" x1="20" y1="40" x2="180" y2="40" stroke-width="6" ${attrs.includes('stroke=') ? '' : 'stroke="black"'} ${attrs}/>`);
+    assert.equal(result.code, 0, result.stderr || result.stdout); assert.deepEqual(result.report.rows.map(row => row.part), ['“READY”']);
+  });
+  await t.test('inherited opacity and transparent local gradient strokes remain excluded', async () => {
+    for (const reference of ['<g opacity="0"><line id="rule" x1="20" y1="40" x2="180" y2="40" stroke="black" stroke-width="6"/></g>', '<defs><linearGradient id="paint"><stop stop-color="transparent"/></linearGradient><filter id="unused"/></defs><line id="rule" x1="20" y1="40" x2="180" y2="40" stroke="url(#paint)" stroke-width="6" filter="url(#unused)"/>']) {
+      const result = await check(reference); assert.equal(result.code, 0, result.stderr || result.stdout); assert.deepEqual(result.report.rows.map(row => row.part), ['“READY”']);
+    }
+  });
+  await t.test('local use is already an explicit unsupported reference', async () => {
+    const result = await check('<defs><rect id="shape" width="40" height="40"/></defs><use id="icon" href="#shape" x="20" y="20"/>');
+    assert.equal(result.code, 2); assert.match(result.stderr, /unsupported.*use/i);
+  });
+  await t.test('textPath id cannot be supplied by the same words without that id', async () => {
+    const reference = '<defs><path id="curve" d="M20 40H180"/></defs><text><textPath id="curved-label" href="#curve">Curved</textPath></text>';
+    const missing = await check(reference, '<text x="20" y="40">Curved</text>');
+    assert.equal(missing.code, 1, missing.stderr || missing.stdout); assert.equal(missing.report.rows.find(row => row.part === '#curved-label').status, 'missing');
+    const positive = await check(reference, reference); assert.equal(positive.code, 0, positive.stderr || positive.stdout);
+  });
+  await t.test('a page use cannot silently serve as established painted geometry', async () => {
+    const result = await check('<rect id="icon" x="20" y="20" width="40" height="40"/>', '<defs><rect id="shape" width="40" height="40"/></defs><use id="icon" href="#shape" x="20" y="20"/>');
+    assert.equal(result.code, 5, result.stderr || result.stdout); assert.match(result.stderr, /unsupported.*use/i);
+  });
+  await t.test('page degenerate stroke cannot supply an established id match', async () => {
+    const result = await check('<rect id="rule" x="20" y="20" width="160" height="40"/>', '<line id="rule" x1="20" y1="40" x2="180" y2="40" stroke="black" stroke-width="6"/>');
+    assert.equal(result.code, 5, result.stderr || result.stdout); assert.match(result.stderr, /unsupported.*geometry|geometry.*unsupported/i);
+  });
+  await t.test('ordinary SVG groups, HTML regions, local gradients and unused resources stay supported', async () => {
+    const reference = '<defs><linearGradient id="paint"><stop stop-color="red"/></linearGradient><filter id="unused"/></defs><g id="icon"><rect x="20" y="20" width="40" height="40" fill="url(#paint)"/></g>';
+    for (const actual of [reference, '<div id="icon" style="position:absolute;left:20px;top:20px;width:40px;height:40px;background:black"></div>']) {
+      const result = await check(reference, actual); assert.equal(result.code, 0, result.stderr || result.stdout);
+    }
+  });
+  await t.test('valid comments and literal CDATA never become executable reference content', async () => {
+    const result = await check('<!-- <script>throw Error("must not execute")</script> --><text x="20" y="40"><![CDATA[<script>]]></text>', '<text x="20" y="40">&lt;script&gt;</text>');
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+  });
+  for (const comment of ['<!--outer<!-- nested -->', '<!-- unterminated', '<!-- bad -- content -->', '<!-- trailing --->']) await t.test(`malformed reference comments cannot pass: ${comment}`, async () => {
+    const result = await check(comment); assert.equal(result.code, 2, result.stderr || result.stdout); assert.match(result.stderr, /comment|malformed/i);
+  });
+});

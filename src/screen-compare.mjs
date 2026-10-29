@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-compare.prompt.md (sha256: 5f7b0e511a246cb4678c9553d66ed893c3e1c19cf6d967bf7fc5395400dc1ada).
+// Generated from prompts/cli/screen-compare.prompt.md (sha256: 7ffe72838901a5f99a7173e0dc5d0c5b9091028899ad3d8c99a5184bb71b27ef).
 import { spawn } from 'node:child_process';
 import { accessSync, constants, lstatSync, mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -135,7 +135,9 @@ function snapshot(reference) {
   const elements = [...document.querySelectorAll('*')], indexes = new Map(elements.map((el, i) => [el, i])), parts = [];
   const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT), textNodes = [], tokenIds = new Map();
   while (walker.nextNode()) { tokenIds.set(walker.currentNode, `text:${textNodes.length}`); textNodes.push(walker.currentNode); }
-  const excluded = el => !!el.closest('title,desc,defs,metadata,script,style,noscript,template');
+  const excluded = el => !!el.closest('title,desc,defs,metadata,script,style,noscript,template,symbol,marker,pattern,clipPath,mask,linearGradient,radialGradient,stop,filter');
+  const svgPaint = new Set(['text', 'tspan', 'textPath', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
+  const svgContainer = new Set(['svg', 'g', 'a', 'switch']);
   const transparent = color => color === 'none' || color === 'transparent' || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?\s*\)$/.test(color) || /\/\s*0(?:\.0+)?\s*\)$/.test(color);
   let unsupported;
   const painted = (color, opacity) => {
@@ -174,8 +176,16 @@ function snapshot(reference) {
       || ['input', 'textarea', 'select'].includes(el.localName) && (style.appearance !== 'none' || !!controlValue(el) && textPaint(style));
   };
   const visible = (el, box, kind) => {
-    if (!(box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight)) return false;
-    const intersection = { left: Math.max(0, box.left), top: Math.max(0, box.top), right: Math.min(innerWidth, box.right), bottom: Math.min(innerHeight, box.bottom) }, effects = [];
+    const style = getComputedStyle(el), svg = el.namespaceURI === 'http://www.w3.org/2000/svg';
+    const degenerate = svg && svgPaint.has(el.localName) && !(box.width > 0 && box.height > 0);
+    // SVG geometric bounds omit the stroke. Probe its possible extent only to
+    // decide whether unsupported zero-area geometry needs an explicit error.
+    const matrix = degenerate && el.getScreenCTM?.();
+    const stroke = degenerate ? parseFloat(style.strokeWidth) * Math.max(1, parseFloat(style.strokeMiterlimit) || 1) : 0;
+    const margin = matrix ? stroke * Math.max(1, Math.abs(matrix.a) + Math.abs(matrix.c), Math.abs(matrix.b) + Math.abs(matrix.d)) : stroke;
+    const probe = degenerate ? { left: box.left - margin, right: box.right + margin, top: box.top - margin, bottom: box.bottom + margin, width: box.width + 2 * margin, height: box.height + 2 * margin } : box;
+    if (!(probe.width > 0 && probe.height > 0 && probe.right > 0 && probe.bottom > 0 && probe.left < innerWidth && probe.top < innerHeight)) return false;
+    const intersection = { left: Math.max(0, probe.left), top: Math.max(0, probe.top), right: Math.min(innerWidth, probe.right), bottom: Math.min(innerHeight, probe.bottom) }, effects = [];
     for (let parent = el; parent; parent = parent.parentElement) {
       const style = getComputedStyle(parent);
       if (style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility) || Number(style.opacity) === 0 || style.contentVisibility === 'hidden') return false;
@@ -187,15 +197,23 @@ function snapshot(reference) {
         if (intersection.right <= intersection.left || intersection.bottom <= intersection.top) return false;
       }
     }
+    if (degenerate && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
     if (effects.length) { unsupported = 'Unsupported applied clip-path, clip, mask or filter; visible parts cannot be established.'; return false; }
-    const style = getComputedStyle(el);
-    if ((kind === 'text' || ['text', 'tspan'].includes(el.localName)) && !textPaint(style)) return false;
-    if (el.namespaceURI === 'http://www.w3.org/2000/svg') {
-      if (kind === 'text' || ['text', 'tspan', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line'].includes(el.localName)) {
-        if (!(el.localName !== 'line' && painted(style.fill, style.fillOpacity)) && !(parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity))) return false;
-      } else {
+    if ((kind === 'text' || ['text', 'tspan', 'textPath'].includes(el.localName)) && !textPaint(style)) return false;
+    if (svg) {
+      if (svgPaint.has(el.localName)) {
+        const strokePaint = parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity);
+        if (degenerate) {
+          if (strokePaint) unsupported = `Unsupported SVG stroke geometry for ${el.localName}; visible bounds cannot be established.`;
+          return false;
+        }
+        if (!(el.localName !== 'line' && painted(style.fill, style.fillOpacity)) && !strokePaint) return false;
+      } else if (svgContainer.has(el.localName)) {
         // A transparent group is a usable region only through its rendered children.
-        return [...el.querySelectorAll('text,rect,circle,ellipse,path,polygon,polyline,line')].some(child => !excluded(child) && visible(child, child.getBoundingClientRect(), child.localName === 'text' ? 'text' : 'id'));
+        return [...el.querySelectorAll('*')].some(child => !excluded(child) && visible(child, child.getBoundingClientRect(), child.localName === 'text' ? 'text' : 'id'));
+      } else {
+        if (painted(style.fill, style.fillOpacity) || parseFloat(style.strokeWidth) > 0 && painted(style.stroke, style.strokeOpacity)) unsupported = `Unsupported SVG element: ${el.localName}; visible paint cannot be established.`;
+        return false;
       }
     } else if (kind === 'id') {
       if (htmlPaint(el)) return true;
@@ -237,9 +255,10 @@ function snapshot(reference) {
   for (const el of elements) {
     const metadata = excluded(el);
     if (reference && (metadata || el.closest('[data-context-only="true"],.context-only'))) continue;
+    // Even an unlabelled painted child can be its enclosing id's only paint.
+    if (!metadata && el.namespaceURI === 'http://www.w3.org/2000/svg' && !svgContainer.has(el.localName)) visible(el, el.getBoundingClientRect(), 'id');
     if (el.id) {
-      const part = item(el, 'id', el.id);
-      if (metadata) part.visible = false;
+      const part = metadata ? { kind: 'id', value: el.id, node: indexes.get(el), visible: false, box: { x: 0, y: 0, width: 0, height: 0 }, ancestors: [], region: null } : item(el, 'id', el.id);
       if (!reference || part.visible) {
         if (reference && referenceIds.has(el.id)) return { error: `Duplicate reference id: ${el.id}.` };
         referenceIds.add(el.id); parts.push(part);
@@ -317,7 +336,9 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
   let source; try { if (!lstatSync(drawing).isFile()) throw Error(); source = readFileSync(drawing, 'utf8'); } catch { throw failure(`Cannot read SVG drawing: ${drawingPath}.`); }
   // Reject obvious active content before even starting Chrome. Remaining XML/CSS
   // validation runs in the browser's inert parser before attaching the document.
-  const active = source.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, '');
+  const tokens = source.match(/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?\]\]>|<[^>]*>|[^<]+|</g) || [];
+  for (const token of tokens) if (token.startsWith('<!--') && (!token.endsWith('-->') || token.slice(4, -3).includes('--') || token.slice(4, -3).endsWith('-'))) throw failure('Malformed or nested SVG comment.');
+  const active = tokens.filter(token => !token.startsWith('<!--') && !token.startsWith('<![CDATA[')).join('\n');
   if (!source.trim() || /<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject)\b|\son\w+\s*=/i.test(active)) throw failure('Empty or unsafe SVG drawing.');
   const rendered = await (ports.browser ?? browserRun)({ source, url: target.href, chromePath, env: ports.env ?? process.env });
   if (!rendered?.reference?.length || !rendered.actual || !(rendered.viewport?.width > 0 && rendered.viewport?.height > 0)) throw failure('Browser returned no valid reference parts.', 5);
@@ -326,7 +347,7 @@ export async function compareScreen({ url, drawingPath, cwd = process.cwd(), chr
 }
 
 export function formatScreenComparison(report) {
-  const escape = value => String(value).replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');
+  const escape = value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\\`*_{}[\]()#+.!|~-]/g, '\\$&').replace(/[\r\n]+/g, ' ');
   return [`Screen vs drawing (${escape(report.drawing)}, ${report.viewport.width} × ${report.viewport.height})`, '', '| Part | Kind | Expected | Actual | Status |', '| --- | --- | --- | --- | --- |',
     ...report.rows.map(row => `| ${[row.part, row.kind, row.expected, row.actual, row.status].map(escape).join(' | ')} |`), '',
     `Screen vs drawing: ${report.passed ? 'PASS' : 'FAIL'} (${report.rows.filter(row => row.status === 'pass').length} of ${report.rows.length} parts pass). Parts, text, regions and order; colors, typography and pixel equivalence require their separate comparator.`].join('\n');

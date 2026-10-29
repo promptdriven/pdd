@@ -6,7 +6,7 @@ Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, prom
 
 ## Parts and advice
 
-The drawing is the layout spec for its declared state: visible parts, words, order and stable ids. Prose owns behavior and dynamic value sources. Ignore Runtime interface JSON, comments and SVG `title`, `desc`, `defs`, hidden elements and their descendants. A context-only region, marked `data-context-only="true"` or class `context-only`, and its descendants are outside the owned layout. Decode XML entities and normalize whitespace and case when comparing labels; preserve original spelling in diagnostics. Do not execute SVG scripts or load external resources.
+The drawing is the layout spec for its declared state: visible parts, words, order and stable ids. Prose owns behavior and dynamic value sources. Ignore Runtime interface JSON, valid comments and SVG `title`, `desc`, `defs`, hidden elements and their descendants. A context-only region, marked `data-context-only="true"` or class `context-only`, and its descendants are outside the owned layout. Decode XML entities and normalize whitespace and case when comparing labels; preserve original spelling in diagnostics. Reject malformed or nested comments with a source/drawing warning; never remove delimiters and reinterpret the result as active markup. CDATA remains literal SVG text. Do not execute SVG scripts or load external resources.
 
 Report all three kinds of disagreement, identifying the prompt, drawing and part:
 
