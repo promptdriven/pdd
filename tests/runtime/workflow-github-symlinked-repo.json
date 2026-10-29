@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Preparing a pull request from a repository path reached through a symlink succeeds and returns the prepared pull-request intent; a body file whose physical parent is inside the repository remains accepted, while a body file outside the repository remains refused as unsafe."
+      "text": "Preparing a pull request from a repository path reached through a folder symlink succeeds and returns the prepared intent with its marker; preparation does not read, write or validate a PR body file."
     }
   ],
   "initial_world": {},
@@ -12,47 +12,23 @@
   "context": [],
   "steps": [
     {
-      "step_id": "prepare-from-symlinked-repository",
+      "step_id": "prepare-from-symlinked-repository-without-body-file",
       "entry_path": "prompts/cli/workflow-github.prompt.md",
       "operation": "prepareWorkflowPr",
       "input": {
-        "cwd": "/tmp/repo-alias",
+        "cwd": "/tmp/repo-alias/run-folder-with-any-name",
         "runId": "run-2444",
         "stageId": "prompt",
         "repository": "Acme/Project",
-        "baseBranch": "main",
-        "bodyFile": "pr-body.md"
+        "baseBranch": "main"
       },
       "checks": [
         {
           "criterion_id": "AC1",
           "target": "result",
-          "path": "/bodyFile",
+          "path": "/marker",
           "op": "equals",
-          "value": "/tmp/repo-alias/pr-body.md"
-        }
-      ]
-    },
-    {
-      "step_id": "refuse-body-outside-repository",
-      "entry_path": "prompts/cli/workflow-github.prompt.md",
-      "operation": "prepareWorkflowPr",
-      "input": {
-        "cwd": "/tmp/repo-alias",
-        "runId": "run-2444-outside",
-        "stageId": "prompt",
-        "repository": "Acme/Project",
-        "baseBranch": "main",
-        "bodyFile": "/tmp/outside/pr-body.md"
-      },
-      "expected_error": "workflow_github_body_unsafe",
-      "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "error",
-          "path": "/code",
-          "op": "equals",
-          "value": "workflow_github_body_unsafe"
+          "value": "pdd-workflow:run-2444:prompt"
         }
       ]
     }
