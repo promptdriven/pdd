@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How to report a problem (for people and agents)
+    url: https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md
+    about: The steps, the fields and a good example. Agents file issues with gh and the same guide.
+  - name: PDD runtime access
+    url: https://github.com/promptdriven/pdd#access
+    about: Sign up at promptdriven.ai/login with the GitHub account that gh uses.
