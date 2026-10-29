@@ -183,11 +183,11 @@ test('AC7: inspection budget inclusive; partial objects stay uncertain despite e
   assert.throws(() => selectTests(findTests({ root })), error => limit(error, 'whitespace.json', INSPECTION + 1, true));
 });
 
-test('AC8: discovery refuses symlinks, ancestors, unreadable and unstable snapshots with bounded descriptor reads', t => {
+test('AC8: synthetic ancestor input, unreadable and unstable snapshots retain bounded safety guards', t => {
   const { root } = fixture(t);
   write(root, 'outside/object.json', '{"data":1}');
   fs.symlinkSync('outside/object.json', join(root, 'link.json'));
-  assert.throws(() => selectTests(findTests({ root })), /unsafe.*symbolic link/);
+  assert.deepEqual(selectTests(findTests({ root })).selected.map(row => row.path), ['tests/normal.json']);
   fs.unlinkSync(join(root, 'link.json'));
   fs.symlinkSync('outside', join(root, 'ancestor'));
   const ancestor = findTests({ root, files: ['ancestor/object.json'] });
@@ -213,4 +213,84 @@ test('AC8: discovery refuses symlinks, ancestors, unreadable and unstable snapsh
   fs.readSync = (...args) => { readBytes += args[3]; return originalRead(...args); }; syncBuiltinESMExports();
   const found = findTests({ root, files: ['huge.json'] });
   assert.ok(found.tests[0].uncertain); assert.ok(readBytes > 0 && readBytes <= 65_536);
+});
+
+test('AC8: small nonregular JSON is skipped without opening links or FIFOs; selected payloads still refuse', t => {
+  const { root, normal } = fixture(t);
+  // The link's own size controls discovery, even when its target is oversized.
+  materialize(root, 'outside/large.data', Buffer.alloc(CAP + 1, 65));
+  fs.symlinkSync('outside/large.data', join(root, 'tsconfig.json'));
+  fs.symlinkSync('missing-target', join(root, 'dangling.json'));
+  assert.equal(spawnSync('mkfifo', [join(root, 'pipe.json')]).status, 0);
+  const originalOpen = fs.openSync, opened = [];
+  t.after(() => { fs.openSync = originalOpen; syncBuiltinESMExports(); });
+  fs.openSync = (path, ...args) => { opened.push(String(path)); return originalOpen(path, ...args); };
+  syncBuiltinESMExports();
+  const found = findTests({ root });
+  assert.deepEqual(selectTests(found).selected.map(row => row.path), [normal]);
+  assert.deepEqual(selectTests(found, ['typo']).unknown, ['typo']);
+  assert.ok(!opened.some(path => /(?:tsconfig\.json|dangling\.json|pipe\.json|large\.data)$/.test(path)), opened.join('\n'));
+  fs.openSync = originalOpen; syncBuiltinESMExports();
+  for (const path of ['tsconfig.json', 'dangling.json', 'pipe.json']) {
+    write(root, 'pdd-source.json', JSON.stringify({ include: [path] }));
+    assert.throws(() => captureSource(root, { tests: [normal] }), error => error.exitCode === 4);
+  }
+  fs.unlinkSync(join(root, 'pdd-source.json'));
+  fs.appendFileSync(join(root, 'prompts/echo.prompt.md'), '\n## Dependencies\n\n[Config](../tsconfig.json)\n');
+  assert.throws(() => captureSource(root, { tests: [normal] }), error => error.exitCode === 4);
+});
+
+test('AC8: real offline CLI preserves default Check/Try, --files, unknown Story and no-tests guidance', t => {
+  const { root, normal } = fixture(t);
+  write(root, 'config/base.json', '{"compilerOptions":{}}');
+  fs.symlinkSync('config/base.json', join(root, 'tsconfig.json'));
+  fs.symlinkSync('missing-target', join(root, 'dangling.json'));
+  assert.equal(spawnSync('mkfifo', [join(root, 'pipe.json')]).status, 0);
+  const bin = join(root, '..', 'bin'), marker = join(root, '..', 'auth-attempts');
+  fs.mkdirSync(bin);
+  // Deterministic auth boundary: no token or network access is possible.
+  write(bin, 'gh', '#!/bin/sh\nprintf "auth\\n" >> "$PDD_TEST_AUTH_LOG"\nexit 1\n');
+  fs.chmodSync(join(bin, 'gh'), 0o755);
+  const env = { HOME: join(root, '..', 'home'), PATH: `${bin}:/usr/bin:/bin`, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PDD_TEST_AUTH_LOG: marker };
+  const cli = args => {
+    const child = spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: 'utf8', env, timeout: 10000 });
+    assert.equal(child.error, undefined, String(child.error));
+    assert.doesNotMatch(child.stderr, /unsafe discovery|unreadable discovery/);
+    return child;
+  };
+  const files = cli(['check', '--files']);
+  assert.equal(files.status, 0, files.stderr); assert.match(files.stdout, /tests\/normal\.json/);
+  assert.equal(fs.existsSync(marker), false);
+  for (const command of ['check', 'try']) {
+    const child = cli([command]);
+    assert.equal(child.status, 5, child.stderr); assert.match(child.stderr, /gh auth login/);
+  }
+  assert.equal(fs.readFileSync(marker, 'utf8').trim().split('\n').length, 2);
+  for (const args of [['check', 'typo'], ['check', '--files', 'typo'], ['try', 'typo']]) {
+    const child = cli(args); assert.equal(child.status, 2, child.stderr); assert.match(child.stderr, /Unknown story/);
+  }
+  fs.unlinkSync(join(root, normal));
+  for (const args of [['check'], ['check', '--files'], ['try']]) {
+    const child = cli(args); assert.equal(child.status, 2, child.stderr); assert.match(child.stderr, /No tests found/);
+  }
+  assert.equal(fs.readFileSync(marker, 'utf8').trim().split('\n').length, 2);
+});
+
+test('AC8: inclusive own-metadata nonregular boundary does not relax oversized safety', t => {
+  const { root } = fixture(t);
+  fs.symlinkSync('missing-target', join(root, 'link.json'));
+  const originalStat = fs.lstatSync;
+  t.after(() => { fs.lstatSync = originalStat; syncBuiltinESMExports(); });
+  // Host link lengths cannot reach 1 MiB: supply only that metadata boundary.
+  for (const size of [CAP - 1, CAP, CAP + 1]) {
+    fs.lstatSync = (path, ...args) => {
+      const stat = originalStat(path, ...args);
+      if (String(path).endsWith('/link.json')) stat.size = BigInt(size);
+      return stat;
+    };
+    syncBuiltinESMExports();
+    const found = findTests({ root });
+    if (size <= CAP) assert.deepEqual(selectTests(found).selected.map(row => row.path), ['tests/normal.json']);
+    else assert.throws(() => selectTests(found), error => error.exitCode === 4 && /unsafe discovery/.test(error.message));
+  }
 });

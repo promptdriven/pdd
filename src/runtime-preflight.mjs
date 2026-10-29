@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8f57a2b6067de7abfbb5f32ad7055307308add51b34f179f3a214d80913c71fc).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 10b45589b9bfce9b575d2e8c611d8b5cec71dd7157b378264270dcd61ff90236).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readFileSync, writeFileSync } from 'node:fs';
@@ -129,6 +129,9 @@ export function findTests({ root, files = gitFiles(root) }) {
     catch (error) { throw new PreflightError(4, `${path}: unreadable discovery file (${error.code || error.message}).`); }
     if (!stat) continue;
     if (path.endsWith('.json')) {
+      // Discovery does not grant payload eligibility to nonregular entries.
+      // Use only their own metadata; never open or follow a small link/FIFO.
+      if (!stat.isFile() && stat.size <= BigInt(LIMITS.test)) continue;
       let text;
       try { text = discoveryBytes(root, path, stat).toString('utf8'); }
       catch (error) { tests.push({ path, discoveryError: error }); continue; }
