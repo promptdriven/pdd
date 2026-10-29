@@ -100,7 +100,7 @@ When lint capacity is busy, Check, lint and Try use [bounded lint-slot retries](
 
 `pdd try [STORY] --cli [--shell] [--max-calls N] [--new]`
 
-Use the program in your own terminal. Copy the printed PATH line or run the absolute shim path.
+Keep this owner terminal open for the file mailbox. Run the installed program name from the repository or a nested folder; no PATH export is needed. Sandboxed agents use the workspace mailbox without home or network access.
 
 `pdd try [STORY] --serve [PORT] [--max-calls N] [--new]`
 
@@ -114,4 +114,4 @@ Story counts use the newest source-compatible evidence across check, verify and 
 
 An explicit `pdd check --lint` that is still queued/running exits 3 and prints its saved read command; exit 0 means validation finished successfully. The all-Story cost estimate includes entry executions, declared saved-data operations and nested prompt-call allowances. Conditional operations may use fewer calls; `--max-calls` remains the hard cap.
 
-Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI command appends its usage line to stderr, keeping program stdout and exit status intact. It distinguishes calls for this command, total used and remaining in this Try, and the session cap. Unknown counters stay unknown. Named HTTP routes carry `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap`, and `x-pdd-usage-source` headers; response bodies and program statuses stay intact. `runtime` identifies a confirmed call receipt; `last-known` identifies cached session allowance on a local zero-call response such as an unmatched route. Session allowance is separate from an account or tester allowance. Usage reads spend no model calls and never repeat commands.
+Virtual CLI and HTTP startup print `Try AI usage` on stderr. Virtual CLI commands keep stdout, stderr and exit status intact, saving usage quietly under .pdd/try/sessions; PDD_TRY_USAGE=1 opts in to a stderr usage line. It distinguishes calls for this command, total used and remaining in this Try, and the session cap. Unknown counters stay unknown. Named HTTP routes carry `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap`, and `x-pdd-usage-source` headers; response bodies and program statuses stay intact. `runtime` identifies a confirmed call receipt; `last-known` identifies cached session allowance on a local zero-call response such as an unmatched route. Session allowance is separate from an account or tester allowance. Usage reads spend no model calls and never repeat commands.

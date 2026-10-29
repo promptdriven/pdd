@@ -533,8 +533,37 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 
 ## 19. Use a Try from your terminal or curl
 
-`pdd try STORY --cli` prints a shim path and a PATH line. Startup and every command show a Try AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
-`--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
+A person starts `pdd try STORY --cli` in a terminal outside the agent sandbox and keeps it open. Setup
+installs the program name (for example `bm`) beside `pdd` as a link to one shared launcher. That folder is
+already on PATH: there is no PATH export to copy. pdd refuses to replace an existing real command; choose
+another prompt program name if it clashes. Run `bm` from the repo or a folder inside it; the same name in
+another repo selects that repo's Try. Outside an open repo Try it explains how to start one.
+
+The owner process watches a file mailbox under the Git-ignored `.pdd/try/mailbox/`. Codex and Claude write
+requests and read answers there, with no home-file, keychain, socket, DNS or network access from the command.
+Keep the normal agent filesystem sandbox and default network-off setting. Credentials stay in the owner's
+memory; no token is written to the repo. Ctrl-C closes the mailbox while the Try keeps its data. `--shell`
+keeps the mailbox running while it opens your shell. Restart setup outside the sandbox if the owner stopped.
+
+Send one command at a time and wait for its exit. Commands commonly take10–30seconds; a step can take up
+to10minutes, so give the agent's shell enough time. Parallel commands wait up to60seconds for their turn,
+with a short progress line on stderr. An unknown result is never permission to replay a state-changing command.
+If a killed process left `command.lock` or `relay.lock`, check its recorded process before removing that lock.
+
+The program's stdout, stderr and exit code remain its own. Wrapper errors start with **pdd try:** on stderr
+and use reserved exit125. Usage is saved quietly in `.pdd/try/sessions/<id>/usage.json`; opt in to a stderr
+usage line with `PDD_TRY_USAGE=1 bm list`. These counters describe the Try, separately from any account allowance.
+Claude Code may ask for one command approval. A project/user permission can allow the virtual command:
+`{"permissions":{"allow":["Bash(bm:*)"]}}`. pdd never changes your agent configuration.
+
+Normal terminal commands can still call the runtime directly with the original gh login. Set
+`PDD_TRY_TRANSPORT=direct` explicitly only in an environment that permits home and network access.
+For a direct command whose sandbox denies network, Codex's one-line setting is
+`codex exec --sandbox workspace-write -c sandbox_workspace_write.network_access=true 'YOUR TASK'`.
+Claude's equivalent is `claude --settings '{"sandbox":{"network":{"allowedDomains":["runtime.example"]}}}'`
+(replace the example with your runtime host). The mailbox path requires neither setting. Blocked file errors
+name the path instead of hiding it behind a generic server-path message.
+
 `pdd try --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
 **pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
@@ -555,6 +584,9 @@ Return `status`, an optional object of response `headers`, and `body` (a string 
 result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
 route returns 404 without an AI call. Runtime or wrapper trouble returns 502 with a plain **pdd try:** reason.
+Start `--serve` in a terminal that stays open while the agent calls curl or fetch. The agent needs access
+to `localhost:PORT` or `127.0.0.1:PORT`; custom `.localhost` names and `ai.local` are not portable DNS names. For direct HTTP calls, allow that address in its network policy. Each request uses the same Try data
+and may take the same10–30seconds (or longer) as a CLI command. Wait for its response before the next action.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
 local server while the Try keeps its data. Use curl or fetch for API routes; browser page, image, script and
 stylesheet loads cannot spend calls through an API route.
@@ -609,4 +641,4 @@ scheme, host or parent traversal. CSS URLs, scripts, unsafe functions and indire
 Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and `clamp`, subject to the same safety
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
 
-The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
+The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program streams, HTTP bodies and status codes retain their program values; CLI usage is quiet unless PDD_TRY_USAGE=1. No model call or repeat dispatch is made for accounting.

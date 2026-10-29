@@ -183,10 +183,21 @@ with its recorded GitHub login. --cli selects terminal on new sessions and deleg
 [Try doors](try-doors.prompt.md); --serve delegates to [HTTP doors](try-http.prompt.md), passing the selected local app-map path and invocation directory for missing-map recovery guidance only; the authenticated pinned model still decides Screen capability. Show no browser link and do not open the browser for these modes.
 
 Export `runDoorCall(descriptor, input, ports={})`: descriptor identifies root, session ID, original runtime origin,
-GitHub login, prompt and operation. Sign in again, require the original login, and send exactly one JSON owner call
-with a fresh request ID. Save the ID before sending. A lost POST is recovered only by GET of that same ID;
-never repeat a dispatch. Read queued/running calls for up to 15 minutes, returning the confirmed owner GET's result.program_result verbatim (the display report is sanitized). Read the owner GET even when POST is already complete; absent program_result is an incompatible-server error.
+GitHub login, prompt and operation. HTTP doors sign in again and require the original login. The owner CLI mailbox relay supplies
+its setup-authenticated in-memory identity/store through the private doorState port (not through descriptor or mailbox data);
+use these without global state or gh access, retaining login validation. Send each admitted command exactly
+once with a fresh request ID. Save the ID before sending. A lost POST is recovered only by GET of that same ID;
+never repeat a dispatch. The sole resend exception is HTTP409 with error.code=session-busy: this confirms
+that execution was not admitted. Wait up to60seconds with a short progress line on stderr, then use a fresh
+request ID. Respect cancellation before any attempt. Other409s, lost replies, timeouts and unknown results
+never authorize resubmission. Exhaustion says busy, not unknown, and sends no further call.
+Read queued/running calls for up to 15 minutes, returning the confirmed owner GET's result.program_result verbatim (the display report is sanitized). Read the owner GET even when POST is already complete; absent program_result is an incompatible-server error.
 Refusals, unknown outcomes, stopped sessions and invalid replies throw a plain error; redact credentials.
+EPERM/EACCES from network connection setup must stop promptly rather than poll for15minutes. Say the sandbox
+blocks network; show Codex `-c sandbox_workspace_write.network_access=true` with workspace-write and Claude
+`--settings '{"sandbox":{"network":{"allowedDomains":["<runtime host>"]}}}'` with the validated host.
+If access fails after dispatch may have happened, explicitly retain the unknown outcome and prohibit replay.
+No network guidance disables the filesystem sandbox.
 Return normalized usage alongside the confirmed result (usage.calls and result.report.remaining_calls; unknown when absent/invalid). A refusal carries its known usage on the thrown error for wrappers. Never dispatch again to obtain usage. No wrapper progress or report text may enter a program's stdout; the door adapter owns the separate usage line on stderr. Session budgets and saved worlds belong
 to the runtime. Preserve paused-session refusals; never silently create a new world during a command.
 
