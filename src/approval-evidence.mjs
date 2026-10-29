@@ -3,7 +3,7 @@ import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
-// Adapted from pdd-fleet workflow-run-records.mjs's stage-session matcher.
+// Match a workflow stage to its agent session files.
 const sessionFile = /^rollout-[^/]+\.jsonl$/;
 const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const epoch = value => {

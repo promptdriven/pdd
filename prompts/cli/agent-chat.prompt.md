@@ -50,7 +50,7 @@ an explicit `pdd try` reconnect. Provider credentials and token values never lea
 
 ## Terminal lines
 
-The owner watches the terminal where `pdd try` runs. Serhan, Oct 28: the page said only "The agent could not answer safely", and the terminal said nothing. Write every line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style:
+The owner watches the terminal where `pdd try` runs. The terminal reports connection and reply outcomes even when the page can show only a safe summary. Write every line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style:
 - Before discovery: `Connecting your agent to the Try page…`.
 - When connected: `Ask your agent is connected (<Name>). Keep this window open for Ask your agent; Ctrl-C disconnects the chat and keeps the Try open.`
 - For each message: `<Name> is answering a question from the Try page…`, then `<Name> answered.` (plus ` It proposed input for the form.` with a fill), or `<Name> could not answer: <the adapter's message>`.

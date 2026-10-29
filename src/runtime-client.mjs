@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 685eb24da7fc215baeabeb55030547a5d5ff101692d32c1e8dbb448085ba45a2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 80004b0e3a8fabd9fb9dfbbaadf0646be73e452d7d9536162d8039be079821eb).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -472,7 +472,7 @@ async function readRow(context, row) {
 const isOpen = row => OPEN_STATES.has(row.state) || (row.state === 'unknown' && row.lost);
 const occupiesSlot = row => OPEN_STATES.has(row.state) || (row.state === 'unknown' && row.request_ids?.length);
 
-// One line every 30 s while checks run (Serhan: no timeouts, so pdd shows that it still waits).
+// One line every 30 s while checks run.
 function progressLine(rows, ms) {
   const stories = new Map();
   for (const row of rows) stories.set(row.story, (stories.get(row.story) ?? true) && ENDED.has(row.state) && !isOpen(row));
@@ -666,7 +666,7 @@ function runFiles(cwd, words, options, ports) {
   return 0;
 }
 
-// pdd check --lint (Serhan: runtime logic belongs on the server): only the server's lint (0 AI calls) on the captured files.
+// pdd check --lint: only the server's lint (0 AI calls) on the captured files.
 // Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
@@ -993,7 +993,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const origin = runtimeOrigin(ports.env);
   const { root, found, normalized } = localSetup(cwd, words);
   context.visible = found.visible; context.origin = origin;
-  // A person has no time limit (Serhan: no timeouts); an agent has 90 s; --timeout MIN overrides both.
+  // A person has no time limit; an agent has 90 s; --timeout MIN overrides both.
   context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
   const selected = select(found, normalized, root);

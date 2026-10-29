@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { checkInput, numberWarnings } from '../src/runtime-preflight.mjs';
 
-// Original A25 address domain, before pocket's workaround commit 4a13573e5.
+// The original three-pattern address domain of issue #2500.
 const address = { oneOf: [
   { type: 'string', pattern: '^ws://127\\.0\\.0\\.1:[1-9][0-9]{0,3}/?$' },
   { type: 'string', pattern: '^unix://[^\\s]+$' },
@@ -11,7 +11,7 @@ const address = { oneOf: [
 const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
 
 test('ONEOF2500: each original address pattern passes without overlap or irrelevant alternative warnings', () => {
-  for (const value of ['ws://127.0.0.1:8080', 'ws://127.0.0.1:9/', 'unix:///tmp/pocket.sock', 'pocket']) {
+  for (const value of ['ws://127.0.0.1:8080', 'ws://127.0.0.1:9/', 'unix:///tmp/app.sock', 'app']) {
     assert.deepEqual(checkInput({ address: value }, object({ address }), 0), { refusals: [], warnings: [] }, value);
   }
 });
@@ -20,7 +20,7 @@ test('ONEOF2500: actual matching pattern overlap is still refused at the nested 
   const schema = object({ address: { oneOf: [
     { type: 'string', pattern: '^unix://' }, { type: 'string', pattern: 'sock$' },
   ] } });
-  const result = checkInput({ address: 'unix:///tmp/pocket.sock' }, schema, 0);
+  const result = checkInput({ address: 'unix:///tmp/app.sock' }, schema, 0);
   assert.equal(result.refusals.length, 1);
   assert.equal(result.refusals[0].section, 'steps[0].input.address');
   assert.match(result.refusals[0].message, /more than one/);
@@ -38,7 +38,7 @@ test('ONEOF2500: recursive branch membership honors patterns in object fields an
 
 test('ONEOF2500: invalid or unjudged patterns cannot prove overlap', () => {
   for (const pattern of ['[', '(?P<address>unix://).*']) {
-    const result = checkInput('unix:///tmp/pocket.sock', { oneOf: [
+    const result = checkInput('unix:///tmp/app.sock', { oneOf: [
       { type: 'string', pattern: '^unix://' }, { type: 'string', pattern },
     ] }, 0);
     assert.deepEqual(result.refusals, [], pattern);

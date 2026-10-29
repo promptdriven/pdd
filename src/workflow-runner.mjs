@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8958580af958c50b3b1313132484c1dd5c703e411f359b5f45a5004d990316d0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 98e4813faaf1654af82561cbfbced60bc35cff3a396656ce01f4907898e628cf).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -58,7 +58,7 @@ function deps(ports = {}) {
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
-// The real reason of a failed gh, git or Herdr call, in plain words (Serhan, Oct 28: errors name their cause).
+// The real reason of a failed gh, git or Herdr call, in plain words.
 function causeOf(error) {
   if (error?.code === 'ENOENT') return `${String(error.path ?? error.message ?? '').match(/\b(herdr|gh|git)\b/)?.[1] ?? 'a needed program'} is not installed or not on PATH`;
   if (error?.code === 'workflow_github_command_unavailable') return 'gh is not installed or not on PATH';

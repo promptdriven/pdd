@@ -33,13 +33,13 @@ test('ONEOF2500 independent CLI replay: original addresses, overlap and numeric 
     { type: 'string', pattern: '^[^\\s:]+$' },
   ] };
   contract.entries[0].input_schema.properties.customerName = schema;
-  for (const address of ['ws://127.0.0.1:8080', 'unix:///tmp/pocket.sock', 'pocket']) {
+  for (const address of ['ws://127.0.0.1:8080', 'unix:///tmp/app.sock', 'app']) {
     doc.steps[0].input.customerName = address;
     const result = await run(), output = result.stdout + result.stderr;
     assert.equal(result.status, 0, output);
     assert.doesNotMatch(output, /more than one|does not match the pattern/);
   }
-  schema.oneOf = [{ type: 'string', pattern: '^pocket$' }, { type: 'string', pattern: '^p' }];
+  schema.oneOf = [{ type: 'string', pattern: '^app$' }, { type: 'string', pattern: '^a' }];
   const overlap = await run(); assert.equal(overlap.status, 4, overlap.stdout + overlap.stderr);
   assert.match(overlap.stdout + overlap.stderr, /more than one/);
   contract.entries[0].input_schema.properties.customerName = { type: 'string' };

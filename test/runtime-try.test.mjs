@@ -156,7 +156,7 @@ const savedCase = (id, { story = 'user_stories/place-order.md', criterion = { id
       input: { customerName: 'Ana', pickupAt: '07:45', items: [{ itemId: 'latte', size: 'M', quantity: 1 }] },
       checks: [{ criterion_id: criterion.id, target: 'result', path: '/totalCents', op: 'equals', value: 445 }] }] } });
 
-// Wrong: a case saved on the Try page is lost, makes a second test file, or is added twice (Serhan, Oct 27: save as test).
+// Wrong: a case saved on the Try page is lost, makes a second test file, or is added twice.
 test('RUNTIME-TRY7: pdd try stays open and appends each saved case as a new step of the story\'s test file', async t => {
   const setup = harbor(t, repo => writeFileSync(join(repo, 'user_stories/refund.md'), '# Refund an order\n\n## Acceptance criteria\n\n1. A refund returns the total.\n'));
   const original = readFileSync(join(setup.repo, 'tests/place-order.json'), 'utf8');

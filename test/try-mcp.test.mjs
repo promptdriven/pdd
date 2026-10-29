@@ -113,6 +113,27 @@ test('owner access opens exactly once and reads real current state with authenti
   assert.equal(fake.posts.filter(p => p.command === 'try').length, 1);
 });
 
+test('owner access refuses a Try recorded for another GitHub login before any owner read', async t => {
+  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { readTryOwner } = await import('../src/runtime-client.mjs');
+  const { rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const setup = harbor(t, root => rmSync(join(root, 'tests/unknown-item.json')));
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.url.endsWith('/model')) return { status: 200, json: { entries: [], calls: { cap: 400, remaining: 400 } } };
+    if (entry.url.endsWith('/state')) return { status: 200, json: { world: { kv: {} }, actions: [] } };
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
+  });
+  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  assert.equal((await readTryOwner({ cwd: setup.repo }, ports)).record.login, 'octo');
+  const gets = fake.gets.length, other = { ...ports, gh: args => args[0] === 'auth' ? ports.gh(args) : { status: 0, stdout: 'mallory 777\n' } };
+  await assert.rejects(readTryOwner({ cwd: setup.repo }, other), /This Try belongs to octo\. Run: gh auth switch -u octo/);
+  assert.equal(fake.gets.length, gets, 'another login gets no owner read');
+  assert.equal(fake.posts.filter(p => p.command === 'try').length, 1);
+});
+
 test('isolated save retains actual starting world and leaves original scenario bytes intact', async t => {
   const { harbor } = await import('./runtime-fake.mjs');
   const { saveDoorCase } = await import('../src/runtime-client.mjs');

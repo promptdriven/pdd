@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: e3759eb230b4157db009c09ed8504c0062583cc1fefffd1d3529c43012faa540).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 4ff3173a6d125fba5d3d60a1d6492d9ca1afe9b58d04040a9a21f5a15991c7c6).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
