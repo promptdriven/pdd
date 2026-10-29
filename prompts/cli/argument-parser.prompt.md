@@ -4,6 +4,16 @@ Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parse
 
 Empty argv, root --help/-h/-help/help, and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. `--version` accepts no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` takes no operands and no options. No route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 
+## Missing workflow name
+
+When the first operand after `workflow run` is a positive decimal issue number
+(the existing digits-only issue form), reject it with `CommandInputError` and
+message `Name the workflow: pdd workflow run small-change NUMBER (or bug, feature). See pdd workflow list.`,
+replacing NUMBER with that operand. This identifies the missing name rather than
+using the generic unsupported-input diagnostic. Never infer or start a workflow.
+Preserve all other command parsing, help, option validation and issue forms;
+this rule changes only the diagnostic for a number in the workflow-name position.
+
 ## Dependencies
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
