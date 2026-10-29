@@ -211,7 +211,8 @@ The skills and the other commands run on your computer.
 
 | You see | What to do |
 |---|---|
-| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is access: PDD Cloud has not approved your GitHub account, or the PDD Cloud sign-in was slow. Make sure that PDD Cloud approved the GitHub account that `gh` uses. See [Access](#access). Then wait 1 minute and run the command again. |
+| `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
+| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is a slow PDD Cloud sign-in. Wait 1 minute, then run the command again. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
 | `REFUSED` (exit code 4) | Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
