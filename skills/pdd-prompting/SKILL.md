@@ -11,13 +11,13 @@ Each code module's `.prompt.md` is the source; code implements it.
 
 ## Core rules
 
-- Read `guide.md` in full before you write or change a prompt, Story or test cases. A link or a summary is not enough. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
+- Read `guide.md` in full before you write or change a prompt, Story or test cases. Read RUNBOOK.md §2–§4 before you write a prompt or a test file.
 - Change the prompt first, then the code.
-- One prompt per module: purpose and behavior, not code narration.
+- One prompt per module: purpose and behavior.
 - Give each rule one owner prompt. Link to a shared rule. Do not copy it. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
-- Keep the behavior callers need and the edge cases that matter.
-- Write expected results from the requirement before the code exists. Never copy them from the code's output.
-- Show the prompt, Story and cases to the person before you build. The person decides; never approve for them.
+- Keep caller behavior and important edges. Outside code (database, files, network, clock, randomness, programs): use a runtime-faked port, never direct calls. See [RUNBOOK §21](RUNBOOK.md#21-fake-the-outside-world).
+- Derive expectations from requirements before code; never copy code output.
+- Show prompt, Story and cases before building. The person approves.
 - Report only checks that you ran, with their real output.
 
 ## Files
@@ -28,12 +28,12 @@ Each code module's `.prompt.md` is the source; code implements it.
 
 ## How to write
 
-1. Tell the person which rules of `guide.md` apply.
-2. Find the owning prompt; use repo paths.
-3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names. A Story is one behavior that a person can check in about a minute: one "I can…" sentence.
-4. Write normal, limit and error cases from the prompt and Story. Keep steps small: one action or about 10 moves/rows/calls. Split long replays with expected state after each part; the server stops a step after 10 minutes.
-5. Show the drafts and mark open questions. Ask only about choices that change the result.
-6. After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.
+1. Name applicable `guide.md` rules.
+2. Find the owning prompt by path.
+3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names. A Story is one "I can…" behavior, checked in a minute.
+4. Derive normal, limit and error cases. Use one action or about 10 moves/rows/calls. Split long replays with expected state after each part; the server stops a step after 10 minutes.
+5. Show drafts and open choices that affect results.
+6. After changing prompt, Story and tests, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Offer `pdd try STORY`. If a check fails, show it; never change the expected value yourself.
 
 For code with no prompts yet, use the code, callers and tests as evidence. Change no code until asked.
 

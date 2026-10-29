@@ -610,3 +610,208 @@ Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
 
 The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
+
+## 21. Fake the outside world
+
+Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Declare the actual dependency's operations as Runtime resources, and supply their replies in the test. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
+
+The examples below specify small JavaScript modules with matching prompt contracts; native execution is reported separately. Their scenarios are synthetic, with exact expected results chosen before execution. Run from the repository root (or copy the linked files retaining their paths). Each command first runs zero-call server lint, then a live prompt check with a hard ceiling; every step requests `gpt-6.1-sol`. A ceiling is not a charge. Native tests establish code behavior separately.
+
+```sh
+pdd check --fill-hash
+pdd check --lint fake-database fake-files fake-hash fake-service fake-decision fake-factory
+pdd check fake-database --max-calls 9
+# Substitute fake-files, fake-hash, fake-service, fake-decision or fake-factory.
+```
+
+Each linked prompt includes complete schemas, resource declarations and limits; each scenario includes its starting world, bindings and checks. Copy the complete pair and its Story, then replace the module-owned behavior and expectations from your requirement. Never pass the test or Story as program context.
+
+### Seed a SQL connection
+
+[Module](examples/fakes/database.mjs) · [Prompt](examples/fakes/database.prompt.md) · [Story](user_stories/fake-database.md) · [Scenario](test/runtime/fake-database.json)
+
+Bind one logical connection to one `world_pointer` for all reads, writes and transactions. Starting rows live under `rows`; SQL executes in real in-memory SQLite. Named scalar argument `id` binds `:id`. Inspect `/database/rows/books`, not SQLite snapshot internals. For dynamic nullable parameters use `statement_argument_pointer` plus JSON-text `parameters_argument_pointer`, as in Pocket’s bounded SQL pattern; never interpolate values into SQL.
+
+```json
+{
+  "initial_world": {
+    "database": {
+      "schema": [
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+      ],
+      "rows": {
+        "books": [
+          {
+            "id": 1,
+            "title": "Dune"
+          }
+        ]
+      }
+    }
+  },
+  "simulation": {
+    "db.find": {
+      "action": "sql.execute",
+      "world_pointer": "/database",
+      "statement": "SELECT title FROM books WHERE id = :id",
+      "result_mode": "rows",
+      "result_template": {
+        "rows": []
+      },
+      "result_value_pointer": "/rows"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8).
+
+### Read UTF-8 files
+
+[Module](examples/fakes/files.mjs) · [Prompt](examples/fakes/files.prompt.md) · [Story](user_stories/fake-files.md) · [Scenario](test/runtime/fake-files.json)
+
+Files are keyed by exact POSIX path, each with UTF-8 `content` and `is_symlink`. `blob.write` additionally selects a content argument; `blob.stat` supports exists/is_symlink/size. These fakes never open a host path. Ownership, permissions, races, fsync and atomic rename require explicit ports and native tests.
+
+```json
+{
+  "initial_world": {
+    "files": {
+      "/notes/hello.txt": {
+        "content": "Hello\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/91df0610-5ecd-4b3b-833f-58a5162d2690).
+
+### Hash exact bytes
+
+[Module](examples/fakes/hash.mjs) · [Prompt](examples/fakes/hash.prompt.md) · [Story](user_stories/fake-hash.md) · [Scenario](test/runtime/fake-hash.json)
+
+The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the runtime canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
+
+```json
+{
+  "initial_world": {},
+  "simulation": {
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/5b26a5ee-1b45-4a79-beb6-ae1dd4c891a3).
+
+### Inject a fixed-answer callback
+
+[Module](examples/fakes/service.mjs) · [Prompt](examples/fakes/service.prompt.md) · [Story](user_stories/fake-service.md) · [Scenario](test/runtime/fake-service.json)
+
+The native `lookup(service, id)` uses the supplied callback; resource `service.lookup` binds that same boundary. `port.write` appends actual argument objects at `/requests` and returns the fixed `result_template`. Assert both the reply and exact request list. The fixed answer does not prove authentication, transport, timeout handling or any live service effect. Never include credentials in fixtures.
+
+```json
+{
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "label": "Available"
+      }
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/53737185-9685-408f-83ca-be9e13c6ae79).
+
+### Separate decide from do
+
+[Module](examples/fakes/decision.mjs) · [Prompt](examples/fakes/decision.prompt.md) · [Story](user_stories/fake-decision.md) · [Scenario](test/runtime/fake-decision.json)
+
+`decideReply` is a pure public decision over supplied facts; `doLookup` obtains those facts through the injected callback and applies the same rule. The first step proves an unavailable decision without I/O; the second proves the exact effect request and available result. Split only when the native design benefits: SQL and callbacks do not require a split merely to bind them.
+
+```json
+{
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": true
+      }
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [4/4 checks · 3 AI calls](https://runtime.promptdriven.ai/r/7cd3364c-d048-46a0-b7a3-41194739405c).
+
+### Keep factory instances with handles
+
+[Module](examples/fakes/factory.mjs) · [Prompt](examples/fakes/factory.prompt.md) · [Story](user_stories/fake-factory.md) · [Scenario](test/runtime/fake-factory.json)
+
+Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"Greeter","resource":"instances"}]`, and write-access collection resource `instances`. Factory entry `instance` is `{"kind":"factory","type":"Greeter","path":"/handle"}`; method uses kind `method` with the same type/path. Mark both handle fields with the `handle` convention. Store captured state under the executor-issued `instance_handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next step takes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
+
+```json
+{
+  "initial_world": {
+    "instances": []
+  },
+  "simulation": {
+    "instances.store": {
+      "action": "collection.merge",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/config",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "instances.load": {
+      "action": "collection.get",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptdriven.ai/r/eaa3c792-986a-498c-8970-5d67181d179e).
+
+A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
