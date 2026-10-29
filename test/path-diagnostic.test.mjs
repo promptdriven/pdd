@@ -36,7 +36,7 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
     assert.ok(r.stderr.includes(join(f.old, 'pdd'))); assert.ok(r.stderr.includes(join(f.alpha, 'pdd')));
     assert.match(r.stderr, /PATH selects:.*pdd, version 0\.0\.305\.dev214/);
     assert.match(r.stderr, /conda/); assert.match(r.stderr, /environment activation.*reorder/i); assert.match(r.stderr, /shadow Alpha again/);
-    assert.ok(r.stderr.includes(process.execPath)); assert.match(r.stderr, /Use Alpha directly:/);
+    assert.ok(r.stderr.includes(process.execPath)); assert.match(r.stderr, /Use Alpha directly:/); assert.match(r.stderr, /export PATH=.*\"\$PATH\"; hash -r/);
     assert.equal(readFileSync(join(f.old, 'pdd'), 'utf8'), f.legacy);
   }
 });
@@ -46,7 +46,7 @@ test('PATH2: PATH correction selects Alpha and a second version check terminates
   f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
   assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);
-  assert.match(r.stderr, /PATH selects:.*\(PDD Alpha 0\.1\.10\)/);
+  assert.match(r.stderr, new RegExp(`PATH selects:.*\\(PDD Alpha ${version.replaceAll(".", "\\.")}\\)`));
   assert.ok(r.stderr.includes(join(f.old, 'pdd')));
   rmSync(join(f.old, 'pdd'));
   const second = f.run('--version');
