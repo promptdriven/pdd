@@ -118,7 +118,7 @@ Only `--read BATCH` (including latest-batch reads) and `--retry BATCH` may conti
 Check held solely by pending lint. This exception never applies to UUID call reads, hidden
 --request, standalone lint, Try, posted-job reads or capacity receipts. New batches save
 explicit normal-Check versus lint-only intent. For supported version 1 legacy records produced
-by 0.1.9/0.1.10, recover normal-Check intent only when every selected row has its valid original
+by 0.1.9/0.1.10, recover normal-Check intent only when every held row has its valid original
 max_calls (1..1000), positive integer criteria_total and consistent authored steps. Require
 producer evidence of an unsent lint-held row: pending-lint evidence, prior unknown-lint
 `not_run` evidence, or the known already-read state with phase `lint`, state `not_run`,
