@@ -43,7 +43,11 @@ test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or C
   const path = `${alpha}:/usr/bin:/bin`;
   for (const args of [['--version'], ['--help'], ['workflow', 'list']]) {
     const result = run(args, { CLAUDE_CONFIG_DIR: config, PATH: path });
-    assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');
+    assert.equal(result.status, 0, result.stderr);
+    if (args[0] === '--version') {
+      assert.equal(result.stdout, `${version()}\n`);
+      assert.match(result.stderr, /PATH selects:/);
+    } else assert.equal(result.stderr, '');
   }
   const conflict = run(['--version'], { CLAUDE_CONFIG_DIR: config, PATH: `${legacy}:${path}` });
   assert.equal(conflict.status, 0); assert.equal(conflict.stdout, `${version()}\n`);
