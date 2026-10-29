@@ -537,8 +537,6 @@ identity only. It does not independently prove execution or prompt/code equivale
   must-fix list at the top, plus "✗ N vectors fail" if vectors still fail. No new human gate.
   Keep actual failures; never change expected values to get a pass.
 
-For each new test, run `pdd workflow prove <run> --test "<command>" --expect "<the bug's error text>"`.
-
 **The formal check (done by an agent that did not write the code).**
 - Every code-space PR has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
   **Failed + counterexample**, **Not run + reason** or **Not applicable + reason**.

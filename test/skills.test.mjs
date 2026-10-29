@@ -530,11 +530,6 @@ test('SKILLS38: small-change behavior fixes name the defect, detection gap and b
   assert.match(verify, /`Not fixed yet: this helps find the cause` at the PR top, use `Refs #N` and keep the issue open/);
 });
 
-test('SKILLS39: RUNBOOK section 17 proves every new test with the agreed command', () => {
-  const section = RUNBOOK().split('## 17. ')[1].split('## 18. ')[0];
-  assert.ok(section.includes('For each new test, run `pdd workflow prove <run> --test "<command>" --expect "<the bug\'s error text>"`.'));
-});
-
 test('SKILLS40: check failure guidance preserves person-owned expectations and diagnosis before retries', () => {
   const runbook = RUNBOOK();
   assert.ok(runbook.includes('A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.'));
