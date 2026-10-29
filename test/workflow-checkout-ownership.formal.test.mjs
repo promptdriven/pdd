@@ -45,6 +45,8 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
      return {id:`cli:${op}`,result:{type:`${kind}_list`,[`${kind}s`]:copy(value??[])}};
     }
     calls.push(copy(args));events.push(op);
+    const peer=1-target;
+    assert.ok(!args.includes(repos[peer].workspaceId)&&!args.includes(runs[peer].workspaceId),'mutation never addresses peer parent/run');
     // Durable intent must be observable before the external mutation.
     const durable=await load();
     if(op==='workspace:create')assert.ok(durable.repositories.some(r=>r.phase==='intent'));
@@ -56,16 +58,21 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
      rows.splice(rows.findIndex(w=>w.workspace_id===args[2]),1);return {id:`cli:${op}`,result:{type:'ok'}};
     }
     const w=`opaque-${++serial}`,t=`${w}-t`,p=`${w}-p`,x=`${w}-x`;
-    const cwd=args[args.indexOf(op==='workspace:create'?'--cwd':'--path')+1];
+    const cwd=args[args.indexOf(kind==='worktree'?'--path':'--cwd')+1];
     const label=args[args.indexOf('--label')+1];
-    if(op==='tab:create')return {id:`cli:${op}`,result:{tab:{tab_id:t},root_pane:{pane_id:p,terminal_id:x}}};
+    if(op==='tab:create'){
+     const owner=args[args.indexOf('--workspace')+1];
+     assert.ok(tabs.has(owner),'tab target is an existing workspace');
+     tabs.get(owner).push({tab_id:t});panes.get(owner).push({workspace_id:owner,tab_id:t,pane_id:p,terminal_id:x,cwd});
+     return {id:`cli:${op}`,result:{tab:{tab_id:t},root_pane:{pane_id:p,terminal_id:x}}};
+    }
     const c=clones[target];rows.push({workspace_id:w,label,worktree:{checkout_path:cwd,repo_key:c.common,is_linked_worktree:kind==='worktree'}});
     panes.set(w,[{workspace_id:w,tab_id:t,pane_id:p,terminal_id:x,cwd}]);tabs.set(w,[{tab_id:t}]);
     return {id:`cli:${op}`,result:{workspace:{workspace_id:w},tab:{tab_id:t},root_pane:{pane_id:p,terminal_id:x}}};
    };
    return {directory,repos,runs,rows,panes,tabs,registry,calls,events,save,load,setLose:()=>{lose=true;},ports:{directory,command,checkpoint:async()=>{events.push('checkpoint');}},input:{repository,issueNumber:2531,runId:`run-${target}`,workflowName:'bug',stageId:'formal',sourceRoot:clones[target].source,commonDir:clones[target].common,cwd:clones[target].cwd}};
   }
-  const snapshot=(w,peer)=>({repo:copy(w.repos[peer]),run:copy(w.runs[peer]),row:copy(w.rows.filter(r=>[w.repos[peer].workspaceId,w.runs[peer].workspaceId].includes(r.workspace_id))),panes:copy([...w.panes].filter(([id])=>[w.repos[peer].workspaceId,w.runs[peer].workspaceId].includes(id)))});
+  const snapshot=(w,peer)=>({repo:copy(w.repos[peer]),run:copy(w.runs[peer]),row:copy(w.rows.filter(r=>[w.repos[peer].workspaceId,w.runs[peer].workspaceId].includes(r.workspace_id))),panes:copy([...w.panes].filter(([id])=>[w.repos[peer].workspaceId,w.runs[peer].workspaceId].includes(id))),tabs:copy([...w.tabs].filter(([id])=>[w.repos[peer].workspaceId,w.runs[peer].workspaceId].includes(id)))});
   async function peerUnchanged(w,peer,before){
    assert.deepEqual(snapshot(w,peer),before,'peer external identity preserved');
    const saved=await w.load();assert.deepEqual(saved.repositories.find(r=>r.workspaceId===before.repo.workspaceId),before.repo);assert.deepEqual(saved.runs.find(r=>r.runId===before.run.runId),before.run);
@@ -86,7 +93,7 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
    await w.save();const before=await w.load(),peerBefore=snapshot(w,peer);
    if(['valid','legacy-label'].includes(state)){
     let result;await assert.doesNotReject(async()=>{result=await openHerdrRunLayout(w.input,w.ports);},`${order}/${target}/${state}: exact pair succeeds`);
-    assert.equal(result.repoWorkspaceId,p.workspaceId);assert.equal(result.workspaceId,r.workspaceId);assert.deepEqual(w.calls.map(a=>a.slice(0,2)),[['tab','create']]);
+    assert.equal(result.repoWorkspaceId,p.workspaceId);assert.equal(result.workspaceId,r.workspaceId);assert.deepEqual(w.calls,[['tab','create','--workspace',r.workspaceId,'--cwd',clones[target].cwd,'--label','formal','--no-focus']]);
    }else{
     await assert.rejects(openHerdrRunLayout(w.input,w.ports),e=>typeof e.code==='string',state);assert.deepEqual(w.calls,[]);assert.deepEqual(await w.load(),before);
    }
@@ -118,8 +125,14 @@ test('bounded public checkout ownership: all 80 seeded worlds',async()=>{
    const saved=await w.load();
    if(occupied){await assert.rejects(openHerdrRunLayout(w.input,w.ports),{code:'repository_label_unavailable'});assert.deepEqual(w.calls,[]);assert.deepEqual(await w.load(),saved);}
    else {
-    await assert.doesNotReject(()=>openHerdrRunLayout(w.input,w.ports),'independent namespace allocates despite earlier same-repository peer');
-    assert.deepEqual(w.calls.map(a=>a.slice(0,2)),[['workspace','create'],['worktree','open'],['tab','create']]);assert.equal(w.calls[0][w.calls[0].indexOf('--label')+1],label);
+    let result;await assert.doesNotReject(async()=>{result=await openHerdrRunLayout(w.input,w.ports);},'independent namespace allocates despite earlier same-repository peer');
+    const allocated=await w.load(),parent=allocated.repositories.find(x=>x.commonDir===clones[target].common),run=allocated.runs.find(x=>x.runId===w.input.runId);
+    assert.equal(result.repoWorkspaceId,parent.workspaceId);assert.equal(result.workspaceId,run.workspaceId);
+    assert.deepEqual(w.calls,[
+     ['workspace','create','--cwd',clones[target].source,'--label',label,'--no-focus'],
+     ['worktree','open','--workspace',parent.workspaceId,'--path',clones[target].cwd,'--label','pdd#2531 bug','--no-focus'],
+     ['tab','create','--workspace',run.workspaceId,'--cwd',clones[target].cwd,'--label','formal','--no-focus']
+    ]);
    }
    await peerUnchanged(w,peer,before);
   }
