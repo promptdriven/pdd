@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: fbae52d4881a98180a1af67bf3d8cc3caec11a09a8749aaf344e2ea10e284947).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d41e531ce658aaf93c815ee38c679f57cc3aa3527a45124b2425a7c9863da0c5).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1580,7 +1580,13 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
     throw new Error('The Story or a prompt changed, or this Try has no source record. Run pdd try STORY --new.');
   let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
   let metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
-  if ([404, 410].includes(metadata.status)) {
+  let paused = false;
+  if (metadata.status === 409 && metadata.json?.error?.code === 'session-stopped') {
+    const saved = await runtime.get(record.id);
+    paused = saved.status === 200 && sameJob(saved.json, record.id, 'try') && saved.json.state === 'passed'
+      && saved.json.result?.session?.state === 'paused';
+  }
+  if (paused || [404, 410].includes(metadata.status)) {
     await openTry(); record = store.repo(root).tries?.[test.path];
     runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
     metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);

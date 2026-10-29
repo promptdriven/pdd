@@ -192,3 +192,38 @@ test('door snapshots use the matching immutable B1 action, never the latest worl
     assert.equal(dispatched, 1);
   }
 });
+
+test('owner tools resume a confirmed idle pause with the same Try, data and budget', async t => {
+  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { readTryOwner } = await import('../src/runtime-client.mjs');
+  const { rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const setup = harbor(t, root => rmSync(join(root, 'tests/unknown-item.json')));
+  let paused = false, sessionId, reopens = 0, receiptState = 'passed', receiptCommand = 'try';
+  const fake = await fakeRuntime(t, (entry, server) => {
+    if (entry.url.endsWith('/model')) return paused
+      ? { status: 409, json: { error: { code: 'session-stopped', message: 'Try paused' } } }
+      : { status: 200, json: { entries: [], calls: { cap: 12, remaining: 9 } } };
+    if (entry.url.endsWith('/state')) return { status: 200, json: { world: { kv: { retained: 'saved' } }, actions: [] } };
+    if (entry.url.endsWith('/reopen')) { paused = false; reopens++; return { status: 200, json: server.tryJob(sessionId) }; }
+    if (entry.command === 'lint') return { status: 200, json: server.lint(entry.request.requestId) };
+    if (entry.command === 'try') { sessionId = entry.request.requestId; return { status: 200, json: server.tryJob(sessionId) }; }
+    const job = server.tryJob(sessionId);
+    if (paused) { job.result.session.state = 'paused'; job.state = receiptState; job.command = receiptCommand; }
+    return { status: 200, json: job };
+  });
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+  const first = await readTryOwner({ cwd: setup.repo }, ports);
+  paused = true;
+  const resumed = await readTryOwner({ cwd: setup.repo }, ports);
+  assert.equal(resumed.record.id, first.record.id);
+  assert.deepEqual(resumed.data, first.data);
+  assert.deepEqual(resumed.model.calls, { cap: 12, remaining: 9 });
+  assert.equal(reopens, 1);
+  for (const [state, command] of [['unknown', 'try'], ['passed', 'call']]) {
+    paused = true; receiptState = state; receiptCommand = command;
+    await assert.rejects(readTryOwner({ cwd: setup.repo }, ports), /Try paused/);
+    assert.equal(reopens, 1, 'an uncertain or unrelated receipt cannot authorize reopening');
+  }
+  assert.equal(fake.posts.filter(entry => entry.command === 'try').length, 1);
+});
