@@ -1,12 +1,20 @@
 # Local authoring-kit CLI
 
-Own `src/pdd-cli.mjs`; export `renderHelp(prefix)` and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide; the agent loads the pdd-prompting skill. Parse before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
+Own `src/pdd-cli.mjs`; export `renderHelp(prefix)` and `runPdd(argv, dependencies)`. Help, version, completion and recipe discovery operate using public local files only. pdd prints no guide; the agent loads the pdd-prompting skill. Parse with `parseArgv` from the required argument-parser contract before reading skills or workflows; unsupported input gets a finite stderr diagnostic/exit2 and no private fallback.
 
 Use the package-root metadata version. For `--version`, print only that version followed by one newline, without the package name or any prefix. Then call [skills install](skills-install.prompt.md) `findSkills` with the same arguments as setup, and for each agent result whose `stale` is `'older'` print the stale line below to stderr (0.1.8 tester: no command showed that the installed skills were older than pdd). A failure of that check prints nothing and never changes the exit code. `workflow list` reads the bundled workflow areas only; it does not start work. Preserve stdout for successful values and stderr for errors. `setup` does two things, in this order. First it calls [skills install](skills-install.prompt.md) `setupSkills({packageRoot, cwd, home, claudeConfigDir})` with home from the HOME environment value (else `os.homedir()`) and `CLAUDE_CONFIG_DIR`. For each agent result it prints `Updated N PDD skills in ROOT: NAMES` when it updated copies, then, when found, `PDD skills found in FOLDER`, or when `stale` is set the stale line `PDD skills in FOLDER are older than pdd VERSION. To update them, run: npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y` (`differ from the skills of pdd VERSION` for `'differs'`; VERSION from the package metadata; leave out ` -g` when FOLDER is `<cwd>/.agents/skills` or `<cwd>/.claude/skills`). Print this `npx skills add` command, never `npx skills update`: update changes only skills that `npx skills add` recorded, and says "No global skills tracked" for copies that pdd setup or a person made (0.1.8 tester). `add` replaces any copy, and later `update` works too, else `Installed N PDD skills to ROOT: NAMES` when it copied any. NAMES are the skill folder names, joined by `, `, in the order of `PDD_SKILL_NAMES`. Use `skill` instead of `skills` when N is 1. An agent error prints `pdd setup: the PDD skills could not be installed in ROOT (REASON).` to stderr. Then it calls [project setup](project-setup.prompt.md) `setupProject({cwd, packageRoot})` and prints `Wrote the PDD block in FILE.` or `FILE already has this PDD block. No change.`; its error prints `pdd setup: ` and the message to stderr. Each part runs even when the other fails. Exit 1 if any part failed, else 0. No other command installs skills. pdd starts no chat itself outside `workflow run`. Keep imports and injection defaults self-contained, with no private transport/backend dependency.
 
 For setup, version reporting and workflow startup, use [PATH diagnostics](path-diagnostic.prompt.md). Print the returned lines to stderr. Setup uses the full report; `--version` uses its conflict-only mode while stdout remains exactly the package version and newline; `workflow run` uses its compact shadowing warning before dispatch. Other commands, help and invalid syntax do not discover or probe PATH. A diagnostic failure must not prevent the requested command. No installer script is part of this package; setup is the supported install check.
 
+For a `CommandInputError`, print its message once to stderr, leave stdout empty
+and return its exitCode (2). Every line written to stdout or stderr ends with
+one newline. Preserve other commands and their existing dispatch and effects.
+
 ## Dependencies
+
+- [Argument parser](argument-parser.prompt.md) is required for authoring,
+  generation, runtime, verification and testing: it owns command validation and
+  exact input-error messages. The CLI owns only their stream and exit handling.
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
@@ -31,3 +39,41 @@ Route workflow-evidence to workflow runner recordEvidence with issue ref and req
 ## Progress and unexpected errors
 
 Pass the runner a `say` port that writes one line to stderr, so slow workflow steps show progress while stdout keeps the result. An unexpected error in a runner, runtime or view route keeps its fixed safe line and adds `Reason: <cleaned first line of the error>` (the [cause helper](runtime-output.prompt.md#progress-and-causes)), so the person sees what really failed.
+
+The `runPdd` entry observes the existing public module function in
+`src/pdd-cli.mjs`: supply argv and capture its stdout/stderr ports and returned
+exit code as the result fields below. This transport does not change that
+function's signature. Invalid syntax is resolved locally before any dependency
+with external effects is invoked; no runtime resource is needed for that path.
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "8ff19e25796686bbf81f5a2eba1f68ae3d8c91c36ee84f609de21b2f2d6b1af0",
+  "entries": [{
+    "operation": "runPdd",
+    "input_schema": {
+      "type": "object",
+      "properties": {"argv": {"type": "array", "items": {"type": "string"}}},
+      "required": ["argv"], "additionalProperties": false
+    },
+    "result_schema": {
+      "type": "object",
+      "properties": {
+        "exit_code": {"type": "integer"},
+        "stdout": {"type": "string"}, "stderr": {"type": "string"}
+      },
+      "required": ["exit_code", "stdout", "stderr"], "additionalProperties": false
+    },
+    "errors": []
+  }],
+  "calls": [], "resources": [],
+  "limits": {"max_steps": 1, "max_model_calls": 1},
+  "conventions": []
+}
+```
+
+</details>
