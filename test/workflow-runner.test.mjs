@@ -34,7 +34,7 @@ function fakeHerdr() {
     if (group === 'workspace' && verb === 'create') {
       const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:workspace:create', result: { workspace: w } };
+      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
     }
     if (group === 'worktree' && verb === 'open') {
       const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
@@ -972,12 +972,12 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
 
 // ---- 0.1.7: a real tester run of 0.1.6 (round 2, "web", bookshelf, Oct 27) ----
 
-// Tester B2: "env -u CLAUDE_CONFIG_DIR CODEX_HOME=~/.pdd-codex/profile-test pdd workflow run feature 3". zsh does not expand "~"
+// Tester B2: "env -u CLAUDE_CONFIG_DIR CODEX_HOME=~/.pdd-codex/work4 pdd workflow run feature 3". zsh does not expand "~"
 // in an env argument, pdd saved the text, and Codex stopped at once ("CODEX_HOME points to … but that path does not exist").
 test('0.1.7 #1: run expands a leading ~ in CODEX_HOME and CLAUDE_CONFIG_DIR and refuses a folder that does not exist before it starts anything', async t => {
   const f = await fixture(t, { agent: 'codex' });
-  const home = f.ports.env.HOME, folder = join(home, '.pdd-codex', 'profile-test');
-  f.ports.env = { HOME: home, CODEX_HOME: '~/.pdd-codex/profile-test' };
+  const home = f.ports.env.HOME, folder = join(home, '.pdd-codex', 'work4');
+  f.ports.env = { HOME: home, CODEX_HOME: '~/.pdd-codex/work4' };
   const refused = await f.run();
   assert.equal(refused.exitCode, 1);
   assert.equal(refused.message, `CODEX_HOME is "${folder}", but that folder does not exist. Fix CODEX_HOME and run the command again.`);
@@ -1687,7 +1687,7 @@ test('RELEASE11: PR2 refreshes its selected remote base with an explicit trackin
   assert.equal(f.git(run.root,'rev-parse','HEAD'),newest,'PR2 uses the newly fetched base');
 });
 
-// Regression #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
+// Greg #2442: newer verify results must beat the old check without treating UNKNOWN as a failure.
 test('GREG2442-1: newest compatible verify evidence replaces 7/8 with 17/17; unknown stays unknown', async t => {
   const { f, run } = await featureAtTryGate(t);
   const old = Array.from({ length: 8 }, (_, i) => `Runtime check (story-${i}): ${i === 7 ? 'unknown · 0' : '✓ 1'} of 1 criteria · 1/1 checks · 1 AI call`).join('\n');
@@ -1820,4 +1820,397 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
+});
+
+// A real Git primary/linked/bare layout, with Herdr's repository-parent rule.
+async function linkedSourceFixture(t,kind='linked') {
+  const f=await fixture(t,{agent:'codex'});let primary=f.source,source=f.source;
+  if(kind==='bare'){
+    primary=join(f.base,'project.git');f.git(f.source,'clone','--bare',f.source,primary);
+    f.git(primary,'remote','set-url','origin','https://github.com/example/project.git');
+    f.git(primary,'update-ref','refs/remotes/origin/main',f.git(primary,'rev-parse','main'));
+  }
+  if(kind!=='normal'){source=join(f.base,'caller');f.git(primary,'worktree','add','-b','caller',source,'main');}
+  const healthy=f.ports.herdr;
+  f.ports.herdr=async args=>{
+    if(args[0]==='worktree'&&args[1]==='open'){
+      const parent=f.herdr.workspaces.find(w=>w.workspace_id===args[args.indexOf('--workspace')+1]);
+      const pane=f.herdr.panes.find(p=>p.workspace_id===parent.workspace_id);
+      if(pane.cwd!==primary||f.refuseOnce){
+        f.refuseOnce=false;f.herdr.calls.push(args);
+        throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'),{code:'linked_worktree_source'});
+      }
+    }
+    return healthy(args);
+  };
+  const record=()=>JSON.parse(readFileSync(join(f.git(source,'rev-parse','--path-format=absolute','--git-common-dir'),'pdd/runs/17/status.json')));
+  const start=()=>startRun({name:'small-change',issue:'17',agent:'codex',base:'main',cwd:source,packageRoot},f.ports);
+  return {f,primary,source,record,start};
+}
+
+for(const kind of ['normal','linked','bare'])test(`2531: ${kind} source starts from verified Herdr parent and retains source/base`,async t=>{
+  const {f,primary,source,record,start}=await linkedSourceFixture(t,kind);
+  const before=f.git(source,'status','--porcelain=v1');const out=await start();assert.equal(out.exitCode,0,out.message);
+  const run=record();assert.equal(run.sourceRoot,source);assert.notEqual(run.root,source);assert.equal(run.baseBranch,'main');
+  assert.equal(f.herdr.panes.find(p=>p.workspace_id===run.chats[0].repoWorkspaceId).cwd,primary);
+  assert.equal(f.git(source,'status','--porcelain=v1'),before);assert.equal(run.chats.length,1);
+});
+
+test('2531: confirmed pre-agent worktree refusal recovers the same run with open once',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;
+  const first=await start();assert.equal(first.exitCode,1);assert.match(first.message,/linked_worktree_source/);
+  const before=record(),worktrees=f.git(source,'worktree','list','--porcelain');
+  assert.equal(before.chats.length,0);assert.equal(before.stageAgent,null);assert.equal(before.chatFailure.code,'linked_worktree_source');
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,0,out.message);
+  const after=record();assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);assert.equal(after.branch,before.branch);
+  assert.equal(f.git(source,'worktree','list','--porcelain'),worktrees);assert.equal(after.chats.length,1);assert.equal(after.chatFailure,undefined);
+  assert.equal(f.herdr.panes.filter(p=>p.agent).length,1);
+  assert.equal((await openRun({ref:'17',cwd:source,packageRoot},f.ports)).exitCode,0);assert.equal(record().chats.length,1);
+  assert.equal(f.herdr.panes.filter(p=>p.agent).length,1);
+});
+
+test('2531: legacy linked-parent refusal and failed open recover without replacing Git allocation',async t=>{
+  const {f,primary,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const before=record(),path=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(path));
+  const repo=registry.repositories[0],oldId=repo.workspaceId,row=f.herdr.workspaces.find(w=>w.workspace_id===oldId);
+  // Saved shape from alpha after linked_worktree_source, then an unsuccessful open.
+  repo.sourceRoot=source;delete repo.rootTabId;delete repo.rootPaneId;delete repo.rootTerminalId;
+  row.worktree=null;f.herdr.panes.find(p=>p.workspace_id===oldId).cwd=source;
+  registry.runs[0].phase='intent';delete registry.runs[0].refusal;
+  writeFileSync(path,JSON.stringify(registry));
+  before.chatFailure.code='herdr_layout_identity_changed';writeFileSync(join(before.runDir,'status.json'),JSON.stringify(before));
+  const worktrees=f.git(source,'worktree','list','--porcelain');
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,0,out.message);
+  const after=record(),saved=JSON.parse(readFileSync(path));
+  assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);assert.equal(after.sourceRoot,source);assert.equal(after.branch,before.branch);
+  assert.equal(f.git(source,'worktree','list','--porcelain'),worktrees);assert.equal(after.chats.length,1);
+  assert.equal(saved.repositories[0].sourceRoot,primary);assert.equal(saved.archivedRepositories[0].workspaceId,oldId);
+  assert.equal(f.herdr.panes.find(p=>p.workspace_id===oldId).cwd,source,'old shell remains untouched');
+  assert(!f.herdr.calls.some(args=>args[0]==='workspace'&&['close','rename'].includes(args[1])));
+});
+
+test('2531: an uncertain retry reply cannot reuse an earlier confirmed refusal to launch again',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const healthy=f.ports.herdr;
+  f.ports.herdr=async args=>{const reply=await healthy(args);if(args[0]==='worktree'&&args[1]==='open')throw closedChannel();return reply;};
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);
+  const before=record(),calls=f.herdr.calls.filter(args=>args[0]==='worktree').length;
+  f.ports.herdr=healthy;
+  const again=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(again.exitCode,1);assert.match(again.message,/layout_allocation_uncertain/);
+  assert.equal(f.herdr.calls.filter(args=>args[0]==='worktree').length,calls);assert.equal(record().chats.length,0);
+  assert.equal(record().root,before.root);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
+});
+
+test('2531: recovery refuses a competing workspace at the assigned cwd and retains its identities',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();const before=record();
+  f.herdr.workspaces.push({workspace_id:'foreign',label:'person',worktree:{checkout_path:before.root,repo_key:before.commonDir,is_linked_worktree:true}});
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);assert.match(out.message,/layout_allocation_uncertain/);
+  assert.equal(record().chats.length,0);assert.equal(record().runId,before.runId);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
+});
+
+test('2531: a refused run cannot change its saved common repository or issue/workflow binding',async t=>{
+ for(const kind of ['common','label']){
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const run=record(),file=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(file));
+  if(kind==='common')registry.runs[0].commonDir=join(f.base,'different.git');else registry.runs[0].label='other#99 feature';
+  writeFileSync(file,JSON.stringify(registry));const calls=f.herdr.calls.filter(a=>a[0]==='worktree').length;
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1,out.message);
+  assert.equal(f.herdr.calls.filter(a=>a[0]==='worktree').length,calls);assert.equal(record().runId,run.runId);assert.equal(record().chats.length,0);
+ }
+});
+
+// #2530: a prose success cannot stand in for code replay evidence.
+async function replayArea(t, { stopAtPrompt = false, extraVectorPath = null } = {}) {
+  const f = await fixture(t, {name:'feature',agent:'codex'});
+  const skill=join(f.source,'.agents/skills/pdd-feature');mkdirSync(skill,{recursive:true});
+  writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:[
+    {name:'story',steps:['scope'],optional:[],gate:'approve'},
+    {name:'prompt-pr',steps:['check'],optional:[],gate:'pr',before:'approve',then:'ask-code'},
+    {name:'code',steps:['verify'],optional:[],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'}]}));
+  assert.equal((await f.run()).exitCode,0);
+  const run=f.record();mkdirSync(join(run.root,'tests'));
+  const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
+  writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  if (extraVectorPath) writeFileSync(join(run.root,extraVectorPath),JSON.stringify(vector));
+  await stepDone({step:'scope',summary:'scoped',cwd:run.root},f.agentPorts());f.tick();
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  await stepDone({step:'check',summary:'Runtime check: ✓ 1 of 1 criteria',cwd:run.root},f.agentPorts());f.tick();
+  if (stopAtPrompt) {
+    assert.equal((await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async question => /open PR 1/.test(question)})).exitCode,0);
+    assert.equal(f.record().gate.kind,'ask-code');
+    return {f,run,vector};
+  }
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  assert.equal(f.record().areas[f.record().area].name,'code');
+  return {f,run,vector};
+}
+
+test('2530: opted-in code publication marks missing structured evidence BLOCKED above prose pass',async t=>{
+  const {f,run}=await replayArea(t);
+  writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n');
+  const out=await stepDone({step:'verify',summary:'PASS: all tests and replay passed',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,2,'a blocked evidence review can still publish');
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/replay-evidence.json/);
+  assert.match(f.prs[1].body,/validates structure and identity/);
+  assert.ok(f.record().replayBaseline,'original vectors were anchored before code');
+});
+
+async function replayManifest(f,run,vector) {
+  const {sourceFingerprint}=await import('../src/workflow-replay.mjs');
+  const {createHash}=await import('node:crypto');
+  const bytes=readFileSync(join(run.root,'tests/add.json'));
+  const step=vector.steps[0],check=step.checks[0];
+  return {schema_version:'pdd.replay-evidence.v1',run_id:run.runId,source:{kind:'git-content-v1',sha256:sourceFingerprint(run.root)},vectors:[{path:'tests/add.json',sha256:createHash('sha256').update(bytes).digest('hex')}],
+    checks:[{vector:'tests/add.json',step_id:step.step_id,check_index:0,entry_path:step.entry_path,operation:step.operation,criterion_id:check.criterion_id,target:check.target,path:check.path,op:check.op,outcome:'pass'}],
+    operations:[{vector:'tests/add.json',step_id:step.step_id,entry_path:step.entry_path,operation:step.operation,executed:true,outcome:'returned',boundary:{kind:'function',name:'add'},command:'node test/add.vectors.test.mjs',exit_code:0}],
+    counts:{total:1,pass:1,fail:0,blocked:0,not_replayed:0},mutation:{kind:'semantic',description:'Return a wrong total',command:'node test/add.vectors.test.mjs --mutant',exit_code:1,outcome:'assertion_failure',failed_checks:[{vector:'tests/add.json',step_id:step.step_id,check_index:0}]},
+    formal:{result:'not_applicable',scope:'Public wiring',reason:'No additional formal rule',control_outcome:'not_run'}};
+}
+
+test('2530: valid replay and real assertion failures both publish with canonical status',async t=>{
+  for(const outcome of ['pass','fail']){
+    const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    const manifest=await replayManifest(f,run,vector);manifest.checks[0].outcome=outcome;manifest.counts.pass=outcome==='pass'?1:0;manifest.counts.fail=outcome==='fail'?1:0;
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+    const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
+    assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
+    assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
+    if(outcome==='fail')assert.match(f.prs[1].body,/^✗ 1 replay assertions fail/);
+  }
+});
+
+test('2530: vector edits after prompt-space approval cannot replace the saved original hashes',async t=>{
+  const {f,run,vector}=await replayArea(t);const original=f.record().replayBaseline;
+  vector.steps[0].checks[0].value=999;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.deepEqual(f.record().replayBaseline,original);
+});
+
+test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Code replay: PASS/);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const out=await stepDone({step:'verify',summary:'PASS again',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
+  assert.ok(f.prs[1].body.includes(`<!-- pdd-workflow:${run.runId}:code -->`));
+  assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
+});
+
+test('2530: failed description downgrade prevents pushing new source with an old pass',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());const pushes=f.pushes.length;
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
+  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Code replay: PASS/,'unchanged remote source still has its valid report');
+});
+
+test('2530: failed final description update leaves a pushed code PR publication-pending',async t=>{
+  const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const original=f.ports.execFile;let edits=0;
+  f.ports.execFile=async(file,args,options)=>{if(file==='gh'&&args[0]==='pr'&&args[1]==='edit'&&++edits===2)return {stdout:'',stderr:'final update rejected',code:1};return original(file,args,options);};
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,1);assert.match(out.message,/Source was pushed/);assert.match(f.prs[1].body,/Code replay: BLOCKED.*Publication pending/);
+});
+
+test('2530: a failed push leaves an existing code PR pending and never restores pass',async t=>{
+  for(const structured of [false,true]){
+    const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    const original=f.ports.execFile;
+    f.ports.execFile=async(file,args,options)=>{
+      if(file==='git'&&args[0]==='push'){
+        if(structured)return {stdout:'',stderr:'push rejected',code:1};
+        throw Object.assign(Error('push rejected'),{stderr:'push rejected',code:1});
+      }
+      return original(file,args,options);
+    };
+    const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    assert.equal(out.exitCode,1,out.message);assert.match(out.message,/push rejected/);
+    assert.match(f.prs[1].body,/^Code replay: BLOCKED.*Publication pending/);
+  }
+});
+
+test('2530: an unopted saved area retains legacy publication without a manifest',async t=>{
+  const {f,run}=await replayArea(t);const saved=f.record();delete saved.areas.find(a=>a.name==='code').replay_evidence;
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);assert.doesNotMatch(f.prs[1].body,/Code replay:/);
+});
+
+
+for (const revision of ['changed', 'added']) {
+  test(`2553: ${revision} scenario repins on subsequent prompt publication`, async t => {
+    const {f,run,vector} = await replayArea(t,{stopAtPrompt:true});
+    const original = f.record().replayBaseline;
+    assert.deepEqual(original.vectors.map(v=>v.path),['tests/add.json']);
+    const path = revision === 'added' ? 'tests/refund.json' : 'tests/add.json';
+    vector.steps[0].checks[0].value = 7;
+    writeFileSync(join(run.root,path),JSON.stringify(vector));
+    f.tick();
+    assert.equal((await stepDone({step:'check',summary:'Reviewed revised scenarios',cwd:run.root},f.agentPorts())).exitCode,0);
+    assert.equal(f.prs.length,1,'the existing prompt PR is updated');
+    const baseline = f.record().replayBaseline;
+    if (revision === 'added') assert.deepEqual(baseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/refund.json']);
+    else assert.notEqual(baseline.vectors[0].sha256,original.vectors[0].sha256);
+    const {createHash} = await import('node:crypto');
+    assert.equal(baseline.vectors.find(v=>v.path===path).sha256,createHash('sha256').update(readFileSync(join(run.root,path))).digest('hex'));
+  });
+}
+
+test('2553: legacy single-vector baseline cannot publish PASS after another scenario is added', async t => {
+  const {f,run,vector} = await replayArea(t);
+  const original = f.record().replayBaseline;
+  assert.deepEqual(original.vectors.map(v=>v.path),['tests/add.json']);
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  // Construct after the addition: its current fingerprint covers both files; inventory is the defect.
+  const manifest = await replayManifest(f,run,vector);
+  const {sourceFingerprint} = await import('../src/workflow-replay.mjs');
+  assert.equal(manifest.source.sha256,sourceFingerprint(run.root));
+  assert.deepEqual(manifest.vectors.map(v=>v.path),['tests/add.json']);
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+  const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,2);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
+  assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
+});
+
+test('2553: non-ASCII scenario filename survives prompt publication discovery', async t => {
+  const {f} = await replayArea(t,{stopAtPrompt:true,extraVectorPath:'tests/café.json'});
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/café.json']);
+});
+
+for (const revision of ['added','changed']) {
+  test(`2553: final committed ${revision} scenario approval push refreshes the frozen anchor`, async t => {
+    const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+    const original=f.record().replayBaseline;
+    const path=revision==='added'?'tests/refund.json':'tests/add.json';
+    vector.steps[0].checks[0].value=8;
+    writeFileSync(join(run.root,path),JSON.stringify(vector));
+    f.git(run.root,'add','--',path);f.git(run.root,'commit','-qm','Reviewed scenario');
+    const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+    assert.equal(result.exitCode,0,result.message);
+    assert.equal(f.record().areas[f.record().area].name,'code');
+    const {createHash}=await import('node:crypto');
+    const saved=f.record().replayBaseline;
+    assert.equal(saved.vectors.find(v=>v.path===path).sha256,createHash('sha256').update(readFileSync(join(run.root,path))).digest('hex'));
+    assert.notDeepEqual(saved,original);
+  });
+}
+
+test('2553: dirty unpublished scenario edits refuse final code entry',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+  const original=f.record().replayBaseline,pushes=f.pushes.length;
+  vector.steps[0].checks[0].value=99;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,1);assert.match(result.message,/Unpublished scenario edits.*tests\/add.json/);
+  assert.equal(f.record().gate.kind,'ask-code');assert.equal(f.pushes.length,pushes);
+  assert.deepEqual(f.record().replayBaseline,original);
+});
+
+test('2553: exact whitespace paths survive anchoring and code inventory checks',async t=>{
+  const path='tests/ café \n.json';
+  const {f,run}=await replayArea(t,{stopAtPrompt:true,extraVectorPath:path});
+  assert.ok(f.record().replayBaseline.vectors.some(v=>v.path===path));
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  const saved=f.record();saved.replayBaseline.vectors=saved.replayBaseline.vectors.filter(v=>v.path!==path);
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
+  const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);assert.match(f.record().replayEvidence.reason,/missing from the approved anchor/);
+});
+
+for(const failure of ['listing','missing','malformed']) {
+  test(`2553: ${failure} current inventory cannot publish subset PASS`,async t=>{
+    const {f,run,vector}=await replayArea(t);
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    const original=f.ports.execFile;
+    if(failure==='malformed')writeFileSync(join(run.root,'tests/broken.json'),'{"schema_version":');
+    if(failure==='missing')f.ports.execFile=async(file,args,options)=>{
+      const reply=await original(file,args,options);
+      return file==='git'&&args[0]==='diff'&&args.includes('-z')?{...reply,stdout:reply.stdout+'tests/missing.json\0'}:reply;
+    };
+    if(failure==='listing')f.ports.execFile=async(file,args,options)=>file==='git'&&args[0]==='diff'&&args.includes('-z')?{stdout:'',code:1,stderr:'inventory unavailable'}:original(file,args,options);
+    const manifest=JSON.parse(readFileSync(join(run.runDir,'replay-evidence.json'),'utf8'));
+    const {sourceFingerprint}=await import('../src/workflow-replay.mjs');
+    manifest.source.sha256=sourceFingerprint(run.root);
+    assert.ok(manifest.source.sha256);
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+    const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+    assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
+    assert.match(result.message,/Code replay: BLOCKED/);
+  });
+}
+
+test('2553: irrelevant JSON mentioning the schema never becomes a scenario',async t=>{
+  const {f,run}=await replayArea(t,{stopAtPrompt:true});
+  writeFileSync(join(run.root,'tests/notes.json'),JSON.stringify({description:'prompt-runtime.program-scenario.v1',schema_version:'other.v1'}));
+  const result=await stepDone({step:'check',summary:'reviewed',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path),['tests/add.json']);
+});
+
+test('2553: an open code PR update guards newly added scenarios and preserves the frozen anchor',async t=>{
+  const {f,run,vector}=await replayArea(t);const saved=f.record().replayBaseline;
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  assert.equal((await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts())).exitCode,0);
+  assert.match(f.prs[1].body,/^Code replay: PASS/);
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED.*refund\.json/);
+  assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
+});
+
+test('2553: a clean final prompt head already published externally refreshes before code entry',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  f.git(run.root,'add','.');f.git(run.root,'commit','-qm','Publish reviewed scenario');
+  f.git(run.root,'update-ref',`refs/remotes/origin/${f.record().branch}`,f.git(run.root,'rev-parse','HEAD'));
+  const pushes=f.pushes.length;
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,0,result.message);assert.equal(f.pushes.length,pushes);
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/refund.json']);
+});
+
+test('2553: final code entry refuses a prompt branch behind its published head',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});const saved=f.record().replayBaseline;
+  const head=f.git(run.root,'rev-parse','HEAD');
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  f.git(run.root,'add','.');f.git(run.root,'commit','-qm','Published scenario');
+  f.git(run.root,'update-ref',`refs/remotes/origin/${f.record().branch}`,f.git(run.root,'rev-parse','HEAD'));
+  f.git(run.root,'reset','--hard',head);
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,1);assert.match(result.message,/behind its published head/);
+  assert.equal(f.record().gate.kind,'ask-code');assert.deepEqual(f.record().replayBaseline,saved);
+});
+
+test('2553: merged prompt branch retains its published anchor on final code entry',async t=>{
+  const {f,run}=await replayArea(t,{stopAtPrompt:true});const saved=f.record().replayBaseline;
+  f.mergedNumbers.push(f.prs[0].number);
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,0,result.message);assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.deepEqual(f.record().replayBaseline,saved);
 });

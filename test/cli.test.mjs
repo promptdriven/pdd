@@ -16,9 +16,9 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['workflow.run', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'mcp', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
-    ['completion', 'zsh'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
+    ['completion', 'zsh'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
@@ -49,7 +49,12 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
+  // RUNBOOK §21's installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
+  assert.deepEqual(names.filter(name => name.startsWith('test/')).sort(), [
+    'test/runtime/fake-database.json', 'test/runtime/fake-decision.json', 'test/runtime/fake-factory.json',
+    'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
+  ]);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);
@@ -158,11 +163,11 @@ test('workflow evidence routes required saved summary file without progressing s
 });
 
 test('Try accepts named local launchers while workflow agent choices stay bounded', () => {
-  for (const name of ['Codex (account-b)', 'Claude (account-a)', 'codex', 'claude', 'gemini']) {
+  for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
     const plan=parseArgv(['try','my-story','--agent',name]);
     assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
   }
-  for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (account-b)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
     assert.doesNotMatch(completion,/try:--agent\)/);

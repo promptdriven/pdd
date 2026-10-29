@@ -20,3 +20,10 @@ A home skill folder never overrides a workflow that the package ships (same `pdd
 - `formatWorkflowList(list, {json})` returns text. JSON is `{"workflows":[{"name","skill","source","dir","areas"}],"default":null}`. Plain text is one line per workflow with its areas, gates (a `before` approval shows as `approve → pr`) and source, then "Listing starts no work. Use pdd workflow run NAME ISSUE."
 
 Check the shape: version 2; at least one area; names and steps are lowercase words joined by single hyphens; `optional` steps are in `steps`; the last area has gate `pr`; every other area has gate `approve`, or gate `pr` with `"then":"ask-code"` (pdd opens PR 1 there and asks whether to go on to the code area). Keep `then` in the returned area. A `pr` area may also have `"before":"approve"`: the person approves the area before pdd opens its PR (0.1.4: Try before PR 1). Keep `before` in the returned area; any other `before` is invalid. An invalid file that wins the lookup throws an error that names the workflow and the file. An unknown name throws an error that lists the known workflows.
+
+## Structured replay opt-in
+
+A pr area may explicitly set replay_evidence to `pdd.replay-evidence.v1`. Preserve this exact field in returned
+areas and saved runs. Reject an unsupported version or a policy on a non-pr area. The bundled feature/bug
+code areas set it; small-change and custom areas have no implicit policy. Never retrofit a policy onto a
+saved area from the current package. [Replay evidence](workflow-replay.prompt.md) owns the manifest contract.

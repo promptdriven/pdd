@@ -37,7 +37,7 @@ test('CHAT5 signed-out choice explains state without subprocess or fallback',asy
 });
 
 test('CHAT6 public parser and mode conflicts fail before sign-in',async t=>{
- const {parseArgv}=await import('../src/argument-parser.mjs');assert.equal(parseArgv(['try','story','--agent','claude']).options['--agent'],'claude');assert.equal(parseArgv(['try','--agent','Codex (account-b)']).options['--agent'],'Codex (account-b)');
+ const {parseArgv}=await import('../src/argument-parser.mjs');assert.equal(parseArgv(['try','story','--agent','claude']).options['--agent'],'claude');assert.equal(parseArgv(['try','--agent','Codex (work5)']).options['--agent'],'Codex (work5)');
  const {runTry}=await import('../src/runtime-client.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const fixture=harbor(t),{ports,clock}=portsFor({HOME:fixture.home,PDD_STATE_DIR:fixture.state});
  for(const mode of ['--no-wait','--cli','--serve','--stop','--save-last'])assert.equal(await runTry({cwd:fixture.repo,words:['place-order'],options:{'--agent':'codex',[mode]:true}},ports),2);
  assert.equal(clock.gh.length,0);
@@ -65,13 +65,13 @@ test('CHAT9 approval collection cannot block relay heartbeats',async()=>{
  const b=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await b.run(async()=>{ticks++;await wait;return true});assert.ok(polls>=2);assert.ok(ticks>=1);
 });
 
-const namedDefinitions=[{id:'custom-work',name:'Codex (account-b)',kind:'codex',command:'/private/codex',env:{CODEX_HOME:'/private/slot',SECRET_TOKEN:'slot-secret'}}];
+const namedDefinitions=[{id:'custom-work',name:'Codex (work5)',kind:'codex',command:'/private/codex',env:{CODEX_HOME:'/private/slot',SECRET_TOKEN:'slot-secret'}}];
 test('CHAT10 named selection maps wire ID to private definition without relay leakage',async()=>{
  let polls=0,discovered,asked;
  const s=setup((c,{controller})=>{if(c.path.endsWith('/connect'))return connect(c);if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'custom-work',message:{id:ID,text:'help',agent:'custom-work',context:{}}}}}return{status:200,json:{ok:true}}},{env:{BASE:'kept'},discoverAgents:async args=>{discovered=args;return [{...namedDefinitions[0],state:'ready'}]},askAgent:async args=>{asked=args;return{say:'Ready',fill:null}}});
  s.context.agentDefinitions=namedDefinitions;
- const b=await createAgentBridge(s.context,{},ID,{'--agent':'Codex (account-b)'},'https://runtime.example/s/abc/');await b.run();
- assert.deepEqual(discovered.definitions,namedDefinitions);assert.equal(s.calls.find(c=>c.path.endsWith('/connect')).body.selected,'custom-work');assert.deepEqual(asked.definition,namedDefinitions[0]);assert.equal(asked.agent,'custom-work');assert.deepEqual(asked.env,{BASE:'kept'});assert.equal(s.saved.at(-1).agent_choice,'Codex (account-b)');
+ const b=await createAgentBridge(s.context,{},ID,{'--agent':'Codex (work5)'},'https://runtime.example/s/abc/');await b.run();
+ assert.deepEqual(discovered.definitions,namedDefinitions);assert.equal(s.calls.find(c=>c.path.endsWith('/connect')).body.selected,'custom-work');assert.deepEqual(asked.definition,namedDefinitions[0]);assert.equal(asked.agent,'custom-work');assert.deepEqual(asked.env,{BASE:'kept'});assert.equal(s.saved.at(-1).agent_choice,'Codex (work5)');
  const wire=JSON.stringify(s.calls);for(const secret of ['/private','slot-secret','CODEX_HOME','"kind"','"command"','"env"'])assert.ok(!wire.includes(secret),secret);
 });
 test('CHAT11 legacy preferences migrate to names and empty definitions fail before network',async()=>{
@@ -89,8 +89,8 @@ test('CHAT13 public named Try retains launcher configuration only in private bri
  const {runTry}=await import('../src/runtime-client.mjs'),{harbor,portsFor,fakeRuntime}=await import('./runtime-fake.mjs');const {mkdirSync,writeFileSync}=await import('node:fs'),{join}=await import('node:path');
  const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});writeFileSync(join(f.home,'.config/pdd/agents.json'),JSON.stringify({agents:namedDefinitions.map(({name,kind,command,env})=>({name,kind,command,env})),include_defaults:false}));
  const fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}}});
- let seen;const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{agentBridge:async(context,test,id,options,link)=>{seen=context.agentDefinitions;assert.equal(options['--agent'],'Codex (account-b)');return{url:link,run:async()=>0,close:async()=>{}}}});
- assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'Codex (account-b)'}},ports),0);assert.equal(seen[0].command,'/private/codex');assert.equal(seen[0].env.SECRET_TOKEN,'slot-secret');assert.ok(!JSON.stringify(fake.posts).includes('slot-secret'));assert.ok(!JSON.stringify(fake.posts).includes('/private/codex'));
+ let seen;const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{agentBridge:async(context,test,id,options,link)=>{seen=context.agentDefinitions;assert.equal(options['--agent'],'Codex (work5)');return{url:link,run:async()=>0,close:async()=>{}}}});
+ assert.equal(await runTry({cwd:f.repo,words:['place-order'],options:{'--agent':'Codex (work5)'}},ports),0);assert.equal(seen[0].command,'/private/codex');assert.equal(seen[0].env.SECRET_TOKEN,'slot-secret');assert.ok(!JSON.stringify(fake.posts).includes('slot-secret'));assert.ok(!JSON.stringify(fake.posts).includes('/private/codex'));
 });
 
 // Keep the production bridge enabled: the shared fake's compatibility switch must not hide non-TTY behavior.
@@ -154,4 +154,18 @@ test('saved collection notices are small, once-only, and callback failures do no
 test('deterministic pass needs no available agent and preserves signed-out state',async()=>{
  let polls=0;const s=setup((c,{controller})=>{if(c.path.endsWith('/connect'))return{...connect(c),json:{...connect(c).json,features:['progress','run_events']}};if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'claude',message:{id:'pass1',kind:'run',text:'Run finished',agent:'claude',context:{last_answer:{id:'action1',entry:{entry_path:entry.entry_path,operation:'main'},input:{argv:['--help']},lossless:true,report:{program_result:{stdout:'help\n'}}}}}}};}return{status:200,json:{ok:true}};},{askAgent:async()=>{throw Error('No provider needed');},guidePorts:{readAgentScenarios:()=>[{path:'tests/tool.json',doc:{schema_version:'prompt-runtime.program-scenario.v1',story_path:'user_stories/tool.md',initial_world:{},criteria:[{id:'AC1',text:'Help prints help'}],steps:[{step_id:'help',entry_path:entry.entry_path,operation:'main',input:{argv:['--help']},checks:[{criterion_id:'AC1',target:'result',path:'/stdout',op:'equals',value:'help\n'}]}]}}],buildProjectCard:()=>({text:'Try guide',fingerprint:'x',sourceFingerprint:'x',productRules:[]})}});
  const b=await createAgentBridge(s.context,{storyPath:'user_stories/tool.md',path:'tests/tool.json'},ID,{'--agent':'claude'},'https://runtime.example/s/abc/');await b.run();const posted=s.calls.find(c=>c.path.endsWith('/reply')).body;assert.match(posted.say,/AC1.*pass/);assert.equal(posted.agents.find(a=>a.id==='claude').state,'signed_out');assert.match(s.output.join(''),/PDD checked the run against the local test cases/);assert.doesNotMatch(s.output.join(''),/Claude could not answer|Claude answered/);
+});
+test('negotiated run reaches adapter and reply only for current manual requests',async()=>{
+ for(const kind of ['chat','run']){
+ let polls=0,captured;
+ const s=setup((c,{controller})=>{
+ if(c.path.endsWith('/connect'))return{...connect(c),json:{...connect(c).json,features:['apply','run']}};
+ if(c.path.includes('/poll')){if(++polls>1){controller.abort();return{lost:true}}return{status:200,json:{connected:true,selected:'codex',message:{id:ID,kind,text:'Please execute that action',agent:'codex',context:{}}}};}
+ return{status:200,json:{ok:true}};
+ },{askAgent:async options=>{captured=options;return{say:'Preparing action',fill:{entry:'prompts/main.prompt.md#main',input:{argv:['list']}},apply:true,run:true};}});
+ const bridge=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await bridge.run();
+ assert.equal(captured.supportsRun,true);assert.equal(captured.context.requestKind,kind);
+ assert.deepEqual(s.calls.find(c=>c.path.endsWith('/connect')).body.features,['apply','progress','run_events','expect','save','run']);
+ assert.equal(s.calls.find(c=>c.path.endsWith('/reply')).body.run,kind==='chat'?true:undefined);
+ }
 });

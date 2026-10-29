@@ -8,7 +8,8 @@ current gate, decision semantics, persistence and application of the decision.
 This is evidence of a user turn, not proof against an agent modifying local files
 or proof that arbitrary user text means approval.
 
-Preserve exact worktree identity and the inclusive session-start window. A native session ID is optional. When the caller
+New standalone interface; preserve the worktree/window matching rule from the
+existing session-file matcher. A native session ID is optional. When the caller
 knows it (pdd started the chat with that ID, or Herdr reported it), only that
 session's file can match.
 

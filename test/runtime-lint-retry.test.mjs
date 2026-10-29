@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
 
-// Wire shape independently transcribed from the documented retryable queue-capacity response.
+// Wire shape independently transcribed from the saved staging queue refusal and server/work_queue.py.
 function queuedOut(f, id, retryable = true) {
   const refusal = { code:'lint-queue-timeout', message:'Lint is waiting for a free slot.', details:{retryable,retry_after:5,max_wait_seconds:20} };
   return f.job(id,'lint','refused',{exitCode:1,refusals:[refusal],report:{verdict:'refused',provider_calls:0,dispatch:'not_started',refusal,lint:{complete:false,tests:[]}}},0);

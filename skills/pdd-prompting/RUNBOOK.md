@@ -340,6 +340,30 @@ Then make sure that every criterion still has a check, and run `pdd check <story
 
 ## 13. Give your app a screen (app map)
 
+### The drawing is the layout spec
+
+When a screen prompt links a `.ui.svg`, that drawing is authoritative for its visible parts, words, spatial order, stable ids and named state. It is a comparison reference, not an optional illustration. Prose and drawing must describe the same parts; prose owns behavior and the sources of dynamic values. Declare the state and viewport beside the view and name each region/control id in the appearance rules. Mark unowned surroundings `data-context-only="true"` or class `context-only`. Keep DOM/focus order in accessibility prose; SVG source order does not set it.
+
+Before building, run `pdd check --lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd check --lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
+
+Build reads the linked drawing as the layout spec and implements its parts, words, ids, order and state. After building, serve the real page in the reference state and run:
+
+```sh
+pdd check --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
+```
+
+This uses installed headless Chrome/Chromium at the SVG viewport, no AI or runtime calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
+
+Verification must put a **Screen vs drawing** table in `verify.md` and in the body of the code PR (code space):
+
+| Part | Drawing | Screen | Result |
+|---|---|---|---|
+| Named id or visible text | Expected state/region | Observed state/region | Pass or concrete failure |
+
+Keep actual rows and the command's exit code. A missing/hidden part, wrong region or inverted order fails verify like a failing test. A missing browser, page or reference leaves verify unproved; never mark it passed. Return to build and compare again until the screen matches; never remove required parts from the reference to obtain a pass. A failing table remains a failure if workflow retry limits are reached. Include every linked reference state affected by the change. A 2048 screen without the drawing's score box, seed box or READY bar must fail even when behavior tests pass.
+
+### App map
+
 The Try page has a **Screen** tab only when the repo has an app map: a JSON file that connects prompt operations to
 screens. It holds no code. Without it, the person uses forms (or a terminal for `cli`).
 - `pdd try` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
@@ -464,40 +488,68 @@ Report: https://…/r/617480ac-…
 - In a Try, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
 - The Try page says "1 AI call each". A step with saved data or a prompt call uses 2 to 3.
 
-## 17. The code PR (PR 2): test vectors and the formal check
+## 17. Code space: replay evidence and the formal check
 
-The runtime proves the prompt. PR 2 must prove that the **code** does the same.
+Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
+that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
+identity only. It does not independently prove execution or prompt/code equivalence.
 
-**Test vectors: the PR 1 cases, run on the real code.**
-- Use `tests/<story>.json` from PR 1 as it is. Never edit it in PR 2. If an expected value looks wrong, stop and ask
-  the person: that is a PR 1 change.
+**Test vectors: the approved cases, run on the real code.**
+- Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
+  wrong, return to prompt space for the person's approval and start a run with the approved vectors.
 - In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
   It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
   (function, command or route). Steps run in order and share state, as on the runtime.
 - Map each check target: `result` → the returned value at the path; `error` → the error code; `world` → the app's
   store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
-  "Not replayed", with the reason. It is never a pass.
+  "Not replayed", with the reason. It is never a pass. Missing checks and unexecuted operations are not replayed.
 - In `verify`, run the replay test. Then run it again on a throwaway copy with ONE planted mistake (in a bug run:
-  the old code). At least one case must fail there. A crash does not count.
-- Write the table into `verify.md`: case, criterion, input, expected, prompt (PR 1 check), code (got), result.
-  Also show that `tests/<story>.json` is unchanged since PR 1.
-- A ✗ case goes back to `build` (at most 2 rounds). If it still fails, PR 2 opens with "✗ N vectors fail" as its
-  first line.
+  the old code). At least one assertion must fail there. A crash does not count.
+- Write the table into `verify.md`: case, criterion, input, expected, prompt check, code (got), result.
+  Also show that `tests/<story>.json` is unchanged since prompt space.
+- A ✗ case goes back to `build` (at most 2 rounds). If it still fails, the code-space PR opens with
+  "✗ N vectors fail" as its first line. Keep actual failures; never change expected values to get a pass.
 
-**The formal check (the new `formal` step, done by an agent that did not write the code).**
-- Every PR 2 has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
+**The formal check (done by an agent that did not write the code).**
+- Every code-space PR has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
   **Failed + counterexample**, **Not run + reason** or **Not applicable + reason**.
-- It is worth it for a precise rule with a clear forbidden result: money and rounding, limits, who may do what,
+- Use it for a precise rule with a clear forbidden result: money and rounding, limits, who may do what,
   order of states, parsers. It is not applicable for looks, wording or plain wiring.
-- Take the rule from the Story's `## Rules to check` section, which the person approved in PR 1. Never take it
-  from the code.
+- Take the rule from the approved Story's `## Rules to check` section. Never take it from the code.
 - Default method: a **bounded check**. Loop over EVERY input in a small, stated range, call the real code, and
   compare with an oracle written from the Story. State the bounds in the PR.
 - Use a solver (Z3, or CrossHair for Python) only when the range is too big to loop. Replay each counterexample
   and 2 witnesses on the real code.
 - Control: the planted mistake must fail the formal check too. If it does not, write "Not run: the check cannot
-  see the mistake".
+  see the mistake". A crash is not assertion detection.
 - Commit the replay test and the formal test as normal tests. Do not commit raw logs.
+
+**Structured record for a workflow run.**
+New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
+custom workflows without that field keep their publication behavior; small-change has no replay policy.
+After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
+This continues through the final approval publication before code space. Final approval refuses unpublished
+scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
+
+Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
+with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.
+It records the run ID, current Git-visible content fingerprint, every original vector hash, per-check outcomes,
+public-boundary executions, exact counts, a semantic mutation control and a typed formal result with scope and
+reason. Keep this JSON in the run folder, outside the Git-visible source; never commit it or raw logs.
+Missing/unmapped checks need honest not-replayed outcomes, and a control that was not run needs a reason.
+
+pdd revalidates immediately before publishing, after committing leftovers, and when updating an open PR.
+It independently inventories current changed scenario files against the saved run base with exact
+NUL-delimited Git paths, including non-ASCII names. A scenario absent from the frozen anchor makes replay
+BLOCKED even when all anchored checks pass; an unavailable inventory cannot establish PASS.
+Changed, absent, empty or unreadable original files cannot pass even with a new source fingerprint. Missing,
+malformed or stale records produce prominent **BLOCKED** / **NOT REPLAYED** status above prose and prompt
+check results. Actual assertion or formal failures remain publishable with a failure line. An existing PR is
+marked publication-pending before source is pushed; a failed final description update leaves it pending.
+A structurally valid agent-reported replay pass can coexist with an explicit formal **Not run** or
+**Not applicable**; neither means a formal proof. Read the counts, scope, reason and trust boundary together.
 
 ## 18. Patterns: a pure function and a state sequence
 
@@ -612,3 +664,213 @@ Allowed CSS functions are `rgb`, `rgba`, `hsl`, `hsla`, `calc`, `min`, `max` and
 filters. A removed element, attribute or declaration cannot satisfy a structured HTML assertion.
 
 The all-Story check estimate includes entry executions, declared saved-data operations and nested prompt-call allowances; conditional operations can use fewer calls. The hard `--max-calls` cap stays authoritative. Named HTTP responses include `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap` and `x-pdd-usage-source` (`runtime` for a receipt, `last-known` for local zero-call responses). Startup shows session usage on stderr. Program stdout, HTTP bodies and status codes retain their program values; CLI stderr carries program text followed by accounting. No model call or repeat dispatch is made for accounting.
+
+## 21. Fake the outside world
+
+Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Declare the actual dependency's operations as Runtime resources, and supply their replies in the test. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
+
+The examples below specify small JavaScript modules with matching prompt contracts; native execution is reported separately. Their scenarios are synthetic, with exact expected results chosen before execution. The commands run in a clone of pdd (`git clone -b alpha https://github.com/promptdriven/pdd`), from its root; in your own repository, copy the linked files with their paths first. Each command first runs zero-call server lint, then a live prompt check with a hard ceiling; every step requests `gpt-6.1-sol`. A ceiling is not a charge. Native tests establish code behavior separately.
+
+```sh
+pdd check --fill-hash
+pdd check --lint fake-database fake-files fake-hash fake-service fake-decision fake-factory
+pdd check fake-database --max-calls 9
+# Substitute fake-files, fake-hash, fake-service, fake-decision or fake-factory.
+```
+
+Each linked prompt includes complete schemas, resource declarations and limits; each scenario includes its starting world, bindings and checks. Copy the complete pair and its Story, then replace the module-owned behavior and expectations from your requirement. Never pass the test or Story as program context.
+
+### Seed a SQL connection
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/database.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-database.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-database.json)
+
+Bind one logical connection to one `world_pointer` for all reads, writes and transactions. Starting rows live under `rows`; SQL executes in real in-memory SQLite. Named scalar argument `id` binds `:id`. Inspect `/database/rows/books`, not SQLite snapshot internals. For dynamic nullable parameters use `statement_argument_pointer` plus JSON-text `parameters_argument_pointer`; never interpolate values into SQL.
+
+```json
+{
+  "initial_world": {
+    "database": {
+      "schema": [
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+      ],
+      "rows": {
+        "books": [
+          {
+            "id": 1,
+            "title": "Dune"
+          }
+        ]
+      }
+    }
+  },
+  "simulation": {
+    "db.find": {
+      "action": "sql.execute",
+      "world_pointer": "/database",
+      "statement": "SELECT title FROM books WHERE id = :id",
+      "result_mode": "rows",
+      "result_template": {
+        "rows": []
+      },
+      "result_value_pointer": "/rows"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8).
+
+### Read UTF-8 files
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/files.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-files.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-files.json)
+
+Files are keyed by exact POSIX path, each with UTF-8 `content` and `is_symlink`. `blob.write` additionally selects a content argument; `blob.stat` supports exists/is_symlink/size. These fakes never open a host path. Ownership, permissions, races, fsync and atomic rename require explicit ports and native tests.
+
+```json
+{
+  "initial_world": {
+    "files": {
+      "/notes/hello.txt": {
+        "content": "Hello\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/91df0610-5ecd-4b3b-833f-58a5162d2690).
+
+### Hash exact bytes
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-hash.json)
+
+The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the runtime canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
+
+```json
+{
+  "initial_world": {},
+  "simulation": {
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/5b26a5ee-1b45-4a79-beb6-ae1dd4c891a3).
+
+### Inject a fixed-answer callback
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/service.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-service.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-service.json)
+
+The native `lookup(service, id)` uses the supplied callback; resource `service.lookup` binds that same boundary. `port.write` appends actual argument objects at `/requests` and returns the fixed `result_template`. Assert both the reply and exact request list. The fixed answer does not prove authentication, transport, timeout handling or any live service effect. Never include credentials in fixtures.
+
+```json
+{
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "label": "Available"
+      }
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 2 AI calls](https://runtime.promptdriven.ai/r/53737185-9685-408f-83ca-be9e13c6ae79).
+
+### Separate decide from do
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/decision.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-decision.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-decision.json)
+
+`decideReply` is a pure public decision over supplied facts; `doLookup` obtains those facts through the injected callback and applies the same rule. The first step proves an unavailable decision without I/O; the second proves the exact effect request and available result. Split only when the native design benefits: SQL and callbacks do not require a split merely to bind them.
+
+```json
+{
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": true
+      }
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [4/4 checks · 3 AI calls](https://runtime.promptdriven.ai/r/7cd3364c-d048-46a0-b7a3-41194739405c).
+
+### Keep factory instances with handles
+
+[Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/factory.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-factory.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-factory.json)
+
+Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"Greeter","resource":"instances"}]`, and write-access collection resource `instances`. Factory entry `instance` is `{"kind":"factory","type":"Greeter","path":"/handle"}`; method uses kind `method` with the same type/path. Mark both handle fields with the `handle` convention. Store captured state under the executor-issued `instance_handle`; never fabricate a handle or expose closure configuration as a new native method argument. The next step takes `{"$step_result":{"step_id":"create","path":"/handle"}}`. Native callers still receive an object with a method; the handle is its JSON transport identity.
+
+```json
+{
+  "initial_world": {
+    "instances": []
+  },
+  "simulation": {
+    "instances.store": {
+      "action": "collection.merge",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/config",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "instances.load": {
+      "action": "collection.get",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    }
+  }
+}
+```
+
+Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptdriven.ai/r/eaa3c792-986a-498c-8970-5d67181d179e).
+
+A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
+## Use the Try tools when they are available
+
+The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's Try, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the Try's call budget and appears in the Try page's history; inspect remaining calls before more work.
+
+Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd check`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd try STORY`.

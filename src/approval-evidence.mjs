@@ -1,8 +1,9 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 52d6a66fc7ec0a62f27eb18a4e862d91156494a9f43be9e4a0788a33654c2ee0).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 26ec261b3bfc7a60d463ead4c0fcbcb70ad4f518caa2e1db145aa1a8c41b8d61).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 
+// Match a workflow stage to its agent session files.
 const sessionFile = /^rollout-[^/]+\.jsonl$/;
 const sessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const epoch = value => {

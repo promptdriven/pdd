@@ -6,6 +6,34 @@ All new runs use the explicit session `pdd`, never the person's `default` or a p
 
 Inputs identify the run UUID, canonical repository (`owner/repo`) verified against the Git origin remote by the worktree assignment owner, source checkout, common Git directory, assigned run cwd, issue number, workflow and stage. Ports supply a Herdr command function already bound to `pdd`, an awaited checkpoint, and optionally a state directory (normally the person's local PDD state). No credential/configuration reads or tool-version checks belong here.
 
+## Repository parent and confirmed pre-agent recovery
+
+Resolve input sourceRoot through the worktree owner's read-only verified repository-parent lookup before
+allocating. Use that root for Herdr's repository workspace, including a verified bare primary; retain the
+actual invoking sourceRoot separately from the assigned run cwd. Never treat a linked caller as a parent.
+Pass the optional execFile port through to that identity lookup; no bypass or independently guessed path.
+
+A structured `linked_worktree_source` rejection of worktree open is confirmed before any child workspace or
+native launch. Persist that run as refused with the code, retaining its original cwd/runId and repository binding.
+On a later explicit open, retry only this refused action after inventory shows no workspace for that cwd.
+Other failures/lost replies retain uncertain intent and must never authorize another allocation.
+
+For an affected saved run, optional input preAgentRefusal=`linked_worktree_source` conveys the runner's
+confirmed original pre-agent refusal. A legacy intent without a returned workspace/root identity can become
+refused only with this evidence and no inventory workspace at its cwd.
+Always reassert the refused run's saved common directory, assigned cwd and issue/workflow label before
+any recovery persistence or mutation; a refusal does not authorize rebinding those identities.
+For a legacy repository workspace created at the linked caller, require same saved common directory and sourceRoot, no other run sharing it,
+and this one confirmed refused run. Archive the old repository entry, preserve its workspace untouched,
+create a verified parent workspace under an unused label, and rebind only that refused run to it. Never
+adopt, close or rename the old workspace. Unknown child allocation or an unrelated identity blocks recovery.
+A further confirmed refusal stays retryable. Before retrying, durably mark the new attempt; a lost retry reply
+is uncertain even when an earlier startup warning records a refusal. Never reuse that warning to retry again.
+Pin the parent workspace root tab/pane/terminal returned at creation. If parent inventory lacks Git metadata,
+reuse only with those same root identities and exact parent cwd, one tab and one pane; conflicting metadata refuses.
+Apply that same repository-parent identity rule to reuse, name qualification and idle cleanup. Parent Git metadata
+must identify a non-linked parent; absent metadata cannot justify accepting changed root identities.
+
 ## Allocation and identity
 
 Keep a durable, private ownership registry. A matching repository identity and common Git directory reuse one repository workspace. Refuse a second checkout identity for the same repository instead of silently opening its worktree against the wrong repository. Name the repository workspace after its repo; on a name clash qualify both owned repository labels with owner/repo. HD2: when another workspace in session `pdd` already holds the short label for a different folder, use `owner/repo` from the verified origin identity, even if that workspace is absent from the PDD ownership registry. The checkout folder name must not replace the origin owner/repo. Never rename or adopt an unrelated workspace; refuse an occupied qualified label.

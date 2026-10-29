@@ -50,6 +50,9 @@ test('the real Herdr transport always targets session pdd and reports Herdr JSON
   const root = temp(t), bin = join(root, 'bin'), log = join(root, 'calls.jsonl');
   const padding = 'x'.repeat(1024 * 1024), errorMessage = 'tab missing not found: ' + padding;
   mkdirSync(bin);
+  // A caller's package scope must not change the fake CLI's module format.
+  writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
+  writeFileSync(join(bin, 'package.json'), '{"type":"commonjs"}\n');
   writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(args)+'\\n');
 if(args.includes('missing')){process.stderr.write(JSON.stringify({error:{code:'tab_not_found',message:${JSON.stringify(errorMessage)}}}));process.exitCode=1;}
 else process.stdout.write(args.includes('run')?'':JSON.stringify({result:{ok:true,padding:${JSON.stringify(padding)}}}));\n`, { mode: 0o755 });

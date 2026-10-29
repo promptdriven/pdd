@@ -55,7 +55,7 @@ export async function fakeRuntime(t, answer) {
   t.after(() => { server.closeAllConnections(); server.close(); });
   fake.origin = `http://127.0.0.1:${server.address().port}`;
   fake.job = (id, command, state, result = null, calls = 0) => ({ requestId: id, id, command, state, engine_sha: 'eae2202a68d00ab762fcbbf1eba0d8607a132a15',
-    result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('md5').update(id).digest('hex')}` });
+    result, usage: usage(calls), report_url: `${fake.origin}/r/${createHash('sha256').update(id).digest('hex').slice(0, 32)}` });
   fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) =>
     fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: { verdict: 'passed', program: { prompts, refused_prompts: refused } } });
   fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
