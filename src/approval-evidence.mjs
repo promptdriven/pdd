@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-evidence.prompt.md (sha256: f60f10e1dc83290074c5f5bd572e991b59dc564e2d1a1cf8bf04a556f949764d).
+// Generated from prompts/cli/approval-evidence.prompt.md (sha256: 26ec261b3bfc7a60d463ead4c0fcbcb70ad4f518caa2e1db145aa1a8c41b8d61).
 import * as nodeFs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -56,7 +56,7 @@ function identity(row, agent) {
   return timestamp === null ? null : { id: meta.id, cwd: meta.cwd, timestamp };
 }
 
-// Text selection and Claude exclusions adapted from pdd-workflow pane-transcript.mjs.
+// Select user text and exclude generated Claude records.
 function textBlocks(content, types) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -66,8 +66,24 @@ function textBlocks(content, types) {
 
 function generatedContext(text) {
   const value = text.trim();
-  return value.startsWith('# AGENTS.md instructions for ') || /^# AGENTS\.md instructions\s*\n\s*<INSTRUCTIONS>/.test(value)
-    || /^(?:<environment_context>[\s\S]*?<\/environment_context>\s*|<permissions instructions>[\s\S]*?<\/permissions instructions>\s*)+$/.test(value);
+  if (value.startsWith('# AGENTS.md instructions for ')) return true;
+  const header = '# AGENTS.md instructions';
+  if (value.startsWith(header)) {
+    const rest = value.slice(header.length), marker = rest.indexOf('<INSTRUCTIONS>');
+    if (marker >= 0 && rest.slice(0, marker).includes('\n') && !rest.slice(0, marker).trim()) return true;
+  }
+  // Each active kind can consume arbitrary inner text until a matching close.
+  // A close creates a boundary where another wrapper may start. Keeping both
+  // possible kinds avoids retries across ambiguous or nested closing tags.
+  const active = new Set();
+  let boundary = true, end = 0;
+  for (const match of value.matchAll(/<\/?(?:environment_context|permissions instructions)>/g)) {
+    const closing = match[0][1] === '/', kind = match[0].slice(closing ? 2 : 1, -1);
+    if (!closing && boundary && !value.slice(end, match.index).trim()) active.add(kind);
+    boundary = closing && active.has(kind);
+    end = match.index + match[0].length;
+  }
+  return end > 0 && boundary && !value.slice(end).trim();
 }
 
 function userText(row, agent, meta) {
