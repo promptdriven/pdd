@@ -1,0 +1,172 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-assertion-changes.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Keeping \"PATH2\" while changing its assertion from an empty error stream to a PATH warning shows 1 → 1 tests and the exact old → new line."
+    },
+    {
+      "id": "AC2",
+      "text": "Removing one assertion in a kept case shows its old line → (removed); assertions in a wholly removed case appear only as a named test removal."
+    },
+    {
+      "id": "AC3",
+      "text": "An unchanged assertion produces no changed-assertion entry, and a newly added assertion shows (added) → its exact line."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "same-count-changed-expectation",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/path.test.mjs",
+            "newPath": "test/path.test.mjs",
+            "before": "test('PATH2', () => {\nassert.equal(stderr, '');\n});\n",
+            "after": "test('PATH2', () => {\nassert.match(stderr, /PATH selects:/);\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"assert.equal(stderr, '');\" → \"assert.match(stderr, /PATH selects&#58;/);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"assert.equal(stderr, '');\" → \"assert.match(stderr, /PATH selects&#58;/);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "inline-declaration-assertion",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/path.test.mjs",
+            "newPath": "test/path.test.mjs",
+            "before": "test(\"PATH2\", () => assert.equal(stderr, \"\"));\n",
+            "after": "test(\"PATH2\", () => assert.match(stderr, /PATH selects:/));\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"test(\\\"PATH2\\\", () =&#62; assert.equal(stderr, \\\"\\\"));\" → \"test(\\\"PATH2\\\", () =&#62; assert.match(stderr, /PATH selects&#58;/));\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"test(\\\"PATH2\\\", () =&#62; assert.equal(stderr, \\\"\\\"));\" → \"test(\\\"PATH2\\\", () =&#62; assert.match(stderr, /PATH selects&#58;/));\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "deleted-assertion-and-case",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/a.test.mjs",
+            "newPath": "test/a.test.mjs",
+            "before": "test('keep', () => {\nassert.ok(true);\n});\ntest('gone', () => {\nassert.equal(2, 2);\n});\n",
+            "after": "test('keep', () => {\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (\"gone\").\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" \"assert.ok(true);\" → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (\"gone\").\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" \"assert.ok(true);\" → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "unchanged-and-added",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/a.test.mjs",
+            "newPath": "test/a.test.mjs",
+            "before": "test('keep', () => {\nassert.ok(true);\n});\n",
+            "after": "test('keep', () => {\nassert.ok(true);\nexpect(value).toBe(2);\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" (added) → \"expect(value).toBe(2);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" (added) → \"expect(value).toBe(2);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

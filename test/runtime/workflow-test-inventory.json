@@ -1,0 +1,172 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-test-inventory.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "For three named cases reduced to two by removing \"gone\" and \"also gone\" and adding \"new\", the report shows 3 → 2 tests and names both removed cases \"gone\" and \"also gone\"."
+    },
+    {
+      "id": "AC2",
+      "text": "A renamed test file keeps matching case names; a deleted test file names its removed case, and an added file shows 0 → 1 tests, preserving unusual paths."
+    },
+    {
+      "id": "AC3",
+      "text": "Comparison requests retain the exact saved base and committed head; unavailable data is shown as unavailable rather than none."
+    }
+  ],
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "snapshot.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": false,
+        "reason": "snapshot unavailable",
+        "files": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "named-removals",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/a.test.mjs",
+            "newPath": "test/a.test.mjs",
+            "before": "test('keep', () => {});\ntest('gone', () => {});\ntest('also gone', () => {});\n",
+            "after": "test('keep', () => {});\ntest('new', () => {});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (\"gone\", \"also gone\").\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (\"gone\", \"also gone\").\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "rename-delete-add",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/old.test.mjs",
+            "newPath": "test/renamed.test.mjs",
+            "before": "test('same', () => {});\n",
+            "after": "test('same', () => {});\n"
+          },
+          {
+            "oldPath": "test/deleted.test.mjs",
+            "newPath": "",
+            "before": "it('lost', () => {});\n",
+            "after": ""
+          },
+          {
+            "oldPath": "",
+            "newPath": "tests/-新\tline\nname.test.mjs",
+            "before": "",
+            "after": "test('fresh', () => {});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (\"lost\").\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (\"lost\").\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "saved-commits-unavailable",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "collectTestInventory",
+      "input": {
+        "cwd": "/repository",
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: unavailable (\"snapshot unavailable\").\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "world",
+          "path": "/requests",
+          "op": "equals",
+          "value": [
+            {
+              "cwd": "/repository",
+              "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-inventory-snapshot-read",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}
