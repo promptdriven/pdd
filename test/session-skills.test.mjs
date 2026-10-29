@@ -24,7 +24,7 @@ function packageCopy(t) {
   for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
   const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"');
   for (const dir of [home, project]) mkdirSync(dir);
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex') };
   delete env.CLAUDE_CONFIG_DIR;
   const run = (args, extra = {}) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), ...args],
     { cwd: project, env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });

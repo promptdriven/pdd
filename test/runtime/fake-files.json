@@ -1,0 +1,51 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-files.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Reading /notes/hello.txt returns Hello followed by one newline."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/notes/hello.txt": {
+        "content": "Hello\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-note",
+      "entry_path": "examples/fakes/files.prompt.md",
+      "operation": "readNote",
+      "input": {
+        "path": "/notes/hello.txt"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/content",
+          "op": "equals",
+          "value": "Hello\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

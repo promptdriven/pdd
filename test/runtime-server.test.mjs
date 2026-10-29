@@ -225,7 +225,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(fake.posts.length, 2);
 });
 
-// Wrong: pdd gives up on a slow check after 10 min, or waits in silence (Serhan: no timeouts).
+// Wrong: pdd gives up on a slow check after 10 min, or waits in silence.
 test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
   const setup = harbor(t), sent = new Map();
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
@@ -402,7 +402,7 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
   }
 });
 
-// Wrong: the PR line hides a failure, or --json lacks the line an agent pastes (Serhan, Oct 27).
+// Wrong: the PR line hides a failure, or --json lacks the line an agent pastes.
 test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
   const setup = harbor(t);
   const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
@@ -426,14 +426,23 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
   assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
-// Wrong: the runtime address is written in more than one place, so a move needs many edits (Serhan, Oct 27).
+// Wrong: the runtime address is written in more than one place, so a move needs many edits.
 test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIME_URL overrides it', async () => {
   const { DEFAULT_RUNTIME_URL, runtimeOrigin } = await import('../src/runtime-client.mjs');
   const host = new URL(DEFAULT_RUNTIME_URL).host;
   // This test names the hosts on purpose; every other tracked file must not.
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
-  assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  // Fixed report evidence in the two runbooks is not a runtime configuration value.
+  const evidenceOnly = hit => {
+    const match = /^(RUNBOOK\.md|skills\/pdd-prompting\/RUNBOOK\.md):[0-9]+:(.*)$/.exec(hit);
+    if (!match) return false;
+    const report = new RegExp(`\\[[^\\]\\n]+\\]\\(https://${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\)`, 'g');
+    return !match[2].replace(report, '').includes(host);
+  };
+  assert.equal(evidenceOnly(`RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`), true);
+  for (const bad of [`RUNBOOK.md:1:PDD_RUNTIME_URL=${DEFAULT_RUNTIME_URL}`, `docs/cli.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`, `RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/latest)`]) assert.equal(evidenceOnly(bad), false);
+  assert.deepEqual(hits.filter(hit => !evidenceOnly(hit)).map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
   assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
   assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', '34\\.72\\.131\\.98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);
@@ -590,7 +599,7 @@ test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and f
   assert.doesNotMatch(old.out, /Where:|Fix:|Your test is fine/);
 });
 
-// Wrong: the engine warning repeats on every run (Serhan: at most once a day for each engine build).
+// Wrong: the engine warning repeats on every run.
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: '7b03d3ea8cc047ed' } } : f.normal(entry));
@@ -610,7 +619,7 @@ const draftRepo = t => harbor(t, repo => {
 const draftLint = (entry, f) => entry.method === 'POST' && entry.command === 'lint'
   ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'draft', admission_state: 'draft', interface: { calls: [] } }]) } : null;
 
-// Wrong: a draft run looks like an approved one in the table, the links, the PR line or --json (Serhan, Oct 27).
+// Wrong: a draft run looks like an approved one in the table, the links, the PR line or --json.
 test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary line and --json says DRAFT', async t => {
   const setup = draftRepo(t), fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
@@ -650,7 +659,7 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
   assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
 });
 
-// Wrong: the runtime runs on a bare IP (Serhan, Oct 27), and pdd refuses its own links or accepts a link to another host.
+// Wrong: the runtime runs on a bare IP, and pdd refuses its own links or accepts a link to another host.
 test('RUNTIME-ADDRESS2: Try and report links on the runtime domain pass; links on the old IP or any other host, port or scheme fail', async () => {
   const { runtimeOrigin } = await import('../src/runtime-client.mjs');
   const origin = runtimeOrigin({}), host = 'https://runtime.promptdriven.ai';
@@ -772,7 +781,7 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
   assert.ok(reading.err.includes(said.json.message), reading.err);
 });
 
-// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules (Serhan: runtime logic on the server).
+// Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
 test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
@@ -813,7 +822,7 @@ test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option 
     const result = await check(clean, fake, [], { '--lint': true });
     assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
   }
-  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true }]) {
+  for (const options of [{ '--lint': true, '--read': true }, { '--lint': true, '--max-calls': '5' }, { '--lint': true, '--local': true, '--details': true }, { '--local': true }]) {
     assert.equal((await check(clean, quiet, [], options)).code, 2, JSON.stringify(options));
   }
 });

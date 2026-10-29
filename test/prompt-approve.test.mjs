@@ -17,7 +17,7 @@ async function approve(setup, words, answer, { tty = true } = {}) {
   return { code, out: ports.stdout.text, err: ports.stderr.text };
 }
 
-// Wrong: an agent (no terminal) approves a prompt, or approve changes the file without a person's yes (Serhan, Oct 27: #9).
+// Wrong: an agent (no terminal) approves a prompt, or approve changes the file without a person's yes.
 test('APPROVE1: pdd approve refuses without a real terminal and changes nothing', async t => {
   const setup = harbor(t, repo => { const file = join(repo, PLACE); writeFileSync(file, asDraft(readFileSync(file, 'utf8'))); });
   const before = readFileSync(join(setup.repo, PLACE), 'utf8');

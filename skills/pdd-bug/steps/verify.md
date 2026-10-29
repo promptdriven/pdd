@@ -5,3 +5,4 @@
 - Run nearby cases and the repo's required checks.
 - Report the exact commands, exit codes and real output, and what no test covers.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
+- For a screen, run the local headless comparison in RUNBOOK §13. A Screen vs drawing table is mandatory in verify.md and the code PR; a missing part fails verify. Return to build on differences.

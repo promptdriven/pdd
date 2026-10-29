@@ -1,6 +1,6 @@
 # Prompt approve
 
-Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "approved"` (Serhan, Oct 27, #9). It is for people only: it needs a real terminal and the person's own `y`.
+Own `src/prompt-approve.mjs`. Export `runApprove({words, cwd}, ports)` (returns an exit code) and `approvePromptText(text)` (returns the approved text or null). `pdd approve PROMPT` is the one way pdd sets `"status": "approved"`. It is for people only: it needs a real terminal and the person's own `y`.
 
 ## Steps
 

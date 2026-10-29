@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -26,7 +26,7 @@ test('the shell line gives the native CLI the whole first message as one argumen
     if (agent === 'claude') { assert.deepEqual(out.argv.slice(0, -1), ['--dangerously-skip-permissions', '--session-id', id]); assert.equal(out.config, join(root, "cfg 'c'")); }
     else assert.deepEqual(out.argv.slice(0, -1), ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]);
   }
-  assert.equal(execFileSync('/bin/sh', ['-c', `ls ${JSON.stringify(root)}`], { encoding: 'utf8' }).includes('broken'), false);
+  assert.equal(readdirSync(root).some(name => name.includes('broken')), false);
   assert.match(chatCommand({ agent: 'claude', cwd, resumeId: id }), new RegExp(`claude --dangerously-skip-permissions --resume '${id}'$`));
   assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume '${id}' --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
 });

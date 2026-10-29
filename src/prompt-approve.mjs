@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 5e6a0d3ea532d868f2b3176d5445c0fd5a01bbf038e56cbbc9bb1f337de356bc).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 2037c7f4c18d9f961f3dfbd3bfe81f065f9d1ad198bf0efd31e5bc1a0c62faa4).
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep, join } from 'node:path';
