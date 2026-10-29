@@ -359,7 +359,7 @@ Each issue gets its own branch, worktree and Herdr tab. You can start several ru
 
 The PDD runtime runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd check` sends your prompts, Stories and tests there and checks each answer against its test. `pdd try` makes a link where a person can use the prompt by hand.
 
-Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; secret names, symlinks and non-regular files are refused. Unrelated source files are not sent. pdd keeps run state in `~/.pdd/runtime`, never in your repo.
+Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; secret names, symlinks and non-regular files are refused. Unrelated source files are not sent. pdd keeps run state in `~/.pdd/runtime`. The virtual CLI also keeps ignored request/result metadata in the repo’s `.pdd/try/` file mailbox; credentials stay in the owner process’s memory.
 
 The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links in each prompt's `## Dependencies`. A dependency list item may instead begin with a backticked file path, such as ``- `data/menu.json`: required runtime context``. Schema labels, code examples, installation paths and backticked names in descriptions do not declare extra files. Markdown context may declare its own Dependencies. Paths in links are relative to their declaring file; repository-root spellings also work when Git names them. A linked fragment includes the whole file. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
 
@@ -588,12 +588,16 @@ Do not paste tokens, passwords or private code.
 
 ## Use your program for real with pdd try
 
-Run `pdd try <story> --cli`. Copy the printed PATH line, then type your program's commands in your
-own terminal, or run the printed absolute path. For example: `tipjar split 100 --people 3 --tip 18 --round-up`.
-Each command runs the prompt on the runtime with your gh login; saved data stays in the same Try session.
-`--help` also runs the prompt. `--shell` opens a shell with the PATH ready. Piped UTF-8 input is forwarded when
-the prompt declares `stdin`. Program output and exit codes pass through; wrapper errors begin `pdd try:`
-and use reserved code 125. Calls can take a while because they run AI.
+Run `pdd try <story> --cli` in an owner terminal and keep it open. Setup installs your program's name beside
+`pdd`, as a link to one shared launcher; no PATH export is needed. Run the name from the repo or a nested folder,
+for example `tipjar split 100 --people 3 --tip 18 --round-up`. The owner process calls the runtime with your gh
+login; sandboxed agents exchange files only under the ignored `.pdd/try/mailbox/`, without home or network
+access. Saved data stays in the same Try. `--help` also runs the prompt. `--shell` keeps the mailbox open while
+it runs your shell. Piped UTF-8 input is forwarded only when the prompt declares `stdin`.
+Program stdout, stderr and exit codes pass through exactly; usage stays in a quiet `usage.json` file unless
+`PDD_TRY_USAGE=1` asks for a stderr usage line. Wrapper errors begin `pdd try:` and use reserved code125.
+Send one command at a time and allow10–30seconds or longer; parallel commands wait their turn for up to60seconds.
+An unknown result must not be replayed automatically. See RUNBOOK§19 for sandbox, timing and Claude permissions.
 
 Run `pdd try --save-last` to append the last command and its observed answer to the original test file.
 Review that recording before treating it as an expected answer. Stop the session with `pdd try --stop <story>`.

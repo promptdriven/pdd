@@ -24,7 +24,7 @@ test('RELEASE9: runbook and lint documentation describe current behavior', () =>
   assert.doesNotMatch(read('docs/lint-capacity.md'),/obsolete unknown wording/);
 });
 test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and Node invocation', () => {
-  const source=read('prompts/cli/try-doors.prompt.md');
+  const source=read('prompts/cli/try-launcher.prompt.md');
   assert.doesNotMatch(source,/Node shebang/);
   assert.match(source,/POSIX shell shebang.*absolute Node/);
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530049c3179bb545be051d15b0a0a2dbfb290faf0059a6ee1c5963c49d94d1f3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7e4e269daec5fab5cedb2e5a6b3a70c6df20d806d3d57b4abab9b8019a47af91).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -48,7 +48,7 @@ function authExecutable(env, preferred) {
     try {
       const stat = lstatSync(path);
       if (!stat.isFile() && !stat.isSymbolicLink()) continue;
-      if (readFileSync(path).subarray(0, 64).toString().includes('PDD Try launcher v1')) continue;
+      if (/PDD (?:shared )?Try launcher v1/.test(readFileSync(path).subarray(0, 64).toString())) continue;
       return realpathSync(path);
     } catch { /* try the next PATH directory */ }
   }
@@ -58,7 +58,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, cliBin: ports.cliBin, cliRelay: ports.cliRelay, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -171,7 +171,7 @@ function lostReply(error, origin) {
   const code = String(error?.cause?.code ?? error?.code ?? ''), cert = /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS/.test(code);
   const reason = UNREACHABLE[code] ?? (cert ? 'its TLS certificate was not accepted' : null);
   if (reason) return { lost: true, unreachable: `pdd could not reach the PDD runtime at ${origin}: ${reason} (${code}). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` };
-  return { lost: true, why: code ? `connection failed: ${code}` : error?.name === 'AbortError' ? 'no answer in time' : null };
+  return { lost: true, networkDenied: ['EPERM', 'EACCES'].includes(code), why: code ? `connection failed: ${code}` : error?.name === 'AbortError' ? 'no answer in time' : null };
 }
 const AUTH_TEXT = 'The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
 
@@ -1180,7 +1180,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     return printTryProblem(context, row);
   } catch (error) {
-    if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
+    if (options['--cli'] || options['--serve'] || options['--save-last']) { const reason = ['EACCES','EPERM'].includes(error.code) && error.path ? `Local access blocked for ${JSON.stringify(String(error.path))}. Allow access or use a writable pdd installation.` : cleanText(error.message || 'The Try could not start.', context.secrets ?? []); line(ports.stderr, `pdd try: ${reason}${error.localPath ? ` Path: ${JSON.stringify(error.localPath)}.` : ''}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
   } finally { release(); }
@@ -1257,7 +1257,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
   line(options['--cli'] || options['--serve'] ? context.ports.stderr : context.ports.stdout, budget);
   if (options['--cli'] || options['--serve']) {
     const doors = await import('./try-doors.mjs');
-    return options['--cli'] ? doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
+    return options['--cli'] ? await doors.openCli(context, test, tryId, options) : (await import('./try-http.mjs')).openServe(context, test, tryId, options);
   }
   const { ports } = context, ends = reused ? `It keeps its original 24-hour expiry; stop it with: pdd try --stop ${test.story}`
     : `It ends in 24 hours, or with: pdd try --stop ${test.story}`;
@@ -1477,15 +1477,29 @@ async function watchSavedTests(context, tryId, wait, story) {
 export const saveDoorCase = (root, saved) => addSavedCase(root, saved);
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
-  const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
+  const store = givenPorts.doorState?.store ?? stateFor(ports.env, root);
+  const identity = givenPorts.doorState?.identity ?? signIn(ports.gh, store);
   if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved runtime address is invalid.');
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
-  const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
-  store.posted(store.folder('tries'), id);
-  const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+  const networkError = () => new Stop(125, `The sandbox blocks network access. Codex: codex exec --sandbox workspace-write -c sandbox_workspace_write.network_access=true … . Claude: claude --settings '${JSON.stringify({ sandbox: { network: { allowedDomains: [new URL(origin).hostname] } } })}'. The command result is unknown if it reached the runtime; do not repeat it automatically.`);
+  const busyEnd = ports.now() + 60_000;
+  let id, reply, told = false;
+  for (;;) {
+    if (ports.signal?.aborted) throw new Stop(125, 'Stopped waiting for the Try; this command was not sent.');
+    id = ports.randomUUID();
+    const request = { requestId: id, prompt, operation, input };
+    store.posted(store.folder('tries'), id);
+    reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+    if (reply.networkDenied) throw networkError();
+    if (reply.unreachable) throw new Stop(125, `${reply.unreachable} ${networkError().message}`);
+    if (reply.status !== 409 || reply.json?.error?.code !== 'session-busy') break;
+    if (!told) { line(ports.stderr, 'pdd try: waiting for the current Try action…'); givenPorts.onDoorProgress?.(); told = true; }
+    if (ports.now() >= busyEnd) throw new Stop(125, 'The Try is still busy; this command was not sent. Try again when the current action finishes.');
+    await ports.sleep(Math.min(1000, busyEnd - ports.now()), ports.signal);
+  }
   if (reply.status && ![200, 202].includes(reply.status)) {
     throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
   }
@@ -1508,6 +1522,7 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
     await ports.sleep(ports.pollMs, ports.signal);
     if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
     const read = await runtime.get(id);
+    if (read.networkDenied) throw networkError();
     if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
     answer = [200, 202].includes(read.status) ? read.json : null;
   }
