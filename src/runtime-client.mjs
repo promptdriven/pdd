@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: ffc20ef596d4b138d3692bbe1180ed9b986321486922965ad39640601bfdc938).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: fbae52d4881a98180a1af67bf3d8cc3caec11a09a8749aaf344e2ea10e284947).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1531,7 +1531,18 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
           if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
           throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
         }
-        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report?.input_world, world: answer.result.report?.world };
+        let observation = answer.result.report ?? {};
+        if (typeof observation.action_id === 'string') {
+          try {
+            const state = await runtime.send(`/v1/try/${sessionId}/state`, { method: 'GET' }, GET_MS);
+            const matched = state.status === 200 && Array.isArray(state.json?.actions)
+              ? state.json.actions.find(action => action.action_id === observation.action_id) : null;
+            if (matched) observation = { ...observation,
+              ...(Object.hasOwn(matched, 'input_world') ? { input_world: matched.input_world } : {}),
+              ...(Object.hasOwn(matched, 'world') ? { world: matched.world } : {}) };
+          } catch { /* Observation is optional; the confirmed result remains confirmed. */ }
+        }
+        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: observation.input_world, world: observation.world };
       }
       if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
       await ports.sleep(ports.pollMs, ports.signal);

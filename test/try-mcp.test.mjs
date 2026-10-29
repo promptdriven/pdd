@@ -162,3 +162,33 @@ test('failed owner result reads block another run regardless of error wording', 
     assert.equal(dispatched, 1, `HTTP ${status} must not dispatch twice`);
   }
 });
+
+test('door snapshots use the matching immutable B1 action, never the latest world or another run', async t => {
+  const { harbor, fakeRuntime, portsFor } = await import('./runtime-fake.mjs');
+  const { runDoorCall } = await import('../src/runtime-client.mjs');
+  for (const available of [true, false]) {
+    const setup = harbor(t); let id, dispatched = 0;
+    const before = { kv: { text: 'exact\n  before' } }, after = { kv: { text: 'exact\n  after' } };
+    const fake = await fakeRuntime(t, (entry, server) => {
+      if (entry.method === 'POST') {
+        id = entry.json.requestId; dispatched++;
+        return { status: 202, json: server.job(id, 'call', 'running') };
+      }
+      if (entry.url.endsWith('/state')) return available
+        ? { status: 200, json: { world: { latest: 'another action already ran' }, actions: [
+          { action_id: 'other-run', input_world: { wrong: true }, world: { wrong: true } },
+          { action_id: 'internal-run', input_world: before, world: after },
+        ] } }
+        : { status: 503, json: { error: { message: 'State temporarily unavailable' } } };
+      return { status: 200, json: server.job(id, 'call', 'passed', {
+        report: { action_id: 'internal-run' }, program_result: { stdout: 'exact\n', stderr: '', exit_code: 0 },
+      }) };
+    });
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+    const answer = await runDoorCall({ root: setup.repo, origin: fake.origin, sessionId: 'try-id', login: 'octo', prompt: 'prompts/bm.prompt.md', operation: 'main' }, { argv: [] }, ports);
+    assert.equal(answer.result.stdout, 'exact\n');
+    assert.deepEqual(answer.inputWorld, available ? before : undefined);
+    assert.deepEqual(answer.world, available ? after : undefined);
+    assert.equal(dispatched, 1);
+  }
+});
