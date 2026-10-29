@@ -515,6 +515,8 @@ Report: https://…/r/617480ac-…
 
 ## 17. Code space: replay evidence and the formal check
 
+On `agent thread limit reached`, follow the workflow skill's checking fallback.
+
 Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.

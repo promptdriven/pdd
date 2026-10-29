@@ -384,8 +384,14 @@ test('SKILLS24: the story gate may offer a Try before the check; the order stays
 
 // Wrong (2048 run, 0.1.7): 47 follow-up messages and 15 timed-out waits to the step subagents.
 test('SKILLS25: the main chat gives each subagent its full brief at once, then waits once with a long time-out', () => {
-  const line = '- Run each step in a new subagent, never reused, so verify never checks its own code. Give the step file and paths at once, not chat history. Wait with one long time-out; avoid small follow-ups.';
-  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).split('\n').includes(line) || read(`${name}/SKILL.md`).includes('Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out.'), name);
+  for (const name of Object.keys(AREAS)) {
+    const brief = read(`${name}/SKILL.md`).split('\n').find(line => /step file/.test(line) && /paths/.test(line));
+    assert.ok(brief, `${name}: complete step brief`);
+    assert.match(brief, /at once/, name);
+    assert.match(brief, /no chat history|not.*history/, name);
+    assert.match(brief, /wait once.*long.*time-out|wait.*one long/i, name);
+    assert.match(brief, /\b(?:no|avoid) small follow-ups/, name);
+  }
 });
 
 // Wrong (0.1.7 trim): a rule grows a second home in the same skill, so the skill grows and the copies drift.
@@ -555,5 +561,55 @@ test('SKILLS41: review completion is held during repairs and released only by th
     assert.match(final, /run `workflow done review`/);
     assert.match(final, /PR 2/);
     assert.doesNotMatch(pending, /(?:^|; )run `workflow done review`/);
+  }
+});
+
+// #2623: instruction structure only; this does not simulate agent tools or exhausted sessions.
+test('SKILLS42: checking closes supported tools and tries fresh startup before reuse', () => {
+  for (const name of Object.keys(AREAS)) {
+    const checking = read(`${name}/SKILL.md`).split('\n').find(line => /^- Before /.test(line) && /verify\/formal\/review/.test(line));
+    assert.ok(checking, `${name}: checking fallback covers verify, formal and review`);
+    assert.match(checking, /close.*finished subagents.*if supported/, name);
+    assert.match(checking, /fresh checker.*first/, name);
+    assert.ok(checking.indexOf('close') < checking.indexOf('fresh'), `${name}: close before fresh startup`);
+    assert.match(checking, /only on startup failure.*reuse/, name);
+  }
+});
+
+test('SKILLS43: reuse is limited to checking agents with no code anywhere in this run', () => {
+  for (const name of Object.keys(AREAS)) {
+    const skill = read(`${name}/SKILL.md`);
+    // Reject the old global rule, not a never-reused restriction scoped to builders.
+    assert.doesNotMatch(skill, /Run each step[^\n]*new subagent, never reused/, name);
+    const steps = skill.split('\n').find(line => /^- Use fresh subagents/.test(line));
+    assert.ok(steps, `${name}: ordinary steps use fresh agents`);
+    assert.match(steps, /never reuse.*builders/, name);
+    assert.match(steps, /never.*let.*check.*code/, name);
+    const reuse = skill.split('\n').find(line => /startup failure.*reuse/.test(line));
+    assert.ok(reuse, `${name}: reuse requires fresh startup failure`);
+    assert.match(reuse, /NO code.*this run/, name);
+  }
+});
+
+test('SKILLS44: no eligible checker stops with missing-check evidence and a new session', () => {
+  for (const name of Object.keys(AREAS)) {
+    const stop = read(`${name}/SKILL.md`).split('\n').find(line => /^- No eligible checker:/.test(line));
+    assert.ok(stop, `${name}: no-checker stop branch`);
+    assert.match(stop, /STOP/, name);
+    assert.ok(stop.includes('`Not checked: <step> (agent limit)`'), name);
+    assert.match(stop, /run file.*PR/, name);
+    assert.match(stop, /Tell the person.*NEW session/, name);
+    assert.ok(stop.includes('`pdd workflow open <N>`'), name);
+    assert.match(stop, /No verdict.*done.*unrun checks/, name);
+  }
+});
+
+test('SKILLS45: RUNBOOK section 17 names the agent limit and points to workflow recovery', () => {
+  for (const text of [readFileSync(join(root, 'RUNBOOK.md'), 'utf8'), RUNBOOK()]) {
+    const section = text.split(/^## 17\. /m)[1]?.split(/^## /m)[0];
+    assert.ok(section, 'code-space evidence section');
+    const recovery = section.split('\n').find(line => line.includes('`agent thread limit reached`'));
+    assert.ok(recovery, 'agent-limit message in section 17');
+    assert.match(recovery, /workflow skill.*fallback/);
   }
 });
