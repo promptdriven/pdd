@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 25d5f4318cd479dc6631189e7cd5211a8eb3123f8590507e2e46d64e5aee7656).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 6db866f01cdc256cbfbe8ff57d0a5e30b3fabeb18da886c33939957c300a7c45).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -157,16 +157,34 @@ const either = items => items.length > 1 ? `${items.slice(0, -1).join(', ')} or 
 const variantNames = variants => [...new Set(variants.map(variant => typeof variant?.type === 'string' ? (variant.type === 'null' ? 'null' : article(variant.type)) : 'another shape'))];
 
 // The JSON Schema check of rule P9: every problem, not only the first. Pattern misses are warnings (JS and Python regexes differ).
-function schemaProblems(value, schema, tokens, out, warnings) {
+// Only a common regex subset is evidence of cross-runtime membership. Other
+// syntax may still be checked by the runtime, but cannot establish overlap.
+function portablePattern(source) {
+  if (/\\(?:[1-9bBAZzGkpPuU]|x|c)|\(\?|[\s\S]*[\u0080-\uffff]/u.test(source)) return null;
+  try { return new RegExp(source, 'u'); } catch { return null; }
+}
+function schemaRun(value, schema, tokens) {
+  const problems = [], warnings = [], evidence = { miss: false, unknown: false };
+  schemaProblems(value, schema, tokens, problems, warnings, evidence);
+  return { problems, warnings, state: problems.length || evidence.miss ? 'miss' : evidence.unknown ? 'unknown' : 'match' };
+}
+function schemaProblems(value, schema, tokens, out, warnings, evidence = { miss: false, unknown: false }) {
   const at = rule => out.push({ tokens, rule });
   if (!isObject(schema)) return;
   if (Array.isArray(schema.oneOf)) {
-    const runs = schema.oneOf.map(variant => { const own = []; schemaProblems(value, variant, tokens, own, []); return own; });
-    const fits = runs.filter(own => !own.length).length;
-    if (fits === 1) return;
+    const runs = schema.oneOf.map(variant => schemaRun(value, variant, tokens));
+    const fits = runs.filter(run => run.state === 'match').length;
     if (fits > 1) return at(`fits more than one of the allowed shapes (oneOf). Make the shapes exclusive.`);
+    if (fits === 1) {
+      if (runs.some(run => run.state === 'unknown')) evidence.unknown = true;
+      return;
+    }
+    if (runs.some(run => run.state === 'unknown')) { evidence.unknown = true; return; }
+    evidence.miss = true;
+    const advisory = runs.find(run => !run.problems.length);
+    if (advisory) { warnings.push(...advisory.warnings); return; }
     const same = schema.oneOf.findIndex(variant => typeof variant?.type === 'string' && typeMatches(value, variant.type));
-    if (same >= 0) { out.push(...runs[same]); return; }
+    if (same >= 0) { out.push(...runs[same].problems); return; }
     return at(`is ${show(value)}. The prompt allows ${either(variantNames(schema.oneOf))}.`);
   }
   if (schema.type !== undefined) {
@@ -190,10 +208,13 @@ function schemaProblems(value, schema, tokens, out, warnings) {
       at(`has ${plural(length, 'character')}. The prompt allows ${range(schema.minLength, schema.maxLength, 'character')}.`);
     }
     if (typeof schema.pattern === 'string') {
-      let pattern = null;
-      try { pattern = new RegExp(schema.pattern, 'u'); } catch { pattern = null; }
+      const pattern = portablePattern(schema.pattern);
+      if (!pattern) evidence.unknown = true;
       const pointer = pointerOf(tokens);
-      if (pattern && !pattern.test(value)) warnings.push(`input${pointer ? ` ${pointer}` : ''} is ${show(value)}. It does not match the pattern ${schema.pattern}, so the runtime will likely refuse it.`);
+      if (pattern && !pattern.test(value)) {
+        evidence.miss = true;
+        warnings.push(`input${pointer ? ` ${pointer}` : ''} is ${show(value)}. It does not match the pattern ${schema.pattern}, so the runtime will likely refuse it.`);
+      }
     }
   }
   if (Array.isArray(value)) {
@@ -201,7 +222,7 @@ function schemaProblems(value, schema, tokens, out, warnings) {
       at(`has ${plural(value.length, 'item')}. The prompt allows ${range(schema.minItems, schema.maxItems, 'item')}.`);
     }
     if (schema.uniqueItems === true && value.some((item, index) => value.findIndex(other => isDeepStrictEqual(other, item)) !== index)) at('has the same item twice. The prompt wants unique items.');
-    if (isObject(schema.items)) for (const [index, item] of value.entries()) schemaProblems(item, schema.items, [...tokens, String(index)], out, warnings);
+    if (isObject(schema.items)) for (const [index, item] of value.entries()) schemaProblems(item, schema.items, [...tokens, String(index)], out, warnings, evidence);
   }
   if (isObject(value)) {
     const count = Object.keys(value).length;
@@ -211,9 +232,9 @@ function schemaProblems(value, schema, tokens, out, warnings) {
     for (const key of Array.isArray(schema.required) ? schema.required : []) if (!Object.hasOwn(value, key)) at(`has no ${show(key)}. The prompt requires it.`);
     const properties = isObject(schema.properties) ? schema.properties : {};
     for (const [key, child] of Object.entries(value)) {
-      if (Object.hasOwn(properties, key)) schemaProblems(child, properties[key], [...tokens, key], out, warnings);
+      if (Object.hasOwn(properties, key)) schemaProblems(child, properties[key], [...tokens, key], out, warnings, evidence);
       else if (schema.additionalProperties === false) at(`has ${show(key)}. The prompt does not allow it.`);
-      else if (isObject(schema.additionalProperties)) schemaProblems(child, schema.additionalProperties, [...tokens, key], out, warnings);
+      else if (isObject(schema.additionalProperties)) schemaProblems(child, schema.additionalProperties, [...tokens, key], out, warnings, evidence);
     }
   }
 }
@@ -374,7 +395,7 @@ function numbersIn(text) {
   for (const match of text.matchAll(/\d+(?:,\d{3})*(?:\.\d+)?/g)) {
     const before = text.slice(0, match.index);
     const negative = before.endsWith('-') && !/[\w.]-$/.test(before);
-    numbers.push({ text: `${negative ? '-' : ''}${match[0]}`, value: Number(match[0].replace(/,/g, '')) * (negative ? -1 : 1) });
+    numbers.push({ index: match.index, end: match.index + match[0].length, text: `${negative ? '-' : ''}${match[0]}`, value: Number(match[0].replace(/,/g, '')) * (negative ? -1 : 1) });
   }
   return numbers;
 }
@@ -411,6 +432,22 @@ function numericReviews(root, found, warnings) {
 const quantityWords = text => String(text ?? '').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z]+/).filter(Boolean);
 const aggregateWords = new Set(['total','combined','cumulative','aggregate','sum','cap','limit','budget']);
 
+const namedQuantity = text => {
+  const words = quantityWords(text);
+  const names = new Set(words.map(word => /^(scores?|points?)$/.test(word) ? 'score'
+    : /^(moves?|turns?)$/.test(word) ? 'moves' : /^seeds?$/.test(word) ? 'seed' : null).filter(Boolean));
+  return names.size === 1 ? [...names][0] : null;
+};
+function numberQuantity(text, number) {
+  // Prefer an immediately following unit ("30 moves"), then a preceding
+  // subject ("score is 30"). Do not cross clauses or another number.
+  const after = /^\s*([a-z]+)/i.exec(text.slice(number.end));
+  const following = after && namedQuantity(after[1]);
+  if (following) return following;
+  const before = /([a-z]+)(?:\s+(?:is|of|equals|at|the|fixed))*\s*$/i.exec(text.slice(0, number.index));
+  return before ? namedQuantity(before[1]) : null;
+}
+
 // A number can be a component of the criterion's quantity, rather than a typo.
 export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
   const texts = new Map((Array.isArray(doc?.criteria) ? doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
@@ -420,7 +457,12 @@ export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
     const text = texts.get(check?.criterion_id);
     if (!isObject(check) || typeof text !== 'string' || !['result','error'].includes(check.target)) continue;
     const values = check.op === 'one_of' && Array.isArray(check.value) ? check.value : check.op === 'equals' ? [check.value] : [];
-    const found = numbersIn(text), leaf = quantityWords(String(check.path ?? '').split('/').at(-1));
+    const allNumbers = numbersIn(text), quantity = namedQuantity(check.path);
+    const associated = allNumbers.map(item => ({ ...item, quantity: numberQuantity(text, item) }));
+    const matching = associated.filter(item => quantity && item.quantity === quantity);
+    const found = quantity && matching.length ? matching
+      : quantity && associated.length && associated.every(item => item.quantity) ? [] : associated;
+    const leaf = quantityWords(String(check.path ?? '').split('/').at(-1));
     const sameQuantity = leaf.some(word => aggregateWords.has(word)) && quantityWords(text).some(word => aggregateWords.has(word));
     const members = /\bacross\b([\s\S]*)/i.exec(text)?.[1] ?? '';
     const namedComponent = !sameQuantity && /\b(?:combined|cumulative|total|aggregate|sum|across)\b/i.test(text)
@@ -431,7 +473,7 @@ export function numberWarnings(doc, { testPath, testSha, reviews = [] } = {}) {
       if (Math.abs(closest.value-value) > 0.1 * Math.max(Math.abs(closest.value),Math.abs(value))) continue;
       const companion = allChecks.some(peer => isObject(peer) && peer !== check && peer.criterion_id === check.criterion_id
         && peer.target === check.target && peer.path !== check.path && peer.op === 'equals' && peer.value === closest.value);
-      if (namedComponent || (!sameQuantity && companion)) continue;
+      if (namedComponent || (!sameQuantity && !matching.length && companion)) continue;
       if (reviews.some(row => validNumericReview(row) && row.test_path === testPath && row.test_sha256.toLowerCase() === testSha
         && row.step_id === step.step_id && row.criterion_id === check.criterion_id && row.target === check.target && row.path === check.path && row.value === value)) continue;
       const location = `${testPath ?? 'test'} steps[${stepIndex}].checks[${checkIndex}] (${check.target} ${check.path})`;
