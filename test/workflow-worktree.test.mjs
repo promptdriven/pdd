@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, realpath, readFile, writeFile, rm, readdir, lstat, symlink, mkdir, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
-import { allocateIssueWorktree, lookupIssueWorktree, releaseIssueClaim } from '../src/workflow-worktree.mjs';
+import { allocateIssueWorktree, lookupIssueWorktree, releaseIssueClaim, lookupRepositoryParent } from '../src/workflow-worktree.mjs';
 
 const execute = promisify(execFile);
 async function fixture(t) {
@@ -53,6 +53,10 @@ for (const layout of ['normal', 'linked-normal', 'linked-bare']) {
   test(`BARE1: ${layout} allocates and reconciles against its verified common repository`, async t => {
     const f = await layoutFixture(t, layout), input = f.input(2488, { cwd: f.cwd });
     const before = (await f.gitAt(f.cwd, 'status', '--porcelain=v1', '-z')).stdout;
+    assert.deepEqual(await lookupRepositoryParent({cwd:f.cwd,repository:'Acme/Project',commonDir:f.common},f.ports),
+      {state:'ready',root:f.primary,bare:layout==='linked-bare'});
+    assert.equal((await lookupRepositoryParent({cwd:f.cwd,repository:'Other/Project',commonDir:f.common},f.ports)).state,'recovery_required');
+    assert.equal((await lookupRepositoryParent({cwd:f.cwd,repository:'Acme/Project',commonDir:f.temp},f.ports)).state,'recovery_required');
     const allocated = await allocateIssueWorktree(input, f.ports);
     assert.equal(allocated.state, 'ready', allocated.message);
     const a = allocated.assignment;

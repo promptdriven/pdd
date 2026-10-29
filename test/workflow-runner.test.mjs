@@ -34,7 +34,7 @@ function fakeHerdr() {
     if (group === 'workspace' && verb === 'create') {
       const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
       h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:workspace:create', result: { workspace: w } };
+      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
     }
     if (group === 'worktree' && verb === 'open') {
       const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
@@ -1820,4 +1820,101 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
   }
+});
+
+// A real Git primary/linked/bare layout, with Herdr's repository-parent rule.
+async function linkedSourceFixture(t,kind='linked') {
+  const f=await fixture(t,{agent:'codex'});let primary=f.source,source=f.source;
+  if(kind==='bare'){
+    primary=join(f.base,'project.git');f.git(f.source,'clone','--bare',f.source,primary);
+    f.git(primary,'remote','set-url','origin','https://github.com/example/project.git');
+    f.git(primary,'update-ref','refs/remotes/origin/main',f.git(primary,'rev-parse','main'));
+  }
+  if(kind!=='normal'){source=join(f.base,'caller');f.git(primary,'worktree','add','-b','caller',source,'main');}
+  const healthy=f.ports.herdr;
+  f.ports.herdr=async args=>{
+    if(args[0]==='worktree'&&args[1]==='open'){
+      const parent=f.herdr.workspaces.find(w=>w.workspace_id===args[args.indexOf('--workspace')+1]);
+      const pane=f.herdr.panes.find(p=>p.workspace_id===parent.workspace_id);
+      if(pane.cwd!==primary||f.refuseOnce){
+        f.refuseOnce=false;f.herdr.calls.push(args);
+        throw Object.assign(Error('New and open worktree actions start from the repo parent workspace.'),{code:'linked_worktree_source'});
+      }
+    }
+    return healthy(args);
+  };
+  const record=()=>JSON.parse(readFileSync(join(f.git(source,'rev-parse','--path-format=absolute','--git-common-dir'),'pdd/runs/17/status.json')));
+  const start=()=>startRun({name:'small-change',issue:'17',agent:'codex',base:'main',cwd:source,packageRoot},f.ports);
+  return {f,primary,source,record,start};
+}
+
+for(const kind of ['normal','linked','bare'])test(`2531: ${kind} source starts from verified Herdr parent and retains source/base`,async t=>{
+  const {f,primary,source,record,start}=await linkedSourceFixture(t,kind);
+  const before=f.git(source,'status','--porcelain=v1');const out=await start();assert.equal(out.exitCode,0,out.message);
+  const run=record();assert.equal(run.sourceRoot,source);assert.notEqual(run.root,source);assert.equal(run.baseBranch,'main');
+  assert.equal(f.herdr.panes.find(p=>p.workspace_id===run.chats[0].repoWorkspaceId).cwd,primary);
+  assert.equal(f.git(source,'status','--porcelain=v1'),before);assert.equal(run.chats.length,1);
+});
+
+test('2531: confirmed pre-agent worktree refusal recovers the same run with open once',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;
+  const first=await start();assert.equal(first.exitCode,1);assert.match(first.message,/linked_worktree_source/);
+  const before=record(),worktrees=f.git(source,'worktree','list','--porcelain');
+  assert.equal(before.chats.length,0);assert.equal(before.stageAgent,null);assert.equal(before.chatFailure.code,'linked_worktree_source');
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,0,out.message);
+  const after=record();assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);assert.equal(after.branch,before.branch);
+  assert.equal(f.git(source,'worktree','list','--porcelain'),worktrees);assert.equal(after.chats.length,1);assert.equal(after.chatFailure,undefined);
+  assert.equal(f.herdr.panes.filter(p=>p.agent).length,1);
+  assert.equal((await openRun({ref:'17',cwd:source,packageRoot},f.ports)).exitCode,0);assert.equal(record().chats.length,1);
+  assert.equal(f.herdr.panes.filter(p=>p.agent).length,1);
+});
+
+test('2531: legacy linked-parent refusal and failed open recover without replacing Git allocation',async t=>{
+  const {f,primary,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const before=record(),path=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(path));
+  const repo=registry.repositories[0],oldId=repo.workspaceId,row=f.herdr.workspaces.find(w=>w.workspace_id===oldId);
+  // Saved shape from alpha after linked_worktree_source, then an unsuccessful open.
+  repo.sourceRoot=source;delete repo.rootTabId;delete repo.rootPaneId;delete repo.rootTerminalId;
+  row.worktree=null;f.herdr.panes.find(p=>p.workspace_id===oldId).cwd=source;
+  registry.runs[0].phase='intent';delete registry.runs[0].refusal;
+  writeFileSync(path,JSON.stringify(registry));
+  before.chatFailure.code='herdr_layout_identity_changed';writeFileSync(join(before.runDir,'status.json'),JSON.stringify(before));
+  const worktrees=f.git(source,'worktree','list','--porcelain');
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,0,out.message);
+  const after=record(),saved=JSON.parse(readFileSync(path));
+  assert.equal(after.runId,before.runId);assert.equal(after.root,before.root);assert.equal(after.sourceRoot,source);assert.equal(after.branch,before.branch);
+  assert.equal(f.git(source,'worktree','list','--porcelain'),worktrees);assert.equal(after.chats.length,1);
+  assert.equal(saved.repositories[0].sourceRoot,primary);assert.equal(saved.archivedRepositories[0].workspaceId,oldId);
+  assert.equal(f.herdr.panes.find(p=>p.workspace_id===oldId).cwd,source,'old shell remains untouched');
+  assert(!f.herdr.calls.some(args=>args[0]==='workspace'&&['close','rename'].includes(args[1])));
+});
+
+test('2531: an uncertain retry reply cannot reuse an earlier confirmed refusal to launch again',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const healthy=f.ports.herdr;
+  f.ports.herdr=async args=>{const reply=await healthy(args);if(args[0]==='worktree'&&args[1]==='open')throw closedChannel();return reply;};
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);
+  const before=record(),calls=f.herdr.calls.filter(args=>args[0]==='worktree').length;
+  f.ports.herdr=healthy;
+  const again=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(again.exitCode,1);assert.match(again.message,/layout_allocation_uncertain/);
+  assert.equal(f.herdr.calls.filter(args=>args[0]==='worktree').length,calls);assert.equal(record().chats.length,0);
+  assert.equal(record().root,before.root);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
+});
+
+test('2531: recovery refuses a competing workspace at the assigned cwd and retains its identities',async t=>{
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();const before=record();
+  f.herdr.workspaces.push({workspace_id:'foreign',label:'person',worktree:{checkout_path:before.root,repo_key:before.commonDir,is_linked_worktree:true}});
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1);assert.match(out.message,/layout_allocation_uncertain/);
+  assert.equal(record().chats.length,0);assert.equal(record().runId,before.runId);assert.equal(f.herdr.panes.filter(p=>p.agent).length,0);
+});
+
+test('2531: a refused run cannot change its saved common repository or issue/workflow binding',async t=>{
+ for(const kind of ['common','label']){
+  const {f,source,record,start}=await linkedSourceFixture(t);f.refuseOnce=true;await start();
+  const run=record(),file=join(f.state,'herdr-layout/registry.json'),registry=JSON.parse(readFileSync(file));
+  if(kind==='common')registry.runs[0].commonDir=join(f.base,'different.git');else registry.runs[0].label='other#99 feature';
+  writeFileSync(file,JSON.stringify(registry));const calls=f.herdr.calls.filter(a=>a[0]==='worktree').length;
+  const out=await openRun({ref:'17',cwd:source,packageRoot},f.ports);assert.equal(out.exitCode,1,out.message);
+  assert.equal(f.herdr.calls.filter(a=>a[0]==='worktree').length,calls);assert.equal(record().runId,run.runId);assert.equal(record().chats.length,0);
+ }
 });
