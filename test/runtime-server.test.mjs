@@ -234,6 +234,23 @@ test('RUNTIME-XFIX1: failed checks show the step, short criterion, diagnosis and
   assert.equal(row.next_step, 'Declare compute.hash_json in the Runtime interface.');
 });
 
+test('RUNTIME-XFIX2: rerun output distinguishes stable, unstable and skipped results and carries JSON data', async t => {
+  const setup = harbor(t);
+  const answerFor = rerun => (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false }]);
+    answer.usage.calls = rerun?.calls ? 1 + rerun.calls : 1; answer.result.report.rerun = rerun;
+    return { status: 200, json: answer };
+  };
+  const stable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'tampered', runs: 3, failed: 3, stable: true }] })), ['place-order']);
+  assert.match(stable.out, /Runtime check \(place-order\): ✗ 0 of 1 criterion · 0\/1 checks · 3 AI calls/);
+  assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. 2 more AI calls\./);
+  const unstable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'tampered', runs: 3, failed: 1, stable: false }] })), ['place-order']);
+  assert.match(unstable.out, /Rerun: failed 1 of 3 \(unstable\)\. Make the rule in the prompt firmer\./);
+  const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'live-resources' })), ['place-order'], { '--json': true });
+  assert.equal(skipped.json.rows[0].rerun.skipped, 'live-resources'); assert.doesNotMatch(skipped.out, /Rerun:/);
+});
+
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
 test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
   const setup = harbor(t);

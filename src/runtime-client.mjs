@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: bcc465d0897a186b92f2633f95c1eefa2d377134d17900963db1c4a3db5775f9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: a881137ea7a83ad89498a11fe3b83470d1081b5540adfddc85627f9ec91c8906).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -388,6 +388,7 @@ function applyAnswer(row, answer, context) {
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
     server_seconds: view.server_seconds, time_limit: view.time_limit, why: view.why ?? row.why, who: view.who ?? row.who, next_step: view.next_step ?? row.next_step,
+    rerun: view.rerun ?? row.rerun,
     engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
@@ -425,7 +426,7 @@ function batchRecord(context) {
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
-      engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
+      engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, rerun: row.rerun ?? null, draft: !!row.draft })) };
 }
 
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }

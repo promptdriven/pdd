@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: a1c75786ab59019acd7fb144bb7bd2737b037f59cc7924c8d4003163221e89f4).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: b4c20f87389381dd8b38ad429197562b2fee4d761858e6e50416ce0cf64b5fbd).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -88,12 +88,19 @@ export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
 export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {} } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
+  const rerun = isObjectLike(report?.rerun) ? {
+    ...(typeof report.rerun.calls === 'number' ? { calls: report.rerun.calls } : {}),
+    ...(typeof report.rerun.skipped === 'string' ? { skipped: cleanField(report.rerun.skipped, secrets) } : {}),
+    ...(Array.isArray(report.rerun.steps) ? { steps: report.rerun.steps.filter(isObjectLike).map(item => ({
+      step_id: cleanField(item.step_id, secrets) || null, runs: item.runs, failed: item.failed, stable: item.stable === true,
+      ...(Array.isArray(item.changed_paths) ? { changed_paths: item.changed_paths.map(path => cleanField(path, secrets)) } : {}) })) } : {}) } : null;
   const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check })) : []).map(({ step, check }) => {
     const criterion_id = cleanField(check?.criterion_id, secrets), diagnosis = isObjectLike(check?.diagnosis) ? {
       kind: cleanField(check.diagnosis.kind, secrets) || null, who: cleanField(check.diagnosis.who, secrets) || null,
       why: cleanField(check.diagnosis.why, secrets) || null, next_step: cleanField(check.diagnosis.next_step, secrets) || null,
       evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanField(item, secrets)).filter(Boolean) : undefined,
-      likely: check.diagnosis.likely === true ? true : undefined } : null;
+      likely: check.diagnosis.likely === true ? true : undefined,
+      ...(isObjectLike(check.diagnosis.rerun) ? { rerun: { runs: check.diagnosis.rerun.runs, failed: check.diagnosis.rerun.failed, stable: check.diagnosis.rerun.stable === true } } : {}) } : null;
     return { criterion_id, step_id: cleanField(step?.step_id, secrets) || null,
       criterion_text: typeof criterionTexts[criterion_id] === 'string' && criterionTexts[criterion_id].length <= 160 ? cleanField(criterionTexts[criterion_id], secrets) : null,
       target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: scrub(check?.expected, secrets),
@@ -121,6 +128,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     who: result?.who ? cleanText(result.who, secrets) : null, next_step: result?.next_step ? cleanText(result.next_step, secrets) : null,
+    rerun,
     engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider: time_limit ? null : provider,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
@@ -138,7 +146,7 @@ export function jsonRow(row) {
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
-    why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
+    why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null, rerun: row.rerun ?? null,
     reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
@@ -217,6 +225,16 @@ function refusalLines(item) {
   return lines;
 }
 
+function rerunLine(row) {
+  const rerun = row.rerun, steps = Array.isArray(rerun?.steps) ? rerun.steps.filter(item => Number.isInteger(item?.runs) && Number.isInteger(item?.failed)) : [];
+  if (!rerun || rerun.skipped || !steps.length) return null;
+  const runs = steps.reduce((sum, item) => sum + item.runs, 0), failed = steps.reduce((sum, item) => sum + item.failed, 0);
+  if (!runs) return null;
+  const stable = steps.every(item => item.stable === true);
+  return stable ? `  Rerun: failed ${failed} of ${runs} (stable). ${Number.isInteger(rerun.calls) ? rerun.calls : 0} more AI calls.`
+    : `  Rerun: failed ${failed} of ${runs} (unstable). Make the rule in the prompt firmer.`;
+}
+
 function localRefusals(rows) {
   const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
@@ -241,6 +259,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
       ...(row.failed_checks?.some(check => check.diagnosis?.why) ? [`  Why: ${row.failed_checks.find(check => check.diagnosis?.why).diagnosis.why}`] : row.next_step && row.why ? [`  Why: ${row.why}`] : []),
       ...(row.failed_checks?.some(check => check.diagnosis?.next_step) ? [`  Next: ${row.failed_checks.find(check => check.diagnosis?.next_step).diagnosis.next_step}`] : row.next_step ? [`  Next: ${row.next_step}`]
         : ['  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.']),
+      ...(rerunLine(row) ? [rerunLine(row)] : []),
       `  Report: ${row.report_url ?? 'none'}`);
   }
   out.push(...localRefusals(rows));
