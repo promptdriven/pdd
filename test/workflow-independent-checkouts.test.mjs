@@ -55,7 +55,7 @@ async function pair(t) {
  const before=await registry(f),peerWorld=structuredClone(f.workspaces);
  // Version 1, no schema rewrite: the first row is precisely legacy clone A.
  assert.equal(before.version,1);
- const b=await f.open(bInput);
+ let b;await assert.doesNotReject(async()=>{b=await f.open(bInput);},'a separately verified checkout must allocate its own layout');
  assert.deepEqual((await registry(f)).repositories[0],before.repositories[0]);
  assert.deepEqual((await registry(f)).runs[0],before.runs[0]);
  assert.deepEqual(f.workspaces.slice(0,2),peerWorld);
