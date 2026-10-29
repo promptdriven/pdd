@@ -6,9 +6,7 @@ lint did not start and marks the capacity refusal retryable. The message is:
 > The server is busy. Waiting for a lint slot…
 
 Pdd makes at most three lint attempts. It keeps each request ID and the same selected files.
-It waits for the server's retry delay, usually five seconds, between attempts. Total lint
-waiting is limited to two minutes, or the command's shorter limit. An agent without a terminal
-keeps its 90-second limit unless a Check explicitly sets `--timeout`.
+It waits for the server's retry delay, usually five seconds, between attempts. Lint shares the caller's wait: Check and remote lint honor `--timeout`, otherwise an agent waits 90 seconds and a terminal Check has no limit. Try keeps its existing five-minute setup allowance and 90-second agent default.
 
 If capacity stays unavailable, pdd says that the server stayed busy, no checks ran, and to run
 the same command again later. Check and lint return exit 5; Try doors use their wrapper exit 125.
@@ -21,10 +19,8 @@ need a correction, and unknown results keep their read-only recovery. Ctrl-C sto
 If an accepted lint is still queued or running when the wait ends, pdd says so and exits 3.
 No check or Try was sent, and check calls are zero. Queue time, backoff and lint work share
 the same wait budget. Check and explicit lint print a saved batch to read with
-`pdd check --read BATCH`; this reads the original lint without posting anything.
+`pdd check --read BATCH`; this reads the original lint without repeating lint; a saved normal Check may continue its original held checks after lint passes, with identical source, owner and call ceilings. Standalone lint reads send no checks.
 
 A later read replaces pending or unknown wording with the saved lint result. It
-shows a reached prompt refusal when one exists. Even if lint finishes successfully, the
-check stays not run: reading cannot start a check or claim it passed. Start a fresh Check
-explicitly when ready. A global lint refusal still names its diagnostics. Lost or mismatched
+shows a reached prompt refusal when one exists. After lint passes, a saved normal Check may continue only its proven never-posted held rows. Recovery authenticates the saved owner, recaptures the original selected source, preserves call ceilings and the saved runtime origin, and uses a fresh finite wait (`--timeout`, otherwise 90 seconds). A permanent exclusive dispatch claim preserves each check ID across concurrent or interrupted recovery. Standalone lint, ambiguous legacy intent and posted or uncertain jobs never authorize another check. A global lint refusal still names its diagnostics. Lost or mismatched
 replies remain unknown; pdd never treats them as a pass.
