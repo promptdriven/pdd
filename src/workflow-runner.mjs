@@ -533,21 +533,21 @@ async function publishAreaPr(run, area, p, lines, retry) {
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
-  const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
+  const base = run.prBase ?? run.baseBranch;
   // PR 1 says "tests" only when it has a test file (0.1.6 tester: a browser-only Story had none).
   const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
-  writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
+  const body = prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests);
   let intent;
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
-    intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
+    intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base,
       title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
   } catch (error) {
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
-  const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
+  const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n` }, p.commandPorts);
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
