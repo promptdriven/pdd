@@ -1,5 +1,6 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 802a5ca30093f09d7c92ffeb1168214f4f0a3cfdf086b2b4263f8e66b9851ad4).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 04787ebf3dc30ad43ef1fe4f1bf9e015b296907a0a17080b8e22f3b754b98353).
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -51,15 +52,17 @@ function unknownFeature(answer,args) {
 export function runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072}={}) {
  return new Promise((resolve,reject)=>{
   if(signal?.aborted){reject(new Error('cancelled'));return;}
-  let child,stdout='',stderr='',size=0,settled=false,killTimer,stopping=false;
-  const stop=()=>{if(!child)return;stopping=true;try{process.kill(-child.pid,'SIGTERM');}catch{child.kill('SIGTERM');}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}},500);killTimer.unref();};
-  const finish=(error,code)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);if(error){error.stderr=stderr;reject(error);}else resolve({code,stdout,stderr});};
-  const abort=()=>{stop();finish(new Error('cancelled'));};
-  const timer=setTimeout(()=>{stop();finish(new Error('timeout'));},timeoutMs);
-  try{child=spawn(command,args,{cwd,env,stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32'});}catch(e){finish(e);return;}
+  let child,stdout='',stderr='',size=0,settled=false,stopping=false,killTimer,postKillTimer,childClosed=false,stopError,stopCode,killed=false;
+  const outDecoder=new StringDecoder('utf8'),errDecoder=new StringDecoder('utf8');
+  const kill=kind=>{if(!child)return;try{if(process.platform!=='win32'&&child.pid){process.kill(-child.pid,kind);return;}}catch{}try{child.kill(kind);}catch{}};
+  const finish=(error,code)=>{if(settled)return;settled=true;clearTimeout(timer);clearTimeout(killTimer);clearTimeout(postKillTimer);signal?.removeEventListener('abort',abort);stdout+=outDecoder.end();stderr+=errDecoder.end();if(error){error.stderr=stderr;error.stdout=stdout;reject(error);}else resolve({code,stdout,stderr});};
+  const stop=(error,code)=>{if(stopping||settled)return;stopping=true;stopError=error;stopCode=code;clearTimeout(timer);signal?.removeEventListener('abort',abort);kill('SIGTERM');killTimer=setTimeout(()=>{killed=true;kill('SIGKILL');if(childClosed)finish(stopError,stopCode);else postKillTimer=setTimeout(()=>finish(Object.assign(new Error('Agent process closure could not be confirmed.'),{teardownUncertain:true})),1000);},error?500:100);};
+  const abort=()=>stop(new Error('cancelled'));
+  const timer=setTimeout(()=>stop(new Error('timeout')),timeoutMs);
+  try{child=spawn(command,args,{cwd,env,stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32'});}catch(error){finish(error);return;}
   signal?.addEventListener('abort',abort,{once:true});
-  const data=(kind,chunk)=>{size+=chunk.length;if(size>maxBytes){stop();finish(new Error('output limit'));return;}if(kind==='stdout')stdout+=chunk;else stderr+=chunk;};
-  child.stdout.on('data',c=>data('stdout',c));child.stderr.on('data',c=>data('stderr',c));child.on('error',e=>finish(e));child.on('close',code=>{if(!stopping)clearTimeout(killTimer);finish(null,code);});child.stdin.on('error',()=>{});child.stdin.end(input);
+  const data=(kind,chunk)=>{if(stopping||settled)return;size+=chunk.length;if(size>maxBytes){stop(new Error('output limit'));return;}if(kind==='stdout')stdout+=outDecoder.write(chunk);else stderr+=errDecoder.write(chunk);};
+  child.stdout.on('data',chunk=>data('stdout',chunk));child.stderr.on('data',chunk=>data('stderr',chunk));child.on('error',error=>{if(child.pid)stop(error);else finish(error);});child.on('close',code=>{childClosed=true;if(!stopping)stop(null,code);else if(killed)finish(stopError,stopCode);});child.stdin.on('error',()=>{});child.stdin.end(input);
  });
 }
 export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runAgentProcess,definitions}={}) {
@@ -108,7 +111,7 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
   let args,overlay;
   if(agent==='gemini'){const version=await run(command,['--version'],{cwd,env,signal,timeoutMs:10000,maxBytes:1024});if(version.code!==0||version.stdout.trim()!=='0.66.0')return fail('error','This Gemini version has no verified read-only adapter. Choose another agent.');overlay=geminiOverlay(env);opts.env=overlay.env;}
   if(agent==='codex'){
-   args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}'];
+   args=['exec','--sandbox','read-only','--ephemeral','--color','never','--ignore-rules','-c','approval_policy="never"','-c','web_search="disabled"','-c','mcp_servers={}','-c','project_doc_max_bytes=0'];
    for(const feature of ['hooks','plugins','apps','browser_use','browser_use_external','browser_use_full_cdp_access','computer_use','multi_agent','multi_agent_v2','shell_tool','unified_exec','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
    args.push('-');
   }else if(agent==='gemini')args=['--extensions','none','--allowed-mcp-server-names',`pdd-disabled-${randomUUID()}`,'-p','Answer the supplied Try question as strict JSON.','--approval-mode','default','--admin-policy',overlay.policy,'--output-format','json'];
@@ -138,5 +141,5 @@ export async function askAgent({agent,definition,cwd,env=process.env,context={},
   if(clean.save===null)result.save=null;
   else if(object(clean.save)&&Object.keys(clean.save).sort().join(',')==='checks,criterion,name'&&typeof clean.save.name==='string'&&clean.save.name.trim()&&clean.save.name.length<=100&&(clean.save.criterion===null||known.has(clean.save.criterion))&&checks(clean.save.checks,false))result.save=clean.save;
   return result;
- }catch(e){if(e instanceof SyntaxError)return fail('error','The agent returned invalid JSON. No fields were applied.');const state=e.code==='ENOENT'?'not_installed':'error';return failedInvocation(agent,e.stderr||e.message,env,state,name);}
+ }catch(e){if(e instanceof SyntaxError)return fail('error','The agent returned invalid JSON. No fields were applied.');const state=e.code==='ENOENT'?'not_installed':stateOf(e.stderr||e.message);const result=failedInvocation(agent,e.stderr||e.message,env,state,name);if(e.recoverable===true&&result.error.state==='error')result.error.recoverable=true;return result;}
 }
