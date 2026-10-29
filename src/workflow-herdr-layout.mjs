@@ -1,9 +1,10 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 18b8302978b99e5c19b3a5b77049495a276734803d318c561861fdcd80e6e925).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: bc53737cd846eee054ff419192eba55a50e3b96d81a63d30bc40db5677cf4d6e).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { lookupRepositoryParent } from './workflow-worktree.mjs';
 
 export const PDD_HERDR_SESSION = 'pdd';
 const problem = code => Object.assign(new Error(code), {code});
@@ -74,26 +75,68 @@ async function assertRunRoot(command, run, closing = false) {
       throw problem('run_has_open_tabs');
   }
 }
+async function ownedRepository(rows,repo,command) {
+  const row=rows.find(w=>w.workspace_id===repo.workspaceId);
+  if(row?.worktree){
+    ownedWorkspace(rows,repo,repo.sourceRoot);
+    if(row.worktree.is_linked_worktree!==false)throw problem('herdr_layout_identity_changed');
+  } else {
+    if(!row||![repo.rootTabId,repo.rootPaneId,repo.rootTerminalId].every(id))throw problem('herdr_layout_identity_changed');
+    await assertRunRoot(command,{...repo,cwd:repo.sourceRoot},true);
+  }
+  return row;
+}
+
 export async function openHerdrRunLayout(input, ports) {
   const {command,checkpoint}=ports,directory=directoryFor(ports);
   if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository??'')||!Number.isSafeInteger(input.issueNumber)||input.issueNumber<1
     ||!id(input.runId)||!id(input.workflowName)||!id(input.stageId)||typeof checkpoint!=='function')throw problem('invalid_herdr_layout_input');
-  const sourceRoot=await realpath(input.sourceRoot),cwd=await realpath(input.cwd),commonDir=input.commonDir;
+  const invokingSource=await realpath(input.sourceRoot),cwd=await realpath(input.cwd),commonDir=input.commonDir;
   if(!id(commonDir))throw problem('invalid_herdr_layout_input');
   const registry=await readRegistry(directory),rows=await inventory(command);
-  const key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
+  const parent=await lookupRepositoryParent({cwd:invokingSource,repository:input.repository,commonDir},ports);
+  if(parent.state!=='ready')throw problem('repository_parent_unverified');
+  const sourceRoot=parent.root,key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
   let repo=registry.repositories.find(r=>r.key===key);
+  const pending=registry.runs.find(r=>r.runId===input.runId);
+  const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
+  if(pending && (pending.commonDir!==commonDir || pending.cwd!==cwd ||
+    ![runLabel,`#${input.issueNumber} ${input.workflowName}`].includes(pending.label)))throw problem('herdr_run_binding_changed');
+  const refused=pending && !pending.workspaceId && !pending.rootPaneId && !pending.rootTabId && !pending.rootTerminalId &&
+    (pending.phase==='refused'&&pending.refusal==='linked_worktree_source' ||
+     pending.phase==='intent'&&!pending.retriedRefusal&&input.preAgentRefusal==='linked_worktree_source');
+  if(refused){
+    if(pending.cwd!==cwd || rows.some(w=>w.worktree?.checkout_path===cwd))throw problem('layout_allocation_uncertain');
+    pending.phase='refused';pending.refusal='linked_worktree_source';
+    await persist(directory,registry);
+  }
+  if(repo && repo.sourceRoot!==sourceRoot){
+    if(!refused || repo.phase!=='ready' || repo.commonDir!==commonDir || repo.sourceRoot!==invokingSource ||
+      pending.repoWorkspaceId!==repo.workspaceId || registry.runs.some(r=>r!==pending&&r.repoWorkspaceId===repo.workspaceId))
+      throw problem('herdr_layout_identity_changed');
+    const row=rows.find(w=>w.workspace_id===repo.workspaceId);
+    if(!row)throw problem('herdr_layout_identity_changed');
+    if(row.worktree)ownedWorkspace(rows,repo,invokingSource);
+    else {
+      const reply=await command(['pane','list','--workspace',repo.workspaceId]),panes=reply.result?.panes;
+      if(reply.id!=='cli:pane:list'||reply.result?.type!=='pane_list'||!Array.isArray(panes)||panes.length!==1||
+        panes[0].workspace_id!==repo.workspaceId||panes[0].cwd!==invokingSource)throw problem('herdr_layout_identity_changed');
+    }
+    registry.archivedRepositories=[...(registry.archivedRepositories??[]),{...repo,reason:'linked-source-pre-agent-refusal'}];
+    registry.repositories=registry.repositories.filter(r=>r!==repo);repo=null;
+    await persist(directory,registry);
+  }
   if(repo) {
     if(repo.phase!=='ready')throw problem('layout_allocation_uncertain');
     if(repo.commonDir!==commonDir)throw problem('repository_checkout_changed');
-    ownedWorkspace(rows,repo,repo.sourceRoot);
+    await ownedRepository(rows,repo,command);
   } else {
     const clashes=registry.repositories.filter(r=>r.repository.split('/')[1].toLowerCase()===name.toLowerCase());
     const label=clashes.length||rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
     if(rows.some(w=>w.label===label))throw problem('repository_label_unavailable');
     for(const other of clashes) {
       if(other.phase!=='ready')throw problem('layout_allocation_uncertain');
-      const existing=ownedWorkspace(rows,other,other.sourceRoot);
+      const existing=await ownedRepository(rows,other,command);
       if(existing.label!==other.repository) {
         if(rows.some(w=>w.workspace_id!==other.workspaceId&&w.label===other.repository))throw problem('repository_label_unavailable');
         await checkpoint();
@@ -105,22 +148,32 @@ export async function openHerdrRunLayout(input, ports) {
     await checkpoint();await persist(directory,registry);
     const created=await command(['workspace','create','--cwd',sourceRoot,'--label',label,'--no-focus']);
     repo.workspaceId=created.result?.workspace?.workspace_id;
+    repo.rootTabId=created.result?.tab?.tab_id;repo.rootPaneId=created.result?.root_pane?.pane_id;repo.rootTerminalId=created.result?.root_pane?.terminal_id;
     if(created.id!=='cli:workspace:create'||!id(repo.workspaceId))throw problem('invalid_workspace_reply');
     repo.phase='ready';await persist(directory,registry);
   }
-  // The repository name keeps "#2 bug" runs of two repositories apart.
-  const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
   let run=registry.runs.find(r=>r.runId===input.runId);
-  if(run) {
+  if(run && run.phase!=='refused') {
     if(run.phase!=='ready')throw problem('layout_allocation_uncertain');
     // Runs from 0.1.3 and older carry the label without the repository name.
     if(run.repoWorkspaceId!==repo.workspaceId||run.cwd!==cwd||![runLabel,`#${input.issueNumber} ${input.workflowName}`].includes(run.label))throw problem('herdr_run_binding_changed');
     ownedWorkspace(rows,run,cwd);
     await assertRunRoot(command,run);
   } else {
-    run={runId:input.runId,repoWorkspaceId:repo.workspaceId,commonDir,cwd,label:runLabel,phase:'intent'};
-    registry.runs.push(run);await checkpoint();await persist(directory,registry);
-    const opened=await command(['worktree','open','--workspace',repo.workspaceId,'--path',cwd,'--label',run.label,'--no-focus']);
+    if(run){
+      if(!refused)throw problem('layout_allocation_uncertain');
+      run.repoWorkspaceId=repo.workspaceId;run.phase='intent';run.retriedRefusal=true;
+    } else {
+      run={runId:input.runId,repoWorkspaceId:repo.workspaceId,commonDir,cwd,label:runLabel,phase:'intent'};
+      registry.runs.push(run);
+    }
+    await checkpoint();await persist(directory,registry);
+    let opened;
+    try {opened=await command(['worktree','open','--workspace',repo.workspaceId,'--path',cwd,'--label',run.label,'--no-focus']);}
+    catch(error){
+      if(error.code==='linked_worktree_source'){run.phase='refused';run.refusal=error.code;await persist(directory,registry);}
+      throw error;
+    }
     run.workspaceId=opened.result?.workspace?.workspace_id;
     if(opened.id!=='cli:worktree:open'||opened.result?.already_open===true||!id(run.workspaceId))throw problem('invalid_worktree_reply');
     run.rootTabId=opened.result?.tab?.tab_id;run.rootPaneId=opened.result?.root_pane?.pane_id;run.rootTerminalId=opened.result?.root_pane?.terminal_id;
@@ -157,7 +210,7 @@ export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) 
   if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
   const rows=await inventory(command);
   if(rows.some(w=>w.workspace_id===repo.workspaceId)) {
-    ownedWorkspace(rows,repo,repo.sourceRoot);
+    await ownedRepository(rows,repo,command);
     const tabs=(await command(['tab','list','--workspace',repo.workspaceId])).result?.tabs,panes=(await command(['pane','list','--workspace',repo.workspaceId])).result?.panes;
     if(!Array.isArray(tabs)||tabs.length!==1||!Array.isArray(panes)||panes.length!==1)return false;
     await checkpoint?.();repo.phase='close_intent';await persist(directory,registry);

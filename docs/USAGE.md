@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.9 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.10 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.9
+pdd --version   # prints 0.1.10
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.9
+pdd --version   # PDD Alpha prints 0.1.10
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -154,7 +154,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.9`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.10`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -443,8 +443,9 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 |---|---|
 | `No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".` | pdd also says why for each near miss: a `tests/*.json` file without that `schema_version`, a prompt that ends in `.prompt` instead of `.prompt.md`, or a prompt with no Runtime interface block. Fix the files that it names. See RUNBOOK.md section 2. |
 | `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
-| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is a slow PDD Cloud sign-in. Wait 1 minute, then run the command again. Exit code 3. |
-| `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
+| `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
+| `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |
+| `Please update pdd: npm install -g github:promptdriven/pdd` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
 
@@ -550,7 +551,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.9` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.10` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -572,6 +573,7 @@ This is an alpha. These limits are known today:
 | `pdd check` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` says that your GitHub account does not have PDD runtime access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd check` or `pdd try` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd`, then `pdd setup`. |
+| `pdd check` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
 | `pdd approve is for a person at a terminal` | An agent tried to approve. Run the `pdd approve` line yourself, in a terminal. |
 | PR 1 says `Draft prompts: …` | Run `pdd approve` for each prompt that it names, before you merge PR 1. |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
@@ -608,7 +610,7 @@ if needed; opening and taps use the same Try budget and saved data. See RUNBOOK.
 
 ## Ask your agent on the Try page
 
-Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. A suggested input is checked against the entry's schema; **Fill fields** changes the form or command box, and you press **Run** yourself.
+Run `pdd try STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd try STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Try page's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the runtime. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the Try budget. Older pages keep manual **Fill fields** and **Run**.
 
 ```sh
 pdd try my-story

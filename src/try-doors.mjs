@@ -1,4 +1,4 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: ca0368b1914e9d2df57622288a041ff34ca8fb6e6f70d140d644868ecc4a3078).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: 7a8cd3af7e3bdac3f55b668af7850fb9da6ec1e83fe90e30323d0f2736c87924).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -88,8 +88,8 @@ export async function openCli(context, test, sessionId, options) {
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
   writePrivate(descriptorPath, descriptor);
   const moduleUrl = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
-  const script = `import(${JSON.stringify(moduleUrl)}).then(async ({ runShim }) => { process.exitCode = await runShim(${JSON.stringify(descriptorPath)}, process.argv.slice(1)); }).catch(() => { process.stderr.write('pdd try: The installed adapter could not load. Run pdd try STORY --cli again.\\n'); process.exitCode = 125; });`;
-  const code = `#!/bin/sh\n# PDD Try launcher v1\nexec ${quote(process.execPath)} --input-type=commonjs -e ${quote(script)} -- \"$@\"\n`;
+  const script = `import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write('pdd try: The installed adapter could not load. Run pdd try STORY --cli again.\\n'); process.exitCode = 125; });`;
+  const code = `#!/bin/sh\n# PDD Try launcher v1\nexec ${quote(process.execPath)} --input-type=commonjs -e ${quote(script)} -- ${quote(moduleUrl)} ${quote(descriptorPath)} \"$@\"\n`;
   const fd = openSync(shim, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o700);
   try { writeFileSync(fd, code); } finally { closeSync(fd); }
   chmodSync(shim, 0o700);

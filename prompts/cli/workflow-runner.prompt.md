@@ -51,6 +51,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 ## Dependencies
 
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
+- [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
 
 ## Recover a missing unconfirmed area tab
@@ -71,4 +72,44 @@ The evidence command writes only the local run record/index and append-only evid
 
 ## Progress and causes
 
-Serhan (Oct 28): pdd always says what happens. An optional `ports.say(text)` prints one progress line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style; without it the runner stays quiet (tests). Say one line before each slow step: `Reading issue N from GitHub…`, `Fetching origin/<base>…`, `Making the worktree and branch for #N…`, `Starting the <area> chat in Herdr…`, `Pushing <branch> to <PR label>…`, `Pushing <branch> and opening <PR label> on GitHub…`, `Reading PR 1 on GitHub…`, `Making the code branch…`, `Opening the <area> chat in Herdr…`, `Closing the chat tabs in Herdr…`, and `Reading N PRs from GitHub…` before status reads them. The final message stays the single result. A failed gh, git or Herdr call names its real reason in the failure line: a missing program is `<herdr|gh|git> is not installed or not on PATH`, else the tool's cleaned first stderr line (gh's `detail`), else its code.
+pdd always says what happens. An optional `ports.say(text)` prints one progress line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style; without it the runner stays quiet (tests). Say one line before each slow step: `Reading issue N from GitHub…`, `Fetching origin/<base>…`, `Making the worktree and branch for #N…`, `Starting the <area> chat in Herdr…`, `Pushing <branch> to <PR label>…`, `Pushing <branch> and opening <PR label> on GitHub…`, `Reading PR 1 on GitHub…`, `Making the code branch…`, `Opening the <area> chat in Herdr…`, `Closing the chat tabs in Herdr…`, and `Reading N PRs from GitHub…` before status reads them. The final message stays the single result. A failed gh, git or Herdr call names its real reason in the failure line: a missing program is `<herdr|gh|git> is not installed or not on PATH`, else the tool's cleaned first stderr line (gh's `detail`), else its code.
+
+## Structured replay evidence in code space
+
+Only a saved area's explicit replay_evidence=pdd.replay-evidence.v1 activates this policy. New bundled
+feature/bug code areas opt in; saved runs/custom areas without it keep their existing publication behavior.
+The runner owns the anchor lifecycle and current inventory guard. After each successful prompt-space
+publication or push preceding an opted-in area, refresh run.replayBaseline from the published changed
+scenario files through [replay evidence](workflow-replay.prompt.md), retaining empty or blocked selections.
+Include publications while waiting for code approval and the final approval publication before entering code
+space. At that final transition require scenario bytes to match the published prompt-space head; refuse with
+repair advice if unpublished scenario edits remain. Never silently approve or anchor dirty unpublished vectors.
+Freeze the final published anchor on entry into code space; code steps, publication retries and later edits
+cannot replace it. For a merged prompt-space branch retain its published anchor, never reconstruct from code.
+
+Discover changed files with NUL-delimited Git diff and untracked-file lists, preserving each exact path,
+including spaces, line breaks and non-ASCII characters; do not trim raw list output. Scenario classification
+uses parsed JSON with exact schema_version `prompt-runtime.program-scenario.v1`, not a text substring.
+An enumeration failure or unreadable/unclassifiable candidate makes the replay inventory unavailable;
+never silently skip it or turn a failed read into an empty successful selection.
+Before every opted-in code publication, after automatic
+commits and also on retries or updates, independently enumerate current changed scenario files against the
+saved run base. If any current scenario path is absent from the frozen anchor, report BLOCKED with the missing
+paths even when the manifest covers every anchored check. An unavailable inventory cannot establish PASS.
+This guard precedes replay validation and does not require a new replay-module API.
+For opted-in code steps, read and save the structured result as run.replayEvidence and on the step record;
+show its status separately from free-form summaries. Revalidate after automatic commits immediately before
+publication, including retries and updates of an existing code PR. The canonical report goes above every
+Runtime check, prose PASS claim or verify.md and retains assertion/formal failure lines. Missing, stale or
+malformed reports publish as BLOCKED/NOT REPLAYED, never PASS. Real assertion failures remain publishable;
+the policy qualifies evidence rather than preventing every failing review. The report and RUNBOOK explicitly
+state the CLI's structure/identity trust boundary; pdd never executes tests or supplied commands.
+
+For a previously opened opted-in code PR, replace its body with a prominent BLOCKED publication-pending
+report before pushing changed source, then set the final newly validated report after a successful push.
+If either description update fails, report the exact failure and retry command; never push new source while
+the description still asserts an old PASS. Preserve ordinary non-opted existing-PR push-only behavior.
+Preserve the single canonical workflow ownership marker on both descriptions, rejecting stray supplied markers.
+Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
+Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
+preserving its representation. This does not turn prompt-runtime checks into code replay evidence.

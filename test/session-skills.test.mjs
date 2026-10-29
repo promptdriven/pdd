@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { setupSkills, PDD_SKILL_NAMES } from '../src/skills-install.mjs';
@@ -24,7 +24,7 @@ function packageCopy(t) {
   for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
   const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"');
   for (const dir of [home, project]) mkdirSync(dir);
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex') };
   delete env.CLAUDE_CONFIG_DIR;
   const run = (args, extra = {}) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), ...args],
     { cwd: project, env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });
@@ -38,8 +38,9 @@ test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or C
   const alpha = join(sandbox, 'alpha-bin'), legacy = join(sandbox, 'legacy-bin');
   mkdirSync(alpha); mkdirSync(legacy);
   symlinkSync(join(pkg, 'bin/pdd.mjs'), join(alpha, 'pdd'));
+  symlinkSync(process.execPath, join(alpha, 'node'));
   writeFileSync(join(legacy, 'pdd'), '#!/bin/sh\necho "pdd, version 0.0.305"\n', { mode: 0o755 });
-  const path = `${alpha}:${dirname(process.execPath)}:/usr/bin:/bin`;
+  const path = `${alpha}:/usr/bin:/bin`;
   for (const args of [['--version'], ['--help'], ['workflow', 'list']]) {
     const result = run(args, { CLAUDE_CONFIG_DIR: config, PATH: path });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stderr, '');

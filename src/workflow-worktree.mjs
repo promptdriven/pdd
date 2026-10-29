@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: c9bd0cb10a9cb80fa1aa0fb43423971312c56977bb6515dddc0c5ea600b31f4b).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 42289e9deb49cdcc4401346a782254e8eea34717292e24a63e6d1607dcfc1baf).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -147,7 +147,7 @@ function registrations(output) {
   return records;
 }
 
-async function externalWorktrees(ctx, c) {
+async function verifiedPrimary(ctx, c) {
   const primary = registrations(await c.git(ctx.sourceRoot, ['worktree', 'list', '--porcelain', '-z']))[0];
   if (!primary?.worktree) fail();
   let anchor;
@@ -165,6 +165,19 @@ async function externalWorktrees(ctx, c) {
       || !sameRepo(original.repository, ctx.repository)) fail();
     anchor = original.sourceRoot;
   }
+  return {root:anchor,bare:Boolean(primary.bare)};
+}
+
+export async function lookupRepositoryParent(input, ports = {}) {
+  try {
+    const {cwd,repository,commonDir}=structuredClone(input??{}), c=commands(ports), ctx=await context(cwd,c);
+    if(!repoName(repository)||!sameRepo(ctx.repository,repository)||ctx.commonDir!==commonDir)fail();
+    return {state:'ready',...await verifiedPrimary(ctx,c)};
+  } catch {return {state:'recovery_required',root:null,bare:null};}
+}
+
+async function externalWorktrees(ctx,c) {
+  const {root:anchor}=await verifiedPrimary(ctx,c);
   const path = join(dirname(anchor), basename(anchor) + '.pdd-worktrees');
   if (path.split(sep).some(part => part.toLowerCase() === '.git')) fail();
   return path;

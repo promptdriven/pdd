@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd#alpha -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.9`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.10`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -134,7 +134,7 @@ The server keeps running, so send the requests from a second terminal. The comma
 
 Each command or request runs on the runtime with no code. It takes about 10 to 20 seconds and uses AI calls from the Try budget. A Try runs one command at a time. Your agent can run the same commands after the PATH line, when it has network access and no sandbox that blocks files outside the repo.
 
-On the Try page, the **Ask your agent** panel connects to an agent on your computer while `pdd try` runs in your terminal. It explains and fills fields, but it never clicks **Run**. To choose the agent, add `--agent NAME`.
+On the Try page, the **Ask your agent** panel connects to an agent on your computer while `pdd try` runs in your terminal. It explains and fills fields. When you ask it to run an action, it runs it using the Try budget; otherwise you press **Run**. To choose the agent, add `--agent NAME`.
 
 - **Budget.** A new Try has 400 AI calls. For more, click **Raise the limit** on the Try page, or start a new Try with `pdd try STORY --new --max-calls 600`. `--new` starts with fresh data.
 - **Save a case.** Click **Save as test** on the Try page, or run `pdd try --save-last` after a `--cli` command. pdd adds the case to the Story's test file.
@@ -156,7 +156,7 @@ pdd shows the interface of the prompt and the text changes since the last approv
 In a workflow run, pdd opens two pull requests:
 
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Runtime check` lines and the report links.
-2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent writes the code from the approved prompts. pdd runs the tests from prompt space on the code, and shows the results in a table with a formal check, for example **Proved (bounded)**.
+2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent writes the code from the approved prompts. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
 pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
 
@@ -212,7 +212,7 @@ The skills and the other commands run on your computer.
 | You see | What to do |
 |---|---|
 | `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
-| `The lint result is unknown.` It comes after 1 or 2 minutes of `Still checking the files`. | pdd got no answer that it can read. One cause is a slow PDD Cloud sign-in. Wait 1 minute, then run the command again. |
+| `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
 | `REFUSED` (exit code 4) | Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
@@ -220,7 +220,7 @@ The skills and the other commands run on your computer.
 | `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a Try that you do not use, run `pdd try --stop STORY`. |
 | `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new`. |
-| `pdd --version` does not print `0.1.9` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.10` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more. To report a problem, [open an issue](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
 
@@ -229,7 +229,7 @@ The [usage guide](docs/USAGE.md#13-troubleshooting) has more. To report a proble
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
 - [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the runtime can check.
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.9).
+- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.10).
 - [Contributing](CONTRIBUTING.md).
 
 ## License
