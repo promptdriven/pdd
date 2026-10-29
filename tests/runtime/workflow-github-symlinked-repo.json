@@ -32,6 +32,29 @@
           "value": "/tmp/repo-alias/pr-body.md"
         }
       ]
+    },
+    {
+      "step_id": "refuse-body-outside-repository",
+      "entry_path": "prompts/cli/workflow-github.prompt.md",
+      "operation": "prepareWorkflowPr",
+      "input": {
+        "cwd": "/tmp/repo-alias",
+        "runId": "run-2444-outside",
+        "stageId": "prompt",
+        "repository": "Acme/Project",
+        "baseBranch": "main",
+        "bodyFile": "/tmp/outside/pr-body.md"
+      },
+      "expected_error": "workflow_github_body_unsafe",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "workflow_github_body_unsafe"
+        }
+      ]
     }
   ]
 }
