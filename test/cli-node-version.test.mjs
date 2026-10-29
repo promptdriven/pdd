@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const bin = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
+const packageVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const branch = spawnSync('git', ['symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+const sha9 = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim().slice(0, 9);
 
 // Wrong: an old Node loads pdd's modules first and fails with a raw syntax or import error.
 test('NODE1: on Node older than 22 pdd prints one plain line, exits 1 and loads nothing else', t => {
@@ -39,5 +42,5 @@ test('NODE2: on Node 22 or newer pdd runs as usual', t => {
   delete env.CLAUDE_CONFIG_DIR;
   const result = spawnSync(process.execPath, [bin, '--version'], { cwd: dir, env, encoding: 'utf8', timeout: 10000 });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}\n`);
+  assert.equal(result.stdout, `${packageVersion}-dev.${branch.replaceAll('/', '-')}.${sha9}\n`);
 });
