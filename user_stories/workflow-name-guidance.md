@@ -5,6 +5,7 @@ I can see how to add the missing workflow name when I try to start work with onl
 ## Acceptance criteria
 
 1. `pdd workflow run 81` prints "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list." to stderr, prints nothing to stdout and exits with code 2.
+2. `pdd workflow run 42` prints "Name the workflow: pdd workflow run small-change 42 (or bug, feature). See pdd workflow list." to stderr, prints nothing to stdout and exits with code 2.
 
 ## What must not change
 

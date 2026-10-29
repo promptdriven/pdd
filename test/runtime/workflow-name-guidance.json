@@ -2,7 +2,8 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/workflow-name-guidance.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd workflow run 81` prints \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."}
+    {"id": "AC1", "text": "`pdd workflow run 81` prints \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."},
+    {"id": "AC2", "text": "`pdd workflow run 42` prints \"Name the workflow: pdd workflow run small-change 42 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."}
   ],
   "initial_world": {},
   "simulation": {},
@@ -17,6 +18,17 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "another-issue-number-without-workflow-name",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["workflow", "run", "42"]},
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 42 (or bug, feature). See pdd workflow list.\n"},
+        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     }
   ]
