@@ -8,7 +8,7 @@ import { runPdd } from '../src/pdd-cli.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
-const checkoutVersion = new RegExp(`^${version.replaceAll('.', '\\.')}(?:-dev\\.[^.]+\\.[0-9a-f]{9})?\\n$`);
+const devVersion = `${version}-dev.pdd-feature-2455-bd781e7d-code.215f5de09`;
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pdd-path ' proof-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -17,7 +17,9 @@ function fixture(t) {
   symlinkSync(process.execPath, join(nodeBin, 'node'));
   const legacy = '#!/bin/sh\nprintf "pdd, version 0.0.305.dev214\\n"\n';
   writeFileSync(join(old, 'pdd'), legacy, { mode: 0o755 });
-  symlinkSync(bin, join(alpha, 'pdd'));
+  // Keep Alpha as a standalone release tree; it must not resolve the source checkout's Git metadata.
+  for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(alpha, name), { recursive: true });
+  symlinkSync(join(alpha, 'bin/pdd.mjs'), join(alpha, 'pdd'));
   const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: '', PATH: [old, alpha, nodeBin, '/usr/bin', '/bin'].join(':') };
   delete env.PDD_PATH_PROBE;
   const run = (...args) => spawnSync(process.execPath, [bin, ...args], { cwd, env, encoding: 'utf8', timeout: 10000 });
@@ -29,12 +31,12 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
   for (const args of [['setup'], ['--version']]) {
     const r = f.run(...args);
     assert.equal(r.status, 0, r.stderr);
-    if (args[0] === '--version') assert.match(r.stdout, checkoutVersion);
+    if (args[0] === '--version') assert.equal(r.stdout, `${devVersion}\n`);
     assert.ok(r.stderr.includes(bin)); assert.ok(r.stderr.includes(`PDD Alpha ${version}`));
     assert.ok(r.stderr.includes(join(f.old, 'pdd'))); assert.ok(r.stderr.includes(join(f.alpha, 'pdd')));
     assert.match(r.stderr, /PATH selects:.*pdd, version 0\.0\.305\.dev214/);
-    assert.match(r.stderr, /conda/); assert.match(r.stderr, /after.*activat/i); assert.match(r.stderr, /shadow Alpha again/);
-    assert.ok(r.stderr.includes(process.execPath)); assert.match(r.stderr, /export PATH=.*hash -r/);
+    assert.match(r.stderr, /conda/); assert.match(r.stderr, /environment activation.*reorder/i); assert.match(r.stderr, /shadow Alpha again/);
+    assert.ok(r.stderr.includes(process.execPath)); assert.match(r.stderr, /Use Alpha directly:/);
     assert.equal(readFileSync(join(f.old, 'pdd'), 'utf8'), f.legacy);
   }
 });
@@ -43,14 +45,14 @@ test('PATH2: PATH correction selects Alpha and a second version check terminates
   const f = fixture(t);
   f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, checkoutVersion);
-  assert.match(r.stderr, /PATH selects:.*PDD Alpha/);
+  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${devVersion}\n`);
+  assert.match(r.stderr, /PATH selects:.*\(0\.1\.10\)/);
   assert.ok(r.stderr.includes(join(f.old, 'pdd')));
   rmSync(join(f.old, 'pdd'));
   const second = f.run('--version');
   assert.equal(second.status, 0, second.stderr);
-  assert.match(second.stdout, checkoutVersion);
-  assert.match(second.stderr, /PATH selects:.*PDD Alpha/);
+  assert.equal(second.stdout, `${devVersion}\n`);
+  assert.match(second.stderr, /PATH selects:.*\(0\.1\.10\)/);
 });
 
 test('PATH3: an unreportable version stays visible and help makes no version probe', t => {
@@ -88,7 +90,7 @@ test('PATH6: probing another Alpha installation terminates and keeps version-onl
   for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(other, name), { recursive: true });
   rmSync(join(f.old, 'pdd')); symlinkSync(join(other, 'bin/pdd.mjs'), join(f.old, 'pdd'));
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, checkoutVersion);
+  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${devVersion}\n`);
   assert.match(r.stderr, new RegExp(`PATH selects:.*\\(${version.replaceAll('.', '\\.')}\\)`));
 });
 
