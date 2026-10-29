@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 6db866f01cdc256cbfbe8ff57d0a5e30b3fabeb18da886c33939957c300a7c45).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 4c2cc8e50193c7222defcae749817e2ca9965ea5e3439a460dd8de4df6c7b8a4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -159,7 +159,10 @@ const variantNames = variants => [...new Set(variants.map(variant => typeof vari
 // The JSON Schema check of rule P9: every problem, not only the first. Pattern misses are warnings (JS and Python regexes differ).
 // Only a common regex subset is evidence of cross-runtime membership. Other
 // syntax may still be checked by the runtime, but cannot establish overlap.
-function portablePattern(source) {
+function portablePattern(source, value) {
+  // Character classes and end anchors differ outside this concrete domain.
+  // Empty JS classes are also invalid in Python, even with ASCII input.
+  if (/[^\x20-\x7e]/u.test(source) || /[^\x20-\x7e]/u.test(value) || /\[\^?\]/u.test(source)) return null;
   if (/\\(?:[1-9bBAZzGkpPuU]|x|c)|\(\?|[\s\S]*[\u0080-\uffff]/u.test(source)) return null;
   try { return new RegExp(source, 'u'); } catch { return null; }
 }
@@ -208,7 +211,7 @@ function schemaProblems(value, schema, tokens, out, warnings, evidence = { miss:
       at(`has ${plural(length, 'character')}. The prompt allows ${range(schema.minLength, schema.maxLength, 'character')}.`);
     }
     if (typeof schema.pattern === 'string') {
-      const pattern = portablePattern(schema.pattern);
+      const pattern = portablePattern(schema.pattern, value);
       if (!pattern) evidence.unknown = true;
       const pointer = pointerOf(tokens);
       if (pattern && !pattern.test(value)) {
