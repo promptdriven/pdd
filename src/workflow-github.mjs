@@ -60,23 +60,15 @@ function dependencies(ports = {}) {
   }
   return { raw, command, readFile: ports.readFile ?? ((file, encoding) => readFile(file,
     { encoding, flag: constants.O_RDONLY | constants.O_NOFOLLOW })),
-  async writeFile(file, body, encoding, safety) {
-    await assertBodyPath(file, safety);
-    return (ports.writeFile ?? writeBodyFile)(file, body, encoding, safety);
+  async writeFile(file, body, encoding) {
+    await assertBodyPath(file);
+    return (ports.writeFile ?? writeBodyFile)(file, body, encoding);
   } };
 }
 
 
-async function assertBodyPath(file, safety = {}) {
-  let physicalParent;
-  try { physicalParent = await realpath(dirname(file)); }
-  catch (error) { if (error?.code === 'ENOENT') fail('workflow_github_body_unsafe'); throw error; }
-  if (safety.rootPhysical) {
-    const expectedParent = resolve(safety.cwdPhysical, relative(safety.cwdAlias, dirname(file)));
-    const withinRoot = relative(safety.rootPhysical, physicalParent);
-    if (physicalParent !== expectedParent || withinRoot === '..' || withinRoot.startsWith('..' + sep) || isAbsolute(withinRoot))
-      fail('workflow_github_body_unsafe');
-  } else if (physicalParent !== dirname(file)) fail('workflow_github_body_unsafe');
+async function assertBodyPath(file) {
+  if (await realpath(dirname(file)) !== dirname(file)) fail('workflow_github_body_unsafe');
   try {
     const entry = await lstat(file);
     if (!entry.isFile() || entry.nlink !== 1) fail('workflow_github_body_unsafe');
@@ -84,11 +76,11 @@ async function assertBodyPath(file, safety = {}) {
   } catch (error) { if (error?.code !== 'ENOENT') throw error; }
 }
 
-async function writeBodyFile(file, body, encoding, safety) {
+async function writeBodyFile(file, body, encoding) {
   // Open without truncation or following the final link; validate the opened file before modifying it.
   const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o666);
   try {
-    const opened = await handle.stat(), entry = await assertBodyPath(file, safety);
+    const opened = await handle.stat(), entry = await assertBodyPath(file);
     if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== entry?.dev || opened.ino !== entry?.ino)
       fail('workflow_github_body_unsafe');
     await handle.truncate(0);
@@ -166,15 +158,11 @@ function markerBody(body, marker) {
 
 async function localTopic(cwd, baseBranch, bodyFile, deps) {
   if (!text(baseBranch) || !text(bodyFile)) fail('workflow_github_topic_invalid');
+  await assertBodyPath(bodyFile);
   await deps.command(cwd, 'git', ['check-ref-format', '--branch', baseBranch]);
   const root = (await deps.command(cwd, 'git', ['rev-parse', '--show-toplevel'])).trim();
   if (!isAbsolute(root)) fail('workflow_github_root_invalid');
-  const rootPhysical = await realpath(root), cwdAlias = resolve(cwd), cwdPhysical = await realpath(cwdAlias);
-  const safety = { rootPhysical, cwdAlias, cwdPhysical };
-  await assertBodyPath(bodyFile, safety);
-  const physicalParent = await realpath(dirname(bodyFile));
-  const bodyPhysical = resolve(physicalParent, bodyFile.split(sep).at(-1));
-  const bodyRelative = relative(rootPhysical, bodyPhysical), inside = bodyRelative && bodyRelative !== '..'
+  const bodyRelative = relative(root, bodyFile), inside = bodyRelative && bodyRelative !== '..'
     && !bodyRelative.startsWith('..' + sep) && !isAbsolute(bodyRelative);
   if (inside) {
     const tracked = await deps.raw(cwd, 'git', ['ls-files', '--error-unmatch', '--', bodyRelative]);
@@ -192,7 +180,7 @@ async function localTopic(cwd, baseBranch, bodyFile, deps) {
   await deps.command(cwd, 'git', ['rev-parse', '--verify', `${base}^{commit}`]);
   const count = (await deps.command(cwd, 'git', ['rev-list', '--count', `${base}..HEAD`])).trim();
   if (!/^[1-9][0-9]*$/.test(count)) fail('workflow_github_topic_has_no_commits');
-  return { headBranch, headSha, safety };
+  return { headBranch, headSha };
 }
 
 export async function prepareWorkflowPr(input, ports = {}) {
@@ -209,9 +197,8 @@ export async function prepareWorkflowPr(input, ports = {}) {
   try { body = await deps.readFile(file, 'utf8'); }
   catch (error) { if (error?.code !== 'ENOENT') throw error; body = title + '\n'; }
   if (!markerBody(body, marker)) body += (body.endsWith('\n') ? '\n' : '\n\n') + `<!-- ${marker} -->\n`;
-  await deps.writeFile(file, body, 'utf8', topic.safety);
-  const { safety, ...committedTopic } = topic;
-  return { repository: actual.repository, runId, stageId, ...committedTopic, baseBranch, marker, title, bodyFile: file };
+  await deps.writeFile(file, body, 'utf8');
+  return { repository: actual.repository, runId, stageId, ...topic, baseBranch, marker, title, bodyFile: file };
 }
 
 function intentCopy(value) {
