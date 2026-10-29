@@ -196,11 +196,13 @@ async function nativeIdentity(pid) {
     const match = stdout.trim().match(/^(\d+)\s+(.+?)\s+(\S+)$/);
     if (!match) throw problem('native_identity_unknown');
     return match[3].startsWith('Z') ? null : { group: Number(match[1]), birth: match[2] };
-  } catch (error) { if (error.code === 1 && !error.stdout?.trim()) return null; throw error; }
+  } catch (error) { if (error.code === 1 && !error.stdout?.trim() && !error.stderr?.trim()) return null; throw error; }
 }
 
 async function nativeProcesses() {
   const { stdout } = await ordinary('ps', ['-axo', 'pid=,ppid=,pgid=,uid=']);
+  if (process.platform !== 'linux' && (!stdout.trim() || stdout.trim().split('\n').some(line => !/^\s*\d+\s+\d+\s+\d+\s+\d+\s*$/.test(line))))
+    throw problem('native_processes_unknown', 'Native process inspection returned invalid data; the issue claim stays.');
   const processes = stdout.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
     .filter(fields => fields.length === 4 && fields.every(Number.isSafeInteger))
     .filter(([, , , uid]) => typeof process.getuid !== 'function' || uid === process.getuid())
@@ -211,12 +213,43 @@ async function nativeProcesses() {
       catch (error) { if (!['ENOENT', 'ESRCH', 'EACCES', 'EPERM'].includes(error.code)) throw error; }
     }
   } else if (processes.length) {
-    const { stdout: directories } = await ordinary('lsof', ['-a', '-p', processes.map(item => item.pid).join(','), '-d', 'cwd', '-Fn']);
-    let pid;
-    for (const line of directories.split('\n')) {
-      if (line.startsWith('p')) pid = Number(line.slice(1));
-      if (line.startsWith('n')) { const item = processes.find(item => item.pid === pid); if (item) item.cwd = line.slice(1); }
+    // Select by user rather than a snapshot-sized PID argument: unrelated short-lived
+    // processes must not turn lsof's valid partial output into a failed stop.
+    let directories;
+    try {
+      if (typeof process.getuid !== 'function') throw problem('native_cwd_unknown', 'Cannot select this user for native cwd inspection.');
+      const output = await ordinary('lsof', ['-a', '-u', String(process.getuid()), '-d', 'cwd', '-Fpfn']);
+      if (String(output.stderr ?? '').trim()) throw problem('native_cwd_unknown');
+      directories = output.stdout;
+    } catch (error) {
+      if (error.code !== 1 || String(error.stderr ?? '').trim())
+        throw problem('native_cwd_unknown', 'Native cwd inspection failed; the issue claim stays.');
+      directories = error.stdout;
     }
+    const byPid = new Map(processes.map(item => [item.pid, item]));
+    let item, cwdField = false;
+    const malformed = () => problem('native_cwd_unknown', 'Native cwd inspection returned incomplete or invalid data; the issue claim stays.');
+    if (typeof directories !== 'string') throw malformed();
+    for (const line of directories.split('\n')) {
+      if (!line) continue;
+      if (/^p[1-9][0-9]*$/.test(line)) {
+        if (item && item.cwd === null) throw malformed();
+        const pid = Number(line.slice(1));
+        if (!Number.isSafeInteger(pid)) throw malformed();
+        item = byPid.get(pid); cwdField = false;
+        // A process may start between ps and lsof; keep its cwd in the whole-worktree scan.
+        if (!item) { item = { pid, parent: null, group: null, cwd: null }; byPid.set(pid, item); processes.push(item); }
+        if (item.cwd !== null) throw malformed();
+      } else if (line === 'fcwd' && item && !cwdField) cwdField = true;
+      else if (line.startsWith('n') && cwdField && item?.cwd === null && isAbsolute(line.slice(1))) item.cwd = line.slice(1);
+      else throw malformed();
+    }
+    if (item && item.cwd === null) throw malformed();
+    // An omitted PID may have exited during inspection. Only positive native
+    // absence permits omission; a live process with unreadable cwd stays unknown.
+    for (const candidate of processes) if (candidate.cwd === null && await nativeIdentity(candidate.pid))
+      throw problem('native_cwd_unknown', `Cannot inspect the cwd of live process ${candidate.pid}; the issue claim stays.`);
+    return processes.filter(candidate => candidate.cwd !== null);
   }
   return processes;
 }

@@ -1503,7 +1503,7 @@ test('BASE4: PR 2 stacks on open PR 1 and returns to the saved topic base after 
 });
 
 // Wrong: a failed replacement start frees a cancelled run's custody before its new base is usable.
-test('BASE5: explicit base failure preserves a cancelled run, worktree and issue claim', async t => {
+test('BASE5: explicit base failure preserves cancelled work and releases the issue claim', async t => {
   const f = await fixture(t); await f.run();
   const old = f.record();
   assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
