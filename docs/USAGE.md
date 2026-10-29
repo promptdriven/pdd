@@ -580,14 +580,9 @@ This is an alpha. These limits are known today:
 
 ## 14. Report a problem
 
-[Open an issue](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) on `promptdriven/pdd` and put **[alpha]** at the start of the title. Please add:
+Follow [Report a problem](ISSUES.md). It is for you and for your agent. It tells how to check the version, search the open issues and write one clear issue. Fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml), or ask your agent to file the issue with `gh`.
 
-- your OS, and the output of `pdd --version`, `node -v`, `git --version` and `herdr --version`;
-- the agent (Codex or Claude Code) and its version;
-- the command you ran and the output of `pdd workflow status N`;
-- what you expected, and what happened.
-
-Do not paste tokens, passwords or private code.
+Do not paste tokens, passwords, Try links or private code.
 
 ## Use your program for real with pdd try
 

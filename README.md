@@ -222,7 +222,15 @@ The skills and the other commands run on your computer.
 | `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new`. |
 | `pdd --version` does not print `0.1.10` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
-The [usage guide](docs/USAGE.md#13-troubleshooting) has more. To report a problem, [open an issue](https://github.com/promptdriven/pdd/issues/new?title=%5Balpha%5D%20) with **[alpha]** in the title.
+The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
+
+## Report a problem
+
+Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you can ask your agent to report the problem.
+
+1. Run `pdd --version`. It must print `0.1.` and a number.
+2. Search the [open issues](https://github.com/promptdriven/pdd/issues). If an issue has the same problem, add a comment to it.
+3. If not, fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml): one problem, the exact command and the output. Never paste tokens, Try links or private code.
 
 ## Links
 
