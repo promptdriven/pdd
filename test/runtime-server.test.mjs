@@ -303,6 +303,52 @@ test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis so
   assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
 });
 
+test('RUNTIME-XFIX6A: a multiline actual with a short expected value stays in block form', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    return { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }]) };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+});
+
+test('RUNTIME-XFIX6B: a result target never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = { stdout: 'present' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6C: an error plus a real result never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = {};
+    answer.result.report.samples[0].steps[0].error = { message: 'bad input' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6D: text and JSON use run-level diagnosis fields when no check diagnosis exists', async t => {
+  const setup = harbor(t), answer = (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const result = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    result.result.why = 'run-level why'; result.result.who = 'runtime'; result.result.next_step = 'run-level next';
+    return { status: 200, json: result };
+  };
+  const text = await check(setup, await fakeRuntime(t, answer), ['place-order']);
+  assert.match(text.out, /Why: run-level why/); assert.match(text.out, /Next: run-level next/);
+  const json = await check(setup, await fakeRuntime(t, answer), ['place-order'], { '--json': true });
+  const row = json.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+});
+
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
 test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
   const setup = harbor(t);
