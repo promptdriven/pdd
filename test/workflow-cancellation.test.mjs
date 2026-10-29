@@ -152,12 +152,23 @@ test('CANCEL9: killed public CLI confirmation owner releases custody by native i
 for(const operation of ['approve','open','changes']) test(`CANCEL10: cancellation confirmation excludes concurrent ${operation} and preserves recorded history`,async t=>{
   const {openRun,changeRun}=await import('../src/workflow-runner.mjs');const f=await cancellationFixture(t);
   await stepDone({step:'scope',summary:'Reviewed scope.',cwd:f.old.root},f.ports);
+  // Without custody these transports permit an actual public resume or prompt.
+  // A control must expose the forbidden effect, not fail on an unbound fixture.
+  const transport=f.ports.herdr,effects=[];
+  f.ports.isTTY=operation!=='open';
+  f.ports.findNativeSessions=async()=>[{id:'00000011-0000-4000-8000-000000000011'}];
+  f.ports.herdr=async args=>{
+    if(args[0]==='status'&&args[1]==='server')return {running:true};
+    if(args[0]==='tab'&&['get','focus'].includes(args[1]))return {};
+    if((args[0]==='pane'&&args[1]==='run')||(args[0]==='agent'&&args[1]==='prompt')){effects.push(args);return {};}
+    return transport(args);
+  };
   const prior=f.read();let release,entered;const wait=new Promise(r=>release=r),ready=new Promise(r=>entered=r);
   f.ports.confirm=async question=>{if(question.startsWith('Cancel run')){entered();await wait;}return true;};
   const cancellation=cancelRun(input(f),f.ports);await ready;
   const request=operation==='approve'?approveRun:operation==='open'?openRun:changeRun;
   const raced=await request({ref:'17',text:'Please revise this step.',cwd:f.source},f.ports);
-  assert.equal(raced.exitCode,1,raced.message);assert.match(raced.message,/custody/);assert.equal(f.chats.length,1);
+  assert.equal(raced.exitCode,1,raced.message);assert.match(raced.message,/custody/);assert.equal(f.chats.length,1);assert.deepEqual(effects,[]);
   release();assert.equal((await cancellation).exitCode,0);assert.deepEqual(f.read().decisions,prior.decisions);assert.deepEqual(f.read().done,prior.done);assert.deepEqual(f.read().changes,prior.changes);assert.equal(f.read().chats.length,prior.chats.length);
 });
 
