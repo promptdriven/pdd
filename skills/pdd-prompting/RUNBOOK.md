@@ -1,5 +1,7 @@
 # PDD runtime runbook
 
+Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
+
 ## 1. What the runtime is
 
 The runtime runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
@@ -129,7 +131,8 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
 - Expected values come from the story and the person. Never take them from a run, a Try or the code.
 - If the story allows two answers, ask the person. Example: "every 10th coffee free" gives $4.95 off, but
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
-- Never change a test to make it pass. Fix the prompt. If you think an expected value is wrong, tell the person.
+- A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.
+  Never change a test to make it pass.
 
 **Possible numeric mismatches.** pdd checks nearby numeric literals as typo advice, not as a verdict. It uses the
 result path and companion checks to distinguish a component from a total. The warning names the test, step/check,
@@ -230,6 +233,9 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `/internal/store--op-add--hex-616464` counts the calls of `add`.
 - Two prompt files with the same file name get other node names. Give each prompt its own file name.
 - `got {"missing": true}` means that the path names no node. The path is wrong, not the prompt: fix only the path.
+  For the `error` target, pdd prints `got no error (a normal result)` when the step returned a result and no error.
+  Then the path is right, and the prompt did not refuse this input. If pdd still prints `got {"missing": true}` on
+  `error`, an error came back without that field: compare the path with the prompt's declared errors.
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
@@ -289,11 +295,29 @@ failed, the real reason and what to do next: pass that line on as it is.
 | Exit | Result | What to do |
 |---|---|---|
 | 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a Try. |
-| 1 | failed | Show the person the failed check. Fix the prompt. Never change the expected value yourself. |
+| 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged. Fix the file that pdd names (table below). If the fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
 | 3 | unknown or still running | Run `pdd check --read` about every minute until every Story has a result. Never send the check again. |
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
+
+**After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.
+1. Read pdd's `Why:`, `Next:` and `Rerun:` lines when pdd prints them. Open "Debug this step" on the report. Read the
+   criterion text, the prompt and the test step.
+2. Tell the person in three lines: the kind, the evidence and the fix you propose.
+3. Act by kind:
+
+| Kind | Evidence | What you do |
+|---|---|---|
+| The prompt is wrong | The Story and the step input give the expected value; the prompt does something else | Fix the prompt. Check that Story once. |
+| The program needs a tool | Only a hash, a digest or exact math shows the right answer | Declare a `compute` resource (section 21, "Hash exact bytes"). Check once. |
+| The test path is wrong | `got {"missing": true}` on `result` or `world` (section 8) | Fix only the path. |
+| The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
+| The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
+| The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
+| No verdict | Exit 3, 4 or 5, or an AI-service cause | Tell the person. Change no file. |
+
+4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
 - A `possible numeric mismatch` is advisory. Confirm the quantities against the Story and prompt; retain a correct
@@ -455,8 +479,9 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
    The expected value comes from the issue and the person.
 2. Run `pdd check <story>` on the CURRENT prompt. Do not change the prompt first.
-3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Fix the
-   prompt first (set draft, fill the hash), and check again until ✓.
+3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Find the
+   cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix
+   rounds, then ask the person.
 4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
    the code fix.
 5. The check report shows before ✗ → after ✓. `pdd try <story>` opens with the issue's input ready.
@@ -507,8 +532,11 @@ identity only. It does not independently prove execution or prompt/code equivale
   the old code). At least one assertion must fail there. A crash does not count.
 - Write the table into `verify.md`: case, criterion, input, expected, prompt check, code (got), result.
   Also show that `tests/<story>.json` is unchanged since prompt space.
-- A ✗ case goes back to `build` (at most 2 rounds). If it still fails, the code-space PR opens with
-  "✗ N vectors fail" as its first line. Keep actual failures; never change expected values to get a pass.
+- In bug and feature, finish the initial build, verify and formal steps with fresh independent review.
+  After the initial review, a ✗ case or review must-fix goes back to `build` (at most 2 repair rounds),
+  then verify, formal and fresh review. The code-space PR keeps the actual `Review:` verdict and remaining
+  must-fix list at the top, plus "✗ N vectors fail" if vectors still fail. No new human gate.
+  Keep actual failures; never change expected values to get a pass.
 
 **The formal check (done by an agent that did not write the code).**
 - Every code-space PR has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
