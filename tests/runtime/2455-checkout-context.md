@@ -1,0 +1,1 @@
+This runtime case represents a checkout build. The checkout branch identity is feature-2455-bd781e7d and the checkout commit identifier is 5a45a2c8b. The package version in package.json is the base release version; because this is a checkout, the CLI reports the development suffix using that branch and commit identity.
