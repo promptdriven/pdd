@@ -15,3 +15,5 @@ Option kind `integer` takes decimal digits with no sign, within the option's `mi
 Option kind `optional-integer` consumes the following word only when it is decimal digits; validate against
 min/max and store it as a string. With no number, store the catalog's default as a string. A subsequent option
 or Story operand remains available for ordinary parsing. This supports --serve [PORT].
+
+The catalogued workflow.cancel operand accepts either an existing issue-reference form or a safe run ID (ASCII letters/digits/dot/underscore/hyphen, at most 160 characters, nonblank). Workflow.run --replace accepts only such a run ID. Preserve numeric issue-reference parsing; cancellation resolves identity in the runner. Reject missing/duplicate --replace, unsafe IDs and extra operands with exit 2 before effects.
