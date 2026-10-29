@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { startRun } from '../../src/workflow-runner.mjs';
 import { readRun, runDirFor, writeRun } from '../../src/workflow-runs.mjs';
+import { disposableFixture } from './disposable-fixture.mjs';
 
 const exec = promisify(callbackExec);
 export const packageRoot = resolve(import.meta.dirname, '../..');
 export async function cancellationFixture(t, { override = false } = {}) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-cancel-'))), source = join(base, 'project'), stateDir = join(base, 'state'), home = join(base, 'home');
-  t.after(() => rmSync(base, { force: true, recursive: true }));
+  const { path: base, ownChild } = disposableFixture(t, 'pdd-cancel-');
+  const source = join(base, 'project'), stateDir = join(base, 'state'), home = join(base, 'home');
   for (const dir of [source, stateDir, home]) mkdirSync(dir);
   const git = (...args) => execFileSync('git', args, { cwd: source, encoding: 'utf8' }).trim();
   git('init', '-q', '-b', 'alpha'); git('config', 'user.name', 'Cancellation Test'); git('config', 'user.email', 'test@example.invalid');
@@ -26,7 +26,7 @@ export async function cancellationFixture(t, { override = false } = {}) {
   }
   const commonDir = join(source, '.git'), runDir = runDirFor(commonDir, 17), events = [], chats = [];
   const claim = join(commonDir, 'pdd/worktree-assignments/issues/17.json');
-  const f = { base, source, stateDir, home, commonDir, runDir, claim, events, chats, git, answer: true };
+  const f = { base, source, stateDir, home, commonDir, runDir, claim, events, chats, git, ownChild, answer: true };
   f.read = () => readRun(runDir);
   f.ports = {
     env: { HOME: home }, stateDir, now: () => 600000, isTTY: true, pdd: 'pdd',

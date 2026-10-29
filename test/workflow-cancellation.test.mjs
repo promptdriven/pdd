@@ -139,12 +139,12 @@ test('CANCEL8: public CLI forwards replacement and run ID cancellation exactly o
 
 test('CANCEL9: killed public CLI confirmation owner releases custody by native identity; live owner remains exclusive',async t=>{
   const {spawn}=await import('node:child_process');const f=await cancellationFixture(t),status=bytes(join(f.runDir,'status.json')),claim=bytes(f.claim);
-  const launch=()=>spawn(process.execPath,[join(packageRoot,'bin/pdd.mjs'),'workflow','cancel',f.old.runId],{cwd:f.source,env:{...process.env,HOME:f.home,PDD_AGENT_SESSION:'',CLAUDECODE:'',CODEX_THREAD_ID:''},stdio:['pipe','pipe','pipe']});
-  const first=launch();t.after(()=>first.kill('SIGKILL'));
+  const launch=()=>{const child=spawn(process.execPath,[join(packageRoot,'bin/pdd.mjs'),'workflow','cancel',f.old.runId],{cwd:f.source,env:{...process.env,HOME:f.home,PDD_AGENT_SESSION:'',CLAUDECODE:'',CODEX_THREAD_ID:''},stdio:['pipe','pipe','pipe']});f.ownChild(child);return child;};
+  const first=launch(),firstClosed=new Promise(resolve=>first.once('close',resolve));
   await new Promise((resolve,reject)=>{first.stderr.on('data',data=>{if(String(data).includes('(y/N)'))resolve();});first.once('exit',code=>reject(Error(`CLI exited before confirmation: ${code}`)));});
   const retry=async()=>{const child=launch();let output='';child.stdout.on('data',s=>output+=s);child.stderr.on('data',s=>output+=s);child.stdin.end('n\n');return {code:await new Promise(r=>child.once('close',r)),output};};
   const live=await retry();assert.equal(live.code,1);assert.match(live.output,/custody/);
-  first.kill('SIGKILL');await new Promise(r=>first.once('close',r));
+  first.kill('SIGKILL');await firstClosed;
   const recovered=await retry();assert.equal(recovered.code,0,recovered.output);assert.match(recovered.output,/declined/);
   assert.equal(bytes(join(f.runDir,'status.json')),status);assert.equal(bytes(f.claim),claim);
 });
@@ -176,11 +176,12 @@ test('CANCEL11: a real detached child writer forbids cancellation and matching c
   const {spawn}=await import('node:child_process'),{statSync}=await import('node:fs');const f=await cancellationFixture(t),root=f.old.root;
   const childScript=join(root,'codex-child.mjs'),parentScript=join(root,'codex-parent.mjs'),ticks=join(root,'child-writes');
   writeFileSync(childScript,`import{appendFileSync}from'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(ticks)},'tick\\n'),10);`);
-  writeFileSync(parentScript,`import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';const child=spawn(process.execPath,[${JSON.stringify(childScript)}],{cwd:${JSON.stringify(root)},detached:true,stdio:'ignore'});writeFileSync(${JSON.stringify(join(root,'child-pid'))},String(child.pid));setInterval(()=>{},1000);`);
-  const parent=spawn(process.execPath,[parentScript],{cwd:root,detached:true,stdio:'ignore'});let child;
-  t.after(()=>{for(const pid of [parent.pid,child])try{process.kill(-pid,'SIGKILL');}catch{}});
+  // The parent owns and reaps its detached child before acknowledging teardown
+  // by exiting. This also covers assertions that fail before reading child-pid.
+  writeFileSync(parentScript,`import{spawn}from'node:child_process';import{writeFileSync}from'node:fs';let child,closed;process.on('SIGTERM',async()=>{child?.kill('SIGKILL');await closed;process.exit(0);});child=spawn(process.execPath,[${JSON.stringify(childScript)}],{cwd:${JSON.stringify(root)},detached:true,stdio:'ignore'});closed=new Promise(resolve=>child.once('close',resolve));writeFileSync(${JSON.stringify(join(root,'child-pid'))},String(child.pid));setInterval(()=>{},1000);`);
+  const parent=spawn(process.execPath,[parentScript],{cwd:root,detached:true,stdio:'ignore'});
+  f.ownChild(parent,'SIGTERM');
   for(let count=0;count<100&&!existsSync(ticks);count++)await new Promise(r=>setTimeout(r,10));assert.equal(existsSync(ticks),true);
-  child=Number(bytes(join(root,'child-pid')));
   f.ports.herdr=async args=>{assert.deepEqual(args,['pane','process-info','--pane',f.old.chats[0].paneId]);return{result:{process_info:{shell_pid:process.pid,foreground_process_group_id:parent.pid,foreground_processes:[{pid:parent.pid,name:'node',argv:[process.execPath,parentScript],cwd:root}]}}};};
   const status=bytes(join(f.runDir,'status.json')),claim=bytes(f.claim),out=await cancelRun(input(f),f.ports);
   assert.equal(out.exitCode,1,out.message);assert.match(out.message,/native_descendants_unconfirmed/);
@@ -194,7 +195,7 @@ test('CANCEL12: an ordinary codex argument does not identify a foreground progra
   writeFileSync(script,`import{appendFileSync}from'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(ticks)},'tick\\n'),10);`);
   const child=spawn(process.execPath,[script,'codex'],{cwd:root,detached:true,stdio:'ignore'});
   let exited=false,signals=0,closed=false;child.on('exit',()=>{exited=true;});
-  t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
+  f.ownChild(child);
   for(let count=0;count<100&&!existsSync(ticks);count++)await new Promise(r=>setTimeout(r,10));
   assert.equal(existsSync(ticks),true,'Disposable worker started');
   f.ports.herdr=async args=>{

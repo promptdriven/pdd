@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
+import { disposableFixture } from './helpers/disposable-fixture.mjs';
 
-const temp = t => { const path = realpathSync(mkdtempSync(join(tmpdir(), "pdd-chat 'q' "))); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
+const temp = t => disposableFixture(t, "pdd-chat 'q' ").path;
 // A fake native CLI that prints its argv and the marker the chat gets.
 const nativeScript = `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION??null,config:process.env.CLAUDE_CONFIG_DIR??process.env.CODEX_HOME??null}));process.exitCode=Number(process.env.PDD_FIXTURE_EXIT??0);\n`;
 
@@ -95,10 +95,11 @@ test('STOP1: native process liveness proves a disposable writer stopped before t
   const { spawn } = await import('node:child_process');
   const { statSync } = await import('node:fs');
   const { stopChats } = await import('../src/workflow-chat.mjs');
-  const root = temp(t), script = join(root, 'codex.mjs'), writes = join(root, 'writes');
+  const { path: root, ownChild } = disposableFixture(t, "pdd-chat 'q' ");
+  const script = join(root, 'codex.mjs'), writes = join(root, 'writes');
   writeFileSync(script, `import {appendFileSync} from 'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(writes)},'tick\\n'),10);`);
   const child = spawn(process.execPath, [script], { cwd: root, detached: true, stdio: 'ignore' });
-  t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });
+  ownChild(child);
   let exited = false; child.on('exit', () => { exited = true; });
   while (!exited) { try { if (statSync(writes).size > 0) break; } catch {} await new Promise(r => setTimeout(r, 10)); }
   assert.equal(exited, false);
