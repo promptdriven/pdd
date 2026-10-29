@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -1193,8 +1193,16 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\./);
   writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'Approve prompts/tipjar.prompt.md');
   const approval = f.git(run.root, 'rev-parse', 'HEAD');
+  const capture = join(f.base, 'gh-body.txt'), gh = join(f.base, 'gh-real');
+  writeFileSync(gh, '#!/bin/sh\ncat > "' + capture + '"\n'); chmodSync(gh, 0o755);
+  const originalExec = f.ports.execFile, oldPath = process.env.PATH; process.env.PATH = `${f.base}:${oldPath}`;
+  f.ports.execFile = async (file, args, opts) => file === 'gh' && args[0] === 'pr' && args[1] === 'edit'
+    ? exec(join(f.base, 'gh-real'), args.slice(2), { cwd: opts.cwd, input: opts.input, encoding: 'utf8' })
+    : originalExec(file, args, opts);
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  f.ports.execFile = originalExec; process.env.PATH = oldPath;
+  assert.equal(readFileSync(capture, 'utf8'), f.prs[0].body);
   assert.equal(code.exitCode, 0, code.message);
   assert.match(code.message, /pdd pushed 1 new commit from the worktree to PR 1\./); assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
   assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), approval, 'the approval is on PR 1');
