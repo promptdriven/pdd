@@ -2,7 +2,7 @@
 name: pdd-bug
 description: PDD bug workflow. Use when fixing PDD bugs, errors or wrong results. Reproduce, fix prompt and tests (PR 1), then code (PR 2) if asked.
 metadata:
-  pdd-skills: 0.1.9
+  pdd-skills: 0.1.10
 ---
 
 # PDD bug
@@ -27,7 +27,7 @@ Briefs: `steps/`. `?` = optional.
 
 ## Try tools
 
-When the person asks, use `try_open`, `try_state`, `try_run` with input, `try_check` and `try_save_case`. Runs spend the Try budget and show in page history. Review saved observations with the person; they are not approved expected values.
+If the person asks, use `try_open`, `try_state`, `try_run` with input, `try_check` and `try_save_case`. Runs spend the Try budget and show in page history. Review saved observations with the person; they are not approved expected values.
 
 ## In a run
 
