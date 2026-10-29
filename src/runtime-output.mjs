@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: ef08a1f215162bd0ab22fb0839d636a040a6ee428308201316b28496a1d9bc0f).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 9b271181656773fe190b8374e7a083327ae7f85f62d821c10d28dae5cd8e8dc0).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -187,10 +187,9 @@ export function summaryLine(rows, story = null) {
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
-  const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare;
-  const unknown = unknownCalls ? `${unknownCalls} unknown` : '';
+  const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...others, ...[usage, unknown].filter(Boolean)].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...others, `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {

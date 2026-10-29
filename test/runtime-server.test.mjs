@@ -416,7 +416,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 1 unknown$/m);
+  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
