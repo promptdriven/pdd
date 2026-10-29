@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: b4c20f87389381dd8b38ad429197562b2fee4d761858e6e50416ce0cf64b5fbd).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 1c73b45f2e61e49811e08b4b7be4ad8d88f05d4cda62acf13f50078959fb31aa).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -94,17 +94,18 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     ...(Array.isArray(report.rerun.steps) ? { steps: report.rerun.steps.filter(isObjectLike).map(item => ({
       step_id: cleanField(item.step_id, secrets) || null, runs: item.runs, failed: item.failed, stable: item.stable === true,
       ...(Array.isArray(item.changed_paths) ? { changed_paths: item.changed_paths.map(path => cleanField(path, secrets)) } : {}) })) } : {}) } : null;
-  const all = steps.flatMap(step => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check })) : []).map(({ step, check }) => {
+  const all = steps.flatMap((step, index) => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check, index })) : []).map(({ step, check, index }) => {
     const criterion_id = cleanField(check?.criterion_id, secrets), diagnosis = isObjectLike(check?.diagnosis) ? {
-      kind: cleanField(check.diagnosis.kind, secrets) || null, who: cleanField(check.diagnosis.who, secrets) || null,
-      why: cleanField(check.diagnosis.why, secrets) || null, next_step: cleanField(check.diagnosis.next_step, secrets) || null,
-      evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanField(item, secrets)).filter(Boolean) : undefined,
+      kind: cleanText(check.diagnosis.kind, secrets) || null, who: cleanText(check.diagnosis.who, secrets) || null,
+      why: cleanText(check.diagnosis.why, secrets) || null, next_step: cleanText(check.diagnosis.next_step, secrets) || null,
+      evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanText(item, secrets)).filter(Boolean) : undefined,
       likely: check.diagnosis.likely === true ? true : undefined,
       ...(isObjectLike(check.diagnosis.rerun) ? { rerun: { runs: check.diagnosis.rerun.runs, failed: check.diagnosis.rerun.failed, stable: check.diagnosis.rerun.stable === true } } : {}) } : null;
-    return { criterion_id, step_id: cleanField(step?.step_id, secrets) || null,
+    return { criterion_id, step_id: cleanField(step?.step_id, secrets) || cleanField(authoredSteps[index]?.step_id, secrets) || null,
       criterion_text: typeof criterionTexts[criterion_id] === 'string' && criterionTexts[criterion_id].length <= 160 ? cleanField(criterionTexts[criterion_id], secrets) : null,
       target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: scrub(check?.expected, secrets),
-      actual: scrub(check?.actual, secrets), passed: check?.passed === true, ...(diagnosis ? { diagnosis } : {}) };
+      actual: scrub(check?.actual, secrets), passed: check?.passed === true,
+      normal_result: Object.prototype.hasOwnProperty.call(step ?? {}, 'result') && !step?.error, ...(diagnosis ? { diagnosis } : {}) };
   });
   // prompt-runtime #379 adds reason, fix, file, at, where and cause to each refusal; the live server may not send them yet.
   const refusals = (Array.isArray(result?.refusals) ? result.refusals : []).map(item => ({
@@ -140,14 +141,16 @@ const round = seconds => typeof seconds === 'number' ? Math.round(seconds * 10) 
 const sentRow = row => row.phase === 'server';
 
 export function jsonRow(row) {
+  const publicChecks = checks => (checks ?? []).map(({ normal_result, ...check }) => check);
   return { story: row.story, title: row.title, test: row.test, state: row.state, checks: row.checks ?? null, criteria: row.criteria ?? null,
-    failed_checks: row.failed_checks ?? [], refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
+    failed_checks: publicChecks(row.failed_checks), refusals: (row.refusals ?? []).map(item => ({ code: item.code, section: item.section ?? null,
       message: item.message ?? null, engine_message: item.engine_message ?? null, hint: item.hint ?? null, reason: item.reason ?? null, fix: item.fix ?? null,
       where: item.where ?? null, cause: item.cause ?? null })), calls: sentRow(row) ? row.calls ?? 'unknown' : 0,
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
-    why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null, rerun: row.rerun ?? null,
-    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
+    why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
+    rerun: row.rerun ?? null,
+    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
@@ -171,6 +174,7 @@ export function summaryLine(rows, story = null) {
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
   const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
   const calls = known.reduce((sum, row) => sum + row.calls, 0), unknownCalls = sent.length - known.length;
+  const rerunCalls = rows.reduce((sum, row) => sum + (Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0 ? row.rerun.calls : 0), 0);
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
@@ -178,7 +182,7 @@ export function summaryLine(rows, story = null) {
   const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${rerunCalls ? ` (${count(rerunCalls, 'AI call')} for reruns)` : ''}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
@@ -200,12 +204,14 @@ const valueLines = value => typeof value === 'string' ? value.replace(/\n$/, '')
 // The check line: one line when both values fit, else the check and a block for each value, never cut inside a line.
 function checkLines(check, secrets) {
   const head = `${check.criterion_id}${check.step_id ? `  step ${check.step_id}` : ''}  ${check.target} ${check.path}`;
-  const actualDisplay = check.target === 'error' && check.actual && typeof check.actual === 'object' && !Array.isArray(check.actual)
-    && check.actual.missing === true && Object.keys(check.actual).length === 1 ? 'no error (a normal result)' : shown(check.actual, secrets);
+  const noError = check.target === 'error' && check.actual && typeof check.actual === 'object' && !Array.isArray(check.actual)
+    && check.actual.missing === true && Object.keys(check.actual).length === 1
+    && (check.normal_result === true || ['no-error', 'needs-tool'].includes(check.diagnosis?.kind));
+  const actualValue = noError ? 'no error (a normal result)' : check.actual, actualDisplay = noError ? actualValue : shown(actualValue, secrets);
   const criterion = check.criterion_text ? [`  Criterion: ${plainLine(check.criterion_text, secrets)}`] : [];
-  const fits = [check.expected, actualDisplay].every(value => typeof value === 'string' ? oneLine(value) && value.length <= 80 : oneLine(value) && shown(value, secrets).length <= 80);
+  const fits = [check.expected, check.actual].every(value => oneLine(value) && shown(value, secrets).length <= 80);
   if (fits) return [`${head}  expected ${shown(check.expected, secrets)}, got ${actualDisplay}`, ...criterion];
-  const expected = valueLines(check.expected), actual = valueLines(check.actual);
+  const expected = valueLines(check.expected), actual = valueLines(actualValue);
   // Start 2 lines before the first line where two strings differ, when it is past the first 20.
   const differ = typeof check.expected === 'string' && typeof check.actual === 'string' ? expected.findIndex((text, index) => text !== actual[index]) : -1;
   const from = differ >= VALUE_LINES ? differ - 2 : 0;
@@ -225,14 +231,30 @@ function refusalLines(item) {
   return lines;
 }
 
-function rerunLine(row) {
-  const rerun = row.rerun, steps = Array.isArray(rerun?.steps) ? rerun.steps.filter(item => Number.isInteger(item?.runs) && Number.isInteger(item?.failed)) : [];
-  if (!rerun || rerun.skipped || !steps.length) return null;
-  const runs = steps.reduce((sum, item) => sum + item.runs, 0), failed = steps.reduce((sum, item) => sum + item.failed, 0);
-  if (!runs) return null;
-  const stable = steps.every(item => item.stable === true);
-  return stable ? `  Rerun: failed ${failed} of ${runs} (stable). ${Number.isInteger(rerun.calls) ? rerun.calls : 0} more AI calls.`
-    : `  Rerun: failed ${failed} of ${runs} (unstable). Make the rule in the prompt firmer.`;
+const validRerun = item => Number.isInteger(item?.runs) && item.runs >= 2
+  && Number.isInteger(item?.failed) && item.failed >= 0 && item.failed <= item.runs;
+const rerunForCheck = (row, check) => {
+  const diagnosis = check.diagnosis?.rerun;
+  if (validRerun(diagnosis)) return diagnosis;
+  const step = row.rerun?.steps?.find(item => item.step_id && item.step_id === check.step_id);
+  return validRerun(step) ? step : null;
+};
+const rerunVerdict = item => item.failed === 0
+  ? `passed ${item.runs} of ${item.runs} reruns.`
+  : item.stable === true && item.runs >= 2 && item.failed === item.runs
+    ? `failed ${item.failed} of ${item.runs} (stable). A recheck of the same files will not help.`
+    : `failed ${item.failed} of ${item.runs} (unstable). Make the rule in the prompt firmer.`;
+const rerunCallText = row => Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0
+  ? `${count(row.rerun.calls, 'more AI call')}.` : '';
+function rerunLines(row, failed) {
+  let calls = rerunCallText(row), lines = [];
+  for (const check of failed) {
+    const item = rerunForCheck(row, check);
+    if (!item) continue;
+    lines.push(`  Rerun: ${rerunVerdict(item)}${calls ? ` ${calls}` : ''}`); calls = '';
+  }
+  if (!lines.length && row.rerun?.skipped) lines.push(`  Rerun: skipped (${row.rerun.skipped}).`);
+  return lines;
 }
 
 function localRefusals(rows) {
@@ -254,13 +276,21 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   const perStory = storyLines(rows).map(([, text]) => text);
   out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
   for (const row of rows.filter(row => row.state === 'failed')) {
-    out.push(`FAILED  ${row.title} (${row.test})`, ...(row.failed_checks ?? []).flatMap(check => checkLines(check, secrets).map(text => `  ${text}`)),
-      ...(row.warnings ?? []).map(text => `  ${text}`),
-      ...(row.failed_checks?.some(check => check.diagnosis?.why) ? [`  Why: ${row.failed_checks.find(check => check.diagnosis?.why).diagnosis.why}`] : row.next_step && row.why ? [`  Why: ${row.why}`] : []),
-      ...(row.failed_checks?.some(check => check.diagnosis?.next_step) ? [`  Next: ${row.failed_checks.find(check => check.diagnosis?.next_step).diagnosis.next_step}`] : row.next_step ? [`  Next: ${row.next_step}`]
-        : ['  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.']),
-      ...(rerunLine(row) ? [rerunLine(row)] : []),
-      `  Report: ${row.report_url ?? 'none'}`);
+    const failed = row.failed_checks ?? [], reruns = rerunLines(row, failed), perCheckRerun = failed.some(check => rerunForCheck(row, check)), lines = [`FAILED  ${row.title} (${row.test})`];
+    let rerunIndex = 0;
+    for (const check of failed) {
+      lines.push(...checkLines(check, secrets).map(text => `  ${text}`));
+      if (check.diagnosis?.why) lines.push(`  Why: ${check.diagnosis.why}`);
+      if (check.diagnosis?.next_step) lines.push(`  Next: ${check.diagnosis.next_step}`);
+      if (rerunForCheck(row, check)) lines.push(reruns[rerunIndex++]);
+    }
+    if (!perCheckRerun) lines.push(...reruns);
+    lines.push(...(row.warnings ?? []).map(text => `  ${text}`));
+    const diagnosed = failed.some(check => check.diagnosis?.why || check.diagnosis?.next_step);
+    if (!diagnosed && row.next_step && row.why) lines.push(`  Why: ${row.why}`);
+    if (!diagnosed && row.next_step) lines.push(`  Next: ${row.next_step}`);
+    if (!diagnosed && !row.next_step) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
+    lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
   out.push(...localRefusals(rows));
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
