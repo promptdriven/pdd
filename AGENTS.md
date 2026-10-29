@@ -1,24 +1,23 @@
-# Repository Guidelines
+# Working on PDD Alpha
 
-## Project Structure & Module Organization
-Core CLI logic lives in `pdd/`, where each module aligns with a prompt template in `prompts/` (for example, `pdd/code_generator.py` pairs with `prompts/code_generator_python.prompt`). Generated examples drop into `context/`, CSV data into `data/`, and packaged artifacts into `dist/`. Public examples live under `examples/`, and central documentation, diagrams, and onboarding notes reside in `docs/`.
+Before you write or change a Story or a prompt, read the full [Prompting guide](docs/prompting-guide.md) in this conversation. Follow its method for module ownership, public behavior, what must not change, required dependencies and the edge cases that matter. A link or a Story template is not enough. If you lose the context, read the guide again before you write.
 
-## Build, Test, and Development Commands
-Activate the Conda environment once per session with `conda activate pdd`; all Makefile targets assume interpreter and deps from that env.
-- `make test` runs the staging pytest suite defined in `tests/`.
-- `make coverage` executes pytest with coverage; review the report before large merges.
-- `make regression` or `make sync-regression` triggers the longer regression harnesses (optionally pass `TEST_NUM=42`).
-- `make lint` wraps `pylint` checks; fix diagnostics instead of suppressing them.
-- `make build` and `make install` create and install the CLI wheel locally for smoke checks.
+Read [skills/pdd-prompting/SKILL.md](skills/pdd-prompting/SKILL.md) for the core rules. Prompts are the source: change the prompt that owns the behavior before you change the code. Keep expected cases apart from what the code returns. Review changes to the contract with the person. Never invent their decision. `skills/pdd-prompting/guide.md` must stay the same as `docs/prompting-guide.md`, byte for byte. A test checks this, so change both together.
 
-## Coding Style & Naming Conventions
-Use Python 3.12+, four-space indentation, and type annotations for public functions. Match module and file names to their prompt identifiers (`snake_case`), keep classes in `PascalCase`, and reserve `UPPER_SNAKE_CASE` for constants. Favor small, composable functions with docstrings summarizing side effects. Run `make lint` or `pylint pdd/<module>.py` before submitting to catch style regressions.
+What this alpha contains:
 
-## Testing Guidelines
-All automated tests live in `tests/test_*.py` and follow the pytest discovery rules pinned in `pytest.ini`. Name new tests `test_<module>_<behavior>` and colocate fixtures in the same file unless shared broadly. Use `pytest -k sync_main` for targeted runs while iterating, then `make coverage` to confirm branch coverage holds. Regression shells (`tests/regression.sh`, `tests/sync_regression.sh`) expect API access—flag them as `real` with the provided marker when applicable.
+- Five skills in `skills/`: `pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug` and `pdd-feature`. People install them with `npx skills add promptdriven/pdd` (`-g` for all projects). The order is: install the skills, then the `pdd-setup` skill once for each repo, then the pdd command only for runs with PRs and for `pdd check`, `pdd try` and `pdd approve`. The pdd command does not copy skills on each command: `pdd setup` copies them to the user skills folders (`~/.agents/skills`; `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set) only when they are missing, and replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. pdd never copies them into the person's repo. Each `SKILL.md` has `pdd-skills: VERSION` under `metadata:` in its frontmatter: change it with the package version. Keep each workflow skill small and its step files short. Do not repeat a rule that `SKILL.md` already states. Write each `description` so that an agent picks the skill by itself.
+- People open Codex or Claude Code as usual and call `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). `pdd setup` and the `pdd-setup` skill add one short block (at most 10 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) to `CLAUDE.md`, else `AGENTS.md`. They never paste the guide.
+- `pdd workflow run` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PRs and status. There is no controller process, no polling loop and no time limit.
+- `feature` and `bug` run the check and the Try, and the person approves, before pdd opens PR 1 (prompt, Story and tests). Then the chat asks before the code area. PR 2 (code) is stacked on PR 1 while PR 1 is open. `small-change` makes one PR.
+- A big feature request gets a plan first: `user_stories/PLAN.md`, many Stories, one test file for each Story, and one `Runtime check` line for each Story. `status` shows `Stories: N of M pass`.
+- The agents run the tests. A fresh subagent that did not write the code does the verify step. pdd does not run tests and never merges. Only a person approves a gate, and only a person approves a prompt (`pdd approve PROMPT` at a terminal, or the Approve button on the Try page that the owner's `pdd try` picks up). Agents use `pdd workflow done` and `pdd workflow ask`.
+- `docs/cli.md` shows every command form of `pdd --help`. `test/docs-commands.test.mjs` fails when a form is missing, so update `docs/cli.md` with each change to the command catalog.
+- The README and the docs describe pdd as it is today, as if this were the first version. Put history and change notes only in the GitHub release notes. The one exception is the short note for people who have the Python pdd installed. `test/docs-first-time.test.mjs` fails on history words.
+- Agents start in full-access mode. pdd does not write global agent config, copy credentials or touch the person's default Herdr session.
 
-## Commit & Pull Request Guidelines
-Commitizen is configured for Conventional Commits; prefer messages like `feat: improve sync verification loop`. Keep commits focused and reference related prompt paths when the change spans generated assets. Before opening a PR, run `make test` and `make lint`, describe the behavioral impact, link any tracked issues, and attach logs or screenshots for CLI UX tweaks.
+Keep the package self-contained: no private dependencies and no credentials. Only `pdd check` and `pdd try` call the PDD runtime, with the user's gh token; the address is one setting (`PDD_RUNTIME_URL`, default `DEFAULT_RUNTIME_URL` in `src/runtime-client.mjs`). Do not import captured conversations or operational fixtures.
 
-## Configuration & Secrets
-Run `pdd setup` once per machine to create `~/.pdd` credentials, and never commit keys or cache files (the repo `.gitignore` already excludes them). Use the public setup documentation to provision provider tokens. When recording logs for debugging, redact token strings and strip `litellm_cache.sqlite` before sharing artifacts.
+Each path has one active writer. Use a topic branch, keep other work and keep implementation prompts with their code. Use ordinary Node tests for changed public behavior. Avoid tests that only check prose or repeat the implementation. The public full suite is `npm test`. It needs no live service and no model call. A real agent run that the person asked for is a separate activity.
+
+Report what changed, the real check results and any behavior that is not proved. A local draft or PR summary is not publication. Keep execution notes outside the repository. Public source publication needs a review and a green public full suite. Follow the route of the named integrator. Never force-push, rewrite private repository history or publish a package to npm as a routine check.

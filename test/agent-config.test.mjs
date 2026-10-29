@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {loadAgentDefinitions} from '../src/agent-config.mjs';
+function fixture(t){const base=mkdtempSync(join(tmpdir(),'pdd-agents-'));t.after(()=>rmSync(base,{recursive:true,force:true}));const home=join(base,'home'),repo=join(base,'repo');mkdirSync(home);mkdirSync(join(repo,'.git'),{recursive:true});return {home,repo,env:{HOME:home},user:join(home,'.config/pdd/agents.json'),local:join(repo,'.pdd/agents.json')};}
+function save(path,value){mkdirSync(join(path,'..'),{recursive:true});writeFileSync(path,typeof value==='string'?value:JSON.stringify(value));}
+const custom=(name='Work')=>({name,kind:'codex',command:'codex'});
+test('defaults are ordered, fresh and require no config',t=>{const f=fixture(t),a=loadAgentDefinitions({cwd:f.repo,env:f.env});assert.deepEqual(a.map(x=>[x.id,x.name,x.command]),[['codex','Codex','codex'],['claude','Claude','claude'],['gemini','Gemini','gemini']]);a[0].env.BAD='x';assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:f.env})[0].env,{});});
+test('user list wins, expands local paths and never merges repo launchers',t=>{const f=fixture(t);save(f.local,{agents:[custom('Repo')]});save(f.user,{agents:[{name:'Work',kind:'claude',command:'./bin/launcher',env:{CODEX_HOME:'~/.pdd/account-b',LABEL:'literal $HOME'}}]});const a=loadAgentDefinitions({cwd:f.repo,env:f.env});assert.deepEqual(a.map(x=>x.name),['Work','Codex','Claude','Gemini']);assert.equal(a[0].command,join(f.home,'.config/pdd/bin/launcher'));assert.deepEqual(a[0].env,{CODEX_HOME:join(f.home,'.pdd/account-b'),LABEL:'literal $HOME'});assert.match(a[0].id,/^custom-[0-9a-f]{24}$/);});
+test('user launcher IDs survive cwd changes, launcher edits and reordering',t=>{const f=fixture(t);mkdirSync(join(f.repo,'nested'));save(f.user,{agents:[custom('A'),custom('B')],include_defaults:false});const a=loadAgentDefinitions({cwd:join(f.repo,'nested'),env:f.env});save(f.user,{agents:[custom('B'),{...custom('A'),command:'~/bin/other'}],include_defaults:false});const b=loadAgentDefinitions({cwd:f.repo,env:f.env});assert.equal(a[0].id,b[1].id);assert.equal(b[1].command,join(f.home,'bin/other'));assert.deepEqual(b.map(x=>x.name),['B','A']);});
+test('invalid user file never falls back and diagnostics do not expose values',t=>{const f=fixture(t);save(f.local,{agents:[custom()]});for(const value of ['bad secret-value',{agents:[{...custom(),kind:'secret-value'}]},{agents:[{name:'Work',kind:'codex',env:{TOKEN:'secret-value'}}]},{agents:[{...custom(),env:{TOKEN:42}}]}]){save(f.user,value);assert.throws(()=>loadAgentDefinitions({cwd:f.repo,env:f.env}),e=>!e.message.includes('secret-value'));}});
+test('validates duplicate names, strict fields, limits and strings',t=>{const f=fixture(t);const values=[null,{agents:[custom(),custom()]},{agents:[custom('Codex')]},{agents:[custom('codex')]},{agents:[{...custom(),command:''}]},{agents:[{...custom(),command:'codex\n'}]},{agents:[custom('x\u0001')]},{agents:[{...custom(),env:{'BAD-NAME':'x'}}]},{agents:[{...custom(),env:{X:'x\0'}}]},{agents:[{...custom(),env:{X:'x'.repeat(8193)}}]},{agents:Array.from({length:25},(_,i)=>custom(String(i)))},{agents:[],include_defaults:'false'},{agents:[],unknown:true}];for(const v of values){save(f.user,v);assert.throws(()=>loadAgentDefinitions({cwd:f.repo,env:f.env}));}save(f.user,{agents:[],include_defaults:false});assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:f.env}),[]);});
+test('bounded files and symlink rejection',t=>{const f=fixture(t);save(f.user,' '.repeat(65537));assert.throws(()=>loadAgentDefinitions({cwd:f.repo,env:f.env}),/large|size|65536/i);rmSync(f.user);save(join(f.home,'real.json'),{agents:[]});symlinkSync(join(f.home,'real.json'),f.user);assert.throws(()=>loadAgentDefinitions({cwd:f.repo,env:f.env}),/symlink|regular/i);rmSync(f.user);mkdirSync(join(f.repo,'elsewhere'));symlinkSync(join(f.repo,'elsewhere'),join(f.repo,'.pdd'));assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:f.env}).map(x=>x.id),['codex','claude','gemini']);});
+
+test('repo launcher files are ignored without a user file, including malformed and symlinked files',t=>{
+ const f=fixture(t),expected=['codex','claude','gemini'];
+ for(const value of [{agents:[{name:'Repo command',kind:'codex',command:'./untrusted',env:{NODE_OPTIONS:'--require ./untrusted',PATH:'.'}}],include_defaults:false},'not valid JSON']){
+  save(f.local,value);assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:f.env}).map(x=>x.id),expected);
+  assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:{}}).map(x=>x.id),expected);
+ }
+ rmSync(f.local);symlinkSync(join(f.repo,'missing'),f.local);assert.deepEqual(loadAgentDefinitions({cwd:f.repo,env:f.env}).map(x=>x.id),expected);
+});

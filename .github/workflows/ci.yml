@@ -1,0 +1,40 @@
+name: PDD Alpha checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, alpha]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pdd-alpha-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public:
+    # main requires this check name; the offline Node suite owns that gate.
+    name: auto-heal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Ensure shell test prerequisites
+        run: |
+          command -v bash
+          bash --version
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          fi
+          command -v zsh
+          zsh --version
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: node bin/pdd.mjs --help
+      - run: npm pack --ignore-scripts --dry-run

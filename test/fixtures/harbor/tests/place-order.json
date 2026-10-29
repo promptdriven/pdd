@@ -1,0 +1,39 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/place-order.md",
+  "criteria": [
+    {"id": "AC1", "text": "An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00)."},
+    {"id": "AC2", "text": "The order keeps the name \"Sam\" and the pickup time \"08:30\"."},
+    {"id": "AC3", "text": "The order lists 2 Espresso S at 275 cents each, then 1 Blueberry Muffin L at 350 cents."}
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "sam-orders-espressos-and-a-muffin",
+      "entry_path": "prompts/place_order.prompt.md",
+      "operation": "place_order",
+      "input": {
+        "customerName": "Sam",
+        "pickupAt": "08:30",
+        "items": [
+          {"itemId": "espresso", "size": "S", "quantity": 2},
+          {"itemId": "muffin", "size": "L", "quantity": 1}
+        ]
+      },
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/totalCents", "op": "equals", "value": 900},
+        {"criterion_id": "AC2", "target": "result", "path": "/customerName", "op": "equals", "value": "Sam"},
+        {"criterion_id": "AC2", "target": "result", "path": "/pickupAt", "op": "equals", "value": "08:30"},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/0/itemId", "op": "equals", "value": "espresso"},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/0/size", "op": "equals", "value": "S"},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/0/quantity", "op": "equals", "value": 2},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/0/unitPriceCents", "op": "equals", "value": 275},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/1/itemId", "op": "equals", "value": "muffin"},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/1/size", "op": "equals", "value": "L"},
+        {"criterion_id": "AC3", "target": "result", "path": "/items/1/unitPriceCents", "op": "equals", "value": 350}
+      ]
+    }
+  ]
+}

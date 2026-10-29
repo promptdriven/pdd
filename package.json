@@ -1,0 +1,29 @@
+{
+  "name": "pdd",
+  "version": "0.1.9",
+  "description": "PDD Alpha: local Prompting guide, skills and recipes for your coding agent",
+  "type": "module",
+  "bin": {
+    "pdd": "bin/pdd.mjs"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+    "RUNBOOK.md",
+    "bin/",
+    "src/",
+    "prompts/cli/",
+    "docs/",
+    "skills/"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "license": "MIT",
+  "private": true
+}
