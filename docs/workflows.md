@@ -88,6 +88,14 @@ you     review and merge on GitHub
 
 A workflow can start from a normal checkout or a linked worktree, including one whose primary repository is bare. All linked checkouts share the same issue claims and allocation records in the common Git directory. New run worktrees live beside the primary repository in `<primary-name>.pdd-worktrees/`; a bare `project.git` uses `project.git.pdd-worktrees/`. pdd verifies the origin and physical Git identity and keeps `core.bare` unchanged. A refusal before saving allocation intent leaves no issue claim or allocation record. If intent was saved but allocation is unconfirmed, preserve it and inspect that exact run before trying recovery.
 
+Herdr uses the verified primary repository workspace as the parent when a run starts from a linked checkout;
+the invoking source checkout and the allocated run worktree keep their own identities. This also supports a
+verified bare primary. If Herdr confirms `linked_worktree_source` before any native agent starts, run
+`pdd workflow open ISSUE` to finish that same allocated run. A saved linked-parent failure can recover through
+this command even after an earlier open failed. pdd preserves the old parent shell workspace, records it as
+superseded, and opens the verified parent under an unused label. It does not allocate another Git worktree.
+An uncertain or lost allocation reply remains blocked for inspection; it never authorizes another native chat.
+
 Review a run without entering its chat with `pdd workflow view ISSUE`; `status` prints this command. The terminal view brings together the saved state and gate, recorded human approvals, pending decisions, PRs, Runtime check/report links and the Try link. It links to the full issue and to current Stories (including acceptance criteria), plan, prompts, tests and gate notes. The commit and uncommitted-change indicator identify what you are reading. These are current files; a recorded approval does not certify later edits. Prompt approval and permission to start code work remain separate decisions. Missing artifacts or links are shown as unavailable or not recorded.
 
 The view uses saved local records and local Git/file reads. It works with Herdr and the network offline and changes no state. Use `pdd workflow open ISSUE` when you want to focus or resume the chat.
@@ -149,6 +157,14 @@ pdd does not run tests. The agents do.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
 - The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
+
+Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
+`replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
+The PR begins with the validated replay status and exact counts, original vector and current source hashes,
+public-boundary execution coverage, semantic mutation control, and formal result with scope and reason.
+Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
+Saved areas and custom workflows without this field retain their behavior. pdd checks structure and identity;
+agents execute the tests. A replay status does not independently prove execution or prompt/code equivalence.
 
 Read that output before you merge. Passing tests are useful evidence. They are not proof of all behavior. A test that was only written is not a test that ran.
 

@@ -1,0 +1,81 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-decision.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A supplied unavailable reply shows Unavailable without a request; looking up book-7 requests it once and shows Available for an available reply."
+    }
+  ],
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": true
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "pure-unavailable",
+      "entry_path": "examples/fakes/decision.prompt.md",
+      "operation": "decideReply",
+      "input": {
+        "reply": {
+          "available": false
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "Unavailable"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/requests",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "effect-available",
+      "entry_path": "examples/fakes/decision.prompt.md",
+      "operation": "doLookup",
+      "input": {
+        "id": "book-7"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "Available"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/requests",
+          "op": "equals",
+          "value": [
+            {
+              "id": "book-7"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

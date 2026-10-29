@@ -33,3 +33,18 @@ test('delivered memory keeps dropped wire fill null and private legacy expectati
 
 test('next fill is revalidated after secret scrubbing changes an enum or const',()=>{for(const restriction of [{enum:['https://user:pass@example.com']},{const:'https://user:pass@example.com'}]){const localSchema={type:'object',properties:{url:{type:'string',...restriction}},required:['url'],additionalProperties:false};const doc=structuredClone(scenario);doc.steps[0].input={url:'https://user:pass@example.com'};const guide=setup(['progress'],{model:{entries:[{entry_path:'prompts/tool.prompt.md',operation:'main',input_schema:localSchema}],stories:{'user_stories/tool.md':{path:'user_stories/tool.md',title:'Tool',criteria:scenario.criteria}},seed:{story_path:'user_stories/tool.md',initial_world:{kv:{}}}},ports:{readAgentScenarios:()=>[{path:'tests/tool.json',doc}]}});guide.prepare(message());const reply=guide.decorate({say:'Keep this explanation.',fill:null,next:{text:'Prepare the next case?',criterion:'AC1',fill:{entry,input:{url:'https://example.com/'}}}});assert.equal(reply.say,'Keep this explanation.');assert.equal(reply.next.text,'Prepare the next case?');assert.equal(reply.next.fill,undefined);assert.doesNotMatch(JSON.stringify(reply),/user:pass/);}});
 test('final returned fills remain valid after every redaction pass',()=>{const e={entry_path:'p.prompt.md',operation:'go',input_schema:{type:'object',properties:{x:{type:'string',enum:['a','[redacted]']}},required:['x'],additionalProperties:false}},doc={...structuredClone(scenario),steps:[{...structuredClone(scenario.steps[0]),entry_path:e.entry_path,operation:e.operation,input:{x:'a'}}]};const guide=setup(['apply','progress'],{secrets:['a'],model:{entries:[e],seed:{story_path:scenario.story_path}},ports:{readAgentScenarios:()=>[{path:'tests/tool.json',doc}]}});guide.prepare(message());const d=guide.decorate({say:'Review.',fill:{entry:'p.prompt.md#go',input:{x:'a'}},apply:true,next:{text:'Next?',criterion:'AC1'}});assert.equal(d.next.fill,undefined);const wire=guide.wire({say:'Review.',fill:{entry:'p.prompt.md#go',input:{x:'[redacted]'}},apply:true,next:{text:'Next?',criterion:'AC1',fill:{entry:'p.prompt.md#go',input:{x:'[redacted]'}}}});assert.equal(wire.fill,null);assert.equal(wire.apply,undefined);assert.equal(wire.next.fill,undefined);assert.equal(wire.next.text,'Next?');});
+
+
+test('run metadata is negotiated, manual-only and bound to final valid applied fill',()=>{
+ const reply={say:'Preparing the requested action.',fill:{entry,input:{argv:['--help']}},apply:true,run:true};
+ for(const features of [[],['apply'],['run'],['apply','run']]){
+  const guide=setup(features);guide.prepare(message('Run it'));
+  const wire=guide.wire(guide.decorate(reply));assert.equal(wire.run,features.includes('apply')&&features.includes('run')?true:undefined);
+ }
+ const guide=setup(['apply','run']);
+ for(const kind of ['chat','own','walk']){guide.prepare(message('Try it',{kind}));assert.equal(guide.wire(guide.decorate(reply)).run,true);}
+ for(const kind of ['run','unknown']){guide.prepare(message('Run it',{kind}));assert.equal(guide.wire(guide.decorate(reply)).run,undefined);}
+ guide.prepare(message('Run it'));
+ for(const extra of [{apply:false},{fill:null},{fill:{entry:'unknown',input:{}}},{run:'yes'}])assert.equal(guide.wire(guide.decorate({...reply,...extra})).run,undefined);
+ const ctx=guide.prepare(message('Run it',{kind:'run'})).context;assert.equal(ctx.requestKind,'run');
+});

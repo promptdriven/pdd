@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <title id="title">Metadata is not a required label</title>
+  <desc>Start state of a small 2048-like screen.</desc>
+  <g id="score" transform="translate(250 20)">
+    <rect width="120" height="65" fill="#bbada0"/>
+    <text x="10" y="22">SCORE</text><text x="10" y="48">0</text>
+  </g>
+  <g id="seed" transform="translate(20 100)">
+    <rect width="120" height="65" fill="#eee4da"/>
+    <text x="10" y="22">SEED</text><text x="10" y="48">42</text>
+  </g>
+  <text x="40" y="220">2</text><text x="120" y="220">2</text>
+  <g id="status" transform="translate(20 280)">
+    <rect width="350" height="45" fill="#eee4da"/>
+    <text x="10" y="28">READY</text>
+  </g>
+  <g display="none"><text id="hidden-sample">HIDDEN</text></g>
+  <g data-context-only="true"><text id="surroundings" x="10" y="380">CONTEXT</text></g>
+</svg>

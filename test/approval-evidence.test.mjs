@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { readApprovalEvidence, findNativeSessions } from '../src/approval-evidence.mjs';
 
 const id = '11111111-1111-4111-8111-111111111111';
@@ -73,6 +74,40 @@ test('Codex generated environment and AGENTS user-role records do not prove a pe
   await f.write([meta(), user('<environment_context>\n<current_date>2026-10-27</current_date>\n</environment_context>'),
     user('# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>generated</INSTRUCTIONS>', gate + 2)]);
   assert.equal((await f.read()).code, 'user_message_missing');
+});
+
+for (const tag of ['environment_context', 'permissions instructions']) {
+  test(`repeated ${tag} wrappers with a user suffix finish without backtracking`, async t => {
+    const f = await fixture(t);
+    const text = `<${tag}>context</${tag}>`.repeat(80) + ' I approve.';
+    await f.write([meta(), user(text)]);
+    const script = `const {readApprovalEvidence}=await import(process.argv[1]);
+const result=await readApprovalEvidence(JSON.parse(process.argv[2]),{home:process.argv[3],env:{},now:()=>Number(process.argv[4])});
+process.stdout.write(JSON.stringify(result));`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script,
+      new URL('../src/approval-evidence.mjs', import.meta.url).href, JSON.stringify(f.request), f.home, String(now)],
+      { encoding: 'utf8', timeout: 2000 });
+    assert.equal(result.error, undefined, 'context recognition must finish within two seconds');
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).userMessage, text);
+  });
+}
+
+test('wrapper-only context preserves mixed, nested and incomplete boundary semantics', async t => {
+  const f = await fixture(t);
+  for (const [text, generated] of [
+    ['<environment_context>a</environment_context>\n<permissions instructions>b</permissions instructions>', true],
+    ['<environment_context>a</environment_context><permissions instructions>literal </environment_context> text</permissions instructions>', true],
+    ['<environment_context><environment_context>nested</environment_context></environment_context>', true],
+    ['<environment_context>not closed', false],
+    ['<environment_context>a</environment_context> I approve.', false],
+    ['I approve. <environment_context>a</environment_context>', false],
+  ]) {
+    await f.write([meta(), user(text)]);
+    const result = await f.read();
+    assert.equal(result.ok, !generated, text);
+    if (!generated) assert.equal(result.userMessage, text);
+  }
 });
 
 test('unrelated cwd and sessions outside inclusive stage window are not candidates', async t => {

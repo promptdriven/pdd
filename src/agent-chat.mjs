@@ -1,9 +1,10 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: e3759eb230b4157db009c09ed8504c0062583cc1fefffd1d3529c43012faa540).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: efcefafc9ee05a7cb82c766d9c2fdf8161a11682000ec00298eb66d47afd0646).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
+const FEATURES=['apply','progress','run_events','expect','save','run'];
 const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
 const json=body=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -34,11 +35,11 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
  if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
  const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
- const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice}),30000);
+ const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice,features:FEATURES}),30000);
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd try again.`);
  remember(choice);
- const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save'].includes(x)):[];
+ const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>FEATURES.includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
  const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});
@@ -54,7 +55,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   const agent=agents.find(a=>a.id===message.agent),name=agent?.name??'Your agent',turn=guide.prepare(message);let result,asked=false;
   if(turn.fast)result=turn.fast;
   else if(!ready(agent))result={say:agent?.state==='signed_out'?`${agent.name} is signed out. Sign in at your terminal, or switch to another agent.`:agent?.state==='quota'?`${agent.name} has reached its usage limit. Switch to another agent.`:`${agent?.name??'This agent'} is not available. Choose an installed agent.`,fill:null};
-  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),context:turn.context});}
+  else {asked=true;write(context,`${name} is answering a question from the Try page…`);result=await (ports.askAgent??askAgent)({agent:agent.id,definition:definitions.find(d=>d.id===agent.id),cwd:root,env:ports.env,entries,signal:controller.signal,supportsApply:features.includes('apply'),supportsRun:features.includes('run'),context:turn.context});}
   if(controller.signal.aborted)return;
   if(turn.fast)write(context,'PDD checked the run against the local test cases.');
   else write(context,result.error||!ready(agent)?`${name} could not answer: ${result.error?.message??result.say}`:`${name} answered.${result.fill?' It proposed input for the form.':''}`);

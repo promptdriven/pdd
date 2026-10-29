@@ -311,12 +311,16 @@ test('RELEASE6: missing gh target with only a PDD launcher on PATH fails closed 
 
 test('RELEASE3: the actual launcher leaves a shell read loop input open for its next command', async t => {
   const {spawn}=await import('node:child_process');
-  const setup=clip(t,false),ready=await opened(t,setup),tools=join(setup.sandbox,'loop-tools');mkdirSync(tools);
+  const setup=clip(t,false);
+  setup.state=join(setup.sandbox, "state 'q' \" $(touch INJECTED)");
+  const ready=await opened(t,setup),tools=join(setup.sandbox,'loop-tools');mkdirSync(tools);
   writeFileSync(join(tools,'gh'),`#!/bin/sh\nif [ "$1" = auth ]; then printf '%s\\n' '${TOKEN}'; else printf '%s\\n' 'octo 4242'; fi\n`,{mode:0o700});
   const descriptor=JSON.parse(readFileSync(ready.descriptor));descriptor.ghPath=join(tools,'gh');writeFileSync(ready.descriptor,JSON.stringify(descriptor));
   const shim=join(setup.repo,'.pdd/try/bin/paperclip');
+  const loop=join(tools,'read-loop.sh');
+  writeFileSync(loop,'while IFS= read -r a; do "$1" "$a" || exit; done\n');
   const outcome=await new Promise((done,reject)=>{
-    const child=spawn('/bin/sh',['-c','while IFS= read -r a; do "$1" "$a" || exit; done','loop',shim],{env:{...process.env,PATH:tools+':'+process.env.PATH},stdio:['pipe','pipe','pipe']});
+    const child=spawn('/bin/sh',[loop,shim],{cwd:setup.sandbox,env:{...process.env,PATH:tools+':'+process.env.PATH},stdio:['pipe','pipe','pipe']});
     let stdout='',stderr='',continued=false;
     const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('The first command waited for the enclosing input pipe to close'));},15000);
     child.on('error',reject);child.stdin.on('error',reject);
@@ -326,6 +330,7 @@ test('RELEASE3: the actual launcher leaves a shell read loop input open for its 
     child.stdin.write('first\n'); // Deliberately keep the pipe open until the first command returns.
   });
   assert.deepEqual(outcome,{code:0,stdout:'first\nsecond\n',stderr:'Try AI usage: 1 this command · 1 used · 39 remaining (session cap 40).\nTry AI usage: 1 this command · 2 used · 38 remaining (session cap 40).\n',continued:true});
+  assert.equal(readdirSync(setup.sandbox).includes('INJECTED'),false);
   assert.deepEqual(ready.fake.jsonPosts.map(p=>p.json.input),[{argv:['first']},{argv:['second']}]);
 });
 
