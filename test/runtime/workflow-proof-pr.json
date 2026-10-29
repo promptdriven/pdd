@@ -317,7 +317,7 @@
   "steps": [
     {
       "step_id": "current",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -357,14 +357,14 @@
         {
           "criterion_id": "AC1",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC1",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -373,7 +373,7 @@
     },
     {
       "step_id": "failed",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -413,14 +413,14 @@
         {
           "criterion_id": "AC2",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC2",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -429,7 +429,7 @@
     },
     {
       "step_id": "stale",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -469,14 +469,14 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -485,7 +485,7 @@
     },
     {
       "step_id": "missing",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -525,14 +525,14 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -541,7 +541,7 @@
     },
     {
       "step_id": "malformed",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -581,14 +581,14 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -597,7 +597,7 @@
     },
     {
       "step_id": "foreign-run",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -637,14 +637,14 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -653,7 +653,7 @@
     },
     {
       "step_id": "foreign-base",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -693,14 +693,14 @@
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC3",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -709,7 +709,7 @@
     },
     {
       "step_id": "forged-summary",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -754,14 +754,14 @@
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 1
         },
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 1
         }
@@ -770,7 +770,7 @@
     },
     {
       "step_id": "prompt-space",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {
@@ -808,14 +808,14 @@
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-currentHead",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
           "op": "equals",
           "value": 0
         },
         {
           "criterion_id": "AC4",
           "target": "calls",
-          "path": "/resources/workflow-runner-publication-readOldCodeProof",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
           "op": "equals",
           "value": 0
         }
@@ -824,7 +824,7 @@
     },
     {
       "step_id": "wrong-reason-keeps-full-output-diagnostic",
-      "entry_path": "prompts/cli/workflow-runner.prompt.md",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
       "operation": "preparePrEvidence",
       "input": {
         "run": {

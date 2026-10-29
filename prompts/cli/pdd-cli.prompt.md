@@ -10,6 +10,10 @@ For a `CommandInputError`, print its message once to stderr, leave stdout empty
 and return its exitCode (2). Every line written to stdout or stderr ends with
 one newline. Preserve other commands and their existing dispatch and effects.
 
+## Authoring
+
+Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
+
 ## Dependencies
 
 - [Old-code proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification context for the explicit prove dispatch and injected callback contract.
@@ -17,7 +21,9 @@ one newline. Preserve other commands and their existing dispatch and effects.
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
 
-Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
+Native authoring/generation uses existing imported project APIs and their owner contracts linked in the route sections below. Those links are the native integration context for the existing commands; the Runtime prove transport uses only its declared callback plus the pure parser/catalog facts, and does not simulate unrelated command effects.
+
+## Workflow dispatch
 
 The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
