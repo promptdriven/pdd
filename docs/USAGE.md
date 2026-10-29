@@ -91,7 +91,7 @@ Important:
 
 ### 2.3 Test a checkout fix before release
 
-The npm installer accepts both a local checkout and a GitHub branch. From the checkout, install it globally with `npm install -g .`, or install a branch with `npm install -g github:promptdriven/pdd#BRANCH`. A checkout or branch build identifies itself with a development suffix such as `0.1.9-dev.BRANCH.SHA` when you run `pdd --version`.
+The npm installer accepts a local checkout. Install it globally with `npm install -g <local path>` (or run `node bin/pdd.mjs`); this links the checkout, so switching branches changes the command and deleting the checkout removes it. `pdd --version` then identifies the symbolic branch with a development suffix such as `0.1.10-dev.BRANCH.SHA`. GitHub branch installs are npm-packed and print the plain release-looking version.
 
 Install the matching branch of the agent skills for the test too:
 
@@ -105,8 +105,6 @@ After testing, restore the release command and skills (replace `alpha` with the 
 npm install -g github:promptdriven/pdd#alpha
 npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y
 ```
-
-Planner evidence is that both `npm install -g github:promptdriven/pdd#branch` and `npm install -g <local checkout>` already work. This feature therefore covers version identification and these instructions; it does not add a separate managed `~/.pdd` development installer.
 
 ## 3. If you have the old Python pdd
 
