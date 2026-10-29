@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,15 +13,18 @@ const AREAS = {
   'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify', 'formal'], [], 'pr']],
   // 0.1.4 #13: the person tries it and approves before pdd opens PR 1 ("before":"approve").
   'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'],
-    ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
-    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 // 0.1.7: the size that counts is what one agent loads. The main chat loads SKILL.md; each subagent loads one step file
 // and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules
 // (1.6 KB since the round-2 cli test: a CLI has one program prompt).
-const SKILL_LIMIT = 3072, STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638 };
+// #2595: the verbatim principle and bounded review repairs need 4 KB only in bug/feature.
+// The six-question independent review brief needs 2.25 KB; other step budgets stay unchanged.
+const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4096, 'pdd-feature': 4096 };
+const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638, review: 2304 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
@@ -78,7 +81,7 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const skillBytes = statSync(join(skills, name, 'SKILL.md')).size;
-    assert.ok(skillBytes <= SKILL_LIMIT, `${name}/SKILL.md is ${skillBytes} bytes`);
+    assert.ok(skillBytes <= (SKILL_LIMITS[name] ?? SKILL_LIMIT), `${name}/SKILL.md is ${skillBytes} bytes`);
     // The total is for information only: no one agent loads every file.
     t.diagnostic(`${name}: ${filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0)} bytes in all`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
@@ -467,4 +470,78 @@ test('SKILLS34: verify.md puts the tables first and the commands last in a close
     assert.match(read(`${name}/steps/formal.md`), /Add `## Formal check` to verify.md after the tables, before the `<details>` block/, name);
   }
   for (const name of ['pdd-bug', 'pdd-feature']) assert.ok(read(`${name}/steps/verify.md`).includes('Put the tables first, after a `✗ N vectors fail` line if cases fail.'), name);
+});
+
+// #2595: these are shipped instruction contracts, not runtime enforcement or tests of reviewer judgment.
+const BRAKES_AND_LIGHT = "Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.";
+
+test('SKILLS35: the approved principle is verbatim at the top of all workflow skills and RUNBOOK', () => {
+  for (const name of Object.keys(AREAS)) {
+    const { body } = frontmatter(read(`${name}/SKILL.md`));
+    assert.equal(body.trimStart().split('\n\n')[1], BRAKES_AND_LIGHT, name);
+  }
+  assert.equal(RUNBOOK().split('\n\n')[1], BRAKES_AND_LIGHT);
+});
+
+test('SKILLS36: independent code review asks all six evidence questions without builder context', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const path = `${name}/steps/review.md`;
+    assert.ok(existsSync(join(skills, path)), `${path} must ship before it can be loaded`);
+    const brief = read(path);
+    assert.match(brief, /fresh independent subagent that neither built nor verified/);
+    assert.match(brief, /only the issue, Story, `Defect:` block \(including `Not caught because:`\), diff against base, `Old-code proof:` and `Tests vs base:`/);
+    assert.match(brief, /Never give builder notes, previous reviews or chat history/);
+    const questions = brief.split('\n').filter(line => /^\d\. /.test(line));
+    assert.equal(questions.length, 6);
+    const obligations = [
+      /defect fixed where it occurs and the detection gap closed/,
+      /every new test fail on old code for the bug's reason.*actual failing assertion and error.*crash, unrelated error or pass on old code is not proof/,
+      /tests were removed or assertions changed.*Count and inspect.*sound reason for each.*safety coverage/,
+      /fake process, git, HTTP or files.*Run one real changed path.*actual boundary.*termination and effects/,
+      /warning light.*`Not fixed yet: this helps find the cause` at the PR top.*`Refs #N` rather than `Closes #N`.*keep the issue open/,
+      /every Story, PR-body and status claim match the evidence.*failures, skips and unproved criteria/,
+    ];
+    questions.forEach((question, i) => assert.match(question, obligations[i], `${name}: question ${i + 1}`));
+    assert.match(brief, /first line is exactly `Review: N must-fix`.*or `Review: no must-fix`/);
+    assert.match(brief, /location, evidence, consequence and required correction/);
+    assert.match(brief, /Missing evidence is a limitation or finding, never a pass/);
+  }
+});
+
+test('SKILLS37: review repairs are bounded after initial review and exhausted findings reach the PR', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /These 2 repair rounds start after the initial review: fresh build, verify, formal, then fresh review/);
+    assert.match(skill, /After that, open PR 2 with the actual `Review:` verdict and remaining must-fix list at the top, plus "✗ N vectors fail" if vectors still fail\. No new human gate/);
+    assert.ok(existsSync(join(skills, name, 'steps/review.md')), 'review brief exists');
+    assert.match(read(`${name}/steps/review.md`), /Keep unresolved must-fixes visible when repair rounds are exhausted; never turn exhaustion into a clean verdict/);
+  }
+  const docs = readFileSync(join(root, 'docs/workflows.md'), 'utf8');
+  assert.match(docs, /code: build, verify, formal, review/);
+  assert.match(docs, /metadata orders steps but does not enforce reviewer independence or judgment/);
+  assert.match(RUNBOOK(), /After the initial review, a ✗ case or review must-fix goes back to `build` \(at most 2 repair rounds\)/);
+});
+
+test('SKILLS38: small-change behavior fixes name the defect, detection gap and both proofs', () => {
+  const scope = read('pdd-small-change/steps/scope.md'), verify = read('pdd-small-change/steps/verify.md');
+  assert.match(scope, /For a behavior fix, write `Defect:`.*`Not caught because:`.*scope\.md/);
+  assert.match(verify, /For a behavior fix, write `Proof \(defect fixed\):` and `Proof \(gap closed\):` with evidence for each in verify\.md/);
+  assert.match(verify, /Give a reason for each removed test or changed assertion/);
+  assert.match(verify, /`Not fixed yet: this helps find the cause` at the PR top, use `Refs #N` and keep the issue open/);
+});
+
+test('SKILLS39: RUNBOOK section 17 proves every new test with the agreed command', () => {
+  const section = RUNBOOK().split('## 17. ')[1].split('## 18. ')[0];
+  assert.ok(section.includes('For each new test, run `pdd workflow prove <run> --test "<command>" --expect "<the bug\'s error text>"`.'));
+});
+
+test('SKILLS40: check failure guidance preserves person-owned expectations and diagnosis before retries', () => {
+  const runbook = RUNBOOK();
+  assert.ok(runbook.includes('A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.'));
+  assert.ok(runbook.includes('For the `error` target it means something else: the step returned a normal result and no error (pdd prints\n  `got no error`). The path is right. The prompt did not refuse this input.'));
+  assert.ok(runbook.includes('**After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.'));
+  for (const kind of ['The prompt is wrong', 'The program needs a tool', 'The test path is wrong', 'The expected value may be wrong', 'The Story is unclear', 'The answer changes between runs', 'No verdict'])
+    assert.ok(runbook.includes(`| ${kind} |`), kind);
+  assert.ok(runbook.includes('4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.'));
+  assert.ok(runbook.includes('cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix'));
 });
