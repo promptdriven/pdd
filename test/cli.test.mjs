@@ -33,6 +33,28 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
   }
 });
 
+test('ALPHA-VERSION: checkout builds identify their branch and commit, while non-checkouts stay release versions', async t => {
+  const checkout = temp(t);
+  writeFileSync(join(checkout, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  execFileSync('git', ['init', '-q', '-b', 'feature/2455-checkout'], { cwd: checkout });
+  execFileSync('git', ['config', 'user.email', 'pdd@example.test'], { cwd: checkout });
+  execFileSync('git', ['config', 'user.name', 'PDD Test'], { cwd: checkout });
+  execFileSync('git', ['add', 'package.json'], { cwd: checkout });
+  execFileSync('git', ['commit', '-q', '-m', 'test'], { cwd: checkout });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, encoding: 'utf8' }).trim().slice(0, 9);
+  const run = async packageRoot => { const stdout = capture(), stderr = capture(); return { code: await runPdd(['--version'], { packageRoot, cwd: packageRoot, stdout, stderr }), stdout: stdout.text, stderr: stderr.text }; };
+  const answer = await run(checkout);
+  assert.equal(answer.code, 0);
+  assert.equal(answer.stdout, `0.1.9-dev.feature-2455-checkout.${sha}\n`);
+  assert.equal(answer.stderr, '');
+  const release = temp(t);
+  writeFileSync(join(release, 'package.json'), JSON.stringify({ version: '0.1.9' }));
+  const fallback = await run(release);
+  assert.equal(fallback.code, 0);
+  assert.equal(fallback.stdout, '0.1.9\n');
+  assert.equal(fallback.stderr, '');
+});
+
 // Wrong: source-only smoke passes while packed dependencies, bin mappings or bundled guidance fail in a clean consumer.
 test('ALPHA4: actual packed package runs every advertised local command without private Host network or auth', t => {
   const sandbox = temp(t), home = join(sandbox, 'home'), consumer = join(sandbox, 'consumer'), project = join(sandbox, 'project');
