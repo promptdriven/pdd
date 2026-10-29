@@ -6,9 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 
-const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
+const sourceBin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
-const devVersion = `${version}-dev.pdd-feature-2455-bd781e7d-code.215f5de09`;
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pdd-path ' proof-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -18,12 +17,13 @@ function fixture(t) {
   const legacy = '#!/bin/sh\nprintf "pdd, version 0.0.305.dev214\\n"\n';
   writeFileSync(join(old, 'pdd'), legacy, { mode: 0o755 });
   // Keep Alpha as a standalone release tree; it must not resolve the source checkout's Git metadata.
-  for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(alpha, name), { recursive: true });
+  for (const name of ['src', 'bin', 'skills', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(alpha, name), { recursive: true });
   symlinkSync(join(alpha, 'bin/pdd.mjs'), join(alpha, 'pdd'));
+  const bin = join(alpha, 'bin/pdd.mjs');
   const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'), CLAUDE_CONFIG_DIR: '', PATH: [old, alpha, nodeBin, '/usr/bin', '/bin'].join(':') };
   delete env.PDD_PATH_PROBE;
   const run = (...args) => spawnSync(process.execPath, [bin, ...args], { cwd, env, encoding: 'utf8', timeout: 10000 });
-  return { root, old, alpha, nodeBin, cwd, env, run, legacy };
+  return { root, old, alpha, nodeBin, cwd, env, run, legacy, bin };
 }
 
 test('PATH1: setup and version identify the running Alpha, selected legacy version, all paths and activation order', t => {
@@ -31,8 +31,8 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
   for (const args of [['setup'], ['--version']]) {
     const r = f.run(...args);
     assert.equal(r.status, 0, r.stderr);
-    if (args[0] === '--version') assert.equal(r.stdout, `${devVersion}\n`);
-    assert.ok(r.stderr.includes(bin)); assert.ok(r.stderr.includes(`PDD Alpha ${version}`));
+    if (args[0] === '--version') assert.equal(r.stdout, `${version}\n`);
+    assert.ok(r.stderr.includes(f.bin)); assert.ok(r.stderr.includes(`PDD Alpha ${version}`));
     assert.ok(r.stderr.includes(join(f.old, 'pdd'))); assert.ok(r.stderr.includes(join(f.alpha, 'pdd')));
     assert.match(r.stderr, /PATH selects:.*pdd, version 0\.0\.305\.dev214/);
     assert.match(r.stderr, /conda/); assert.match(r.stderr, /environment activation.*reorder/i); assert.match(r.stderr, /shadow Alpha again/);
@@ -45,14 +45,14 @@ test('PATH2: PATH correction selects Alpha and a second version check terminates
   const f = fixture(t);
   f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${devVersion}\n`);
-  assert.match(r.stderr, /PATH selects:.*\(0\.1\.10\)/);
+  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);
+  assert.match(r.stderr, /PATH selects:.*\(PDD Alpha 0\.1\.10\)/);
   assert.ok(r.stderr.includes(join(f.old, 'pdd')));
   rmSync(join(f.old, 'pdd'));
   const second = f.run('--version');
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(second.stdout, `${devVersion}\n`);
-  assert.match(second.stderr, /PATH selects:.*\(0\.1\.10\)/);
+  assert.equal(second.stdout, `${version}\n`);
+  assert.equal(second.stderr, '');
 });
 
 test('PATH3: an unreportable version stays visible and help makes no version probe', t => {
@@ -72,7 +72,7 @@ test('PATH4: workflow startup gives a one-line shadow warning before normal disp
     workflowRunner: { startRun: async () => { called = true; return { exitCode: 0, message: 'Local dispatch proof' }; } } }), 0);
   assert.equal(called, true); assert.equal(stdout.text, 'Local dispatch proof\n');
   assert.equal(stderr.text.trim().split('\n').length, 1);
-  assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(bin));
+  assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(sourceBin));
 });
 
 test('PATH5: without which, relative PATH entries and symlinked Alpha still resolve correctly', t => {
@@ -87,10 +87,10 @@ test('PATH5: without which, relative PATH entries and symlinked Alpha still reso
 test('PATH6: probing another Alpha installation terminates and keeps version-only stdout', t => {
   const f = fixture(t), other = join(f.root, 'other-alpha');
   mkdirSync(other);
-  for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(other, name), { recursive: true });
+  for (const name of ['src', 'bin', 'skills', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(other, name), { recursive: true });
   rmSync(join(f.old, 'pdd')); symlinkSync(join(other, 'bin/pdd.mjs'), join(f.old, 'pdd'));
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${devVersion}\n`);
+  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);
   assert.match(r.stderr, new RegExp(`PATH selects:.*\\(${version.replaceAll('.', '\\.')}\\)`));
 });
 
