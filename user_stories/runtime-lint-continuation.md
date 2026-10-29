@@ -14,7 +14,7 @@ I can wait for lint or use the saved recovery command to finish my original Stor
 
 ## Rules to check
 
-The original request's intent survives waiting. New batches explicitly record Check or lint-only intent. Supported legacy 0.1.9/0.1.10 Check records need the original valid per-row call ceiling, criteria count, authored steps and pending-lint evidence, as specified by the [owning prompt](../prompts/cli/runtime-client.prompt.md#continue-the-original-saved-check); missing or contradictory evidence fails closed. A passing lint alone never authorizes paid checks.
+The original request's intent survives waiting. New batches explicitly record Check or lint-only intent. Supported legacy 0.1.9/0.1.10 Check records need the original valid per-row call ceiling, criteria count, authored steps and recognized producer evidence that the row was held for lint (including an already-read legacy result), as specified by the [owning prompt](../prompts/cli/runtime-client.prompt.md#continue-the-original-saved-check); missing or contradictory evidence fails closed. A passing lint alone never authorizes paid checks.
 
 Recovery has a fresh finite caller wait (--timeout when supplied, otherwise 90 seconds). Validate before allocating the first held check ID and claim dispatch exclusively before POST. Preserve posted/running/lost/unknown jobs and every historical ID; never replay them. UUID call reads, hidden request reads and capacity reads remain GET-only. Pending/refused/unknown lint does not become a successful check. No exception changes server permission or execution rules.
 
@@ -41,6 +41,7 @@ Each row is one command/action with deterministic fake clock and transport repli
 | Invalid lint | separately wrong ID, wrong command, unknown, missing receipt, reached/global refusal | no check ID/POST; preserve uncertainty or explain refusal and paths |
 | Standalone | saved explicit lint with terminal passing receipt | zero paid IDs/POSTs on read/retry |
 | Legacy Check | version1 producer record with valid max_calls6, criteria_total, authored steps and pending evidence | safe same-source continuation without repeat lint |
+| Legacy already read | version1 0.1.9/0.1.10 Check with valid max_calls6, positive criteria_total and consistent authored steps; prior read left lint passed with pending/unknown cleared, row phase lint/state not_run/calls0, no check IDs and note.code lint-finished; matching owner/repo/source and no dispatch claim | one first check ID and exclusive claim, one original check POST without repeat lint; same guards apply to prior unknown-lint not_run evidence |
 | Legacy ambiguity | legacy standalone missing max_calls/criteria_total; separately contradictory intent | zero paid IDs/POSTs; explain unavailable Check intent |
 | Existing jobs | batch includes completed, running, lost and held rows | preserve all prior IDs/answers; only proven never-posted held row gets first ID |
 | Recovery deadline | --read BATCH --timeout 4, separately default | fresh bounded240000ms or90000ms wait; no cap increase or extra dispatch after limit |
