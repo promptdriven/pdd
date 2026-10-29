@@ -1,0 +1,37 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-github-symlinked-repo.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Preparing a pull request from a repository path reached through a symlink succeeds and returns the prepared pull-request intent; a body file whose physical parent is inside the repository remains accepted, while a body file outside the repository remains refused as unsafe."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "prepare-from-symlinked-repository",
+      "entry_path": "prompts/cli/workflow-github.prompt.md",
+      "operation": "prepareWorkflowPr",
+      "input": {
+        "cwd": "/tmp/repo-alias",
+        "runId": "run-2444",
+        "stageId": "prompt",
+        "repository": "Acme/Project",
+        "baseBranch": "main",
+        "bodyFile": "pr-body.md"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/bodyFile",
+          "op": "equals",
+          "value": "/tmp/repo-alias/pr-body.md"
+        }
+      ]
+    }
+  ]
+}
