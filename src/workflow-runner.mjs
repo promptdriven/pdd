@@ -1069,16 +1069,63 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
     line: [ref, run.workflow, area?.name ?? '?', words, ...(stories ? [storyText(stories)] : []), ...(prs.length ? [`PR ${prs.map(pr => `#${pr.number}`).join(' ')}`] : []), when].join(' · ') };
 }
 
+// The machine-wide JSON view is a public contract separate from the saved C3
+// record. Keep the conversion here so refresh/filter/order behavior stays the
+// same as plain status while callers receive stable domain fields.
+function publicStatus(run, item, chatStateValue) {
+  const area = run.areas[run.area], step = area?.steps.find(name => !run.done?.[name]) ?? null;
+  const chatRecord = currentChat(run);
+  const question = openQuestion(run);
+  const failure = activeChatFailure(run);
+  let waitsFor = null;
+  if (question) waitsFor = 'question';
+  else if (run.gate) waitsFor = 'gate';
+  else if (chatStateValue === 'stopped') waitsFor = 'chat_stopped';
+  else if (failure || ['unconfirmed', 'unavailable'].includes(chatStateValue)) waitsFor = 'startup_failed';
+  const stoppedReason = waitsFor === 'chat_stopped'
+    ? (chatRecord?.stopReason === 'usage_limit' ? 'usage_limit' : chatRecord?.stopReason === 'exited' ? 'exited' : 'unknown')
+    : null;
+  const stories = item.stories && Number.isInteger(item.stories.total)
+    ? { passed: item.stories.pass, total: item.stories.total } : null;
+  const pullRequests = (run.pr ?? []).map(pr => ({ number: pr.number, url: pr.url,
+    draft: Boolean(pr.draft ?? pr.isDraft ?? false), ci: pr.ci ?? null }));
+  return {
+    identity: { ref: `${run.repo}#${run.number}`, repository: run.repo,
+      issue: { number: run.issue?.number ?? run.number, title: run.issue?.title ?? '', url: run.issue?.url ?? null },
+      folder: run.root ?? null },
+    workflow: run.workflow ?? null, agent: run.agent ?? null, area: area?.name ?? null, step,
+    waits_for: waitsFor, gate_id: waitsFor === 'gate' ? `${run.gate.area}:${run.gate.kind ?? 'approve'}` : null,
+    question: waitsFor === 'question' ? question.text : null, stopped_reason: stoppedReason,
+    pull_requests: pullRequests, stories,
+    chat: { session: chatRecord?.session?.id ?? null, tab: chatRecord?.label ?? null, pane: chatRecord?.paneId ?? null },
+    last_change: Number.isFinite(run.updatedAt) ? run.updatedAt : null,
+    // Retain the established summary fields for existing machine clients.
+    ref: item.ref, number: item.number, group: item.group, words: item.words, prs: item.prs,
+    updatedAt: item.updatedAt, root: item.root, runDir: item.runDir, viewCommand: item.viewCommand
+  };
+}
+
 async function listStatus(runs, { json, cancelled, scope }, p) {
   const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
   const all = [];
-  for (const run of runs) all.push(summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p)));
+  for (const run of runs) {
+    const liveChatState = await chatState(run, p);
+    const item = summary(run, p.timeZone, liveChatState, ended(run) ? {} : await gateFacts(run, p));
+    item._chatState = liveChatState;
+    all.push(item);
+  }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
+  if (json) {
+    const rows = shown.map(item => {
+      const run = runs.find(candidate => candidate.number === item.number && candidate.runDir === item.runDir);
+      return publicStatus(run, item, item._chatState);
+    });
+    return done(JSON.stringify({ version: 1, runs: rows }, null, 2));
+  }
   if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   return done([...shown.map(item => item.line),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
