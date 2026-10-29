@@ -6,7 +6,7 @@ The shipped skill instructions remain the canonical prompt source. Install them 
 
 ## MANUAL 1 — workflow and reviewer context (AC1, AC2)
 
-Inspect bug and feature workflow definitions, skill area summaries and docs: the code sequence is build, verify, formal, review, with review last before the existing PR gate. The gate list is unchanged. In an actual run, record separate fresh reviewer identity and supplied paths; the reviewer neither built nor verified this change. Its input is limited to issue, Story, Defect block, diff, Old-code proof and Tests vs base. Source/test inspection and a real changed-path exercise are permitted. Builder notes, prior conversation and expected replay findings are excluded. Text assertions alone cannot establish reviewer independence.
+Inspect bug and feature workflow definitions, skill area summaries and docs: the code sequence is build, verify, formal, review, with review last before the existing PR gate. The gate list is unchanged. In an actual run, record separate fresh reviewer identity and supplied paths; the reviewer neither built nor verified this change. The brief addresses the reviewer directly: read only the issue, Story, Defect block, diff, Old-code proof and Tests vs base evidence, PR 1 body and supplied step summaries. Source/test inspection and a real changed-path exercise are permitted. Builder notes, prior conversation and expected replay findings are excluded; the reviewer must not open build.md, verify.md or formal.md in the run folder. Text assertions alone cannot establish reviewer independence.
 
 ## MANUAL 2 — six review answers (AC3, AC6)
 
@@ -19,15 +19,15 @@ Read each new review brief and an actual run's review.md. Require one evidence-b
 | Test changes | A sound reason for each removed test and changed assertion; matching the builder's output is insufficient. |
 | Fakes | Checks whether coverage uses only a fake process, git, HTTP or files and exercises one real changed path; a fake-only pass is insufficient. |
 | Unfinished work | Warning-light-only work has the exact PR-top line "Not fixed yet: this helps find the cause", uses "Refs #N" rather than "Closes #N" and leaves the issue open. |
-| Claims | Checks Story, PR body and status against actual evidence; green claims cannot conceal unsupported criteria, skips or failures. |
+| Claims | Checks the PR 1 body, step summaries and Story against actual evidence; green claims cannot conceal unsupported criteria, skips or failures. PR 2 does not yet exist. |
 
-Record unavailable evidence as a limitation or finding, never a pass. PR rendering and issue-reference behavior depend on flow-runner (#2594); retain the integration check until that work is present.
+A must-fix is a problem build can fix in this change. Withhold the pdd-made "Old-code proof:" and "Tests vs base:" lines: the reviewer records their absence as limitations, not must-fixes or passes. Other unavailable evidence remains a limitation or concrete finding. PR rendering and issue-reference behavior depend on flow-runner (#2594); retain the integration check until that work is present.
 
 ## MANUAL 3 — verdict and bounded repair (AC4)
 
 Exercise a clean review: the run-folder review.md first line is exactly "Review: no must-fix". Exercise a review with two concrete unresolved findings: the first line is exactly "Review: 2 must-fix" and the findings follow. The PR top receives the actual verdict and unresolved list.
 
-Observe one initial review and at most two repair rounds. Each repair reruns build in a fresh subagent, then verify, formal and a fresh review. If fixed after either round, the next verdict reflects the evidence. If still unresolved after round two, open the code PR with the remaining list visible. No third repair round or new human gate is introduced. Do not claim this exercise was enforced by new CLI code.
+After the initial must-fix review, observe that the chat holds `pdd workflow done review`, gives the findings to a fresh build and leaves PR 2 unopened. Each repair runs build, verify, formal and a fresh review. If the first repair review still finds must-fixes, hold completion again and run the second repair. Call `pdd workflow done review` only after the final review: either no must-fixes remain or two repair rounds are complete. It then opens PR 2 with the actual verdict and remaining list visible. No third repair round or new human gate is introduced. Do not claim this exercise was enforced by new CLI code.
 
 ## MANUAL 4 — exact principle and small changes (AC5, AC7)
 
@@ -35,7 +35,7 @@ Compare the following requirement fixture verbatim against the top of skills/pdd
 
 > Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-For a small-change behavior fix, inspect scope/verify instructions and an actual result: "Defect:", "Not caught because:", "Proof (defect fixed):" and "Proof (gap closed):" appear with evidence. Every removed test or changed assertion has a reason. Preserve existing expected-value ownership, approvals and regression checks. Skill/step sizes pass the repository's limits, or a necessary limit increase is explicitly justified in the PR.
+For a small-change behavior fix, inspect scope/verify instructions and an actual result: "Defect:", "Not caught because:", "Proof (defect fixed):" and "Proof (gap closed):" appear with evidence. Every removed test or changed assertion has a reason. For warning-light-only work, verify writes "Not fixed yet: this helps find the cause" in verify.md for pdd to lift to the PR top. Preserve existing expected-value ownership, approvals and regression checks. Skill/step sizes pass the repository's limits, or a necessary limit increase is explicitly justified in the PR.
 
 ## MANUAL 5 — RUNBOOK dependencies (AC8)
 
@@ -45,7 +45,7 @@ Apply the supplied check-x-RUNBOOK.patch unchanged to both RUNBOOK copies in PR 
 
 ## MANUAL 6 — actual proof and separation of expectations (AC9)
 
-After implementation, run `node --test test/skills.test.mjs` and `npm test` on the VM; report real pass/fail/skip counts. Run each new deterministic source-contract assertion against old source and require assertion failure where applicable. This checks installed instruction/metadata changes; it is not runtime replay or proof of agent judgment.
+After implementation, run `node --test test/skills.test.mjs` and `npm test` on the VM; report real pass/fail/skip counts. Source checks cover labels and structure, including six numbered review questions, verdict/proof labels, review last in the code area and the completion hold in both skills. Keep the verbatim principle check across all five files; do not pin other long wording or check-x text. Require the new completion-hold assertion to fail on the pre-fix head. Run each new deterministic source-contract assertion against old source and require assertion failure where applicable. This checks installed instruction/metadata changes; it is not runtime replay or proof of agent judgment. Both PR bodies give their added and removed line counts as +added / -removed.
 
 In scratch clones, supply only MANUAL 1's permitted evidence and the shipped review brief to separate fresh read-only subagents. Do not give them this document, expected findings, builder notes or earlier review reports. They may run tests in the scratch copy without editing source. Independently compare their completed outputs with these requirements:
 
