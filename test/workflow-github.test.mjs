@@ -447,7 +447,7 @@ test('an early stdin failure becomes recovery_required without an unhandled EPIP
   const f = await fixture(t), intent = await f.prepare();
   const bin = await mkdtemp(join(tmpdir(), 'pdd-gh-bin-')), gh = join(bin, 'gh');
   t.after(() => rm(bin, { recursive: true, force: true }));
-  await writeFile(gh, '#!/bin/sh\nexit 1\n'); await chmod(gh, 0o755);
+  await writeFile(gh, '#!/bin/sh\nexec 0<&-\nkill -PIPE $\n'); await chmod(gh, 0o755);
   const original = f.ports.execFile;
   f.ports.execFile = (file, args, options) => file === 'gh'
     ? promisify(execFile)(file, args, { ...options, env: { ...f.ports.env, PATH: `${bin}:${process.env.PATH}` } })
