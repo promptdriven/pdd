@@ -5,7 +5,7 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 ## Setup
 
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
-- The runtime address is one setting: `PDD_RUNTIME_URL`, else the exported constant `DEFAULT_RUNTIME_URL` in this module. No other code, prompt, test or doc names the address; tests use the override or import the constant. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
+- The runtime address is one setting: `PDD_RUNTIME_URL`, else the exported constant `DEFAULT_RUNTIME_URL` in this module. Fixed immutable report links in RUNBOOK evidence are not configuration. No other code, prompt, test or doc names the runtime configuration address; tests use the override or import the constant. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
 - Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`, `interactive` (stdin and stdout are both terminals). Read the environment only from `env`.
 
@@ -169,6 +169,8 @@ Serhan (Oct 28): `pdd try` was silent for about a minute while it uploaded, lint
 - HTTP 401: `The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The runtime answered HTTP 500: <message>.`
 
 ## Dependencies
+
+[Local bindings](runtime-bindings.prompt.md) supplies required generation/runtime context for the local inventory helper.
 
 [Agent configuration](agent-config.prompt.md) is required generation/runtime context for loading private named launchers before owner authentication.
 

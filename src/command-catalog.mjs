@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: c682d2c5cec62f5618983b1a29e7293505b94ea44afee286ac4e492d6995cfd0).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b2f46d0c7a9373550f9a534bc018397ffde3408bb9de418c124931bc812f2407).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -47,7 +47,7 @@ const routes = [
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--request', kind: 'uuid', hidden: true }],
     forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
-      form('pdd check --read [BATCH] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --read [BATCH|CALL_ID] [--json]', 'Show saved check results again; sends no check.'),
       form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),

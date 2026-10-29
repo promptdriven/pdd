@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530049c3179bb545be051d15b0a0a2dbfb290faf0059a6ee1c5963c49d94d1f3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 38f5576e454de0ba2c8f2fbf50e634c1fc589cd798befc69afb5de6cc6c8ff6d).
+import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,7 +10,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
-import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink } from './runtime-output.mjs';
+import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -410,7 +411,7 @@ function batchRecord(context) {
   const { batch, origin, root, identity, capture, rows, lint, warnings } = context;
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
-    created_at: new Date(context.startedAt).toISOString(), lint, warnings,
+    created_at: new Date(context.startedAt).toISOString(), lint, warnings, coverage: context.coverage,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -634,7 +635,7 @@ function printResult(context, rows, extra = {}) {
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
   const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
-  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, rows, exitCode, summaryLine: summaryLine(rows),
+  const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage: context.coverage, rows, exitCode, summaryLine: summaryLine(rows),
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
   if (context.batch && rows.some(row => row.can_retry)) line(ports.stderr, `Retry only unstarted checks with: pdd check --retry ${context.batch}`);
@@ -642,7 +643,7 @@ function printResult(context, rows, extra = {}) {
   if (context.stopped && !context.json) line(ports.stderr, context.stopped.message);
   const scrub = text => (context.secrets ?? []).reduce((value, secret) => secret ? value.split(secret).join('[secret]') : value, text);
   if (context.json) line(ports.stdout, scrub(JSON.stringify(summary)));
-  else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, warnings, details: context.details, timeoutMin: context.timeoutMin,
+  else ports.stdout.write(scrub(renderText({ batch: context.batch, rows, coverage: context.coverage, warnings, details: context.details, timeoutMin: context.timeoutMin,
     interrupted: context.interrupted || !!context.readStop, reading: !!context.reading, exitCode, secrets: context.secrets, ...extra })));
   // At the time limit the jobs keep running on the server.
   if (exitCode === 3 && context.batch) line(ports.stderr, context.timedOut ? `Still running. Read the results later with: pdd check --read ${context.batch}`
@@ -652,12 +653,14 @@ function printResult(context, rows, extra = {}) {
 
 function runFiles(cwd, words, options, ports) {
   const { root, found, normalized } = localSetup(cwd, words);
-  const tests = select(found, normalized, root).map(test => test.path);
+  const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
+  const tests = selected.map(test => test.path);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   const capture = captureSource(root, { tests, appMap });
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
+  line(ports.stderr, coverageText(coverage));
   return 0;
 }
 
@@ -666,6 +669,7 @@ function runFiles(cwd, words, options, ports) {
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root);
+  context.coverage = bindingCoverage({ root, found, selected });
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null }), identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -716,7 +720,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const passing = rows.filter(row => row.state === 'passed').length, exitCode = passing === rows.length ? 0 : 4;
   const summary = `Lint: ${passing} of ${rows.length} tests pass. 0 AI calls. No checks were sent.`;
   if (context.json) {
-    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, problems,
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: exitCode, lint_state: exitCode === 0 ? 'passed' : 'refused', summary_line: summary, coverage: context.coverage, problems,
       rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: found.warnings }));
     return exitCode;
   }
@@ -726,7 +730,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
   }
   for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : `refused: ${row.refusals.map(item => item.code).join(', ')}`}`);
-  out.push(summary, ...found.warnings);
+  out.push(summary, coverageText(context.coverage), ...found.warnings);
   ports.stdout.write(`${out.join('\n')}\n`);
   return exitCode;
 }
@@ -806,7 +810,7 @@ async function runRead(context, batchWord, quiet = false) {
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
-  Object.assign(context, { batch: name, origin: saved.origin, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
+  Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [],
@@ -872,6 +876,52 @@ async function runRequest(context, id) {
   return printResult(context, [row], { recovery: `pdd check --request '${id}'` });
 }
 
+// A read is observation only; it does not replay the call or settle backend accounting.
+async function runCallRead(context, id) {
+  const { ports, store } = context;
+  const saved = store.read(join(store.dir, 'calls', `${id}.meta.json`));
+  const identity = signIn(ports.gh, store);
+  if (saved && identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
+  const origin = runtimeOrigin(saved ? { PDD_RUNTIME_URL: saved.origin } : ports.env);
+  const runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
+  const reply = await runtime.get(id), blocked = blockingAnswer(reply);
+  if (blocked) throw new Stop(5, blocked);
+  const command = ['call', 'check'].includes(reply.json?.command) ? reply.json.command : null;
+  const verified = [200, 202].includes(reply.status) && command && sameJob(reply.json, id, command)
+    && !(saved?.session_id && reply.json.session_id && saved.session_id !== reply.json.session_id);
+  const answer = verified && !(command === 'call' && reply.json.state === 'passed' && !isObject(reply.json.result?.program_result)) ? reply.json : null;
+  if (answer?.command === 'check') {
+    Object.assign(context, { origin, secrets: [identity.token] });
+    const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
+    applyAnswer(row, answer, context);
+    return printResult(context, [row], { recovery: `pdd check --read ${id}` });
+  }
+  const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
+  const sanitize = value => typeof value === 'string' ? value.split(identity.token).join('[secret]').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[secret]')
+    : Array.isArray(value) ? value.map(sanitize) : isObject(value) ? Object.fromEntries(Object.entries(value).map(([k, v]) => [sanitize(k), sanitize(v)])) : value;
+  const out = sanitize({ request_id: id, command: 'call', state, exit_code: exitCode,
+    calls: answer?.usage?.calls ?? 'unknown', usage: answer?.usage ?? null,
+    program_result: answer?.result?.program_result ?? null, result: answer?.result ?? null,
+    report_url: answer?.report_url ? validLink(answer.report_url, origin, 'report') : null,
+    why: answer ? answer.why ?? null : reply.status === 401 ? AUTH_TEXT : reply.status === 410 ? 'The result expired.' : 'The call receipt could not be verified.' });
+  if (answer) store.write(join(store.folder('calls'), `${id}.json`), answer);
+  if (context.json) line(ports.stdout, JSON.stringify(out));
+  else {
+    line(ports.stdout, `Call ${id}: ${state} · ${out.calls} AI calls`);
+    if (out.program_result !== null) {
+      const { stdout, stderr, ...fields } = out.program_result;
+      if (typeof stdout === 'string') { line(ports.stdout, 'stdout:'); ports.stdout.write(stdout); if (!stdout.endsWith('\n')) line(ports.stdout, ''); }
+      if (typeof stderr === 'string') { line(ports.stdout, 'stderr:'); ports.stdout.write(stderr); if (!stderr.endsWith('\n')) line(ports.stdout, ''); }
+      line(ports.stdout, JSON.stringify({ ...fields, ...(typeof stdout !== 'string' && stdout !== undefined ? { stdout } : {}), ...(typeof stderr !== 'string' && stderr !== undefined ? { stderr } : {}) }, null, 2));
+    }
+    if (out.usage) line(ports.stdout, `Usage: ${JSON.stringify(out.usage)}`);
+    if (out.report_url) line(ports.stdout, out.report_url);
+    if (out.why) line(ports.stdout, out.why);
+  }
+  if (exitCode === 3) line(ports.stderr, `Read the result later with: pdd check --read ${id}`);
+  return exitCode;
+}
+
 // pdd check. Returns the exit code.
 export async function runCheck({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
   const ports = withDefaults(givenPorts);
@@ -889,11 +939,21 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
     if (modes[0] === '--files') return runFiles(cwd, words, options, ports);
     context.root = root; context.store = stateFor(ports.env, root);
     if (modes[0] === '--retry') { release = interruptible(context); return await runRetry(context, options['--retry'], options); }
-    if (modes[0] === '--read') { release = interruptible(context); return await runRead(context, words[0]); }
+    if (modes[0] === '--read') { release = interruptible(context); return UUID.test(words[0] ?? '') ? await runCallRead(context, words[0]) : await runRead(context, words[0]); }
     if (modes[0] === '--lint') return await runLintOnly(context, cwd, words, value => { release = value; });
     return await runBatch(context, cwd, words, options, value => { release = value; });
   } catch (error) {
-    if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
+    if (error instanceof Stop || error instanceof PreflightError) {
+      line(ports.stderr, error.message);
+      if (context.json && error.bindingInventory) line(ports.stdout, JSON.stringify({ batch: null, repo: context.root, exit_code: 4, lint_state: 'refused',
+        coverage: { available: false, bound: null, total: null, modules: [] }, problems: [{ code: 'binding-invalid', path: 'pdd-bindings.json', message: error.message }], rows: [], warnings: [] }));
+      else if (context.coverage && error.exitCode !== 5) {
+        if (context.json) line(ports.stdout, JSON.stringify({ batch: context.batch ?? null, repo: context.root, exit_code: error.exitCode,
+          coverage: context.coverage, lint_state: error.exitCode === 3 ? 'unknown' : 'not_run', problems: [], rows: [], warnings: context.warnings, message: error.message }));
+        else line(ports.stdout, coverageText(context.coverage));
+      }
+      return error.exitCode;
+    }
     throw error;
   } finally { release(); }
 }
@@ -907,6 +967,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
   const selected = select(found, normalized, root);
+  context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
@@ -1483,32 +1544,34 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
   const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
+  const recovery = ` Read the result with: pdd check --read ${id}`;
+  store.write(join(store.folder('calls'), `${id}.meta.json`), { id, origin, root, login, user_id: identity.userId, session_id: sessionId });
   store.posted(store.folder('tries'), id);
   const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
   if (reply.status && ![200, 202].includes(reply.status)) {
-    throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
+    throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
   }
   const end = ports.now() + 900_000;
   let answer = null;
   for (;;) {
-    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
-    if (answer && (answer.id !== id || answer.command !== 'call' || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.');
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.' + recovery);
+    if (answer && (!sameJob(answer, id, 'call') || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.' + recovery);
     if (answer && ENDED.has(answer.state)) {
       store.write(join(store.folder('tries'), `${id}.json`), answer);
       if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
         const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
         const why = answer.result?.refusals?.[0];
-        if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-        throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+        if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}${recovery}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+        throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token]) + (['failed', 'refused'].includes(answer.state) ? '' : recovery)), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
       }
-      return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report.input_world, world: answer.result.report.world };
+      return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report?.input_world, world: answer.result.report?.world };
     }
-    if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
+    if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.' + recovery);
     await ports.sleep(ports.pollMs, ports.signal);
-    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.' + recovery);
     const read = await runtime.get(id);
-    if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
+    if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]) + recovery);
     answer = [200, 202].includes(read.status) ? read.json : null;
   }
 }
