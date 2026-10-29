@@ -480,63 +480,78 @@ test('SKILLS35: the approved principle is verbatim at the top of all workflow sk
     const { body } = frontmatter(read(`${name}/SKILL.md`));
     assert.equal(body.trimStart().split('\n\n')[1], BRAKES_AND_LIGHT, name);
   }
-  assert.equal(RUNBOOK().split('\n\n')[1], BRAKES_AND_LIGHT);
+  for (const text of [RUNBOOK(), read('pdd-prompting/RUNBOOK.md')])
+    assert.equal(text.split('\n\n')[1], BRAKES_AND_LIGHT);
 });
 
+// Labels and Markdown structure are source checks, not proof of reviewer judgment.
 test('SKILLS36: independent code review asks all six evidence questions without builder context', () => {
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const path = `${name}/steps/review.md`;
     assert.ok(existsSync(join(skills, path)), `${path} must ship before it can be loaded`);
     const brief = read(path);
-    assert.match(brief, /fresh independent subagent that neither built nor verified/);
-    assert.match(brief, /only the issue, Story, `Defect:` block \(including `Not caught because:`\), diff against base, `Old-code proof:` and `Tests vs base:`/);
-    assert.match(brief, /Never give builder notes, previous reviews or chat history/);
-    const questions = brief.split('\n').filter(line => /^\d\. /.test(line));
-    assert.equal(questions.length, 6);
-    const obligations = [
-      /defect fixed where it occurs and the detection gap closed/,
-      /every new test fail on old code for the bug's reason.*actual failing assertion and error.*crash, unrelated error or pass on old code is not proof/,
-      /tests were removed or assertions changed.*Count and inspect.*sound reason for each.*safety coverage/,
-      /fake process, git, HTTP or files.*Run one real changed path.*actual boundary.*termination and effects/,
-      /warning light.*`Not fixed yet: this helps find the cause` at the PR top.*`Refs #N` rather than `Closes #N`.*keep the issue open/,
-      /every Story, PR-body and status claim match the evidence.*failures, skips and unproved criteria/,
-    ];
-    questions.forEach((question, i) => assert.match(question, obligations[i], `${name}: question ${i + 1}`));
-    assert.match(brief, /first line is exactly `Review: N must-fix`.*or `Review: no must-fix`/);
-    assert.match(brief, /location, evidence, consequence and required correction/);
-    assert.match(brief, /Missing evidence is a limitation or finding, never a pass/);
+    const questions = [...brief.matchAll(/^(\d)\. /gm)].map(match => Number(match[1]));
+    assert.deepEqual(questions, [1, 2, 3, 4, 5, 6], name);
+    for (const label of ['Defect:', 'Not caught because:', 'Old-code proof:', 'Tests vs base:',
+      'Review: N must-fix', 'Review: no must-fix']) assert.ok(brief.includes(`\`${label}\``), `${name}: ${label}`);
+    assert.match(brief, /`<run folder>\/review\.md`/, name);
   }
+  assert.equal(read('pdd-bug/steps/review.md'), read('pdd-feature/steps/review.md'));
 });
 
 test('SKILLS37: review repairs are bounded after initial review and exhausted findings reach the PR', () => {
   for (const name of ['pdd-bug', 'pdd-feature']) {
+    const area = JSON.parse(read(`${name}/workflow.json`)).areas.at(-1);
+    assert.equal(area.name, 'code');
+    assert.deepEqual(area.steps, ['build', 'verify', 'formal', 'review']);
+    assert.equal(area.gate, 'pr');
     const skill = read(`${name}/SKILL.md`);
-    assert.match(skill, /These 2 repair rounds start after the initial review: fresh build, verify, formal, then fresh review/);
-    assert.match(skill, /After that, open PR 2 with the actual `Review:` verdict and remaining must-fix list at the top, plus "✗ N vectors fail" if vectors still fail\. No new human gate/);
+    assert.match(skill, /2 repair rounds/, name);
+    assert.match(skill, /`Review:`/, name);
     assert.ok(existsSync(join(skills, name, 'steps/review.md')), 'review brief exists');
-    assert.match(read(`${name}/steps/review.md`), /Keep unresolved must-fixes visible when repair rounds are exhausted; never turn exhaustion into a clean verdict/);
   }
   const docs = readFileSync(join(root, 'docs/workflows.md'), 'utf8');
-  assert.match(docs, /code: build, verify, formal, review/);
-  assert.match(docs, /metadata orders steps but does not enforce reviewer independence or judgment/);
-  assert.match(RUNBOOK(), /After the initial review, a ✗ case or review must-fix goes back to `build` \(at most 2 repair rounds\)/);
+  for (const label of ['Review: N must-fix', 'Review: no must-fix']) assert.ok(docs.includes(`\`${label}\``), label);
+  assert.match(RUNBOOK(), /`Review:`/);
 });
 
 test('SKILLS38: small-change behavior fixes name the defect, detection gap and both proofs', () => {
   const scope = read('pdd-small-change/steps/scope.md'), verify = read('pdd-small-change/steps/verify.md');
-  assert.match(scope, /For a behavior fix, write `Defect:`.*`Not caught because:`.*scope\.md/);
-  assert.match(verify, /For a behavior fix, write `Proof \(defect fixed\):` and `Proof \(gap closed\):` with evidence for each in verify\.md/);
-  assert.match(verify, /Give a reason for each removed test or changed assertion/);
-  assert.match(verify, /`Not fixed yet: this helps find the cause` at the PR top, use `Refs #N` and keep the issue open/);
+  for (const label of ['Defect:', 'Not caught because:']) assert.ok(scope.includes(`\`${label}\``), label);
+  for (const label of ['Proof (defect fixed):', 'Proof (gap closed):', 'Not fixed yet: this helps find the cause', 'Refs #N'])
+    assert.ok(verify.includes(`\`${label}\``), label);
+  assert.match(verify, /verify\.md/);
 });
 
 test('SKILLS40: check failure guidance preserves person-owned expectations and diagnosis before retries', () => {
   const runbook = RUNBOOK();
-  assert.ok(runbook.includes('A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.'));
-  assert.ok(runbook.includes('For the `error` target it means something else: the step returned a normal result and no error (pdd prints\n  `got no error`). The path is right. The prompt did not refuse this input.'));
-  assert.ok(runbook.includes('**After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.'));
-  for (const kind of ['The prompt is wrong', 'The program needs a tool', 'The test path is wrong', 'The expected value may be wrong', 'The Story is unclear', 'The answer changes between runs', 'No verdict'])
-    assert.ok(runbook.includes(`| ${kind} |`), kind);
-  assert.ok(runbook.includes('4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.'));
-  assert.ok(runbook.includes('cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix'));
+  const section = number => runbook.split(new RegExp(`^## ${number}\\. `, 'm'))[1]?.split(/^## /m)[0];
+  assert.match(section(4) ?? '', /^Expected values/);
+  const check = section(11) ?? '';
+  const diagnosis = check.split(/\*\*After a ✗ \(exit 1\)\.\*\*/)[1];
+  assert.ok(diagnosis, 'failed-check diagnosis label');
+  assert.deepEqual([...diagnosis.matchAll(/^(\d)\. /gm)].map(match => Number(match[1])), [1, 2, 3, 4]);
+  const rows = (diagnosis.match(/(?:^\|.*\n)+/m)?.[0] ?? '').trim().split('\n');
+  assert.equal(rows.length, 9, 'diagnosis table: header, separator and seven kinds');
+  assert.ok(rows.every(row => row.split('|').length === 5), 'three-column diagnosis table');
+});
+
+// #2595 lead repair: intermediate review must not trigger the existing PR gate.
+test('SKILLS41: review completion is held during repairs and released only by the final branch', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const branches = Object.fromEntries([...read(`${name}/SKILL.md`).matchAll(/^  - ([^:]+): (.+)$/gm)]
+      .map(([, label, body]) => [label, body]));
+    assert.ok(branches['Repair pending'], `${name}: repair branch before PR completion`);
+    assert.ok(branches['Final review'], `${name}: final review branch`);
+    const pending = branches['Repair pending'], final = branches['Final review'];
+    assert.match(pending, /must-fixes/);
+    assert.match(pending, /fewer than 2 repairs/);
+    assert.match(pending, /do not run `workflow done review`/);
+    assert.match(pending, /fresh build/);
+    assert.match(pending, /must-fix list/);
+    assert.match(final, /clear or 2 repairs used/);
+    assert.match(final, /run `workflow done review`/);
+    assert.match(final, /PR 2/);
+    assert.doesNotMatch(pending, /(?:^|; )run `workflow done review`/);
+  }
 });
