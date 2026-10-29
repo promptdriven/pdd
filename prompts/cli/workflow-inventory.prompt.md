@@ -28,7 +28,7 @@ Skip markers are JS declaration `.skip`/`.todo`, literal declaration options `sk
 
 ## Report format
 
-Order files lexically by new path, or old path for deletion, using JavaScript string order; preserve declaration and changed-line source order inside each file. Display a rename as `OLD → NEW`; other files use their existing path. All source-derived paths, names and lines are JSON string literals, then escape `&`, `<`, `>`, backtick, pipe and colon as HTML numeric entities, and escape control/bidirectional formatting characters as JSON Unicode escapes. This prevents data from creating headings, links, HTML or workflow markers. Keep exact raw path/name/line identity internally; no trim or whitespace collapse.
+Order files lexically by new path, or old path for deletion, using JavaScript string order; preserve declaration and changed-line source order inside each file. Display a rename as `OLD → NEW`; other files use their existing path. All source-derived paths, names and lines are JSON string literals using standard JSON string escaping: short escapes `\t`, `\n`, `\r`, `\b` and `\f` for tab, newline, carriage return, backspace and form feed, and JSON Unicode escapes for other control characters. Then escape `&`, `<`, `>`, backtick, pipe and colon as HTML numeric entities, and explicitly escape bidirectional formatting characters as JSON Unicode escapes. This prevents data from creating headings, links, HTML or workflow markers. Keep exact raw path/name/line identity internally; no trim or whitespace collapse.
 
 For each changed candidate file show `Tests vs base: PATH B → H tests. Removed: N (NAMES).` Use `Removed: none.` when zero. With no candidate files use `Tests vs base: none.` Then one `Changed assertions in kept tests: PATH NAME OLD → NEW.` per changed pair, or `Changed assertions in kept tests: none.` Finally one `New skips: PATH NAME LINE.` per introduced marker, or `New skips: none.` Use the literal unquoted `(removed)` / `(added)` for absent assertion sides. Every report ends with `Static inventory only; tests were not run.` and a newline.
 
@@ -45,7 +45,7 @@ None. Runtime `snapshot.read` supplies the native injected snapshot callback. Th
 ```json
 {
   "status": "draft",
-  "prose_sha256": "65ab1dab3be3b4236c62bf51e647bf2148a106d2efd440027c112b9b73c684b1",
+  "prose_sha256": "837946f41755e695fc0f0ea374a33fe416354909f51b0e1f1885ebb734f1560b",
   "entries": [
     {
       "operation": "analyzeTestChanges",
