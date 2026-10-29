@@ -126,6 +126,16 @@ async function custody(run, p, action) {
 
 const issueRef = run => `${run.repo}#${run.number}`;
 const switchCommand = (run, name) => `pdd workflow run ${name} ${run.number} --replace ${run.runId}`;
+function scopeWorkflow(summary) {
+  // Formatting affects recognition only; the saved reason remains the complete summary.
+  const text = summary.replace(/[`*_~]/g, '').replace(/’/g, "'");
+  const advice = /\b(?:recommend(?:s|ed|ing)?|use|switch\s+to)\s+(?:the\s+)?(?:workflow\s*:?\s+)?(?:pdd-)?(feature|bug|small-change)\b/gi;
+  for (const match of text.matchAll(advice)) {
+    const prefix = text.slice(0, match.index);
+    if (/\b(?:no|not|never|cannot|can't|don't|doesn't|didn't|shouldn't|wouldn't|won't)(?:\s+(?:ever|really))?\s*$/i.test(prefix)) continue;
+    return match[1].toLowerCase();
+  }
+}
 function recommendation(run) {
   const advice = run.scopeRecommendation;
   return advice ? `Scope recommends ${advice.workflow}: ${advice.reason}\nSwitch: ${switchCommand(run, advice.workflow)}` : '';
@@ -762,8 +772,9 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   }
   run.done[step] = record;
   if (step === 'scope') {
-    const advised = record.summary.match(/\b(?:recommend(?:s|ed|ing)?|use|switch to)\s+(?:the\s+)?(?:pdd-)?(feature|bug|small-change)\b/i)?.[1];
-    if (advised && advised !== run.workflow) run.scopeRecommendation = { workflow: advised.toLowerCase(), reason: record.summary };
+    const advised = scopeWorkflow(record.summary);
+    delete run.scopeRecommendation;
+    if (advised && advised !== run.workflow) run.scopeRecommendation = { workflow: advised, reason: record.summary };
   }
   const next = area.steps.find(item => !run.done[item]);
   if (next) {

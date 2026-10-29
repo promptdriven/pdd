@@ -187,3 +187,26 @@ test('CANCEL11: a real detached child writer forbids cancellation and matching c
   assert.equal(bytes(join(f.runDir,'status.json')),status);assert.equal(bytes(f.claim),claim);
   const before=statSync(ticks).size;await new Promise(r=>setTimeout(r,50));assert.ok(statSync(ticks).size>before);
 });
+
+test('CANCEL12: an ordinary codex argument does not identify a foreground program as the saved agent',async t=>{
+  const {spawn}=await import('node:child_process'),{statSync}=await import('node:fs');
+  const f=await cancellationFixture(t),root=f.old.root,script=join(root,'ordinary-worker.mjs'),ticks=join(root,'ordinary-writes');
+  writeFileSync(script,`import{appendFileSync}from'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(ticks)},'tick\\n'),10);`);
+  const child=spawn(process.execPath,[script,'codex'],{cwd:root,detached:true,stdio:'ignore'});
+  let exited=false,signals=0,closed=false;child.on('exit',()=>{exited=true;});
+  t.after(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{}});
+  for(let count=0;count<100&&!existsSync(ticks);count++)await new Promise(r=>setTimeout(r,10));
+  assert.equal(existsSync(ticks),true,'Disposable worker started');
+  f.ports.herdr=async args=>{
+    if(args[0]==='tab'){closed=true;return {};}
+    assert.deepEqual(args,['pane','process-info','--pane',f.old.chats[0].paneId]);
+    return{result:{process_info:{shell_pid:process.pid,foreground_process_group_id:exited?process.pid:child.pid,
+      foreground_processes:exited?[]:[{pid:child.pid,name:'node',argv:[process.execPath,script,'codex'],cwd:root}]}}};
+  };
+  f.ports.stopProcessGroup=async group=>{signals++;process.kill(-group,'SIGKILL');};
+  const status=bytes(join(f.runDir,'status.json')),claim=bytes(f.claim),out=await cancelRun(input(f),f.ports);
+  assert.equal(out.exitCode,1,out.message);assert.match(out.message,/native_identity_mismatch/);
+  assert.equal(signals,0);assert.equal(closed,false);assert.equal(exited,false);
+  assert.equal(bytes(join(f.runDir,'status.json')),status);assert.equal(bytes(f.claim),claim);
+  const before=statSync(ticks).size;await new Promise(r=>setTimeout(r,50));assert.ok(statSync(ticks).size>before);
+});

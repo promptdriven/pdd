@@ -95,7 +95,7 @@ test('STOP1: native process liveness proves a disposable writer stopped before t
   const { spawn } = await import('node:child_process');
   const { statSync } = await import('node:fs');
   const { stopChats } = await import('../src/workflow-chat.mjs');
-  const root = temp(t), script = join(root, 'codex-writer.mjs'), writes = join(root, 'writes');
+  const root = temp(t), script = join(root, 'codex.mjs'), writes = join(root, 'writes');
   writeFileSync(script, `import {appendFileSync} from 'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(writes)},'tick\\n'),10);`);
   const child = spawn(process.execPath, [script], { cwd: root, detached: true, stdio: 'ignore' });
   t.after(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} });

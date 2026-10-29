@@ -3,7 +3,7 @@ import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, relative, isAbsolute, sep } from 'node:path';
+import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
@@ -235,6 +235,17 @@ function assertNoUnownedWriters(run, processes, infos, stopped = false) {
   }
 }
 
+function isAgentProcess(item, agent) {
+  if (!['codex', 'claude'].includes(agent)) return false;
+  const argv = Array.isArray(item.argv) ? item.argv : [];
+  const executable = basename(typeof argv[0] === 'string' ? argv[0] : item.name ?? '');
+  if (executable === agent || executable === `${agent}.exe`) return true;
+  // Node launchers identify their program in the script position, never in user arguments.
+  if (!/^node(?:js)?(?:\.exe)?$/.test(executable) || typeof argv[1] !== 'string') return false;
+  return [agent, `${agent}.js`, `${agent}.mjs`, `${agent}.cjs`].includes(basename(argv[1]))
+    || agent === 'claude' && /(?:^|\/)@anthropic-ai\/claude-code\/cli\.js$/.test(argv[1]);
+}
+
 export async function stopChats(run, ports = {}) {
   const herdr = herdrCommand(ports), identity = ports.nativeIdentity ?? nativeIdentity;
   const stopGroup = ports.stopProcessGroup ?? (group => process.kill(-group, 'SIGKILL'));
@@ -277,8 +288,7 @@ export async function stopChats(run, ports = {}) {
         return Number.isSafeInteger(item.pid) && item.pid > 1 && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
       };
       const agent = chat.agent ?? run.agent;
-      const isAgent = item => new RegExp(`(?:^|[\\s/])${agent}(?:$|[\\s/.-])`).test([item.name, ...(Array.isArray(item.argv) ? item.argv : [item.argv ?? ''])].join(' '));
-      if (!foreground.every(belongs) || !foreground.some(isAgent))
+      if (!foreground.every(belongs) || !foreground.some(item => isAgentProcess(item, agent)))
         throw problem('native_identity_mismatch', `The foreground process in ${chat.paneId} is not this run's ${agent} agent.`);
       const observed = await Promise.all(foreground.map(async item => ({ pid: item.pid, identity: await identity(item.pid) })));
       if (observed.some(item => !item.identity || item.identity.group !== group)) throw problem('native_identity_changed', 'The native process group changed during inspection.');
