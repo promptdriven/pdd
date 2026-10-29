@@ -10,6 +10,8 @@ You need a GitHub login (`gh auth status`). A check sends relevant source select
 The order of work: story → prompt (`"status": "draft"`) → test → `pdd check --fill-hash` → `pdd check <story>` →
 offer `pdd try <story>` → the person tries it and approves → PR 1 with the one-line result (section 15).
 Read section 3 (schema rules) and section 8 (check paths) before the first check. Most failed first checks start there.
+When the person asks you to report a problem with pdd itself, follow
+[docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).
 
 ## 2. The files
 
