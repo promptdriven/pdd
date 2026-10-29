@@ -149,7 +149,7 @@ When the program does what you want, approve each prompt in your terminal:
 pdd approve prompts/NAME.prompt.md
 ```
 
-pdd shows the interface of the prompt and the text changes since the last approval. Then it asks y/n. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** on the Try page while `pdd try` runs in your terminal.
+pdd shows the interface of the prompt and the text changes since the last approval. Then it asks yes or no. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** on the Try page while `pdd try` runs in your terminal.
 
 ### 5. Code space
 
