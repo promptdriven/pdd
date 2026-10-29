@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4298881dd4fdbcfaaeafe5dcc1d3f0a8bb3adaae658550b1813bc2097031741e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: bcc465d0897a186b92f2633f95c1eefa2d377134d17900963db1c4a3db5775f9).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -384,10 +384,11 @@ function addHints(row, root, visible) {
 }
 
 function applyAnswer(row, answer, context) {
-  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [] });
+  const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, time_limit: view.time_limit, why: view.state === 'unknown' ? view.why : row.why, engine_sha: view.engine_sha, provider: view.provider,
+    server_seconds: view.server_seconds, time_limit: view.time_limit, why: view.why ?? row.why, who: view.who ?? row.who, next_step: view.next_step ?? row.next_step,
+    engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
   if (wait !== null) markBusy(context, row, wait);
@@ -424,7 +425,7 @@ function batchRecord(context) {
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
-      engine_sha: row.engine_sha ?? null, draft: !!row.draft })) };
+      engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
 function saveBatch(context) { if (context.batch) context.store.write(join(context.folder, 'batch.json'), batchRecord(context)); }
@@ -679,7 +680,8 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const selected = select(found, normalized, root);
   context.coverage = bindingCoverage({ root, found, selected });
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
-    refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [] }));
+    refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
+    criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   context.warnings = [...svgWarnings, ...found.warnings];
@@ -1006,6 +1008,10 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
+  for (const row of rows) {
+    const test = selected.find(item => item.path === row.test);
+    row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
+  }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);

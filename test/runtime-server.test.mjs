@@ -205,10 +205,33 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.equal(result.code, 1, result.err);
   const lines = result.out.split('\n');
   const at = lines.indexOf('FAILED  Place a coffee order (tests/place-order.json)');
-  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
-  assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
-  assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
-    ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
+  assert.deepEqual(lines.slice(at + 1, at + 4), ['  AC1  result /totalCents  expected 899, got 900', '    Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
+  assert.match(lines[at + 4], /^ {2}Next: show this check to the person\. A person decides expected values\. The agent may propose a change, and never makes it\.$/);
+  assert.match(lines[at + 5], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+$/);
+  const details = lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1);
+  assert.equal(details[0], '  failed  AC1  result /totalCents  expected 899, got 900');
+  assert.equal(details.find(line => line.includes('passed  AC2')), '  passed  AC2  result /customerName  expected "Sam", got "Sam"');
+});
+
+test('RUNTIME-XFIX1: failed checks show the step, short criterion, diagnosis and a missing error plainly', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false, diagnosis: {
+      kind: 'needs-tool', who: 'prompt', why: 'This check needs a SHA-256, and the AI cannot compute one.', next_step: 'Declare compute.hash_json in the Runtime interface.', evidence: ['target error, no error came back'], likely: true } }]);
+    answer.result.who = 'prompt'; answer.result.why = 'This check needs a SHA-256, and the AI cannot compute one.'; answer.result.next_step = 'Declare compute.hash_json in the Runtime interface.';
+    answer.result.report.samples[0].steps[0].step_id = 'tampered';
+    return { status: 200, json: answer };
+  });
+  const text = await check(setup, fake, ['place-order']);
+  assert.equal(text.code, 1, text.err + text.out);
+  assert.match(text.out, /AC1  step tampered  error \/code  expected "validation-error", got no error \(a normal result\)/);
+  assert.match(text.out, /Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents/);
+  assert.match(text.out, /Why: This check needs a SHA-256, and the AI cannot compute one\./);
+  assert.match(text.out, /Next: Declare compute\.hash_json in the Runtime interface\./);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  const row = json.json.rows[0], failed = row.failed_checks[0];
+  assert.equal(failed.step_id, 'tampered'); assert.equal(failed.diagnosis.who, 'prompt'); assert.equal(row.who, 'prompt');
+  assert.equal(row.next_step, 'Declare compute.hash_json in the Runtime interface.');
 });
 
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
@@ -560,12 +583,12 @@ test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is ne
   const lines = result.out.split('\n'), first = lines.indexOf('  AC1  result /stdout');
   const shown = cents => ['      Bill:  $100.00', '      Tip:   $0.00 (0%)', '      Total: $100.00', `      Person 1: $${cents}`, '      Person 2: $33.33', '      Person 3: $33.33',
     '      (ends with a line break)'];
-  assert.deepEqual(lines.slice(first, first + 17), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
+  assert.deepEqual(lines.slice(first, first + 18).filter(line => !line.startsWith('    Criterion: ')), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
   const window = mark => ['      … 22 lines before', ...Array.from({ length: 20 }, (_, index) => `      line ${index + 23}${index === 2 ? ` ${mark}` : ''}`),
     '      … 18 more lines in the report'];
   const second = lines.indexOf('  AC2  result /log');
-  assert.deepEqual(lines.slice(second, second + 47), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
-  assert.match(lines[second + 47], /^ {2}Report: http/);
+  assert.deepEqual(lines.slice(second, second + 48).filter(line => !line.startsWith('    Criterion: ')), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
+  assert.match(lines.find((line, index) => index > second && /^  Report: http/.test(line)), /^  Report: http/);
 });
 
 // Refusal items as prompt-runtime #379 sends them (not live yet): plain reason, fix, file, at, where, cause, and message = reason + fix.
