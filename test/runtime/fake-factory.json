@@ -1,0 +1,86 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-factory.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A greeter made with Hello followed by a space remembers it and greets Ada as Hello Ada."
+    }
+  ],
+  "initial_world": {
+    "instances": []
+  },
+  "simulation": {
+    "instances.store": {
+      "action": "collection.merge",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": "/config",
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    },
+    "instances.load": {
+      "action": "collection.get",
+      "world_pointer": "/instances",
+      "key_argument_pointer": "/handle",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/handle",
+      "item_value_pointer": "/config",
+      "result_template": {
+        "config": null
+      },
+      "result_value_pointer": "/config"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "create",
+      "entry_path": "examples/fakes/factory.prompt.md",
+      "operation": "createGreeter",
+      "input": {
+        "prefix": "Hello "
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/instances/0/config",
+          "op": "equals",
+          "value": {
+            "prefix": "Hello "
+          }
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "greet",
+      "entry_path": "examples/fakes/factory.prompt.md",
+      "operation": "greet",
+      "input": {
+        "handle": {
+          "$step_result": {
+            "step_id": "create",
+            "path": "/handle"
+          }
+        },
+        "name": "Ada"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Hello Ada"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

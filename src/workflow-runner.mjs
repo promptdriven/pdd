@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8958580af958c50b3b1313132484c1dd5c703e411f359b5f45a5004d990316d0).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
 import { execFile as execFileCallback } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -16,6 +16,7 @@ import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-p
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
+import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -58,7 +59,7 @@ function deps(ports = {}) {
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
-// The real reason of a failed gh, git or Herdr call, in plain words (Serhan, Oct 28: errors name their cause).
+// The real reason of a failed gh, git or Herdr call, in plain words.
 function causeOf(error) {
   if (error?.code === 'ENOENT') return `${String(error.path ?? error.message ?? '').match(/\b(herdr|gh|git)\b/)?.[1] ?? 'a needed program'} is not installed or not on PATH`;
   if (error?.code === 'workflow_github_command_unavailable') return 'gh is not installed or not on PATH';
@@ -83,12 +84,49 @@ function claudeTrusts(folder, configDir, env) {
   } catch { return false; }
 }
 
-async function changedFiles(run, p) {
+async function rawGit(p, root, ...args) {
+  const reply = await p.execFile('git', args, {cwd:root});
+  if (reply.code !== undefined && reply.code !== 0) throw Error(reply.stderr || 'Git inventory failed.');
+  return String(reply.stdout ?? '');
+}
+async function changedFiles(run, p, strict = false) {
   try {
-    const tracked = (await git(p, run.root, 'diff', '--name-only', run.baseSha)).split('\n');
-    const untracked = (await git(p, run.root, 'ls-files', '--others', '--exclude-standard')).split('\n');
+    const tracked = (await rawGit(p, run.root, 'diff', '--name-only', '-z', run.baseSha)).split('\0');
+    const untracked = (await rawGit(p, run.root, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0');
     return [...new Set([...tracked, ...untracked].filter(Boolean))];
-  } catch { return []; }
+  } catch (error) { if (strict) throw error; return []; }
+}
+const isScenario = text => JSON.parse(text)?.schema_version === 'prompt-runtime.program-scenario.v1';
+async function scenarioInventory(run, p) {
+  const paths = [];
+  for (const path of await changedFiles(run,p,true)) {
+    if (path.endsWith('.json') && isScenario(readFileSync(join(run.root,path),'utf8'))) paths.push(path);
+  }
+  return paths;
+}
+const replayEnabled = run => run.areas.some(area => area.replay_evidence === REPLAY_POLICY);
+async function refreshReplayBaseline(run,p) {
+  if (!replayEnabled(run)) return;
+  try { run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p)); }
+  catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
+  writeRun(run,p);
+}
+async function currentReplayEvidence(run,p) {
+  let reason;
+  try {
+    const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
+    const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
+    if (missing.length) reason = `Current scenario paths are missing from the approved anchor: ${missing.join(', ')}. Return to prompt space.`;
+  } catch { reason = 'The current changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'; }
+  const evidence = readReplayEvidence(run);
+  return reason ? {...evidence,outcome:'blocked',reason} : evidence;
+}
+async function unpublishedScenarios(run,p) {
+  const paths = (await rawGit(p,run.root,'diff','--name-only','-z','HEAD')).split('\0');
+  paths.push(...(await rawGit(p,run.root,'ls-files','--others','--exclude-standard','-z')).split('\0'));
+  const originals = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
+  return [...new Set(paths.filter(Boolean))].filter(path=>path.endsWith('.json') &&
+    (originals.has(path) || isScenario(readFileSync(join(run.root,path),'utf8'))));
 }
 
 async function areaMessage(run, index, p, packageRoot) {
@@ -149,7 +187,7 @@ async function worktreeContents(run, p) {
   const paths = [...texts.keys()], prompts = paths.filter(path => path.endsWith('.prompt.md')), status = path => statuses(texts.get(path));
   const drafts = prompts.filter(path => status(path).includes('draft')), approved = prompts.filter(path => !drafts.includes(path) && status(path).includes('approved'));
   return { drafts, approved, other: prompts.filter(path => !drafts.includes(path) && !approved.includes(path)),
-    tests: paths.filter(path => path.endsWith('.json') && texts.get(path).includes('prompt-runtime.program-scenario')),
+    tests: paths.filter(path => path.endsWith('.json') && (() => { try { return isScenario(texts.get(path)); } catch { return false; } })()),
     stories: paths.filter(path => path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(path.split('/').at(-1))).length };
 }
 // The words for what PR 1 holds (0.1.6 tester: the chat said "the approved prompt" while only the Story was approved).
@@ -344,19 +382,6 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-// Content identity includes uncommitted and untracked Git-visible source, independent of commit SHA.
-function gitFingerprint(root) {
-  try {
-    const files = gitFiles(root).sort().map(path => {
-      const full = join(root, path);
-      let stat; try { stat = lstatSync(full); } catch (error) { if (error.code === 'ENOENT') return [path, 'missing']; throw error; }
-      if (stat.isSymbolicLink()) return [path, 'link', readlinkSync(full)];
-      if (!stat.isFile()) throw Error('Not a regular source file');
-      return [path, stat.mode & 0o111, createHash('sha256').update(readFileSync(full)).digest('hex')];
-    });
-    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
-  } catch { return null; }
-}
 function matchesSource(record, root, fingerprint) {
   const source = record.source;
   if (!source?.sha256) return false;
@@ -509,7 +534,8 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const reports = checked ? reportLinks(checked, env).filter(row => !shown.some(url => row.includes(` ${url} `))) : [];
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
-  const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
+  const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
@@ -526,10 +552,37 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+  const opted = area.replay_evidence === REPLAY_POLICY;
+  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
+  const replayBody = join(run.runDir,`pr-${area.name}.md`);
+  const markedReplayBody = evidence => {
+    const body=prBody({...run,replayEvidence:evidence},area,p.env);
+    if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
+    return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
+  };
+  try {if (opted) writeFileSync(replayBody,markedReplayBody(run.replayEvidence));}
+  catch(error){return fail([...lines,oneLine(error.message)].join('\n'));}
+  const editReplay = async (file,afterPush=false) => {
+    try {
+      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file',file],{cwd:run.root});
+      if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
+    } catch(error) {return fail([...lines,`The code-space PR description could not be updated (${causeOf(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${retry}.`].join('\n'));}
+    return null;
+  };
   if (existing) {
+    if (opted) {
+      const pending = join(run.runDir,`pr-${area.name}-pending.md`);
+      writeFileSync(pending,markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'}));
+      const failed=await editReplay(pending);if(failed)return failed;
+    }
     p.say(`Pushing ${run.branch} to ${label}…`);
-    try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
+    try {
+      const reply = await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root });
+      if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
+    }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
+    if (opted) {const failed=await editReplay(replayBody,true);if(failed)return failed;}
+    if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -551,6 +604,7 @@ async function publishAreaPr(run, area, p, lines, retry) {
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
+  if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
   run.pr.push({ stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base });
   return null;
 }
@@ -638,6 +692,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
+  if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
@@ -719,11 +774,17 @@ async function syncPr1(run, p) {
   try { await p.execFile('git', ['fetch', 'origin', run.branch], { cwd: run.root }); } catch { /* The last fetched PR 1 head decides. */ }
   const remote = `refs/remotes/origin/${run.branch}`;
   let ahead = 0, behind = false;
-  try { ahead = Number(await git(p, run.root, 'rev-list', '--count', `${remote}..HEAD`)) || 0; behind = Number(await git(p, run.root, 'rev-list', '--count', `HEAD..${remote}`)) > 0; } catch { ahead = 0; }
+  try { ahead = Number(await git(p, run.root, 'rev-list', '--count', `${remote}..HEAD`)) || 0; behind = Number(await git(p, run.root, 'rev-list', '--count', `HEAD..${remote}`)) > 0; } catch {
+    if (replayEnabled(run)) return {failed:`Cannot verify the published prompt-space head. Fetch the prompt branch and run pdd workflow approve ${run.number} again.`};
+    ahead = 0;
+  }
+  if (behind && replayEnabled(run)) return {failed:`The prompt branch is behind its published head. Update the worktree from origin/${run.branch}, then run pdd workflow approve ${run.number} again.`};
+  if (!ahead && !behind) await refreshReplayBaseline(run,p);
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
   if (!ahead || behind) return { drafts: approved.length ? await pr1Drafts(run, p) : before, lines: [] };
-  try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
+  try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
+  await refreshReplayBaseline(run,p);
   const drafts = await pr1Drafts(run, p);
   return { drafts, lines: [what ? `pdd committed ${what} and pushed it to PR 1.` : `pdd pushed ${ahead} new commit${ahead > 1 ? 's' : ''} from the worktree to PR 1.`, ...await draftDescription(run, pr1, drafts, p)] };
 }
@@ -778,6 +839,12 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let carried = [];
   if (askCode && run.gate?.kind === 'ask-code') {
+    if (replayEnabled(run)) {
+      try {
+        const dirty = await unpublishedScenarios(run,p);
+        if (dirty.length) return fail(`Unpublished scenario edits remain: ${dirty.join(', ')}. Publish them in prompt space, then run pdd workflow approve ${run.number} again.`);
+      } catch { return fail(`Cannot verify published scenario bytes. Repair the scenario inventory, then run pdd workflow approve ${run.number} again.`); }
+    }
     // The code is built only from approved prompts; pdd never approves them itself.
     p.say('Reading PR 1 on GitHub…');
     const carry = await syncPr1(run, p);

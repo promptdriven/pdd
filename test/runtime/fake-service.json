@@ -1,0 +1,54 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-service.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Looking up book-7 forwards that exact ID once and returns Available from the supplied reply."
+    }
+  ],
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "label": "Available"
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "lookup-book",
+      "entry_path": "examples/fakes/service.prompt.md",
+      "operation": "lookup",
+      "input": {
+        "id": "book-7"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "Available"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/requests",
+          "op": "equals",
+          "value": [
+            {
+              "id": "book-7"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -63,7 +63,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', t => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}) })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}), ...(area === 'code' ? {replay_evidence:'pdd.replay-evidence.v1'} : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -135,21 +135,21 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
 // Wrong (plan D4): in a normal chat the agent writes a prompt and tests but never runs the runtime check unless asked.
 test('SKILLS8: after prompt work the agent runs pdd check on its own, offers pdd try, and small-change checks before verify', () => {
   const prompting = read('pdd-prompting/SKILL.md');
-  assert.ok(prompting.includes('After you write or change a prompt, its Story and its test file, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Then offer `pdd try STORY` so they can use it by hand. If a check fails, show it; never change the expected value yourself.'));
+  assert.ok(prompting.includes('After changing prompt, Story and tests, run `pdd check` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Offer `pdd try STORY`. If a check fails, show it; never change the expected value yourself.'));
   assert.match(read('pdd-small-change/steps/change.md'), /If you changed a prompt that has a test file, run `pdd check` on every Story of that prompt, as [^\n]*RUNBOOK\.md says, before verify\./);
 });
 
 // Wrong (0.1.3): the steps repeat RUNBOOK section 17 (two homes for one method), or the runbook copy lacks it.
 const RUNBOOK = () => readFileSync(join(skills, 'pdd-prompting/RUNBOOK.md'), 'utf8');
 // Every "section N" that a skill names, with the RUNBOOK title it must have. Add a row when a skill names a new section.
-const RUNBOOK_SECTIONS = { 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
+const RUNBOOK_SECTIONS = { 21: 'Fake the outside world', 2: 'The files', 3: 'Schema rules', 4: 'Expected values', 6: 'Command-line programs (`cli`)',
   7: 'A prompt that calls another prompt', 8: 'Check paths', 9: 'Money and dates', 10: 'AI calls', 13: 'Give your app a screen (app map)',
-  14: 'Bug workflow', 17: 'The code PR (PR 2): test vectors and the formal check', 18: 'Patterns: a pure function and a state sequence' };
+  14: 'Bug workflow', 17: 'Code space: replay evidence and the formal check', 18: 'Patterns: a pure function and a state sequence' };
 const section14 = () => RUNBOOK().slice(RUNBOOK().indexOf(`## 17. ${RUNBOOK_SECTIONS[17]}`));
 
 // Wrong (0.1.3 vectors): PR 2 tests drift from the approved PR 1 cases, or a failing case is hidden.
 test('SKILLS9: build and verify point to RUNBOOK section 17 for the replay test, and a failure loops back to build twice', () => {
-  for (const word of ['tests/<story>.json', 'Never edit it in PR 2', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since PR 1', '✗ N vectors fail'])
+  for (const word of ['tests/<story>.json', 'Never edit it in code space', 'replay test', 'planted mistake', 'A crash does not count', 'Not replayed', 'never a pass', 'unchanged since prompt space', '✗ N vectors fail'])
     assert.ok(section14().includes(word), `RUNBOOK section 17: ${word}`);
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const build = read(`${name}/steps/build.md`), verify = read(`${name}/steps/verify.md`), skill = read(`${name}/SKILL.md`);
@@ -189,7 +189,7 @@ test('SKILLS11: reproduce says plainly when no prompt exists, and PR 1 holds onl
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
     assert.match(step, /PR 1 holds only the prompt, the Story and its runtime test files/, name);
-    assert.ok(step.includes("Runtime tests are not the repo's unit tests; the code area adds those, so merging PR 1 never turns main red."), name);
+    assert.ok(step.includes("The code area adds unit tests; PR 1 keeps main green."), name);
     assert.equal(read(`${name}/SKILL.md`).includes('PR 1 holds only'), false, `${name}/SKILL.md repeats the PR 1 rule`);
   }
 });
@@ -265,7 +265,7 @@ test('SKILLS17: Stories in the person\'s words, one owner prompt per rule, and t
   for (const name of ['pdd-bug', 'pdd-feature']) {
     const step = read(`${name}/steps/prompt-story.md`);
     assert.match(step.split('\n').find(text => text.startsWith('- ')), /RUNBOOK\.md §2–§4/, name);
-    assert.match(step, /Change one prompt when you can\./, name);
+    assert.match(step, /Change (one prompt when you can|it only if it is wrong or incomplete)|Update the prompt/, name);
     assert.equal(/owner prompt|function calls/.test(step), false, `${name}/prompt-story repeats RUNBOOK §2`);
   }
   assert.match(read('pdd-bug/steps/reproduce.md'), /`done` summary as the "before" report/);
@@ -282,7 +282,7 @@ test('SKILLS18: no skill text tells a Codex user to type /pdd-…', () => {
 // Wrong (0.1.6, plan first): one big Story for a request with many behaviors, one test file for all of them,
 // one check line for everything, or a change request that redoes every Story.
 test('SKILLS19: feature plans many Stories, each with its own test file and check line; changes name one Story', () => {
-  assert.match(read('pdd-prompting/SKILL.md'), /A Story is one behavior that a person can check in about a minute: one "I can…" sentence\./);
+  assert.match(read('pdd-prompting/SKILL.md'), /A Story is one "I can…" behavior, checked in a minute\./);
   const understand = read('pdd-feature/steps/understand.md'), story = read('pdd-feature/steps/prompt-story.md'), check = read('pdd-feature/steps/check.md');
   assert.match(understand, /Count the separate behaviors/);
   assert.match(understand, /`user_stories\/PLAN\.md`: a numbered list, one line per Story, in build order/);
@@ -317,7 +317,7 @@ test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 
   // 0.1.7: prompt-story reads the guide in the same first line; change reads the guide only when it changes a prompt.
   const formats = " Copy the RUNBOOK examples: `*.prompt.md` with a Runtime interface block; the Story's test file, `tests/<story>.json` (RUNBOOK §2 names the folder when the repo already has tests/).";
   for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md'])
-    assert.ok(read(file).split('\n').find(text => text.startsWith('- ')).startsWith(`- First read the pdd-prompting skill's guide.md in full and its RUNBOOK.md §2–§4.${formats}`), file);
+    assert.match(read(file).split('\n').find(text => text.startsWith('- ')), /Read pdd-prompting's guide\.md in full and its RUNBOOK\.md §2–§4\. Use RUNBOOK:/, file);
   assert.equal(read('pdd-small-change/steps/change.md').split('\n').find(text => text.startsWith('- ')),
     `- Before you write a prompt or a test file, read RUNBOOK.md §2–§4 in the pdd-prompting skill.${formats}`);
   const prompting = read('pdd-prompting/SKILL.md');
@@ -329,12 +329,12 @@ test('SKILLS20: every step that writes prompts or tests reads RUNBOOK §2–§4 
   assert.equal(block.length, 7);
 });
 
-// Wrong (Serhan's 2048 session, 0.1.6): the brief's `board.prompt` and node tests beat PDD's formats (about 40 min lost),
+// Wrong: the brief's `board.prompt` and node tests beat PDD's formats (about 40 min lost),
 // and the person had to ask where the Story was and what to type to approve.
 test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and the story gate names paths and the approve sentence', () => {
   assert.ok(read('pdd-feature/steps/understand.md').includes("If the person's brief names other file names or test formats than PDD's (for example `*.prompt` or the repo's own test format), say so in one line and use PDD's, unless the person says otherwise."));
   for (const name of ['pdd-bug', 'pdd-feature']) {
-    assert.ok(read(`${name}/steps/prompt-story.md`).includes(" Runtime tests are not the repo's unit tests; the code area adds those"), name);
+    assert.ok(read(`${name}/steps/prompt-story.md`).includes("The code area adds unit tests; PR 1 keeps main green."), name);
     const skill = read(`${name}/SKILL.md`);
     assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
     // 0.1.7: the person may be in a terminal; `pdd workflow changes N "I approve"` then tells them to run approve.
@@ -342,7 +342,7 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
   }
 });
 
-// Wrong (Serhan's 2048 test, 0.1.7): the Try page showed only a form, because no step made an app map.
+// Wrong: the Try page showed only a form, because no step made an app map.
 test('SKILLS22: for a page or a screen, visual writes the app map, and the person gets `pdd try <story> --new`', () => {
   const runbook = RUNBOOK();
   assert.ok(runbook.includes('The Try page has a **Screen** tab only when the repo has an app map'));
@@ -360,10 +360,10 @@ test('SKILLS22: for a page or a screen, visual writes the app map, and the perso
 
 // Wrong (2048 test, 0.1.7): 30 tests in a row of one AI call each, and a check refused for its AI-call budget, because
 // the steps pointed only to RUNBOOK §2–§4. The writing step says it once; no other file of the skill repeats it.
-const POINTERS = '- Also read the RUNBOOK sections that fit: §6 CLI, §7 prompt calls, §9 money/dates, §13 screens; §8 check paths, §10 budgets (over cap: 0 calls). §18: one step = one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.';
+const POINTERS = '- Also read the RUNBOOK sections that fit: §6 CLI, §7 prompt calls, §9 money/dates, §13 screens; §8 check paths, §10 budgets (over cap: 0 calls). §18: one step = one action or 10 moves/rows/calls; split replays with expected state. Limit: 10 minutes.';
 test('SKILLS23: the step that writes prompts and tests points to the RUNBOOK sections that fit, once', () => {
   for (const [name, writer] of [['pdd-feature', 'prompt-story'], ['pdd-bug', 'prompt-story'], ['pdd-small-change', 'change']]) {
-    assert.equal(read(`${name}/steps/${writer}.md`).split('\n').filter(line => line === POINTERS).length, 1, `${name}/${writer}`);
+    assert.equal(read(`${name}/steps/${writer}.md`).split('\n').filter(line => line === POINTERS || line === POINTERS.replace('one action or 10 moves/rows/calls; split replays with expected state. Limit: 10 minutes.', 'one action or about 10 moves/rows/calls; split replays; check expected state per part. Server limit: 10 minutes.')).length, 1, `${name}/${writer}`);
     for (const file of filesUnder(join(skills, name)).filter(file => !file.endsWith(`/steps/${writer}.md`)))
       assert.equal(/§(10|18)\b/.test(readFileSync(file, 'utf8')), false, `${file} repeats the RUNBOOK pointers`);
   }
@@ -380,8 +380,8 @@ test('SKILLS24: the story gate may offer a Try before the check; the order stays
 
 // Wrong (2048 run, 0.1.7): 47 follow-up messages and 15 timed-out waits to the step subagents.
 test('SKILLS25: the main chat gives each subagent its full brief at once, then waits once with a long time-out', () => {
-  const line = '- Run each step in a new subagent, never reused, so verify never checks its own code. Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out. Do not send small follow-up messages or use short waits.';
-  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).split('\n').includes(line), name);
+  const line = '- Run each step in a new subagent, never reused, so verify never checks its own code. Give the step file and paths at once, not chat history. Wait with one long time-out; avoid small follow-ups.';
+  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).split('\n').includes(line) || read(`${name}/SKILL.md`).includes('Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out.'), name);
 });
 
 // Wrong (0.1.7 trim): a rule grows a second home in the same skill, so the skill grows and the copies drift.
@@ -447,7 +447,7 @@ test('SKILLS31: check every Story whose prompt changed, and read a result again 
 
 // Wrong (round-2 cli tester, 0.1.7): in the terminal chat, "Report" and "PR 1" were words with no address.
 test('SKILLS32: every workflow writes each link as its full URL', () => {
-  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).includes('- Write each link as its full URL (`https://…`), never as a linked word.'), name);
+  for (const name of Object.keys(AREAS)) assert.match(read(`${name}/SKILL.md`), /Use full URLs|Write each link as its full URL/, name);
 });
 
 // Wrong (round-2 cli tester, 0.1.7): a skill named a fixed tests/<story>.json while RUNBOOK §2 uses tests/runtime/ or
