@@ -133,7 +133,7 @@ function prepareReference(source) {
 function snapshot(reference) {
   const normalize = text => text.replace(/\s+/g, ' ').trim();
   const elements = [...document.querySelectorAll('*')], indexes = new Map(elements.map((el, i) => [el, i])), parts = [];
-  const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT), textNodes = [], tokenIds = new Map();
+  const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION), textNodes = [], tokenIds = new Map();
   while (walker.nextNode()) { tokenIds.set(walker.currentNode, `text:${textNodes.length}`); textNodes.push(walker.currentNode); }
   const excluded = el => !!el.closest('title,desc,defs,metadata,script,style,noscript,template,symbol,marker,pattern,clipPath,mask,linearGradient,radialGradient,stop,filter');
   const svgPaint = new Set(['text', 'tspan', 'textPath', 'rect', 'circle', 'ellipse', 'path', 'polygon', 'polyline', 'line']);
@@ -245,7 +245,7 @@ function snapshot(reference) {
     return [node, { value: normalize(node.textContent), box: range.getBoundingClientRect(), visible: !!el && !excluded(el) && !el.closest('textarea,select,option') && !(reference && el.closest('[data-context-only="true"],.context-only')) && visible(el, range.getBoundingClientRect(), 'text') }];
   }));
   const renderedText = node => {
-    if (node.nodeType === Node.TEXT_NODE) return textInfo.get(node)?.visible ? node.textContent : '';
+    if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) return textInfo.get(node)?.visible ? node.textContent : '';
     if (node.nodeType !== Node.ELEMENT_NODE || excluded(node) || ['textarea', 'select', 'option'].includes(node.localName)) return '';
     if (node.localName === 'br') return '\n';
     const text = [...node.childNodes].map(renderedText).join('');

@@ -313,8 +313,65 @@ test('public CLI refuses unestablished SVG geometry and keeps all rendered SVG i
   await t.test('valid comments and literal CDATA never become executable reference content', async () => {
     const result = await check('<!-- <script>throw Error("must not execute")</script> --><text x="20" y="40"><![CDATA[<script>]]></text>', '<text x="20" y="40">&lt;script&gt;</text>');
     assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.map(row => [row.part, row.status]), [['“<script>”', 'pass'], ['“READY”', 'pass']]);
   });
   for (const comment of ['<!--outer<!-- nested -->', '<!-- unterminated', '<!-- bad -- content -->', '<!-- trailing --->']) await t.test(`malformed reference comments cannot pass: ${comment}`, async () => {
     const result = await check(comment); assert.equal(result.code, 2, result.stderr || result.stdout); assert.match(result.stderr, /comment|malformed/i);
+  });
+});
+
+test('public CLI requires literal CDATA labels, distinct occurrences and visible geometry', { skip: !chrome, timeout: 180000 }, async t => {
+  const wrap = body => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">${body}<text x="20" y="320">READY</text></svg>`;
+  const input = setup(t);
+  let page;
+  // XML preserves CDATA_SECTION_NODE on the actual page as well as the reference.
+  const server = createServer((_, res) => { res.writeHead(200, { 'content-type': 'image/svg+xml' }); res.end(page); });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  t.after(() => new Promise(done => { server.closeAllConnections(); server.close(done); }));
+  const check = async (reference, actual = reference) => {
+    writeFileSync(join(input.cwd, input.drawingPath), wrap(reference)); page = wrap(actual);
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(['check', '--screen', `http://127.0.0.1:${server.address().port}/`, '--drawing', input.drawingPath, '--json'], { cwd: input.cwd, env: { ...process.env, PDD_CHROME_PATH: chrome, PDD_RUNTIME_URL: 'invalid-offline', PDD_STATE_DIR: input.cwd }, stdout, stderr });
+    return { code, stderr: stderr.text, stdout: stdout.text, report: stdout.text ? JSON.parse(stdout.text) : null };
+  };
+  const label = '<text id="label" x="20" y="40"><![CDATA[CDATA REQUIRED]]></text>';
+  await t.test('CDATA on both sides is required literal text', async () => {
+    const result = await check(label); assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.map(row => [row.part, row.status]), [['#label', 'pass'], ['“CDATA REQUIRED”', 'pass'], ['“READY”', 'pass']]);
+  });
+  await t.test('an id with wrong content cannot hide a CDATA label mismatch', async () => {
+    const result = await check(label, '<text id="label" x="20" y="40">WRONG</text>');
+    assert.equal(result.code, 1, result.stderr || result.stdout);
+    assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'missing');
+  });
+  await t.test('mixed text and CDATA aggregate literally without parsing markup or entities', async () => {
+    const result = await check('<text x="20" y="40">Alpha <![CDATA[<literal>&word]]> Omega</text>', '<text x="20" y="40">Alpha &lt;literal&gt;&amp;word Omega</text>');
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.map(row => [row.part, row.status]), [['“Alpha <literal>&word Omega”', 'pass'], ['“READY”', 'pass']]);
+  });
+  const repeated = '<text x="20" y="40"><![CDATA[SAME]]></text><text x="20" y="80">SA<![CDATA[ME]]></text>';
+  await t.test('repeated mixed labels use distinct displayed occurrences', async () => {
+    const result = await check(repeated); assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.map(row => [row.part, row.status]), [['“SAME”', 'pass'], ['“SAME”', 'pass'], ['“READY”', 'pass']]);
+  });
+  await t.test('one mixed occurrence cannot supply two required labels through ancestor aggregation', async () => {
+    const result = await check(repeated, '<g><text x="20" y="40">SA<![CDATA[ME]]></text></g>');
+    assert.equal(result.code, 1, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.filter(row => row.part === '“SAME”').map(row => row.status), ['pass', 'missing']);
+  });
+  await t.test('hidden and context-only reference CDATA stays excluded', async () => {
+    const result = await check('<text display="none" x="20" y="40"><![CDATA[HIDDEN]]></text><g opacity="0"><text x="20" y="80"><![CDATA[TRANSPARENT]]></text></g><text data-context-only="true" x="20" y="120"><![CDATA[CONTEXT]]></text>', '');
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.deepEqual(result.report.rows.map(row => row.part), ['“READY”']);
+  });
+  await t.test('hidden page CDATA cannot satisfy a visible required label', async () => {
+    const result = await check(label, '<text id="label" visibility="hidden" x="20" y="40"><![CDATA[CDATA REQUIRED]]></text>');
+    assert.equal(result.code, 1, result.stderr || result.stdout);
+    assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'hidden');
+  });
+  await t.test('CDATA uses its rendered region instead of passing moved text', async () => {
+    const result = await check(label, label.replace('y="40"', 'y="200"'));
+    assert.equal(result.code, 1, result.stderr || result.stdout);
+    assert.equal(result.report.rows.find(row => row.part === '“CDATA REQUIRED”')?.status, 'region');
   });
 });
