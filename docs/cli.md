@@ -99,7 +99,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | Command | What it does |
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
-| `pdd --version` | Print the version, `0.1.10`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print `0.1.10`; a linked local checkout on a symbolic branch prints `0.1.10-dev.<branch>.<sha9>`. Detached, release, and npm-packed GitHub branch installs print `0.1.10`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 
 ## Run from a source checkout
