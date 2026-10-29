@@ -1200,7 +1200,8 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
     ? exec(join(f.base, 'gh-real'), args.slice(2), { cwd: opts.cwd, input: opts.input, encoding: 'utf8' })
     : originalExec(file, args, opts);
   f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  const testPorts = { ...f.ports }; delete testPorts.execFile;
+  const code = await approveRun({ ref: '17', cwd: f.source }, testPorts);
   f.ports.execFile = originalExec; process.env.PATH = oldPath;
   assert.equal(readFileSync(capture, 'utf8'), f.prs[0].body);
   assert.equal(code.exitCode, 0, code.message);
