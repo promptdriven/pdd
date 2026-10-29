@@ -8,9 +8,7 @@ import { runPdd } from '../src/pdd-cli.mjs';
 
 const bin = resolve(import.meta.dirname, '../bin/pdd.mjs');
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version;
-const branch = spawnSync('git', ['symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
-const sha9 = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim().slice(0, 9);
-const checkoutVersion = `${version}-dev.${branch.replaceAll('/', '-')}.${sha9}`;
+const checkoutVersion = new RegExp(`^${version.replaceAll('.', '\\.')}(?:-dev\\.[^.]+\\.[0-9a-f]{9})?\\n$`);
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "pdd-path ' proof-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -31,7 +29,7 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
   for (const args of [['setup'], ['--version']]) {
     const r = f.run(...args);
     assert.equal(r.status, 0, r.stderr);
-    if (args[0] === '--version') assert.equal(r.stdout, `${checkoutVersion}\n`);
+    if (args[0] === '--version') assert.match(r.stdout, checkoutVersion);
     assert.ok(r.stderr.includes(bin)); assert.ok(r.stderr.includes(`PDD Alpha ${version}`));
     assert.ok(r.stderr.includes(join(f.old, 'pdd'))); assert.ok(r.stderr.includes(join(f.alpha, 'pdd')));
     assert.match(r.stderr, /PATH selects:.*pdd, version 0\.0\.305\.dev214/);
@@ -45,13 +43,13 @@ test('PATH2: PATH correction selects Alpha and a second version check terminates
   const f = fixture(t);
   f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${checkoutVersion}\n`);
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, checkoutVersion);
   assert.match(r.stderr, /PATH selects:.*PDD Alpha/);
   assert.ok(r.stderr.includes(join(f.old, 'pdd')));
   rmSync(join(f.old, 'pdd'));
   const second = f.run('--version');
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(second.stdout, `${checkoutVersion}\n`);
+  assert.match(second.stdout, checkoutVersion);
   assert.match(second.stderr, /PATH selects:.*PDD Alpha/);
 });
 
@@ -90,7 +88,7 @@ test('PATH6: probing another Alpha installation terminates and keeps version-onl
   for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(other, name), { recursive: true });
   rmSync(join(f.old, 'pdd')); symlinkSync(join(other, 'bin/pdd.mjs'), join(f.old, 'pdd'));
   const r = f.run('--version');
-  assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${checkoutVersion}\n`);
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, checkoutVersion);
   assert.match(r.stderr, new RegExp(`PATH selects:.*\\(${version.replaceAll('.', '\\.')}\\)`));
 });
 

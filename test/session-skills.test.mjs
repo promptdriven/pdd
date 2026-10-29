@@ -46,7 +46,7 @@ test('INSTALL1: pdd --version, help and workflow list write nothing to HOME or C
     assert.equal(result.status, 0, result.stderr);
     if (args[0] === '--version') {
       assert.equal(result.stdout, `${version()}\n`);
-      assert.match(result.stderr, /PATH selects:/);
+      assert.equal(result.stderr, '');
     } else assert.equal(result.stderr, '');
   }
   const conflict = run(['--version'], { CLAUDE_CONFIG_DIR: config, PATH: `${legacy}:${path}` });
