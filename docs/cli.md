@@ -67,6 +67,8 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, `pdd check --help` and `pdd try --help` for the options, and `RUNBOOK.md` for the file formats.
 
+The Try page's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the Try budget. Older pages keep manual Fill fields and Run.
+
 ## Used by the agent
 
 | Command | What it does |

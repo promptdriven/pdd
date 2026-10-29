@@ -63,3 +63,15 @@ test('own expectations and save offers are independently validated',async()=>{
  for(const bad of [{expect:{...expect,checks:[{target:'calls',path:'/save',value:1}]}},{expect:{...expect,checks:[{target:'result',path:'not-pointer',value:1}]}},{expect:{...expect,checks:[{target:'result',path:'',value:{$step_result:'prior'}}]}},{expect:{...expect,checks:[]}},{save:{...save,criterion:'AC999'}},{save:{...save,checks:[{target:'result',path:'/stdout',value:'guessed'}]}}]){const field=Object.keys(bad)[0],got=await askAgent({agent:'claude',entries,context,run:fake({...valid,...bad})});assert.equal(got.say,reply.say);assert.equal(got[field],undefined);}
  const noFill=await askAgent({agent:'claude',entries,context,run:fake({...valid,fill:null})});assert.equal(noFill.expect,undefined);assert.deepEqual(noFill.save,save);
 });
+test('optional run requires negotiated capability and a valid manual applied fill',async()=>{
+ const wanted={...reply,apply:true,run:true};
+ for(const supportsRun of [false,true]){
+ const got=await askAgent({agent:'claude',entries,supportsApply:true,supportsRun,context:{message:'Run it',requestKind:'chat'},run:fake(wanted)});
+ assert.equal(got.run,supportsRun?true:undefined);assert.equal(got.say,reply.say);
+ }
+ for(const requestKind of ['run','unknown'])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{requestKind,message:'Run it'},run:fake(wanted)})).run,undefined);
+ for(const extra of [{apply:false},{fill:null},{run:'yes'}])assert.equal((await askAgent({agent:'claude',entries,supportsApply:true,supportsRun:true,context:{message:'Run it'},run:fake({...wanted,...extra})})).run,undefined);
+});
+
+test('failed native process preserves bounded stdout privately for owned-session cleanup',async()=>{const {runAgentProcess}=await import('../src/agent-adapters.mjs');await assert.rejects(runAgentProcess(process.execPath,['-e',`process.stdout.write('native-session-marker\\n');setInterval(()=>{},1000)`],{timeoutMs:350,maxBytes:4096}),error=>error.stdout==='native-session-marker\n'&&/timeout/.test(error.message));});
+test('only mechanical transport errors carry recoverability through the sanitized adapter',async()=>{for(const [message,state] of [['Connection interrupted','error'],['Usage limit reached','quota'],['Not logged in','signed_out']]){const result=await askAgent({agent:'codex',env:{},run:async()=>{throw Object.assign(Error(message),{recoverable:true});}});assert.equal(result.error.state,state);assert.equal(result.error.recoverable,state==='error'?true:undefined);}});

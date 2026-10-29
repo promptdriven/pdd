@@ -24,7 +24,7 @@ never print this key in diagnostics or ordinary shared Try links. Runtime-client
 ```mermaid
 flowchart TD
     C[Owner connects] --> P[Poll and renew heartbeat]
-    P -->|Message, idle| A[Fresh local read-only agent turn]
+    P -->|Message, idle| A[Selected local read-only agent turn]
     A --> R[Post one reply]
     R --> P
     P -->|No message| P
@@ -34,9 +34,9 @@ flowchart TD
 Polling continues concurrently while a turn runs, so the heartbeat outlives slow agents. At most one
 local turn runs at a time. Remember received IDs before execution; never run a duplicate or retry an
 uncertain turn/reply. Every poll adopts a valid selection and remembers it; each message's server-assigned
-agent wins for that message. A user switch affects following messages, without rerunning the old one.
+agent wins for that message. Cleanup warnings on switch and disconnect are reported without suppressing owner disconnect or guide cleanup. A recoverable mechanical transport error keeps the launcher available for a new person message, while quota/authentication/missing states stay unavailable. A user switch affects following messages, without rerunning the old one. Keep one lazy structured session for the selected private launcher, closing the old one before a following message uses another launcher. Separate Tries never share sessions. Deterministic replies create no agent process. Cancel and close the session, await its active bounded turn and clean its owned fallback transcript when the chat disconnects. An injected askAgent port keeps its existing behavior unless an explicit createAgentSession port is also supplied.
 
-POST `/agent/reply` with bridge_id/message_id/say/fill and updated discovery states. Negotiate optional apply/progress/run_events/expect/save from a bounded string-array connect response; ignore unknown features. Absent features use the legacy say/fill payload only and a manual Fill fields then Run prompt variant. Preserve strict
+POST `/agent/reply` with bridge_id/message_id/say/fill and updated discovery states. Negotiate optional apply/progress/run_events/expect/save/run from a bounded string-array connect response; ignore unknown features. Absent features use the legacy say/fill payload only and a manual Fill fields then Run prompt variant. Preserve strict
 adapter validation; a failure yields a plain assistant message and that agent's signed-out/quota/error
 state. No automatic provider switch. Never call a missing or non-ready agent; explain its current state.
 Bound reply text and IDs, strip credentials from diagnostics and output. Missing/failed/malformed poll
@@ -67,6 +67,8 @@ After a successful relay reply, call delivered with its accepted person/reply pa
 
 ## Dependencies
 
+- [Local session](agent-session.prompt.md): required generation/runtime/verification owner of warm structured transport, pre-submission fallback and owned transcript lifetime.
+
 - [Try guide](agent-guide.prompt.md): required generation/runtime context for memory, coverage, own-case checks and compatibility projection.
 - [Run judge](agent-judge.prompt.md): required generation/runtime context for deterministic verdicts and ordered progress.
 - [Project card](agent-project.prompt.md): required generation/runtime context for safe local facts and latest official check.
@@ -76,3 +78,9 @@ After a successful relay reply, call delivered with its accepted person/reply pa
   scrubbing, read-only CLI execution, strict JSON and schema validation.
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated
   transport, repository state, safe source capture, cancellation and Try lifecycle; it owns invocation.
+
+Advertised run is passed as supportsRun to the adapter and retained for guide wire
+projection. Only the current manual person's request can authorize the agent's run flag;
+interpret intent in any wording, never a fixed word list. Automatic run observations
+cannot authorize another action. The bridge never dispatches it; the negotiated page
+uses its ordinary funded action path and guards. Without run capability, omit the field.
