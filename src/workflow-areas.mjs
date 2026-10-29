@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-areas.prompt.md (sha256: 3883b0c345cd5238f1b1ee1e894fec01571232ae4f8dcc8366ad976789e1a668).
+// Generated from prompts/cli/workflow-areas.prompt.md (sha256: b99507d1bce9ae7b7776620f6096bb863240aa5a589ebdf2226eee3b23838604).
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -30,13 +30,15 @@ function parse(name, file) {
   return data.areas.map((area, index) => {
     const last = index === data.areas.length - 1;
     const askCode = !last && area?.gate === 'pr' && area.then === 'ask-code';
+    if (area?.replay_evidence !== undefined && (area.replay_evidence !== 'pdd.replay-evidence.v1' || area.gate !== 'pr'))
+      throw invalid(`area ${index + 1} has an unsupported replay-evidence policy or gate`);
     if (area?.before !== undefined && !(area.before === 'approve' && area.gate === 'pr'))
       throw invalid(`area ${index + 1} may have "before":"approve" only with gate "pr"`);
     if (!word(area?.name) || !Array.isArray(area.steps) || !area.steps.length || !area.steps.every(word)
       || !Array.isArray(area.optional ?? []) || !(area.optional ?? []).every(step => area.steps.includes(step))
       || !(last ? area.gate === 'pr' && area.then === undefined : area.gate === 'approve' && area.then === undefined || askCode))
       throw invalid(`area ${index + 1} needs a name, steps, optional steps from its steps and gate ${last ? '"pr"' : '"approve", or "pr" with "then":"ask-code"'}`);
-    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}) };
+    return { name: area.name, steps: [...area.steps], optional: [...(area.optional ?? [])], gate: area.gate, ...(askCode ? { then: 'ask-code' } : {}), ...(area.before ? { before: 'approve' } : {}), ...(area.replay_evidence ? {replay_evidence:area.replay_evidence} : {}) };
   });
 }
 

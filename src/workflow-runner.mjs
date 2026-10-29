@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 98e4813faaf1654af82561cbfbced60bc35cff3a396656ce01f4907898e628cf).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 77034b03e508dd46bcc0980a80a63e33b50db40382623716c06f35dba28a392f).
 import { execFile as execFileCallback } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -16,6 +16,7 @@ import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-p
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
+import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -344,19 +345,6 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-// Content identity includes uncommitted and untracked Git-visible source, independent of commit SHA.
-function gitFingerprint(root) {
-  try {
-    const files = gitFiles(root).sort().map(path => {
-      const full = join(root, path);
-      let stat; try { stat = lstatSync(full); } catch (error) { if (error.code === 'ENOENT') return [path, 'missing']; throw error; }
-      if (stat.isSymbolicLink()) return [path, 'link', readlinkSync(full)];
-      if (!stat.isFile()) throw Error('Not a regular source file');
-      return [path, stat.mode & 0o111, createHash('sha256').update(readFileSync(full)).digest('hex')];
-    });
-    return createHash('sha256').update(JSON.stringify(files)).digest('hex');
-  } catch { return null; }
-}
 function matchesSource(record, root, fingerprint) {
   const source = record.source;
   if (!source?.sha256) return false;
@@ -509,7 +497,8 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const reports = checked ? reportLinks(checked, env).filter(row => !shown.some(url => row.includes(` ${url} `))) : [];
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
-  const top = [...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
+  const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
@@ -526,10 +515,39 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+  if (area.then === 'ask-code' && run.areas.some(item=>item.replay_evidence === REPLAY_POLICY) && !Object.hasOwn(run,'replayBaseline')) {
+    run.replayBaseline = pinReplayVectors(run.root,(await worktreeContents(run,p)).tests);writeRun(run,p);
+  }
+  const opted = area.replay_evidence === REPLAY_POLICY;
+  if (opted) {run.replayEvidence=readReplayEvidence(run);writeRun(run,p);}
+  const replayBody = join(run.runDir,`pr-${area.name}.md`);
+  const markedReplayBody = evidence => {
+    const body=prBody({...run,replayEvidence:evidence},area,p.env);
+    if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
+    return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
+  };
+  try {if (opted) writeFileSync(replayBody,markedReplayBody(run.replayEvidence));}
+  catch(error){return fail([...lines,oneLine(error.message)].join('\n'));}
+  const editReplay = async (file,afterPush=false) => {
+    try {
+      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file',file],{cwd:run.root});
+      if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
+    } catch(error) {return fail([...lines,`The code-space PR description could not be updated (${causeOf(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${retry}.`].join('\n'));}
+    return null;
+  };
   if (existing) {
+    if (opted) {
+      const pending = join(run.runDir,`pr-${area.name}-pending.md`);
+      writeFileSync(pending,markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'}));
+      const failed=await editReplay(pending);if(failed)return failed;
+    }
     p.say(`Pushing ${run.branch} to ${label}…`);
-    try { await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root }); }
+    try {
+      const reply = await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root });
+      if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
+    }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
+    if (opted) {const failed=await editReplay(replayBody,true);if(failed)return failed;}
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
@@ -638,6 +656,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
+  if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=readReplayEvidence(run); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {

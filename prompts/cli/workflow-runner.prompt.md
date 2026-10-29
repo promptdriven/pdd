@@ -51,6 +51,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 ## Dependencies
 
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
+- [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
 
 ## Recover a missing unconfirmed area tab
@@ -72,3 +73,29 @@ The evidence command writes only the local run record/index and append-only evid
 ## Progress and causes
 
 pdd always says what happens. An optional `ports.say(text)` prints one progress line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style; without it the runner stays quiet (tests). Say one line before each slow step: `Reading issue N from GitHub…`, `Fetching origin/<base>…`, `Making the worktree and branch for #N…`, `Starting the <area> chat in Herdr…`, `Pushing <branch> to <PR label>…`, `Pushing <branch> and opening <PR label> on GitHub…`, `Reading PR 1 on GitHub…`, `Making the code branch…`, `Opening the <area> chat in Herdr…`, `Closing the chat tabs in Herdr…`, and `Reading N PRs from GitHub…` before status reads them. The final message stays the single result. A failed gh, git or Herdr call names its real reason in the failure line: a missing program is `<herdr|gh|git> is not installed or not on PATH`, else the tool's cleaned first stderr line (gh's `detail`), else its code.
+
+## Structured replay evidence in code space
+
+Only a saved area's explicit replay_evidence=pdd.replay-evidence.v1 activates this policy. New bundled
+feature/bug code areas opt in; saved runs/custom areas without it keep their existing publication behavior.
+At the approved prompt-space publication immediately preceding an opted-in area, pin the changed scenario
+files from worktreeContents.tests through [replay evidence](workflow-replay.prompt.md), after committing
+leftovers and before publishing. Save the original anchor once as run.replayBaseline, even when it is blocked
+or empty. Retries or later vector edits cannot silently replace the approved original hashes.
+
+For opted-in code steps, read and save the structured result as run.replayEvidence and on the step record;
+show its status separately from free-form summaries. Revalidate after automatic commits immediately before
+publication, including retries and updates of an existing code PR. The canonical report goes above every
+Runtime check, prose PASS claim or verify.md and retains assertion/formal failure lines. Missing, stale or
+malformed reports publish as BLOCKED/NOT REPLAYED, never PASS. Real assertion failures remain publishable;
+the policy qualifies evidence rather than preventing every failing review. The report and RUNBOOK explicitly
+state the CLI's structure/identity trust boundary; pdd never executes tests or supplied commands.
+
+For a previously opened opted-in code PR, replace its body with a prominent BLOCKED publication-pending
+report before pushing changed source, then set the final newly validated report after a successful push.
+If either description update fails, report the exact failure and retry command; never push new source while
+the description still asserts an old PASS. Preserve ordinary non-opted existing-PR push-only behavior.
+Preserve the single canonical workflow ownership marker on both descriptions, rejecting stray supplied markers.
+Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
+Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
+preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
