@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 80004b0e3a8fabd9fb9dfbbaadf0646be73e452d7d9536162d8039be079821eb).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d0383725998fa51e5c48088256bc0b47cc4d9b55b4fa3adaceb0e490bbaeb380).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -206,17 +206,23 @@ class Runtime {
   stop(tryId, requestId) { return this.send(`/v1/try/${tryId}`, { method: 'DELETE', headers: { 'X-Request-Id': requestId } }, this.ports.postMs); }
 }
 
-// Answers that stop everything with one plain line and exit 5: a login not on the invite list (403 not-invited), and an
+// Answers that stop everything with one plain line and exit 5: a login not on the invite list (403 not-invited), an
+// account that PDD Cloud did not approve (403 no-cloud-access) or could not check (503 cloud-unavailable), and an
 // old pdd that the server no longer serves (code update-required, any status, 0.1.6).
 const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd#alpha';
+const NO_CLOUD_TEXT = 'Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.';
+const CLOUD_DOWN_TEXT = 'PDD Cloud could not confirm your access. Try again in a minute.';
 function blockingAnswer(reply) {
-  const json = reply.json, code = json?.code ?? json?.error?.code;
-  if (code === 'update-required') {
-    const said = cleanText(typeof json?.message === 'string' ? json.message : json?.error?.message).slice(0, 300);
-    return said || UPDATE_TEXT;
-  }
+  // error.code first: for pdd 0.1.9 a server sends a top-level update-required over error.code no-cloud-access.
+  const json = reply.json, error = isObject(json?.error) ? json.error : null, code = error?.code ?? json?.code;
+  const said = () => [error?.message, json?.message].map(text => typeof text === 'string' ? cleanText(text).slice(0, 300) : '').find(Boolean);
+  if (code === 'update-required') return said() || UPDATE_TEXT;
+  if (reply.status === 403 && code === 'no-cloud-access') return said() || NO_CLOUD_TEXT;
+  // The server text says that pdd retries; pdd stops at once instead, so it prints its own line.
+  if (reply.status === 503 && code === 'cloud-unavailable') return CLOUD_DOWN_TEXT;
   if (reply.status !== 403 || code !== 'not-invited') return null;
-  const login = typeof json.login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(json.login) ? json.login : null;
+  const named = json.login ?? error?.details?.login;
+  const login = typeof named === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(named) ? named : null;
   return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD runtime invite list yet. Ask the PDD team to add you.`;
 }
 
