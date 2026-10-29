@@ -127,7 +127,7 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   const posts = fake.posts.length;
   const read = await check(setup, fake, [batch], { '--read': true });
   assert.equal(read.code, 1, read.err + read.out); assert.equal(fake.posts.length, posts); assert.equal(read.clock.uuids, 0);
-  assert.match(read.out, /FAILED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}AC1 {2}result \/totalCents {2}expected 899, got 900/);
+  assert.match(read.out, /FAILED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}AC1 {2}step [^ ]+ {2}result \/totalCents {2}expected 899, got 900/);
   const last = await check(setup, fake, [], { '--read': true, '--json': true });
   assert.equal(last.code, 1); assert.equal(last.json.batch, batch); assert.equal(fake.posts.length, posts); assert.equal(last.clock.uuids, 0);
   assert.equal(last.json.rows[0].request_id, fake.posts[1].request.requestId);
@@ -205,10 +205,148 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.equal(result.code, 1, result.err);
   const lines = result.out.split('\n');
   const at = lines.indexOf('FAILED  Place a coffee order (tests/place-order.json)');
-  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
-  assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
-  assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
-    ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
+  assert.deepEqual(lines.slice(at + 1, at + 4), ['  AC1  step sam-orders-espressos-and-a-muffin  result /totalCents  expected 899, got 900', '    Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
+  assert.match(lines[at + 4], /^ {2}Next: show this check to the person\. A person decides expected values\. The agent may propose a change, and never makes it\.$/);
+  assert.match(lines[at + 5], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+$/);
+  const details = lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1);
+  assert.equal(details[0], '  failed  AC1  step sam-orders-espressos-and-a-muffin  result /totalCents  expected 899, got 900');
+  assert.equal(details.find(line => line.includes('passed  AC2')), '  passed  AC2  step sam-orders-espressos-and-a-muffin  result /customerName  expected "Sam", got "Sam"');
+});
+
+test('RUNTIME-XFIX1: failed checks show the step, short criterion, diagnosis and a missing error plainly', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false, diagnosis: {
+      kind: 'needs-tool', who: 'prompt', why: 'This check needs a SHA-256, and the AI cannot compute one.', next_step: 'Declare compute.hash_json in the Runtime interface.', evidence: ['target error, no error came back'], likely: true } }]);
+    answer.result.who = 'prompt'; answer.result.why = 'This check needs a SHA-256, and the AI cannot compute one.'; answer.result.next_step = 'Declare compute.hash_json in the Runtime interface.';
+    answer.result.report.samples[0].steps[0].step_id = 'tampered';
+    return { status: 200, json: answer };
+  });
+  const text = await check(setup, fake, ['place-order']);
+  assert.equal(text.code, 1, text.err + text.out);
+  assert.match(text.out, /AC1  step tampered  error \/code  expected "validation-error", got no error \(a normal result\)/);
+  assert.match(text.out, /Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents/);
+  assert.match(text.out, /Why: This check needs a SHA-256, and the AI cannot compute one\./);
+  assert.match(text.out, /Next: Declare compute\.hash_json in the Runtime interface\./);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  const row = json.json.rows[0], failed = row.failed_checks[0];
+  assert.equal(failed.step_id, 'tampered'); assert.equal(failed.diagnosis.who, 'prompt'); assert.equal(row.who, 'prompt');
+  assert.equal(row.next_step, 'Declare compute.hash_json in the Runtime interface.');
+});
+
+test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is conservative, and failed JSON reason stays null', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [
+      { criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false,
+        diagnosis: { kind: 'unsure', who: 'test', why: 'check why 1 /srv/private/a', next_step: 'check next 1', evidence: ['evidence /srv/private/b'] } },
+      { criterion_id: 'AC2', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false,
+        diagnosis: { kind: 'path-missing', who: 'test', why: 'check why 2', next_step: 'check next 2' } }]);
+    answer.result.why = 'run why'; answer.result.who = 'runtime'; answer.result.next_step = 'run next';
+    answer.result.report.samples[0].steps[0].step_id = 'diagnosed'; answer.result.report.samples[0].steps[0].error = { message: 'bad input' };
+    return { status: 200, json: answer };
+  });
+  const text = await check(setup, fake, ['place-order']);
+  assert.match(text.out, /expected "validation-error", got \{"missing":true\}/);
+  assert.match(text.out, /Why: check why 1 <server path>/); assert.match(text.out, /Next: check next 1/);
+  assert.match(text.out, /Why: check why 2/); assert.match(text.out, /Next: check next 2/);
+  assert.doesNotMatch(text.out, /run why|run next|\/srv\/private/);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(json.json.rows[0].reason, null); assert.equal(json.json.rows[0].why, 'run why'); assert.equal(json.json.rows[0].next_step, 'run next');
+  const passed = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order'], { '--json': true });
+  assert.equal(passed.json.rows[0].reason, null);
+
+  const noResult = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false }]);
+    delete answer.result.report.samples[0].steps[0].result;
+    return { status: 200, json: answer };
+  }), ['place-order']);
+  assert.match(noResult.out, /got \{"missing":true\}/);
+
+  const longError = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/message', op: 'equals', expected: 'x'.repeat(90), actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = {};
+    return { status: 200, json: answer };
+  }), ['place-order']);
+  assert.match(longError.out, /got:\n {6}no error \(a normal result\)/);
+});
+
+test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
+  const setup = harbor(t);
+  const answerFor = ({ checks, result = {}, why = null, who = null, next_step = null, error = null }) => async (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', checks);
+    answer.result.report.samples[0].steps[0].result = result;
+    if (error) answer.result.report.samples[0].steps[0].error = error;
+    answer.result.why = why; answer.result.who = who; answer.result.next_step = next_step;
+    return { status: 200, json: answer };
+  };
+  const multiline = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }] })), ['place-order']);
+  assert.match(multiline.out, /AC1  step sam-orders-espressos-and-a-muffin  result \/stdout\n {4}Criterion:[\s\S]*\n {4}expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+  assert.doesNotMatch(multiline.out, /got no error/);
+
+  const resultMissing = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }], result: { stdout: 'present' } })), ['place-order']);
+  assert.match(resultMissing.out, /target result|result \/stdout/);
+  assert.match(resultMissing.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(resultMissing.out, /got no error/);
+
+  const errorWithResult = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }], result: {}, error: { message: 'bad input' } })), ['place-order']);
+  assert.match(errorWithResult.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(errorWithResult.out, /got no error/);
+
+  const runLevel = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order']);
+  assert.match(runLevel.out, /Why: run-level why/); assert.match(runLevel.out, /Next: run-level next/);
+  const runLevelJson = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order'], { '--json': true });
+  const row = runLevelJson.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+});
+
+test('RUNTIME-XFIX6A: a multiline actual with a short expected value stays in block form', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    return { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }]) };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+});
+
+test('RUNTIME-XFIX6B: a result target never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = { stdout: 'present' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6C: an error plus a real result never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = {};
+    answer.result.report.samples[0].steps[0].error = { message: 'bad input' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6D: text and JSON use run-level diagnosis fields when no check diagnosis exists', async t => {
+  const setup = harbor(t), answer = (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const result = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    result.result.why = 'run-level why'; result.result.who = 'runtime'; result.result.next_step = 'run-level next';
+    return { status: 200, json: result };
+  };
+  const text = await check(setup, await fakeRuntime(t, answer), ['place-order']);
+  assert.match(text.out, /Why: run-level why/); assert.match(text.out, /Next: run-level next/);
+  const json = await check(setup, await fakeRuntime(t, answer), ['place-order'], { '--json': true });
+  const row = json.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
 });
 
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
@@ -563,7 +701,7 @@ test('RUNTIME-SERVER20: expected and got strings print JSON-escaped', async t =>
     [{ criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam\n', actual: 'Sam', passed: false }]) } : f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 1);
-  assert.match(result.out, /^ {2}AC2 {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
+  assert.match(result.out, /^ {2}AC2 {2}step sam-orders-espressos-and-a-muffin {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
 });
 
 // Wrong: a failed CLI output loses its line breaks and is cut near the difference (round-2 tester, Oct 27).
@@ -576,15 +714,20 @@ test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is ne
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', checks) } : f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 1, result.err);
-  const lines = result.out.split('\n'), first = lines.indexOf('  AC1  result /stdout');
+  const lines = result.out.split('\n'), first = lines.findIndex(line => /^  AC1  (?:step \S+  )?result \/stdout$/.test(line));
   const shown = cents => ['      Bill:  $100.00', '      Tip:   $0.00 (0%)', '      Total: $100.00', `      Person 1: $${cents}`, '      Person 2: $33.33', '      Person 3: $33.33',
     '      (ends with a line break)'];
-  assert.deepEqual(lines.slice(first, first + 17), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
+  const firstBlock = lines.slice(first, first + 18).filter(line => !line.startsWith('    Criterion: '));
+  assert.equal(firstBlock[0], '  AC1  step sam-orders-espressos-and-a-muffin  result /stdout');
+  assert.deepEqual(firstBlock.slice(1), ['    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
   const window = mark => ['      … 22 lines before', ...Array.from({ length: 20 }, (_, index) => `      line ${index + 23}${index === 2 ? ` ${mark}` : ''}`),
     '      … 18 more lines in the report'];
-  const second = lines.indexOf('  AC2  result /log');
-  assert.deepEqual(lines.slice(second, second + 47), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
-  assert.match(lines[second + 47], /^ {2}Report: http/);
+  const second = lines.findIndex(line => /^  AC2  (?:step \S+  )?result \/log$/.test(line));
+  const secondBlock = lines.slice(second, second + 48).filter(line => !line.startsWith('    Criterion: '));
+  assert.equal(secondBlock[0], '  AC2  step sam-orders-espressos-and-a-muffin  result /log');
+  assert.deepEqual(secondBlock.slice(1), ['    expected:', ...window('want'), '    got:', ...window('got')]);
+  const report = lines.findIndex((line, index) => index > second && /^  Report: http/.test(line));
+  assert.equal(report, second + 49); assert.match(lines[report], /^  Report: http/);
 });
 
 // Refusal items as prompt-runtime #379 sends them (not live yet): plain reason, fix, file, at, where, cause, and message = reason + fix.

@@ -4,6 +4,7 @@
 - For an opted-in run, write replay-evidence.json in the run folder as section 17 specifies; the formal step updates its result.
 - Put the tables first, after a `✗ N vectors fail` line if cases fail. Put the exact commands and long output last, in a closed `<details>` block.
 - Run the new cases, the regression tests and the repo's required checks.
+- For a behavior fix, write `Proof (defect fixed):` and `Proof (gap closed):` with evidence. If only the warning light changed, write `Not fixed yet: this helps find the cause`; the PR must use `Refs #N` and keep the issue open.
 - Report the exact commands, exit codes and real output. Name what no test covers.
 - verify.md shows commands and results only: no local absolute paths (like /Users/… or /home/…) and no raw logs.
 - For a screen, run the local headless comparison in RUNBOOK §13. A Screen vs drawing table is mandatory in verify.md and the code PR; a missing part fails verify. Return to build on differences.
