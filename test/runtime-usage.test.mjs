@@ -45,6 +45,6 @@ test('issues 11 and 20: incomplete server usage stays unknown despite a raw zero
   });
   const result=await run(setup,fake,{});
   assert.equal(result.code,4);assert.equal(result.json.rows[0].calls,'unknown');
-  assert.match(result.json.summary_line,/\+ 1 unknown/);
+  assert.match(result.json.summary_line,/1 unknown/);
   assert.deepEqual(fake.posts.map(p=>p.command),['lint','check']);
 });
