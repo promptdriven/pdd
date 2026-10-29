@@ -11,7 +11,7 @@ I can see an independent review of a fix and its proof before the code PR opens,
 5. The complete brakes-and-warning-light principle from issue #2595 appears verbatim at the top of bug, feature and small-change skill instructions and in the RUNBOOK; both RUNBOOK copies remain byte-identical.
 6. Warning-light-only work says "Not fixed yet: this helps find the cause" at the PR top, uses "Refs #N" and keeps the issue open.
 7. For a small-change behavior fix, scope records "Defect:" and "Not caught because:"; verify records "Proof (defect fixed):" and "Proof (gap closed):" and a reason for every removed test or changed assertion.
-8. RUNBOOK section 17 tells agents to prove each new test against old code with the agreed prove command. The exact supplied check-x RUNBOOK patch is included in both copies, and the PR names #2598, #2599 and #2602.
+8. The exact supplied check-x RUNBOOK patch for #2598, #2599 and #2602 is retained in both copies, and the PR names those issues. Adding prove-command guidance to section 17 is deferred to #2594 together with the command; #2595 adds no guidance for an unavailable command.
 9. Evidence distinguishes source checks from actual fresh-agent reviews: the required historical reviews detect the known unsafe change and find no must-fix in the control, while limitations and failures remain visible.
 
 ## Rules to check

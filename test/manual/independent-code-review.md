@@ -39,7 +39,7 @@ For a small-change behavior fix, inspect scope/verify instructions and an actual
 
 ## MANUAL 5 — RUNBOOK dependencies (AC8)
 
-Section 17 contains: for each new test, run `pdd workflow prove <run> --test "<command>" --expect "<the bug's error text>"`. This documents flow-runner's #2594 command; this change does not implement it.
+In #2595, section 17 does not add `pdd workflow prove` guidance. Flow-runner adds that guidance in #2594 together with the command, so this slice requires no unavailable command.
 
 Apply the supplied check-x-RUNBOOK.patch unchanged to both RUNBOOK copies in PR 2 and check they remain identical. Its expected-value, missing-error and failed-check guidance must survive other edits. Name #2598, #2599 and #2602 in the PR body. Do not edit check-x's feature check.md or small-change change.md, or #1462's existing bug step files. If the patch cannot apply, report the conflict rather than guessing replacement policy.
 
