@@ -2,7 +2,7 @@
 
 ## What PDD is
 
-In PDD, you write prompts and Stories in plain words. The prompts are the source of your program. The PDD runtime runs your prompts with an AI that acts as the code, so you can check and try your program before any code exists. The code comes later, from the approved prompts.
+In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD runtime runs your prompts with an AI that acts as the code, so you can check and try your program before any code exists. The code comes later, from the approved prompts.
 
 ```mermaid
 flowchart LR
@@ -81,7 +81,7 @@ tests/*.json                 one test file for each Story
 app-map.json                 connects the screen to the prompts, for the Try page
 ```
 
-This is one of the 2048 Stories (cut). Your Stories will look different. Each one tells, in plain words, what a user can do, and has numbered acceptance criteria that a person can check:
+This is one of the 2048 Stories (cut). Your Stories will look different. Each one tells what a user can do, and has numbered acceptance criteria that a person can check:
 
 ```markdown
 # Move and merge tiles
@@ -185,21 +185,21 @@ When the program does what you want, approve each prompt in your terminal:
 pdd approve prompts/board.prompt.md
 ```
 
-pdd shows the interface in plain words and the text changes since the last approval. Then it asks y/n. When you answer `y`, pdd sets the prompt to approved. Its next check results do not say DRAFT.
+pdd shows the interface and the text changes since the last approval. Then it asks y/n. When you answer `y`, pdd sets the prompt to approved. Its next check results do not say DRAFT.
 
 Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** on the Try page while `pdd try` runs in your terminal. pdd then asks y/n in that terminal.
 
-### 6. PR 1, then the code PR
+### 6. From prompt space to code space
 
 In a workflow run, pdd opens the pull requests:
 
-1. After you try it and approve, pdd opens **PR 1**: the prompts, the Stories and the tests. The PR text starts with the `Runtime check` lines and the report links.
-2. Then the chat asks if you want the code PR. To get it, say so in the chat, or run `pdd workflow approve 42`.
-3. The agent builds the code from the approved prompts. pdd opens **PR 2**. It runs the PR 1 test cases on the real code and shows the results in a table, with a formal check.
+1. After you try it and approve, pdd opens a pull request with the prompts, the Stories and the tests (prompt space). Its text starts with the `Runtime check` lines and the report links.
+2. Then the chat asks if you want the code. To get it, say so in the chat, or run `pdd workflow approve 42`.
+3. The agent builds the code from the approved prompts. pdd opens a pull request with the code (code space). It runs the test cases from prompt space on the real code and shows the results in a table, with a formal check.
 
-In the 2048 project, PR 1 held the 3 prompts, the 5 Stories, their tests, the mockup and the app map. PR 2 held the code. It ran all 31 test steps of PR 1 on the real code, and its formal check said **Proved (bounded)**.
+In the 2048 project, the pull request for prompt space held the 3 prompts, the 5 Stories, their tests, the mockup and the app map. The pull request for code space held the code. It ran all 31 test steps from prompt space on the real code, and its formal check said **Proved (bounded)**.
 
-You can also stop at PR 1, merge it, and make the code PR later with `pdd workflow approve 42`. pdd makes the code PR only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
+You can also stop in prompt space: merge that pull request, and make the pull request for code space later with `pdd workflow approve 42`. pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
 
 To see where a run is, run `pdd workflow status 42`. To open its chat, run `pdd workflow open 42`.
 
@@ -217,7 +217,7 @@ To see where a run is, run `pdd workflow status 42`. To open its chat, run `pdd 
 | `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show a run: the gate, the approvals, the PRs and the Try links. It changes nothing. |
-| `pdd workflow approve [ISSUE]` | Approve the gate of a run, or make the code PR. |
+| `pdd workflow approve [ISSUE]` | Approve the gate of a run, or make the pull request for code space. |
 | `pdd setup` | Set up this repo for PDD, and install the skills when they are missing. |
 | `pdd help` | Show all commands. |
 
@@ -239,7 +239,7 @@ Call a skill the way that your agent calls skills, or ask for it by name.
 
 **Prompt space.** Your program lives in prompt space before it has code: the prompts, the Stories and the tests. You check it, try it and change it there. When it does what you want, you approve the prompts, and the code follows them.
 
-**Stories and criteria.** A Story is one thing that a user can do, in plain words. Its acceptance criteria are a numbered list that a person can check. The test file copies each criterion word for word and has at least one exact check for it.
+**Stories and criteria.** A Story is one thing that a user can do. Its acceptance criteria are a numbered list that a person can check. The test file copies each criterion word for word and has at least one exact check for it.
 
 **Small test steps.** Keep each test step small: one action, or a short run of about 10 moves. The server stops one step after 10 minutes.
 
