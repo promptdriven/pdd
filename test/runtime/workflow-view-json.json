@@ -1,0 +1,15 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-view-json.md",
+  "criteria": [
+    {"id":"AC1","text":"The command prints one JSON object with `version: 1`, the saved issue identity, run state and current area, and exits successfully without changing the run or contacting Herdr, GitHub, the PDD runtime or the network."},
+    {"id":"AC2","text":"An open gate is represented by `gate` with its saved id, area and kind, and the saved gate or question text is in `message`; a completed, cancelled or otherwise ungated run has `gate: null` and `message: null` when no message is saved."},
+    {"id":"AC3","text":"`links` groups the saved Story, plan and pull-request review links, and contains no Try URL."},
+    {"id":"AC4","text":"`approvals` lists only approvals recorded in the run, with each decision's actor and timestamp; a run with none returns an empty list."},
+    {"id":"AC5","text":"Missing or malformed local review artifacts remain represented as unavailable or empty data and do not make the JSON command crash."}
+  ],
+  "initial_world": {"files": {}},
+  "simulation": {},
+  "context": [],
+  "steps": []
+}

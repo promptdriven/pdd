@@ -14,3 +14,17 @@ Keep the output small and textual. Do not embed entire documents or build a serv
 
 - Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. [Run records](workflow-runs.prompt.md) owns run selection; [runtime preflight](runtime-preflight.prompt.md) owns interface discovery and prose hashes.
 - Runtime: Node filesystem/path/URL primitives, Git local read commands through optional `ports.execFile`, and `ports.env`/`stateDir` for existing run-index selection. No runner/chat mutation helpers.
+
+## Structured review (`--json`)
+
+`pdd workflow view ISSUE --json` returns one JSON object on stdout and no human-formatted headings. It is the same passive review and uses the same saved run selection and local-only reads as the text form. The object has `version` (the integer `1`), `issue` (the saved issue number, title and URL), `state`, `area`, `gate`, `message`, `links` and `approvals`. `gate` is an object containing the saved gate id, area and kind when a gate is open, and is `null` for completed, cancelled or otherwise ungated runs. `message` is the saved gate/question message, or `null` when none is saved. `links` groups only saved review links for Stories, the plan and pull requests; it never includes Try URLs. `approvals` contains only recorded human decisions, each with its decision, actor and timestamp; it does not create or infer an approval. Missing saved values remain `null`, empty arrays or an explicit unavailable entry according to their group, and malformed local artifacts do not crash the command. The JSON form performs no writes, chat calls, approvals, network calls, Git fetches or refreshes.
+
+The exact field names and nesting above are the proposed contract for this Story and require the person's approval before implementation. In particular, the source record does not yet define a stable gate id, actor representation or timestamp format; the implementation must not invent those values.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"status":"draft","prose_sha256":"","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":12},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]}
+```
+
+</details>
