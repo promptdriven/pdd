@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 530049c3179bb545be051d15b0a0a2dbfb290faf0059a6ee1c5963c49d94d1f3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: ffc20ef596d4b138d3692bbe1180ed9b986321486922965ad39640601bfdc938).
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1136,7 +1136,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     }
     const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
       tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
+    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
     store.posted(context.folder, request.requestId);
     line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
     const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
@@ -1474,7 +1474,32 @@ async function watchSavedTests(context, tryId, wait, story) {
 
 
 // The doors use the same gh identity, private store, one-shot dispatch and owner-scoped ledger as Try.
-export const saveDoorCase = (root, saved) => addSavedCase(root, saved);
+export const saveDoorCase = (root, saved, options = {}) => {
+  if (!options.isolated) return addSavedCase(root, saved);
+  try {
+    root = realpathSync(root);
+    const found = findTests({ root }), test = saved?.test;
+    const original = found.tests.find(item => item.path === saved.original_path && item.storyPath === saved.story_path);
+    if (!original?.doc || !inRepo(root, original.path) || !inRepo(root, saved.story_path)) return 'not added: the original Story or test is missing or changed.';
+    if (!isObject(test) || !isObject(test.initial_world) || !Array.isArray(test.steps) || test.steps.length !== 1 || test.story_path !== original.storyPath
+      || !isDeepStrictEqual(test.criteria, original.doc.criteria)
+      || !isDeepStrictEqual(test.simulation ?? {}, original.doc.simulation ?? {})
+      || !isDeepStrictEqual(test.context ?? [], original.doc.context ?? [])) return 'not added: the recorded case lacks its original Story criteria, simulation, context or confirmed starting world.';
+    const folder = join(root, 'tests'), stat = statOrNull(folder);
+    if (stat && (!stat.isDirectory() || stat.isSymbolicLink()) || stat && !inRepo(root, 'tests')) return 'not added: tests/ must be a real folder inside the repository.';
+    if (!stat) mkdirSync(folder);
+    const id = slug(saved.id), story = slug(original.story);
+    if (!id || !story) return 'not added: the recorded case has no safe identity.';
+    const path = `tests/${story}-try-${id}.json`, file = join(root, path), existing = statOrNull(file);
+    if (existing) {
+      if (!existing.isFile() || existing.isSymbolicLink() || !inRepo(root, path)) return 'not added: the recorded case path is not a regular repository file.';
+      if (isDeepStrictEqual(JSON.parse(readFileSync(file, 'utf8')), test)) return `already saved to ${path}`;
+      return 'not added: a different case already uses this recorded run identity.';
+    }
+    writeFileSync(file, `${JSON.stringify(test, null, 2)}\n`, { flag: 'wx' });
+    return `added to ${path} as step ${cleanText(test.steps[0].step_id)}`;
+  } catch (error) { return `not added: pdd could not write the recorded case (${cleanText(error.code ?? error.message)}).`; }
+};
 export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
@@ -1484,31 +1509,73 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
   const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
   store.posted(store.folder('tries'), id);
-  const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
-  if (reply.status && ![200, 202].includes(reply.status)) {
-    throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
-  }
-  const end = ports.now() + 900_000;
-  let answer = null;
-  for (;;) {
-    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
-    if (answer && (answer.id !== id || answer.command !== 'call' || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.');
-    if (answer && ENDED.has(answer.state)) {
-      store.write(join(store.folder('tries'), `${id}.json`), answer);
-      if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
-        const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
-        const why = answer.result?.refusals?.[0];
-        if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-        throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
-      }
-      return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report.input_world, world: answer.result.report.world };
+  let knownOutcome = false;
+  try {
+    const reply = await runtime.send(`/v1/try/${sessionId}/call`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
+    if (reply.status && ![200, 202].includes(reply.status)) {
+      knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
+      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]));
     }
-    if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
-    await ports.sleep(ports.pollMs, ports.signal);
-    if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
-    const read = await runtime.get(id);
-    if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
-    answer = [200, 202].includes(read.status) ? read.json : null;
+    const end = ports.now() + 900_000;
+    let answer = null;
+    for (;;) {
+      if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+      if (answer && (answer.id !== id || answer.command !== 'call' || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.');
+      if (answer && ENDED.has(answer.state)) {
+        store.write(join(store.folder('tries'), `${id}.json`), answer);
+        if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
+          knownOutcome = ['failed', 'refused', 'not_run'].includes(answer.state);
+          const limit = stepTimeLimit(answer, { steps: [{ step_id: operation }], secrets: [identity.token] });
+          const why = answer.result?.refusals?.[0];
+          if (limit) throw Object.assign(new Stop(125, `${limit.message} ${limit.fix}`), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+          throw Object.assign(new Stop(125, cleanText(why?.engine_message || why?.message || why?.code || 'The command result is unknown. Do not repeat it automatically.', [identity.token])), { tryUsage: tryUsage(answer, { cap: descriptor.callCap }) });
+        }
+        return { id, result: answer.result.program_result, usage: tryUsage(answer, { cap: descriptor.callCap }), inputWorld: answer.result.report?.input_world, world: answer.result.report?.world };
+      }
+      if (ports.now() >= end) throw new Stop(125, 'The command result is unknown. Do not repeat it automatically.');
+      await ports.sleep(ports.pollMs, ports.signal);
+      if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.');
+      const read = await runtime.get(id);
+      if ([401, 403, 410].includes(read.status)) throw new Stop(125, cleanText(read.json?.error?.message || 'The command could not be read. Do not repeat it automatically.', [identity.token]));
+      answer = [200, 202].includes(read.status) ? read.json : null;
+    }
+  } catch (error) {
+    if (!knownOutcome) error.unknownOutcome = true;
+    throw error;
   }
+}
+
+export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPorts = {}) {
+  const ports = withDefaults(givenPorts), root = repoRoot(cwd), found = findTests({ root }), store = stateFor(ports.env, root);
+  const repo = store.repo(root), open = found.tests.filter(test => repo.tries?.[test.path]);
+  let selected = story === undefined ? (open.length === 1 ? open : found.tests) : selectTests(found, [story]).selected;
+  if (selected.length > 1) { const live = selected.filter(test => repo.tries?.[test.path]); if (live.length === 1) selected = live; }
+  if (selected.length !== 1) throw new Error(`Choose one Story${story ? ` matching "${story}"` : ''}. Available: ${found.tests.map(test => `${test.story} (${test.path})`).join(', ') || 'none'}.`);
+  const test = selected[0];
+  async function openTry() {
+    const code = await runTry({ cwd, words: [test.path], options: { '--no-open': true, '--no-wait': true } }, { ...ports, stdout: ports.stderr, interactive: false, agentBridge: false });
+    if (code !== 0) throw new Error('The Try could not open. Read the progress on stderr and fix the reported problem.');
+  }
+  let record = repo.tries?.[test.path];
+  if (!record) { await openTry(); record = store.repo(root).tries?.[test.path]; }
+  if (!record) throw new Error('No confirmed Try is recorded. Run pdd try STORY.');
+  const identity = signIn(ports.gh, store);
+  if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
+  if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved runtime address is invalid.');
+  const hashes = record.prompt_hashes;
+  if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || !isObject(hashes) || !Object.keys(hashes).length || !test.doc?.steps?.every(step => typeof hashes[step.entry_path] === 'string')
+    || !Object.entries(hashes).every(([path, hash]) => found.visible.has(path) && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === hash))
+    throw new Error('The Story or a prompt changed, or this Try has no source record. Run pdd try STORY --new.');
+  let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
+  let metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
+  if ([404, 410].includes(metadata.status)) {
+    await openTry(); record = store.repo(root).tries?.[test.path];
+    runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
+    metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
+  }
+  if (metadata.status !== 200 || !Array.isArray(metadata.json?.entries)) throw new Error(cleanText(metadata.json?.error?.message || `The Try model could not be read${metadata.status ? ` (HTTP ${metadata.status})` : ''}. Read this Try again; no new run was sent.`, [identity.token]));
+  const state = await runtime.send(`/v1/try/${record.id}/state`, { method: 'GET' }, GET_MS);
+  return { root, test: record.seed_scenario ? { ...test, doc: record.seed_scenario } : test, record, model: metadata.json, actions: Array.isArray(state.json?.actions) ? state.json.actions : null,
+    ...(state.status === 200 && Object.hasOwn(state.json ?? {}, 'world') ? { data: state.json.world } : { data_error: `Current saved data unavailable${state.status ? ` (HTTP ${state.status})` : ''}; no initial data was substituted.` }) };
 }

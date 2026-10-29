@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 83676e372e6e57d59b7b0ae36e06b23565ae154b69b60c07958bc23b8adc2aec).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 420915777c7e5c59157e2e211a5d18a885326e56c218b634b3cc27b1eb824743).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -41,7 +41,8 @@ export function renderHelp(prefix = []) {
     'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
-  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas } = {}) {
+  cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
+  stdin = process.stdin, confirm, mcpServer } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -91,6 +92,12 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
     }
+    case 'mcp': {
+      try {
+        const server = mcpServer ?? await import('./try-mcp.mjs');
+        return await server.runMcp({ cwd, env }, { stdin, stdout, stderr });
+      } catch (error) { line(stderr, `pdd mcp could not start.${reason(error)}`); return 1; }
+    }
     case 'setup': {
       let code = 0;
       for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
@@ -106,6 +113,10 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const { file, changed } = setupProject({ cwd, packageRoot });
         line(stdout, changed ? `Wrote the PDD block in ${file}.` : `${file} already has this PDD block. No change.`);
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
+      try {
+        const { setupAgentMcp } = await import('./agent-mcp-setup.mjs');
+        if (await setupAgentMcp({ env, packageRoot }, { stdin, stdout, stderr, confirm })) code = 1;
+      } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       return code;
     }
     case 'runtime-check':
