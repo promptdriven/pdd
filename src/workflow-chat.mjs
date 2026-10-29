@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9c28341b59f41ff2e4b73590bd63d2a4f596980d45c74c77eed488e7606ebae5).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 69f5cffc4ba055fcdab58fdba23b1fe4928562a482525a2d90ad96cb0427996e).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
@@ -79,8 +79,10 @@ export async function startChat({ run, area, message }, ports = {}) {
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, env = ports.env ?? process.env;
   await ensureServer(herdr, ports);
   const layout = await withHerdrLayoutLock(() => openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId,
-    workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir },
-  { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory }), { directory: ports.layoutDirectory });
+    workflowName: run.workflow, stageId: area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir,
+    preAgentRefusal: !(run.chats?.length || Object.keys(run.done??{}).length || run.pr?.length) &&
+      (run.chatFailure?.code==='linked_worktree_source' || run.warnings?.includes(`The ${area} chat startup was not confirmed (linked_worktree_source).`)) ? 'linked_worktree_source':undefined },
+  { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory, ...(ports.execFile?{execFile:ports.execFile}:{}) }), { directory: ports.layoutDirectory });
   const messageFile = join(run.runDir, `${area}-start.md`);
   writeFileSync(messageFile, message);
   const sessionId = run.agent === 'claude' ? randomUUID() : null;

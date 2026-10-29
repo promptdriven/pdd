@@ -1,0 +1,41 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-hash.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The fingerprint of abc is ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {
+    "compute.hash_utf8": {
+      "action": "compute",
+      "result_template": {
+        "value": null
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "hash-abc",
+      "entry_path": "examples/fakes/hash.prompt.md",
+      "operation": "fingerprint",
+      "input": {
+        "text": "abc"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/value",
+          "op": "equals",
+          "value": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

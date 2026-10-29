@@ -76,3 +76,13 @@ test('#13: "before":"approve" is allowed only on a pr gate', t => {
     assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }), error => error.code === 'workflow_invalid');
   }
 });
+
+test('2530: replay policy is explicit, retained, versioned and limited to pr gates',t=>{
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'pdd-areas-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
+  const pkg=join(base,'pkg'),skills=join(pkg,'skills'),data=areas('plan');
+  put(skills,'custom',data);assert.equal(readWorkflowAreas({packageRoot:pkg,name:'custom',home:base}).areas[1].replay_evidence,undefined);
+  data.areas[1].replay_evidence='pdd.replay-evidence.v1';put(skills,'custom',data);
+  assert.equal(readWorkflowAreas({packageRoot:pkg,name:'custom',home:base}).areas[1].replay_evidence,'pdd.replay-evidence.v1');
+  for(const bad of ['pdd.replay-evidence.v2',true]){data.areas[1].replay_evidence=bad;put(skills,'custom',data);assert.throws(()=>readWorkflowAreas({packageRoot:pkg,name:'custom',home:base}),/replay-evidence/);}
+  delete data.areas[1].replay_evidence;data.areas[0].replay_evidence='pdd.replay-evidence.v1';put(skills,'custom',data);assert.throws(()=>readWorkflowAreas({packageRoot:pkg,name:'custom',home:base}),/replay-evidence/);
+});

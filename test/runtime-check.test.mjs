@@ -206,8 +206,10 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   delete env.CLAUDE_CONFIG_DIR;
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
   const help = pdd('check', '--help');
-  assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\]/);
-  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/); assert.doesNotMatch(help.stdout, /--local/);
+  assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\|CALL_ID\]/);
+  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
+  assert.match(help.stdout, /pdd check --lint --local \[STORY\.\.\.\] \[--json\]/);
+  assert.match(help.stdout, /pdd check --screen URL --drawing PATH \[--json\]/);
   assert.doesNotMatch(help.stdout, /--request/);
   assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
@@ -250,7 +252,7 @@ test('RUNTIME-RULES3: default max_calls is 12 per step (18 to 1000), and a step 
   assert.equal((await check(repo, home, ['place-order'])).json.rows[0].refusals[0].code, 'invalid-step-model');
 });
 
-// Wrong: a draft prompt is refused before it reaches the runtime (Serhan, Oct 27: drafts may run, marked DRAFT).
+// Wrong: a draft prompt is refused before it reaches the runtime.
 test('RUNTIME-DRAFT1: a draft interface with a current hash passes preflight and is marked as a draft', async t => {
   const { repo, home } = harbor(t), prompt = join(repo, 'prompts/place_order.prompt.md');
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('"approved"', '"draft"'));
@@ -404,7 +406,7 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
   assert.equal(result.out.split('is named by 2 prompts').length, 2);
 });
 
-// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found" (Serhan's real test, 0.1.6).
+// Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
 test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
   mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);

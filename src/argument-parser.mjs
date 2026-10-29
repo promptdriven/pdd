@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 0ed656581a195bbf9b8bded6cc9fc698f9f0e0508a7367937570f1d628338bbf).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 59d42acdc7de5546652ed5d876e5b01318781c488b0fbdc30f97886a975f2061).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -44,6 +44,9 @@ function parseRoute(route, words) {
         options[word] = value;
       }
     } else operands.push(word);
+  }
+  if (route.id === 'workflow.run' && /^[1-9][0-9]*$/.test(operands[0] ?? '')) {
+    throw new CommandInputError(`Name the workflow: pdd workflow run small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
   }
   const minimum = route.operands.filter(item => !item.optional).length;
   if (operands.length < minimum || !route.operands.at(-1)?.repeat && operands.length > route.operands.length) fail();

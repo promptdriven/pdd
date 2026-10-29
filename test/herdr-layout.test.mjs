@@ -11,6 +11,9 @@ import { promisify } from 'node:util';
 async function fixture(t){
  const root=await realpath(await mkdtemp(join(tmpdir(),'pdd-layout-')));t.after(()=>rm(root,{recursive:true,force:true}));
  const sourceRoot=join(root,'coffee'),cwd=join(root,'run');await mkdir(sourceRoot);await mkdir(cwd);
+ const git=async(root,...args)=>promisify(execFile)('git',args,{cwd:root});
+ const init=async(root,repository)=>{await git(root,'init','-q','-b','main');await git(root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-qm','Base');await git(root,'remote','add','origin','https://github.com/'+repository+'.git');};
+ await init(sourceRoot,'alice/coffee');
  const input={runId:randomUUID(),repository:'alice/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd,issueNumber:2,workflowName:'small-change',stageId:'scope'};
  const calls=[],workspaces=[];let id=0;
  const command=async args=>{
@@ -33,7 +36,7 @@ async function fixture(t){
  const ports={command,directory:join(root,'state'),checkpoint:async()=>{}};
  const module=await import('../src/workflow-herdr-layout.mjs');
  const open=(extra={})=>module.withHerdrLayoutLock(()=>module.openHerdrRunLayout({...input,...extra},ports),ports);
- return {module,root,input,ports,calls,workspaces,open};
+ return {module,root,input,ports,calls,workspaces,open,init};
 }
 test('repository reuse, one worktree per run, issue/workflow label and stage tabs',async t=>{
  const f=await fixture(t),a=await f.open(),b=await f.open({stageId:'change'});
@@ -55,7 +58,7 @@ test('a busy layout lock fails at once instead of waiting; a later run shares th
  assert.deepEqual(f.workspaces.map(w=>w.label),['coffee','coffee#2 small-change','coffee#3 small-change']);
 });
 test('repo-name clash qualifies both owned labels and preserves existing run',async t=>{
- const f=await fixture(t),a=await f.open(),other=join(f.root,'other');await mkdir(other);
+ const f=await fixture(t),a=await f.open(),other=join(f.root,'other');await mkdir(other);await f.init(other,'bob/coffee');
  await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot:other,commonDir:join(other,'.git'),cwd:other});
  assert.deepEqual(f.workspaces.map(w=>w.label),['alice/coffee','coffee#2 small-change','bob/coffee','coffee#2 small-change']);assert.equal(f.workspaces[1].workspace_id,a.workspaceId);
 });
@@ -91,16 +94,16 @@ test('changed root terminal or an extra tab prevents run cleanup',async t=>{
 });
 test('Ctrl+C leaves a proved-dead layout owner recoverable by the next process',async t=>{
  const {spawn}=await import('node:child_process');const f=await fixture(t);
- const script=`import {withHerdrLayoutLock} from ${JSON.stringify(new URL('../src/workflow-herdr-layout.mjs',import.meta.url).href)};process.on('SIGINT',()=>process.exit(130));await withHerdrLayoutLock(async()=>{console.log('LOCKED');await new Promise(()=>{setInterval(()=>{},1000);});},{directory:${JSON.stringify(f.ports.directory)}});`;
- const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:['ignore','pipe','pipe']});
+ const script=`const {withHerdrLayoutLock}=await import(process.argv[1]);process.on('SIGINT',()=>process.exit(130));await withHerdrLayoutLock(async()=>{console.log('LOCKED');await new Promise(()=>{setInterval(()=>{},1000);});},{directory:process.argv[2]});`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script,new URL('../src/workflow-herdr-layout.mjs',import.meta.url).href,f.ports.directory],{stdio:['ignore','pipe','pipe']});
  t.after(()=>child.kill('SIGKILL'));
  const ready=new Promise(resolve=>child.stdout.once('data',resolve));const ended=new Promise(resolve=>child.once('exit',resolve));
  await ready;child.kill('SIGINT');assert.equal(await ended,130);
  let acquired=false;await f.module.withHerdrLayoutLock(()=>{acquired=true;},f.ports);assert.equal(acquired,true);
 });
 
-for (const origin of ['https://github.com/Serhan-Asad/harbor-coffee.git',
-  'git@github.com:Serhan-Asad/harbor-coffee.git', 'ssh://git@github.com/Serhan-Asad/harbor-coffee.git']) {
+for (const origin of ['https://github.com/Acme/Project.git',
+  'git@github.com:Acme/Project.git', 'ssh://git@github.com/Acme/Project.git']) {
  test(`HD2: different-folder workspace collision uses owner/repo from ${origin}`,async t=>{
   const f=await fixture(t),sourceRoot=join(f.root,'local-checkout'),otherFolder=join(f.root,'different-folder');
   await mkdir(sourceRoot);await mkdir(otherFolder);
@@ -108,23 +111,23 @@ for (const origin of ['https://github.com/Serhan-Asad/harbor-coffee.git',
   await git('init','-b','main');
   await git('-c','user.name=Layout test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','Base');
   await git('remote','add','origin',origin);
-  const existing={workspace_id:'personal',label:'harbor-coffee',
+  const existing={workspace_id:'personal',label:'Project',
    worktree:{checkout_path:otherFolder,repo_key:join(otherFolder,'.git'),is_linked_worktree:false}};
   f.workspaces.push(structuredClone(existing));
   // The real allocator checks origin and creates the real assigned Git worktree.
   // Only the external Herdr transport is captured; no fake setup or runner.
-  const allocated=await allocateIssueWorktree({cwd:sourceRoot,repository:'Serhan-Asad/harbor-coffee',
+  const allocated=await allocateIssueWorktree({cwd:sourceRoot,repository:'Acme/Project',
    issueNumber:2,runId:f.input.runId,workflowName:'small-change',baseRef:'main'});
   assert.equal(allocated.state,'ready',allocated.message);
   const a=allocated.assignment;
   const layout=await f.open({repository:a.repository,sourceRoot:a.sourceRoot,commonDir:a.commonDir,cwd:a.worktreePath});
-  assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'Serhan-Asad/harbor-coffee');
+  assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'Acme/Project');
   assert.deepEqual(f.workspaces.find(w=>w.workspace_id==='personal'),existing);
   assert(!f.calls.some(args=>args[0]==='workspace'&&['rename','close'].includes(args[1])));
   const again=await f.open({repository:a.repository,sourceRoot:a.sourceRoot,commonDir:a.commonDir,cwd:a.worktreePath,stageId:'change'});
   assert.equal(again.repoWorkspaceId,layout.repoWorkspaceId);
   assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,1);
-  const foreign=await allocateIssueWorktree({cwd:sourceRoot,repository:'WrongOwner/harbor-coffee',
+  const foreign=await allocateIssueWorktree({cwd:sourceRoot,repository:'WrongOwner/Project',
    issueNumber:3,runId:randomUUID(),workflowName:'small-change',baseRef:'main'});
   assert.notEqual(foreign.state,'ready','a supplied owner cannot override origin identity');
  });
@@ -148,4 +151,48 @@ test('the repository workspace closes only when no run of it is open and it hold
  f.ports.command=command;
  assert.equal(await idle(),true);assert.deepEqual(f.workspaces,[]);
  assert.equal(await idle(),false,'nothing left to close');
+});
+
+test('2531: a pinned parent without Git metadata supports safe reuse and idle cleanup',async t=>{
+ const f=await fixture(t),layout=await f.open();
+ f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).worktree=null;
+ // Pane cwd remains the pinned parent even before Herdr has populated worktree metadata.
+ const original=f.ports.command;f.ports.command=async args=>{
+  const reply=await original(args);
+  if(args[0]==='pane'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.panes[0].cwd=f.input.sourceRoot;
+  return reply;
+ };
+ await f.open({stageId:'change'});
+ await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,layout},f.ports),f.ports);
+ const closed=await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),f.ports);
+ assert.equal(closed,true);assert.deepEqual(f.workspaces,[]);
+});
+
+test('2531: a pinned null-metadata parent can be qualified on a repository-name clash',async t=>{
+ const f=await fixture(t),layout=await f.open(),other=join(f.root,'other-repo');await mkdir(other);await f.init(other,'bob/coffee');
+ f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).worktree=null;
+ const original=f.ports.command;f.ports.command=async args=>{
+  const reply=await original(args);if(args[0]==='pane'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.panes[0].cwd=f.input.sourceRoot;
+  return reply;
+ };
+ await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot:other,commonDir:join(other,'.git'),cwd:other});
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'alice/coffee');
+});
+
+test('2531: missing parent Git metadata never permits changed root identities',async t=>{
+ for(const kind of ['terminal','cwd','tab','pane','linked-metadata']){
+  const f=await fixture(t),layout=await f.open(),row=f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId);
+  if(kind==='linked-metadata')row.worktree.is_linked_worktree=true;else row.worktree=null;
+  const original=f.ports.command;f.ports.command=async args=>{
+   const reply=await original(args);
+   if(args[3]===layout.repoWorkspaceId&&args[0]==='pane'&&args[1]==='list'){
+    reply.result.panes[0].cwd=kind==='cwd'?f.input.cwd:f.input.sourceRoot;
+    if(kind==='terminal')reply.result.panes[0].terminal_id='replacement';
+    if(kind==='pane')reply.result.panes.push({...reply.result.panes[0],pane_id:'unknown'});
+   }
+   if(kind==='tab'&&args[0]==='tab'&&args[1]==='list'&&args[3]===layout.repoWorkspaceId)reply.result.tabs.push({tab_id:'unknown'});
+   return reply;
+  };
+  await assert.rejects(f.open({stageId:'change'}),/herdr_layout_identity_changed|run_has_open_tabs/,kind);
+ }
 });

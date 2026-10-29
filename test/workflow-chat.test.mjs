@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -26,7 +27,7 @@ test('the shell line gives the native CLI the whole first message as one argumen
     if (agent === 'claude') { assert.deepEqual(out.argv.slice(0, -1), ['--dangerously-skip-permissions', '--session-id', id]); assert.equal(out.config, join(root, "cfg 'c'")); }
     else assert.deepEqual(out.argv.slice(0, -1), ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`]);
   }
-  assert.equal(execFileSync('/bin/sh', ['-c', `ls ${JSON.stringify(root)}`], { encoding: 'utf8' }).includes('broken'), false);
+  assert.equal(readdirSync(root).some(name => name.includes('broken')), false);
   assert.match(chatCommand({ agent: 'claude', cwd, resumeId: id }), new RegExp(`claude --dangerously-skip-permissions --resume '${id}'$`));
   assert.match(chatCommand({ agent: 'codex', cwd, resumeId: id }), new RegExp(`codex resume '${id}' --no-daemon --dangerously-bypass-approvals-and-sandbox -c `));
 });
@@ -50,6 +51,9 @@ test('the real Herdr transport always targets session pdd and reports Herdr JSON
   const root = temp(t), bin = join(root, 'bin'), log = join(root, 'calls.jsonl');
   const padding = 'x'.repeat(1024 * 1024), errorMessage = 'tab missing not found: ' + padding;
   mkdirSync(bin);
+  // A caller's package scope must not change the fake CLI's module format.
+  writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
+  writeFileSync(join(bin, 'package.json'), '{"type":"commonjs"}\n');
   writeFileSync(join(bin, 'herdr'), `#!${process.execPath}\nconst fs=require('node:fs');const args=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(args)+'\\n');
 if(args.includes('missing')){process.stderr.write(JSON.stringify({error:{code:'tab_not_found',message:${JSON.stringify(errorMessage)}}}));process.exitCode=1;}
 else process.stdout.write(args.includes('run')?'':JSON.stringify({result:{ok:true,padding:${JSON.stringify(padding)}}}));\n`, { mode: 0o755 });

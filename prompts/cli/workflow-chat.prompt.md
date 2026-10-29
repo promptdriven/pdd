@@ -12,6 +12,11 @@ Own `src/workflow-chat.mjs`. An area chat is one native Codex or Claude session 
 - `stopChats(run, ports)`: production cancellation lifecycle; return `{stopped, warnings}`. Inspect the saved stage agents in this run's own pdd-session panes, stop any live agent, and positively confirm each is stopped or absent before returning stopped true. A lost stop reply, unconfirmed start, unavailable inspection or failure cannot imply absence: return stopped false with the real cause, preserving tabs and custody. Never stop another run's agent or use tab closure as proof. Once every agent is confirmed stopped/absent, call closeChats; its tab/workspace-close warnings do not undo confirmed quiescence. No native relaunch, push or PR action.
 - `closeChats(run, ports)`: close each chat tab, then the run workspace, then the repository workspace when no other run uses it. Failures are warnings. Chat labels are `<repo name>#N NAME › AREA`.
 
+Pass input preAgentRefusal to the layout only for a saved first-start run with no chats, completed steps or
+PRs and the canonical linked_worktree_source chat failure (or its exact saved startup warning on legacy runs).
+The layout owns inventory-backed recovery; neither chat startup nor recovery allocates another Git worktree.
+Forward the command execFile port to the layout's verified repository-parent lookup.
+
 Herdr transport reads complete stdout/stderr before interpreting JSON or a nonzero exit. Responses larger than a pipe buffer must retain their full content, and a nonzero response must keep its structured error code. Attaching to a session waits for stream closure before reporting its exit status.
 
 Full-access flags stay. Do not pin tool versions. No timeouts. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
