@@ -778,7 +778,7 @@ test('RUNTIME-CLOUD3: update-required still says to update pdd, and not-invited 
   const setup = harbor(t);
   for (const [reply, said] of [[{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /^Please update pdd\.$/m],
     [{ status: 426, json: { code: 'update-required', error: { code: 'update-required', message: 'Please update pdd now.' } } }, /^Please update pdd now\.$/m],
-    [{ status: 426, json: { code: 'update-required' } }, /^Please update pdd: npm install -g github:promptdriven\/pdd#alpha$/m],
+    [{ status: 426, json: { code: 'update-required' } }, /^Please update pdd: npm install -g github:promptdriven\/pdd$/m],
     [NOT_INVITED, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m],
     [{ status: 403, json: refusedBody({ code: 'not-invited', message: 'not invited', details: { login: 'octo' } }) }, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m]]) {
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
@@ -842,7 +842,7 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
   const bare = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 400, json: { error: { code: 'update-required' } } } : f.normal(entry));
   const fallback = await check(setup, bare, ['place-order']);
-  assert.equal(fallback.code, 5); assert.ok(fallback.err.includes('Please update pdd: npm install -g github:promptdriven/pdd#alpha'), fallback.err);
+  assert.equal(fallback.code, 5); assert.match(fallback.err, /^Please update pdd: npm install -g github:promptdriven\/pdd$/m);
   const onRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? said : f.normal(entry));
   const reading = await check(setup, onRead, ['place-order']);
   assert.ok(reading.err.includes(said.json.message), reading.err);

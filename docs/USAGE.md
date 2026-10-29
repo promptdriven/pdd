@@ -445,7 +445,7 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 | `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
 | `Your GitHub login NAME is not on the PDD runtime invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
 | `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |
-| `Please update pdd: npm install -g github:promptdriven/pdd#alpha` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
+| `Please update pdd: npm install -g github:promptdriven/pdd` | Your pdd is too old for the runtime. Run that line, then `pdd setup`. Exit code 5. |
 
 ## 8. Make your own workflow
 

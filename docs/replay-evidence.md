@@ -3,7 +3,9 @@
 For an area with `replay_evidence: "pdd.replay-evidence.v1"`, the agent writes one UTF-8 JSON object to
 `<run-folder>/replay-evidence.json` before completing a code-space step. The start message names the run folder.
 Read `status.json` for `runId`, `root` and `replayBaseline`. The saved baseline contains the original paths,
-raw SHA256 hashes and step/check identities; it is pinned at approved prompt-space publication, once.
+raw SHA256 hashes and step/check identities. pdd refreshes it after every prompt-space publication/push,
+through the final approval publication before code space. Final approval refuses unpublished scenario edits;
+publish those approved edits in prompt space first. On entry into code space the published anchor is frozen.
 Do not replace the baseline or derive new expected values from code. If approved vectors need to change,
 return to prompt space for human approval and start a run with those approved vectors.
 
@@ -104,6 +106,9 @@ A pass requires complete original check coverage through recorded public operati
 assertion failure in the mutation control. A crash is not detection. Formal proved outcomes also require an
 assertion-failure control. Formal not-run/not-applicable stays explicit and is not a proof claim.
 
+Before code-space publication, pdd independently lists the current changed scenario files against the saved
+run base using exact NUL-delimited Git paths. Any scenario absent from the frozen anchor makes replay
+BLOCKED, even if the manifest covers every saved vector. An unavailable inventory cannot establish PASS.
 Missing/stale/malformed manifests and altered originals cannot pass. Real assertion/formal failures may
 still publish with failure lines. When updating an existing code-space PR, pdd sets publication-pending
 before pushing source, then refreshes the validated result; a failed final update leaves it pending.

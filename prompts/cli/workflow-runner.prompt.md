@@ -78,11 +78,25 @@ pdd always says what happens. An optional `ports.say(text)` prints one progress 
 
 Only a saved area's explicit replay_evidence=pdd.replay-evidence.v1 activates this policy. New bundled
 feature/bug code areas opt in; saved runs/custom areas without it keep their existing publication behavior.
-At the approved prompt-space publication immediately preceding an opted-in area, pin the changed scenario
-files from worktreeContents.tests through [replay evidence](workflow-replay.prompt.md), after committing
-leftovers and before publishing. Save the original anchor once as run.replayBaseline, even when it is blocked
-or empty. Retries or later vector edits cannot silently replace the approved original hashes.
+The runner owns the anchor lifecycle and current inventory guard. After each successful prompt-space
+publication or push preceding an opted-in area, refresh run.replayBaseline from the published changed
+scenario files through [replay evidence](workflow-replay.prompt.md), retaining empty or blocked selections.
+Include publications while waiting for code approval and the final approval publication before entering code
+space. At that final transition require scenario bytes to match the published prompt-space head; refuse with
+repair advice if unpublished scenario edits remain. Never silently approve or anchor dirty unpublished vectors.
+Freeze the final published anchor on entry into code space; code steps, publication retries and later edits
+cannot replace it. For a merged prompt-space branch retain its published anchor, never reconstruct from code.
 
+Discover changed files with NUL-delimited Git diff and untracked-file lists, preserving each exact path,
+including spaces, line breaks and non-ASCII characters; do not trim raw list output. Scenario classification
+uses parsed JSON with exact schema_version `prompt-runtime.program-scenario.v1`, not a text substring.
+An enumeration failure or unreadable/unclassifiable candidate makes the replay inventory unavailable;
+never silently skip it or turn a failed read into an empty successful selection.
+Before every opted-in code publication, after automatic
+commits and also on retries or updates, independently enumerate current changed scenario files against the
+saved run base. If any current scenario path is absent from the frozen anchor, report BLOCKED with the missing
+paths even when the manifest covers every anchored check. An unavailable inventory cannot establish PASS.
+This guard precedes replay validation and does not require a new replay-module API.
 For opted-in code steps, read and save the structured result as run.replayEvidence and on the step record;
 show its status separately from free-form summaries. Revalidate after automatic commits immediately before
 publication, including retries and updates of an existing code PR. The canonical report goes above every

@@ -525,9 +525,11 @@ identity only. It does not independently prove execution or prompt/code equivale
 **Structured record for a workflow run.**
 New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
 custom workflows without that field keep their publication behavior; small-change has no replay policy.
-At approved prompt-space publication, pdd pins the changed scenario files, their original byte hashes and
-step/check identities in `status.json` as `replayBaseline`. The anchor is saved once, including an empty or
-blocked selection; a code-space retry cannot replace it. No selected vectors means not replayed.
+After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
+This continues through the final approval publication before code space. Final approval refuses unpublished
+scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.
@@ -537,6 +539,9 @@ reason. Keep this JSON in the run folder, outside the Git-visible source; never 
 Missing/unmapped checks need honest not-replayed outcomes, and a control that was not run needs a reason.
 
 pdd revalidates immediately before publishing, after committing leftovers, and when updating an open PR.
+It independently inventories current changed scenario files against the saved run base with exact
+NUL-delimited Git paths, including non-ASCII names. A scenario absent from the frozen anchor makes replay
+BLOCKED even when all anchored checks pass; an unavailable inventory cannot establish PASS.
 Changed, absent, empty or unreadable original files cannot pass even with a new source fingerprint. Missing,
 malformed or stale records produce prominent **BLOCKED** / **NOT REPLAYED** status above prose and prompt
 check results. Actual assertion or formal failures remain publishable with a failure line. An existing PR is

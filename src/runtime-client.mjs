@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: d0383725998fa51e5c48088256bc0b47cc4d9b55b4fa3adaceb0e490bbaeb380).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4298881dd4fdbcfaaeafe5dcc1d3f0a8bb3adaae658550b1813bc2097031741e).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -209,7 +209,7 @@ class Runtime {
 // Answers that stop everything with one plain line and exit 5: a login not on the invite list (403 not-invited), an
 // account that PDD Cloud did not approve (403 no-cloud-access) or could not check (503 cloud-unavailable), and an
 // old pdd that the server no longer serves (code update-required, any status, 0.1.6).
-const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd#alpha';
+const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd';
 const NO_CLOUD_TEXT = 'Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.';
 const CLOUD_DOWN_TEXT = 'PDD Cloud could not confirm your access. Try again in a minute.';
 function blockingAnswer(reply) {

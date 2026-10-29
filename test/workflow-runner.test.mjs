@@ -1920,7 +1920,7 @@ test('2531: a refused run cannot change its saved common repository or issue/wor
 });
 
 // #2530: a prose success cannot stand in for code replay evidence.
-async function replayArea(t) {
+async function replayArea(t, { stopAtPrompt = false, extraVectorPath = null } = {}) {
   const f = await fixture(t, {name:'feature',agent:'codex'});
   const skill=join(f.source,'.agents/skills/pdd-feature');mkdirSync(skill,{recursive:true});
   writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:[
@@ -1931,9 +1931,15 @@ async function replayArea(t) {
   const run=f.record();mkdirSync(join(run.root,'tests'));
   const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
   writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  if (extraVectorPath) writeFileSync(join(run.root,extraVectorPath),JSON.stringify(vector));
   await stepDone({step:'scope',summary:'scoped',cwd:run.root},f.agentPorts());f.tick();
   assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
   await stepDone({step:'check',summary:'Runtime check: ✓ 1 of 1 criteria',cwd:run.root},f.agentPorts());f.tick();
+  if (stopAtPrompt) {
+    assert.equal((await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async question => /open PR 1/.test(question)})).exitCode,0);
+    assert.equal(f.record().gate.kind,'ask-code');
+    return {f,run,vector};
+  }
   assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
   assert.equal(f.record().areas[f.record().area].name,'code');
   return {f,run,vector};
@@ -2046,4 +2052,165 @@ test('2530: an unopted saved area retains legacy publication without a manifest'
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);assert.doesNotMatch(f.prs[1].body,/Code replay:/);
+});
+
+
+for (const revision of ['changed', 'added']) {
+  test(`2553: ${revision} scenario repins on subsequent prompt publication`, async t => {
+    const {f,run,vector} = await replayArea(t,{stopAtPrompt:true});
+    const original = f.record().replayBaseline;
+    assert.deepEqual(original.vectors.map(v=>v.path),['tests/add.json']);
+    const path = revision === 'added' ? 'tests/refund.json' : 'tests/add.json';
+    vector.steps[0].checks[0].value = 7;
+    writeFileSync(join(run.root,path),JSON.stringify(vector));
+    f.tick();
+    assert.equal((await stepDone({step:'check',summary:'Reviewed revised scenarios',cwd:run.root},f.agentPorts())).exitCode,0);
+    assert.equal(f.prs.length,1,'the existing prompt PR is updated');
+    const baseline = f.record().replayBaseline;
+    if (revision === 'added') assert.deepEqual(baseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/refund.json']);
+    else assert.notEqual(baseline.vectors[0].sha256,original.vectors[0].sha256);
+    const {createHash} = await import('node:crypto');
+    assert.equal(baseline.vectors.find(v=>v.path===path).sha256,createHash('sha256').update(readFileSync(join(run.root,path))).digest('hex'));
+  });
+}
+
+test('2553: legacy single-vector baseline cannot publish PASS after another scenario is added', async t => {
+  const {f,run,vector} = await replayArea(t);
+  const original = f.record().replayBaseline;
+  assert.deepEqual(original.vectors.map(v=>v.path),['tests/add.json']);
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  // Construct after the addition: its current fingerprint covers both files; inventory is the defect.
+  const manifest = await replayManifest(f,run,vector);
+  const {sourceFingerprint} = await import('../src/workflow-replay.mjs');
+  assert.equal(manifest.source.sha256,sourceFingerprint(run.root));
+  assert.deepEqual(manifest.vectors.map(v=>v.path),['tests/add.json']);
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+  const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,2);
+  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
+  assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
+});
+
+test('2553: non-ASCII scenario filename survives prompt publication discovery', async t => {
+  const {f} = await replayArea(t,{stopAtPrompt:true,extraVectorPath:'tests/café.json'});
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/café.json']);
+});
+
+for (const revision of ['added','changed']) {
+  test(`2553: final committed ${revision} scenario approval push refreshes the frozen anchor`, async t => {
+    const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+    const original=f.record().replayBaseline;
+    const path=revision==='added'?'tests/refund.json':'tests/add.json';
+    vector.steps[0].checks[0].value=8;
+    writeFileSync(join(run.root,path),JSON.stringify(vector));
+    f.git(run.root,'add','--',path);f.git(run.root,'commit','-qm','Reviewed scenario');
+    const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+    assert.equal(result.exitCode,0,result.message);
+    assert.equal(f.record().areas[f.record().area].name,'code');
+    const {createHash}=await import('node:crypto');
+    const saved=f.record().replayBaseline;
+    assert.equal(saved.vectors.find(v=>v.path===path).sha256,createHash('sha256').update(readFileSync(join(run.root,path))).digest('hex'));
+    assert.notDeepEqual(saved,original);
+  });
+}
+
+test('2553: dirty unpublished scenario edits refuse final code entry',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+  const original=f.record().replayBaseline,pushes=f.pushes.length;
+  vector.steps[0].checks[0].value=99;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,1);assert.match(result.message,/Unpublished scenario edits.*tests\/add.json/);
+  assert.equal(f.record().gate.kind,'ask-code');assert.equal(f.pushes.length,pushes);
+  assert.deepEqual(f.record().replayBaseline,original);
+});
+
+test('2553: exact whitespace paths survive anchoring and code inventory checks',async t=>{
+  const path='tests/ café \n.json';
+  const {f,run}=await replayArea(t,{stopAtPrompt:true,extraVectorPath:path});
+  assert.ok(f.record().replayBaseline.vectors.some(v=>v.path===path));
+  assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  const saved=f.record();saved.replayBaseline.vectors=saved.replayBaseline.vectors.filter(v=>v.path!==path);
+  writeFileSync(join(run.runDir,'status.json'),JSON.stringify(saved));
+  const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);assert.match(f.record().replayEvidence.reason,/missing from the approved anchor/);
+});
+
+for(const failure of ['listing','missing','malformed']) {
+  test(`2553: ${failure} current inventory cannot publish subset PASS`,async t=>{
+    const {f,run,vector}=await replayArea(t);
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+    writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    const original=f.ports.execFile;
+    if(failure==='malformed')writeFileSync(join(run.root,'tests/broken.json'),'{"schema_version":');
+    if(failure==='missing')f.ports.execFile=async(file,args,options)=>{
+      const reply=await original(file,args,options);
+      return file==='git'&&args[0]==='diff'&&args.includes('-z')?{...reply,stdout:reply.stdout+'tests/missing.json\0'}:reply;
+    };
+    if(failure==='listing')f.ports.execFile=async(file,args,options)=>file==='git'&&args[0]==='diff'&&args.includes('-z')?{stdout:'',code:1,stderr:'inventory unavailable'}:original(file,args,options);
+    const manifest=JSON.parse(readFileSync(join(run.runDir,'replay-evidence.json'),'utf8'));
+    const {sourceFingerprint}=await import('../src/workflow-replay.mjs');
+    manifest.source.sha256=sourceFingerprint(run.root);
+    assert.ok(manifest.source.sha256);
+    writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
+    const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+    assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
+    assert.match(result.message,/Code replay: BLOCKED/);
+  });
+}
+
+test('2553: irrelevant JSON mentioning the schema never becomes a scenario',async t=>{
+  const {f,run}=await replayArea(t,{stopAtPrompt:true});
+  writeFileSync(join(run.root,'tests/notes.json'),JSON.stringify({description:'prompt-runtime.program-scenario.v1',schema_version:'other.v1'}));
+  const result=await stepDone({step:'check',summary:'reviewed',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path),['tests/add.json']);
+});
+
+test('2553: an open code PR update guards newly added scenarios and preserves the frozen anchor',async t=>{
+  const {f,run,vector}=await replayArea(t);const saved=f.record().replayBaseline;
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  assert.equal((await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts())).exitCode,0);
+  assert.match(f.prs[1].body,/^Code replay: PASS/);
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED.*refund\.json/);
+  assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
+});
+
+test('2553: a clean final prompt head already published externally refreshes before code entry',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  f.git(run.root,'add','.');f.git(run.root,'commit','-qm','Publish reviewed scenario');
+  f.git(run.root,'update-ref',`refs/remotes/origin/${f.record().branch}`,f.git(run.root,'rev-parse','HEAD'));
+  const pushes=f.pushes.length;
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,0,result.message);assert.equal(f.pushes.length,pushes);
+  assert.deepEqual(f.record().replayBaseline.vectors.map(v=>v.path).sort(),['tests/add.json','tests/refund.json']);
+});
+
+test('2553: final code entry refuses a prompt branch behind its published head',async t=>{
+  const {f,run,vector}=await replayArea(t,{stopAtPrompt:true});const saved=f.record().replayBaseline;
+  const head=f.git(run.root,'rev-parse','HEAD');
+  writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
+  f.git(run.root,'add','.');f.git(run.root,'commit','-qm','Published scenario');
+  f.git(run.root,'update-ref',`refs/remotes/origin/${f.record().branch}`,f.git(run.root,'rev-parse','HEAD'));
+  f.git(run.root,'reset','--hard',head);
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,1);assert.match(result.message,/behind its published head/);
+  assert.equal(f.record().gate.kind,'ask-code');assert.deepEqual(f.record().replayBaseline,saved);
+});
+
+test('2553: merged prompt branch retains its published anchor on final code entry',async t=>{
+  const {f,run}=await replayArea(t,{stopAtPrompt:true});const saved=f.record().replayBaseline;
+  f.mergedNumbers.push(f.prs[0].number);
+  const result=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(result.exitCode,0,result.message);assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.deepEqual(f.record().replayBaseline,saved);
 });
