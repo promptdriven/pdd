@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: f176d665de0f90677acfa7481abad7d67662eb184ce429be9e82aaf8dd8ec6d9).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 16a41d486d0fc2da17ee9b68de944fc385452571c981fa5d77dd7311f34c0d89).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -132,9 +132,9 @@ export function jsonRow(row) {
     reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.why ? { code: null, message: row.why } : null) };
 }
 
-export function renderJson({ batch = null, repo, sourceSha256 = null, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
+export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
   const perStory = new Map(storyLines(rows).map(([story, text]) => [story, text]));
-  return { batch, repo, source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
+  return { batch, repo, ...(coverage ? { coverage } : {}), source_sha256: sourceSha256, exit_code: exitCode, summary_line: line, draft: rows.some(row => row.draft),
     rows: rows.map(row => ({ ...jsonRow(row), summary_line: perStory.get(row.story) ?? null })), warnings };
 }
 
@@ -216,7 +216,7 @@ function localRefusals(rows) {
 }
 
 // The terminal result of a batch (stdout).
-export function renderText({ batch, rows, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
+export function renderText({ batch, rows, coverage, warnings = [], details = false, timeoutMin = null, interrupted = false, reading = false, exitCode, secrets = [], recovery }) {
   const out = [];
   if (exitCode === 3) out.push(recovery ?? `pdd check --read ${batch}`);
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
@@ -254,6 +254,7 @@ export function renderText({ batch, rows, warnings = [], details = false, timeou
       ...[...row.all_checks].sort((a, b) => a.passed - b.passed).flatMap(check => checkLines(check, secrets)
         .map((text, index) => index ? `  ${text}` : `  ${check.passed ? 'passed' : 'failed'}  ${text}`)));
   }
+  if (coverage) out.push(coverageText(coverage));
   const models = [...new Set(rows.map(row => row.requested_model).filter(Boolean))];
   out.push(`${rows.filter(row => row.state === 'passed').length} of ${rows.length} stories passed.${models.length ? ` Model asked for: ${models.join(', ')}.` : ''}`);
   const linked = rows.filter(row => row.report_url);
@@ -280,4 +281,9 @@ export function tryUsageLine(usage, { command = false } = {}) {
 export function tryUsageHeaders(usage) {
   return { 'x-pdd-ai-calls': String(usage.calls), 'x-pdd-try-used': String(usage.used),
     'x-pdd-try-remaining': String(usage.remaining), 'x-pdd-try-cap': String(usage.cap) };
+}
+
+export function coverageText(coverage) {
+  if (!coverage?.available) return 'Module binding coverage unavailable: no pdd-bindings.json.';
+  return [`${coverage.bound} of ${coverage.total} modules bound`, ...coverage.modules.filter(m => m.state === 'unbound').map(m => `  ${m.path}: ${m.reason} Port attempted: ${m.port_attempt}`)].join('\n');
 }

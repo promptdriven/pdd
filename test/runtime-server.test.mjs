@@ -433,7 +433,16 @@ test('RUNTIME-ADDRESS1: the runtime address is in one place only, and PDD_RUNTIM
   // This test names the hosts on purpose; every other tracked file must not.
   const others = ['--', '.', ':!test/runtime-server.test.mjs'];
   const hits = spawnSync('git', ['grep', '-n', '-F', host, ...others], { cwd: root, encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
-  assert.deepEqual(hits.map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
+  // Fixed report evidence in the two runbooks is not a runtime configuration value.
+  const evidenceOnly = hit => {
+    const match = /^(RUNBOOK\.md|skills\/pdd-prompting\/RUNBOOK\.md):[0-9]+:(.*)$/.exec(hit);
+    if (!match) return false;
+    const report = new RegExp(`\\[[^\\]\\n]+\\]\\(https://${host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\)`, 'g');
+    return !match[2].replace(report, '').includes(host);
+  };
+  assert.equal(evidenceOnly(`RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`), true);
+  for (const bad of [`RUNBOOK.md:1:PDD_RUNTIME_URL=${DEFAULT_RUNTIME_URL}`, `docs/cli.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/13e8c6dc-532a-4f0c-bb0b-1d1b3671d2a8)`, `RUNBOOK.md:1:[proof](${DEFAULT_RUNTIME_URL}/r/latest)`]) assert.equal(evidenceOnly(bad), false);
+  assert.deepEqual(hits.filter(hit => !evidenceOnly(hit)).map(hit => hit.split(':')[0]), ['src/runtime-client.mjs']);
   assert.equal(DEFAULT_RUNTIME_URL, 'https://runtime.promptdriven.ai');
   assert.equal(spawnSync('git', ['grep', '-n', '-e', 'sslip', '-e', '34-72-131-98', '-e', '34\\.72\\.131\\.98', ...others], { cwd: root, encoding: 'utf8' }).stdout, '');
   assert.equal(runtimeOrigin({}), DEFAULT_RUNTIME_URL);

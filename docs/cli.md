@@ -46,7 +46,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | Command | What it does |
 |---|---|
 | `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Runtime check` line for each Story and, with two or more Stories, the overall line |
-| `pdd check --read [BATCH] [--json]` | Show saved check results again. Sends no check |
+| `pdd check --read [BATCH|CALL_ID] [--json]` | Show saved check results again. Sends no check |
 | `pdd check --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews a Try map |
@@ -115,3 +115,5 @@ Story counts use the newest source-compatible evidence across check, verify and 
 An explicit `pdd check --lint` that is still queued/running exits 3 and prints its saved read command; exit 0 means validation finished successfully. The all-Story cost estimate includes entry executions, declared saved-data operations and nested prompt-call allowances. Conditional operations may use fewer calls; `--max-calls` remains the hard cap.
 
 Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI command appends its usage line to stderr, keeping program stdout and exit status intact. It distinguishes calls for this command, total used and remaining in this Try, and the session cap. Unknown counters stay unknown. Named HTTP routes carry `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap`, and `x-pdd-usage-source` headers; response bodies and program statuses stay intact. `runtime` identifies a confirmed call receipt; `last-known` identifies cached session allowance on a local zero-call response such as an unmatched route. Session allowance is separate from an account or tester allowance. Usage reads spend no model calls and never repeat commands.
+
+`pdd check --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted Try CLI commands print this exact recovery command. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.

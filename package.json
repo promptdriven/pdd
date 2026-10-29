@@ -16,7 +16,10 @@
     "src/",
     "prompts/cli/",
     "docs/",
-    "skills/"
+    "skills/",
+    "examples/",
+    "test/runtime/fake-*.json",
+    "user_stories/fake-*.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"
