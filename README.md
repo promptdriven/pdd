@@ -1,4 +1,4 @@
-# PDD
+# PDD v2
 
 ## What PDD is
 
@@ -50,17 +50,17 @@ To update, do steps 1, 2 and 4 again. Then start a new agent chat.
 
 ## Your first 10 minutes
 
-This example makes a 2048 game that you can play in the browser, also on a phone. The outputs below come from a real 2048 project. Some lines are cut.
+These steps add one feature with PDD. The names are placeholders: `my-story` is a Story, and `tests/my-story.json` is its test file. Your names come from your project. Some output lines are cut.
 
 ### 1. Ask your agent for a feature
 
-Open your coding agent in your repo, as usual. Ask it to use the `pdd-feature` skill:
+Open your coding agent in your repo, as usual. Ask it to use the `pdd-feature` skill, and tell it the feature:
 
 ```
-/pdd-feature Add a 2048 game that I can play in the browser, also on a phone.
+/pdd-feature <the feature, in one or two sentences>
 ```
 
-The exact way to call a skill depends on your agent. You can also write "Use the pdd-feature skill to add a 2048 game …".
+The exact way to call a skill depends on your agent. You can also write "Use the pdd-feature skill to add …".
 
 In a chat, the work stays in your folder. To get pull requests, start from a GitHub issue instead: `pdd workflow run feature 42`, where 42 is the issue number. pdd then opens the chats in Herdr, and you follow the same steps. Run `pdd help` to see which agents `pdd workflow run` can start.
 
@@ -69,33 +69,27 @@ In a chat, the work stays in your folder. To get pull requests, start from a Git
 
 ### 2. The agent writes the prompts, the Stories and the tests
 
-The files depend on your project. A small program can have one prompt, one Story and one test file. For the 2048 game, the agent wrote:
+The files depend on your project. A small program can have one prompt, one Story and one test file. The usual files are:
 
 ```
-prompts/board.prompt.md      the board: how tiles move and merge
-prompts/game.prompt.md       the game: score, new tiles, game over
-prompts/ui.prompt.md         the screen in the browser
-prompts/views/*.svg          a mockup of the screen
-user_stories/*.md            5 Stories, for example "Move and merge tiles" and "Play on a phone"
-tests/*.json                 one test file for each Story
-app-map.json                 connects the screen to the prompts, for the Try page
+prompts/NAME.prompt.md       a prompt: the source of one part of the program
+prompts/views/*.svg          a mockup, if the program has a screen
+user_stories/my-story.md     a Story: one thing that a user can do
+tests/my-story.json          the test file of that Story
+app-map.json                 connects a screen to the prompts, for the Try page
 ```
 
-This is one of the 2048 Stories (cut). Your Stories will look different. Each one tells what a user can do, and has numbered acceptance criteria that a person can check:
+Each Story tells what a user can do, and has numbered acceptance criteria that a person can check. A Story has this shape:
 
 ```markdown
-# Move and merge tiles
+# Story title
 
-As a player, I want to move and combine tiles and see my score grow, so I can
-build larger tiles.
+One or two sentences: who the user is, and what the user can do.
 
 ## Acceptance criteria
 
-1. I can move tiles left, right, up or down. They slide toward the edge I choose.
-2. Equal neighboring tiles join once in a move, starting from the direction of movement.
-3. When tiles join, my score increases by the values of the new tiles.
-4. A move that cannot change the board leaves it unchanged and adds no score.
-5. An unsupported direction reports an error.
+1. One result that a person can check.
+2. Another result that a person can check.
 ```
 
 You read the Stories and approve them. The expected values come from you and the Stories, not from a run. If you want a change, say it in the chat. The agent changes the files and asks you again.
@@ -112,28 +106,25 @@ pdd check            # run the tests of every Story on the runtime
 `pdd check --lint` prints:
 
 ```
-  tests/game-over.json  passes lint
-  tests/move-and-merge.json  passes lint
-  tests/new-tile-after-move.json  passes lint
-  tests/phone-play.json  passes lint
-  tests/same-seed-same-game.json  passes lint
-Lint: 5 of 5 tests pass. 0 AI calls. No checks were sent.
+  tests/my-story.json  passes lint
+  tests/other-story.json  passes lint
+Lint: 2 of 2 tests pass. 0 AI calls. No checks were sent.
 ```
 
-`pdd check move-and-merge game-over` checks two Stories. It prints one table, one `Runtime check` line for each Story, the overall line, and a report link for each Story:
+`pdd check my-story other-story` checks two Stories. It prints one table, one `Runtime check` line for each Story, the overall line, and a report link for each Story:
 
 ```
 Still running: 1 of 2 Stories done · 2 AI calls so far · 1 min
-Story                 Test                       Result  Checks  Time
-Game over             tests/game-over.json       passed  20/20   41.4 s
-Move and merge tiles  tests/move-and-merge.json  passed  34/34   89.1 s
-Runtime check (game-over): ✓ 2 of 2 criteria · 20/20 checks · 2 AI calls
-Runtime check (move-and-merge): ✓ 5 of 5 criteria · 34/34 checks · 10 AI calls
+Story        Test                    Result  Checks  Time
+My story     tests/my-story.json     passed  20/20   41.4 s
+Other story  tests/other-story.json  passed  34/34   89.1 s
+Runtime check (my-story): ✓ 2 of 2 criteria · 20/20 checks · 2 AI calls
+Runtime check (other-story): ✓ 5 of 5 criteria · 34/34 checks · 10 AI calls
 Runtime check: ✓ 7 of 7 criteria · 54/54 checks · 12 AI calls
 2 of 2 stories passed.
 Reports (anyone with a link can open it):
-  game-over       https://…/r/…
-  move-and-merge  https://…/r/…
+  my-story     https://…/r/…
+  other-story  https://…/r/…
 ```
 
 While pdd works, it tells you what it does, for example `Checking 14 files (125 KB) on the PDD runtime (lint, 0 AI calls)…`.
@@ -143,7 +134,7 @@ While pdd works, it tells you what it does, for example `Checking 14 files (125 
 | `✓` | Every check passed. |
 | `✗` with `FAILED` | A check failed. pdd shows the criterion, the path, the expected value and the answer, for example `AC1  result /score  expected …, got …`. You decide: fix the prompt, or change the expected value. |
 | `✗` with `REFUSED` | A file breaks a rule. Nothing was judged. Fix the file that pdd names. |
-| `STOPPED` | One test step took more than 10 minutes, and the server stopped it. There is no verdict. pdd tells you to make the step smaller, for example to split 30 moves into 3 steps of 10. |
+| `STOPPED` | One test step took more than 10 minutes, and the server stopped it. There is no verdict. pdd tells you how to make the step smaller. |
 | `DRAFT` | A prompt is still a draft. A draft runs, and pdd labels its result, for example `passed (DRAFT)`. A DRAFT pass is not an approval. |
 | The report link | A page with each step, check and answer. Anyone with the link can open it. It expires after 7 days. |
 
@@ -152,7 +143,7 @@ While pdd works, it tells you what it does, for example `Checking 14 files (125 
 `pdd try` lets you use the program by hand. There is no code yet: the runtime runs the prompts.
 
 ```sh
-pdd try phone-play
+pdd try my-story
 ```
 
 pdd opens the Try page in your browser and prints the budget of this Try:
@@ -161,7 +152,7 @@ pdd opens the Try page in your browser and prints the budget of this Try:
 Try budget 400 calls; 400 remaining. You are charged only for calls that run.
 ```
 
-On the **Screen** tab, click **Open the app**. The runtime draws the 2048 board (1 AI call). Then tap the arrows. In the real project, one move took 4 AI calls and 75 seconds. The page shows the calls that each tap uses and the calls that are left.
+If your program has a screen, click **Open the app** on the **Screen** tab. The runtime draws the screen from the prompts. Then use it as a user does. Each click runs on the runtime, and one click can take several AI calls and more than a minute. The page shows the calls that each click uses and the calls that are left.
 
 | Your program | Command | What you do |
 |---|---|---|
@@ -175,14 +166,14 @@ On the **Screen** tab, click **Open the app**. The runtime draws the 2048 board 
 - **More AI calls.** When a Try runs low, click **Raise the limit** on the Try page and type a new limit. To start a new Try with another limit, run `pdd try STORY --new --max-calls 600`. `--new` starts again with fresh saved data.
 - **Save a case.** To keep a case as a test, click **Save as test** on the Try page, or run `pdd try --save-last` after a `--cli` command. pdd adds it to the Story's test file. Read each saved case: it holds the answer that the AI gave, not always the answer that you expect.
 - **Keep the link private.** Anyone with a Try link can use it and spend its AI calls. Do not put it in a PR or an issue.
-- **Stop it.** A Try ends after 24 hours. To stop it before that, run `pdd try --stop phone-play`.
+- **Stop it.** A Try ends after 24 hours. To stop it before that, run `pdd try --stop my-story`.
 
 ### 5. Approve the prompts
 
 When the program does what you want, approve each prompt in your terminal:
 
 ```sh
-pdd approve prompts/board.prompt.md
+pdd approve prompts/NAME.prompt.md
 ```
 
 pdd shows the interface and the text changes since the last approval. Then it asks y/n. When you answer `y`, pdd sets the prompt to approved. Its next check results do not say DRAFT.
@@ -195,9 +186,7 @@ In a workflow run, pdd opens the pull requests:
 
 1. After you try it and approve, pdd opens a pull request with the prompts, the Stories and the tests (prompt space). Its text starts with the `Runtime check` lines and the report links.
 2. Then the chat asks if you want the code. To get it, say so in the chat, or run `pdd workflow approve 42`.
-3. The agent builds the code from the approved prompts. pdd opens a pull request with the code (code space). It runs the test cases from prompt space on the real code and shows the results in a table, with a formal check.
-
-In the 2048 project, the pull request for prompt space held the 3 prompts, the 5 Stories, their tests, the mockup and the app map. The pull request for code space held the code. It ran all 31 test steps from prompt space on the real code, and its formal check said **Proved (bounded)**.
+3. The agent builds the code from the approved prompts. pdd opens a pull request with the code (code space). It runs the test cases from prompt space on the real code and shows the results in a table, with a formal check, for example **Proved (bounded)**.
 
 You can also stop in prompt space: merge that pull request, and make the pull request for code space later with `pdd workflow approve 42`. pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
 
@@ -205,7 +194,7 @@ To see where a run is, run `pdd workflow status 42`. To open its chat, run `pdd 
 
 ## The virtual CLI and the virtual API
 
-A Try can also run your program in your terminal: as a command line (the virtual CLI), or as an HTTP API on your computer (the virtual API). There is no code. The PDD runtime runs each command and each request from the prompts. The example is a bookmarks program. Its prompt describes the `bm` commands and 3 routes: `GET /api/bookmarks`, `GET /api/bookmarks/:id` and `POST /api/bookmarks`.
+A Try can also run your program in your terminal: as a command line (the virtual CLI), or as an HTTP API on your computer (the virtual API). There is no code. The PDD runtime runs each command and each request from the prompts. The steps below show the pattern for a program named `bm` that saves bookmarks. Its Story is `shared-bookmarks`. Its prompt describes the `bm` commands and 3 routes: `GET /api/bookmarks`, `GET /api/bookmarks/:id` and `POST /api/bookmarks`. For your program, use your Story, your commands and your routes.
 
 **The virtual CLI.** In terminal 1, start the Try:
 
@@ -315,7 +304,7 @@ Call a skill the way that your agent calls skills, or ask for it by name.
 
 **Stories and criteria.** A Story is one thing that a user can do. Its acceptance criteria are a numbered list that a person can check. The test file copies each criterion word for word and has at least one exact check for it.
 
-**Small test steps.** Keep each test step small: one action, or a short run of about 10 moves. The server stops one step after 10 minutes.
+**Small test steps.** Keep each test step small: one action, or a short run of about 10 actions. The server stops one step after 10 minutes.
 
 **Draft and approved prompts.** A prompt starts as a draft. A draft can be checked and tried, and pdd labels its results DRAFT. Only a person approves a prompt, with `pdd approve`. When an approved prompt changes, it goes back to draft, and you approve it again.
 
@@ -342,7 +331,7 @@ The skills and the other commands run on your computer.
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again, then run `pdd setup`. |
 | `REFUSED` (exit code 4) | A file breaks a rule, and nothing was judged. Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check may still run on the server. Run `pdd check --read` later. Do not send the same check again. |
-| `STOPPED … took more than 10 minutes and was stopped.` | One test step is too long. Make it smaller, for example split 30 moves into 3 steps of 10. Then check that Story again. |
+| `STOPPED … took more than 10 minutes and was stopped.` | One test step is too long. Make it smaller, for example split one long step into 3 short steps. Then check that Story again. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | The runtime hit a rate limit or is full. Wait a few minutes, then run the command again. For Try links, stop one that you do not use: `pdd try --stop STORY`. |
 | `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new` for a fresh Try. Next time, click **Raise the limit** before the calls run out. A Try that paused after 15 minutes with no clicks opens again with `pdd try STORY`. |
 | `pdd --version` does not print `0.1.9` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows each `pdd` on your PATH, and the `export PATH=…` line that puts this pdd first. |
