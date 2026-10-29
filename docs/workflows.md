@@ -147,7 +147,6 @@ Each run has a run folder: `.git/pdd/runs/N/` in your clone, where N is the issu
 | `STEP.md` (one for each step) | The notes of that step |
 | `verify.md` | The exact test commands and their real output |
 | `review.md` | The independent verdict, six answers and concrete must-fix findings |
-| `pr-body.md` | The PR body that pdd writes |
 
 The code that the steps write is committed on the run's branch, in the run's worktree.
 
