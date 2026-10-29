@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -116,7 +116,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
       const value = flag => args[args.indexOf(flag) + 1];
       const number = 23 + f.prs.length;
       const pr = { number, url: `https://github.com/example/project/pull/${number}`, state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
-        headRefOid: (await exec('git', ['rev-parse', 'HEAD'], { cwd: opts.cwd })).stdout.trim(), body: readFileSync(value('--body-file'), 'utf8'), title: value('--title'),
+        headRefOid: (await exec('git', ['rev-parse', 'HEAD'], { cwd: opts.cwd })).stdout.trim(), body: String(opts.input ?? ''), title: value('--title'),
         headRepository: { name: 'project' }, headRepositoryOwner: { login: 'example' }, isCrossRepository: false, mergeCommit: null };
       f.prs.push(pr); return { stdout: pr.url + '\n' };
     }
@@ -130,7 +130,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'edit') {
       const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8'); f.edits.push(pr.number); return { stdout: '' };
+      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
@@ -1200,8 +1200,29 @@ test('0.1.7 #9: a prompt approval committed by hand is pushed to PR 1 before the
   assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\./);
   writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'Approve prompts/tipjar.prompt.md');
   const approval = f.git(run.root, 'rev-parse', 'HEAD');
+  const capture = join(f.base, 'gh-body.txt'), gh = join(f.base, 'gh'), gitShim = join(f.base, 'git'), bodyFile = join(f.base, 'gh-pr-body.txt');
+  writeFileSync(bodyFile, f.prs[0].body);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  writeFileSync(gitShim, '#!/bin/sh\nif [ "$1" = fetch ]; then exit 0; fi\nif [ "$1" = push ]; then sha=$("' + realGit + '" rev-parse HEAD) || exit 1; ref=${3#*:}; local_ref=refs/remotes/origin/${ref#refs/heads/}; "' + realGit + '" update-ref "$local_ref" "$sha"; exit 0; fi\nexec "' + realGit + '" "$@"\n'); chmodSync(gitShim, 0o755);
+  const ghScript = `#!/bin/sh
+if [ "$1" = pr ] && [ "$2" = edit ]; then cat > "$GH_CAPTURE"; cp "$GH_CAPTURE" "$GH_PR_BODY_FILE"; exit 0; fi
+if [ "$1" = pr ] && [ "$2" = view ]; then
+  if [ "$4" = --json ] && [ "$5" = body ]; then
+    node -e 'const fs=require("fs"); process.stdout.write(JSON.stringify({body:fs.readFileSync(process.env.GH_PR_BODY_FILE,"utf8")}));'
+  else
+    echo '{"state":"OPEN"}'
+  fi
+  exit 0
+fi
+exit 0
+`;
+  writeFileSync(gh, ghScript); chmodSync(gh, 0o755);
+  const oldPath = process.env.PATH, oldCap=process.env.GH_CAPTURE, oldBody=process.env.GH_PR_BODY_FILE; process.env.PATH = `${f.base}:${oldPath}`; process.env.GH_CAPTURE=capture; process.env.GH_PR_BODY_FILE=bodyFile;
   f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  const testPorts = { ...f.ports }; delete testPorts.execFile;
+  const code = await approveRun({ ref: '17', cwd: f.source }, testPorts);
+  process.env.PATH = oldPath; if(oldCap===undefined) delete process.env.GH_CAPTURE; else process.env.GH_CAPTURE=oldCap; if(oldBody===undefined) delete process.env.GH_PR_BODY_FILE; else process.env.GH_PR_BODY_FILE=oldBody;
+  f.prs[0].body = readFileSync(capture, 'utf8'); assert.equal(readFileSync(capture, 'utf8'), f.prs[0].body);
   assert.equal(code.exitCode, 0, code.message);
   assert.match(code.message, /pdd pushed 1 new commit from the worktree to PR 1\./); assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
   assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), approval, 'the approval is on PR 1');
