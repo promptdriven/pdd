@@ -416,8 +416,8 @@ test('real local Git proves absent remote branch, recovers one original publicat
   const ports = { async execFile(file, args, options) {
     assert.equal(options.cwd, cwd); calls.push({ file, args: [...args] });
     if (file === 'git') {
-      if (args[0] === 'push') { pushed = true; return execute('git', ['push', remote, `HEAD:refs/heads/topic/real-recovery`], { cwd, encoding: 'utf8' }); }
-      if (args[0] === 'ls-remote' && pushed) return execute('git', ['ls-remote', remote, 'refs/heads/topic/real-recovery'], { cwd, encoding: 'utf8' });
+      if (args[0] === 'push') { pushed = true; const localArgs = args.map((arg, i) => arg === 'origin' ? remote : arg); return execute('git', localArgs, { cwd, encoding: 'utf8' }); }
+      if (args[0] === 'ls-remote' && pushed) { const localArgs = args.map((arg, i) => arg === 'origin' ? remote : arg); return execute('git', localArgs, { cwd, encoding: 'utf8' }); }
       if (args[0] === 'ls-remote') {
         const localArgs = args.map((arg, i) => arg === 'origin' && i > 0 ? remote : arg);
         return execute('git', localArgs, { cwd, encoding: 'utf8' });
@@ -434,6 +434,8 @@ test('real local Git proves absent remote branch, recovers one original publicat
   const saved = JSON.stringify(intent), body = `<!-- ${intent.marker} -->\n`; calls.length = 0;
   assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
   assert.equal(effects(calls).length, 2);
+  assert.deepEqual(calls.find(c => c.file === 'git' && c.args[0] === 'push').args, ['push', 'origin', `${actualSha}:refs/heads/${intent.headBranch}`]);
+  assert.deepEqual(calls.find(c => c.file === 'git' && c.args[0] === 'ls-remote').args, ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
   calls.length = 0;
   assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
   assert.equal(effects(calls).length, 0);
