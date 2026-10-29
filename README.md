@@ -256,7 +256,7 @@ Call a skill the way that your agent calls skills, or ask for it by name.
 
 ## Access
 
-`pdd check` and `pdd try` use the hosted PDD runtime. The runtime checks your PDD Cloud account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses, or [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your GitHub login.
+`pdd check` and `pdd try` use the hosted PDD runtime. The hosted runtime is in early access. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses, or [open an access request](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your GitHub login. Access follows PDD Cloud accounts soon.
 
 The skills and the other commands run on your computer.
 
@@ -264,7 +264,7 @@ The skills and the other commands run on your computer.
 
 | You see | What to do |
 |---|---|
-| `Your GitHub account has no PDD Cloud access yet.` or `Your GitHub login NAME is not on the PDD runtime invite list yet.` | Get access. See [Access](#access). |
+| `Your GitHub login NAME is not on the PDD runtime invite list yet.` | The PDD team must add your GitHub login. [Open an access request](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your login. See [Access](#access). |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again, then run `pdd setup`. |
 | `REFUSED` (exit code 4) | A file breaks a rule, and nothing was judged. Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check may still run on the server. Run `pdd check --read` later. Do not send the same check again. |
