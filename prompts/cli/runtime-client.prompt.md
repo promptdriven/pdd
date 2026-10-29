@@ -122,11 +122,15 @@ by 0.1.9/0.1.10, recover normal-Check intent only when every selected row has it
 max_calls (1..1000), positive integer criteria_total and consistent authored steps. Require
 producer evidence of an unsent lint-held row: pending-lint evidence, prior unknown-lint
 `not_run` evidence, or the known already-read state with phase `lint`, state `not_run`,
-calls 0, no check request IDs and note.code `lint-finished`. The latter is written by the
+no check request IDs and note.code `lint-finished`. The latter is written by the
 legacy reader after terminal lint clears its pending/unknown markers. Each evidence form
 requires a matching passed lint and all owner, repository, source and exclusive-dispatch
-guards below, zero check calls/IDs and no existing dispatch claim for the held row;
-none independently authorizes a paid check. These producer fields distinguish
+guards below, no check IDs and no existing dispatch claim for the held row. Establish
+zero check calls from this known never-posted producer state: supported legacy batch
+serialization omits row.calls, so its absence is allowed here. If call evidence is
+present, require confirmed zero; positive, unknown or incomplete call evidence refuses
+continuation. This does not infer zero for posted, claimed or unknown jobs, and no
+evidence form independently authorizes a paid check. These producer fields distinguish
 Check from standalone lint, which omits max_calls and criteria_total. Reject missing, contradictory or ambiguous intent with a plain explanation;
 never infer paid intent from a passing lint or Story path alone.
 
