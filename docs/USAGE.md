@@ -89,6 +89,25 @@ Important:
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace PDD Alpha with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
+### 2.3 Test a checkout fix before release
+
+The npm installer accepts both a local checkout and a GitHub branch. From the checkout, install it globally with `npm install -g .`, or install a branch with `npm install -g github:promptdriven/pdd#BRANCH`. A checkout or branch build identifies itself with a development suffix such as `0.1.9-dev.BRANCH.SHA` when you run `pdd --version`.
+
+Install the matching branch of the agent skills for the test too:
+
+```sh
+npx skills add promptdriven/pdd#BRANCH -g -a codex -a claude-code -y
+```
+
+After testing, restore the release command and skills (replace `alpha` with the release branch you use):
+
+```sh
+npm install -g github:promptdriven/pdd#alpha
+npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y
+```
+
+Planner evidence is that both `npm install -g github:promptdriven/pdd#branch` and `npm install -g <local checkout>` already work. This feature therefore covers version identification and these instructions; it does not add a separate managed `~/.pdd` development installer.
+
 ## 3. If you have the old Python pdd
 
 v1 is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.

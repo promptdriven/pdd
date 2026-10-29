@@ -1,6 +1,6 @@
-# Alpha 0.1.1 checkout installer
+# Alpha 0.1.1 checkout testing
 
-1. [Install and select a checkout build](2455-install-checkout.md) — a tester can install a checkout build into the managed layout, select it, and see its development version.
-2. [Uninstall and restore the previous selection](2455-uninstall-checkout.md) — a tester can remove that development installation and recover the active state that preceded it.
+1. [Distinguish checkout builds in `pdd --version`](2455-version-checkout.md) — a tester can identify a local or branch build by its development version suffix while release output stays stable.
+2. [Document testing a checkout fix before release](2455-test-checkout-docs.md) — a tester can install local/branch npm packages and matching skill branches, then restore the release.
 
-Open questions for approval: the exact command and arguments; the authoritative `runtime.json` and active-selection schema; artifact and Node-tool copy rules; version source and `-dev` spelling; supported OS/Node/permissions; idempotence and behavior when another installation becomes active.
+The previously drafted managed `~/.pdd` development installer, install/select state, and uninstall/restore behavior are obsolete because the planner confirmed that npm local and branch installs already work. Close that scope. Remaining decisions are the branch-name encoding and commit SHA length in the `-dev.<branch>.<sha>` version.
