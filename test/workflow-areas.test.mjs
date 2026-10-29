@@ -76,3 +76,17 @@ test('#13: "before":"approve" is allowed only on a pr gate', t => {
     assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'feature', home: base }), error => error.code === 'workflow_invalid');
   }
 });
+
+
+test('#2530: replay policy is explicit, preserved and rejected on non-PR areas', t => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-areas-replay-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
+  const pkg = join(base, 'package'), skills = join(pkg, 'skills'), data = areas('plan');
+  put(skills, 'flow', data);
+  assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'flow', home: base }).areas[1].replayEvidence, undefined);
+  data.areas[1].replayEvidence = 'code-replay-v1'; put(skills, 'flow', data);
+  assert.equal(readWorkflowAreas({ packageRoot: pkg, name: 'flow', home: base }).areas[1].replayEvidence, 'code-replay-v1');
+  data.areas[0].replayEvidence = 'code-replay-v1'; put(skills, 'flow', data);
+  assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'flow', home: base }), /replayEvidence/);
+  delete data.areas[0].replayEvidence; data.areas[1].replayEvidence = 'unknown'; put(skills, 'flow', data);
+  assert.throws(() => readWorkflowAreas({ packageRoot: pkg, name: 'flow', home: base }), /replayEvidence/);
+});

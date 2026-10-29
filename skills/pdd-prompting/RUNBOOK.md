@@ -482,6 +482,23 @@ The runtime proves the prompt. PR 2 must prove that the **code** does the same.
 - A ✗ case goes back to `build` (at most 2 rounds). If it still fails, PR 2 opens with "✗ N vectors fail" as its
   first line.
 
+**Structured code evidence.** Bundled feature/bug code areas use `replayEvidence: "code-replay-v1"`.
+Saved runs and custom workflows without that explicit marker retain their behavior. The run folder's
+`replay-baseline.json` freezes the original scenario paths and SHA-256 hashes from the chosen Git HEAD tree when code work starts.
+Dirty or untracked expectations cannot replace that committed baseline.
+Write `code-replay.json` there after native verification; update its `formal` field after the formal step.
+The [manifest contract](prompts/cli/code-replay.prompt.md) defines its exact fields. Each vector carries its
+original path/hash and each original step/check appears once in order, with its operation and check identity.
+Record actual public-boundary execution, every check's typed outcome and semantic mutation assertion failures;
+a crash is not mutation detection. Keep expected values in the original JSON.
+
+The manifest's `source_sha256` is the current `sourceFingerprint(root)` exported from `src/code-replay.mjs`
+in the running PDD package, after all source edits. This is Git-visible content identity, not a commit SHA.
+The CLI validates these identities and record consistency; test execution remains agent-reported, not an
+independent equivalence proof. Code PRs start with PASS, FAIL, BLOCKED or NOT REPLAYED and exact counts.
+Missing, stale or malformed evidence never passes. Failure and incomplete work may still open for review,
+with their prominent status. Prompt-runtime PASS does not imply native-code replay PASS.
+
 **The formal check (the new `formal` step, done by an agent that did not write the code).**
 - Every PR 2 has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
   **Failed + counterexample**, **Not run + reason** or **Not applicable + reason**.

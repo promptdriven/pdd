@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { sourceFingerprint } from '../src/code-replay.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -1819,5 +1820,62 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
     const body = f.prs[0].body;
     assert.ok([...body].length <= 60_000); assert.ok(body.includes(failure), style); assert.ok(body.split('\n').includes(`Report: ${url} (report links expire after 7 days)`), style);
     assert.match(body, /full verify report/); assert.doesNotMatch(body, /<details\b/); assert.equal(readFileSync(join(run.runDir, 'verify.md'), 'utf8'), verify);
+  }
+});
+
+
+async function replayCodeArea(t) {
+  const f = await fixture(t, { name: 'feature' });
+  await f.run(); let run = f.record();
+  const check = { criterion_id: 'AC1', target: 'result', path: '/value', op: 'equals', value: 2 };
+  const scenario = { schema_version: 'prompt-runtime.program-scenario.v1', criteria: [{ id: 'AC1', text: 'Read two' }], initial_world: {},
+    steps: [{ step_id: 'read', entry_path: 'prompts/value.prompt.md', operation: 'read', input: {}, checks: [check] }] };
+  writeFileSync(join(run.root, 'vectors.json'), JSON.stringify(scenario));
+  for (let at = 0; at < 2; at++) {
+    run = f.record();
+    for (const step of run.areas[run.area].steps) { f.tick(); await stepDone({ step, summary: 'done', cwd: run.root }, f.agentPorts()); }
+    f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  }
+  run = f.record(); assert.equal(run.areas[run.area].name, 'code');
+  writeFileSync(join(run.root, 'value.mjs'), 'export const value = 2;\n');
+  return { f, run, check };
+}
+
+test('#2530: missing code evidence publishes BLOCKED before a prose PASS summary', async t => {
+  const { f, run } = await replayCodeArea(t);
+  assert.equal(run.replayBaseline.vectors.length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(run.runDir, 'replay-baseline.json'))), run.replayBaseline);
+  for (const step of run.areas[run.area].steps) { f.tick(); const out = await stepDone({ step, summary: 'PASS production equivalent', cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0); }
+  assert.equal(f.prs.length, 2); assert.match(f.prs[1].body, /^Code replay: BLOCKED/);
+  assert.equal(f.record().codeReplay.status, 'blocked');
+});
+
+for (const status of ['pass', 'fail']) test(`#2530: structured ${status} is source-bound and publishes without an extra approval`, async t => {
+  const { f, run, check } = await replayCodeArea(t);
+  const mutation = { kind: 'semantic', command: 'node --test mutated.test.mjs', assertion_failures: 1, crashed: false };
+  const doc = { schema_version: 'code-replay-v1', source_sha256: sourceFingerprint(run.root),
+    vectors: [{ ...run.replayBaseline.vectors[0], steps: [{ step_id: 'read', operation: 'read', execution: { executed: true, boundary: 'value.mjs:value', command: 'node --test vectors.test.mjs' },
+      checks: [{ ...check, actual: status === 'pass' ? 2 : 1, status, ...(status === 'fail' ? { reason: 'Expected two, got one' } : {}) }] }] }], mutation,
+    formal: { status: 'not_applicable', rule: 'Plain wiring', reason: 'No approved formal rule' } };
+  writeFileSync(join(run.runDir, 'code-replay.json'), JSON.stringify(doc));
+  const prompts = f.prompts.length;
+  for (const step of run.areas[run.area].steps) { f.tick(); const out = await stepDone({ step, summary: 'done', cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); }
+  assert.equal(f.prs.length, 2); assert.match(f.prs[1].body, new RegExp(`^Code replay: ${status.toUpperCase()}`));
+  assert.equal(f.record().codeReplay.status, status); assert.equal(f.prompts.length, prompts);
+  if (status === 'pass') {
+    writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n');
+    doc.source_sha256 = sourceFingerprint(run.root);
+    doc.vectors[0].steps[0].checks[0] = { ...check, actual: 3, status: 'fail', reason: 'Expected two, got three' };
+    writeFileSync(join(run.runDir, 'code-replay.json'), JSON.stringify(doc));
+    const editFailure = f.agentPorts({ execFile: async (file, args, opts) => file === 'gh' && args[0] === 'pr' && args[1] === 'edit'
+      ? { code: 1, stdout: '', stderr: 'HTTP 503: GitHub unavailable' } : f.ports.execFile(file, args, opts) });
+    f.tick(); const refused = await stepDone({ step: 'formal', summary: 'Updated evidence', cwd: run.root }, editFailure);
+    assert.equal(refused.exitCode, 1); assert.match(refused.message, /replay description could not be updated/);
+    assert.equal(f.record().codeReplay.status, 'fail', 'current local outcome survives a failed remote description update');
+    assert.match(f.prs[1].body, /^Code replay: PASS/, 'failed remote update is explicitly reported, not claimed successful');
+    f.tick(); const again = await stepDone({ step: 'formal', summary: 'Updated evidence', cwd: run.root }, f.agentPorts());
+    assert.equal(again.exitCode, 0, again.message); assert.equal(f.prs.length, 2);
+    assert.match(f.prs[1].body, /^Code replay: FAIL/); assert.equal(f.record().codeReplay.status, 'fail');
+    assert.deepEqual(f.edits, [f.prs[1].number]);
   }
 });

@@ -63,7 +63,7 @@ test('SKILLS3: pdd-prompting SKILL.md is at most 400 words with 1 to 8 core rule
 test('SKILLS4: workflow skills have version 2 areas, one step file per step, and stay small', t => {
   for (const [name, areas] of Object.entries(AREAS)) {
     const definition = JSON.parse(read(`${name}/workflow.json`));
-    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}) })) });
+    assert.deepEqual(definition, { version: 2, areas: areas.map(([area, steps, optional, gate, then, before]) => ({ name: area, steps, optional, gate, ...(before ? { before } : {}), ...(then ? { then } : {}), ...(['pdd-feature', 'pdd-bug'].includes(name) && area === 'code' ? { replayEvidence: 'code-replay-v1' } : {}) })) });
     const steps = [...new Set(areas.flatMap(([, list]) => list))];
     assert.deepEqual(readdirSync(join(skills, name, 'steps')).sort(), steps.map(step => `${step}.md`).sort(), name);
     for (const step of steps) {
@@ -177,7 +177,7 @@ test('SKILLS10: every workflow has a short formal step that points to RUNBOOK se
     assert.ok(text.trimEnd().split('\n').length <= 8, `${name}/formal.md is short`);
   }
   assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-feature/steps/formal.md'));
-  assert.equal(read('pdd-bug/steps/formal.md'), read('pdd-small-change/steps/formal.md'));
+  assert.ok(read('pdd-bug/steps/formal.md').startsWith(read('pdd-small-change/steps/formal.md'))); // Only opted-in code areas add the manifest update.
 });
 
 // Wrong (real-user ISSUES 1 and 3): reproduce skips the prompt check in silence, or PR 1 adds repo tests that turn main red.

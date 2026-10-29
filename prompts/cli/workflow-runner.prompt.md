@@ -50,6 +50,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 
 ## Dependencies
 
+- [Code replay evidence](code-replay.prompt.md) for opted-in native-code evidence validation.
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
 
@@ -72,3 +73,9 @@ The evidence command writes only the local run record/index and append-only evid
 ## Progress and causes
 
 Serhan (Oct 28): pdd always says what happens. An optional `ports.say(text)` prints one progress line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style; without it the runner stays quiet (tests). Say one line before each slow step: `Reading issue N from GitHub…`, `Fetching origin/<base>…`, `Making the worktree and branch for #N…`, `Starting the <area> chat in Herdr…`, `Pushing <branch> to <PR label>…`, `Pushing <branch> and opening <PR label> on GitHub…`, `Reading PR 1 on GitHub…`, `Making the code branch…`, `Opening the <area> chat in Herdr…`, `Closing the chat tabs in Herdr…`, and `Reading N PRs from GitHub…` before status reads them. The final message stays the single result. A failed gh, git or Herdr call names its real reason in the failure line: a missing program is `<herdr|gh|git> is not installed or not on PATH`, else the tool's cleaned first stderr line (gh's `detail`), else its code.
+
+## Code replay evidence
+
+A PR area with `replayEvidence: "code-replay-v1"` opts in to the [code-replay contract](code-replay.prompt.md). Existing saved areas without that marker keep their behavior. When first entering an opted-in area (including a custom first area), freeze the committed scenario inventory and hashes from the chosen HEAD tree in `run.replayBaseline`; write the same inventory to `replay-baseline.json` in the run folder for the agent. Never refresh it after code changes. Tell the area chat to read RUNBOOK §17 and supply `code-replay.json` there.
+
+Before publishing an opted-in area, validate its manifest against that frozen baseline and current source. Persist the derived result in `run.codeReplay` before any publication attempt (including a failed PR-description refresh), and put its status and counts first in the PR body, ahead of runtime prompt results. Missing, stale or malformed evidence is BLOCKED; incomplete mappings are NOT REPLAYED. These outcomes and genuine assertion failures may publish for review: no claim of success and no extra approval gate. Explain that execution records come from the agent and the CLI validates structure and source identity, without running tests or proving equivalence. Preserve existing summary budgeting and redaction. For an existing opted-in PR, refresh the description from the current evidence after pushing, so an earlier PASS cannot survive a later failed, stale or missing replay. Name an update failure and keep the command unsuccessful. Other existing PRs retain push-only behavior.
