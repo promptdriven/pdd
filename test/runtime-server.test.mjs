@@ -273,6 +273,36 @@ test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is c
   assert.match(longError.out, /got:\n {6}no error \(a normal result\)/);
 });
 
+test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
+  const setup = harbor(t);
+  const answerFor = ({ checks, result = {}, why = null, who = null, next_step = null, error = null }) => async (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', checks);
+    answer.result.report.samples[0].steps[0].result = result;
+    if (error) answer.result.report.samples[0].steps[0].error = error;
+    answer.result.why = why; answer.result.who = who; answer.result.next_step = next_step;
+    return { status: 200, json: answer };
+  };
+  const multiline = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }] })), ['place-order']);
+  assert.match(multiline.out, /AC1  step sam-orders-espressos-and-a-muffin  result \/stdout\n {4}Criterion:[\s\S]*\n {4}expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+  assert.doesNotMatch(multiline.out, /got no error/);
+
+  const resultMissing = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }], result: { stdout: 'present' } })), ['place-order']);
+  assert.match(resultMissing.out, /target result|result \/stdout/);
+  assert.match(resultMissing.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(resultMissing.out, /got no error/);
+
+  const errorWithResult = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }], result: {}, error: { message: 'bad input' } })), ['place-order']);
+  assert.match(errorWithResult.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(errorWithResult.out, /got no error/);
+
+  const runLevel = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order']);
+  assert.match(runLevel.out, /Why: run-level why/); assert.match(runLevel.out, /Next: run-level next/);
+  const runLevelJson = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order'], { '--json': true });
+  const row = runLevelJson.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+});
+
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
 test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
   const setup = harbor(t);
