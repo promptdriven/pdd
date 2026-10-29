@@ -1,7 +1,7 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c85c10a68973046f0ae46f6ef890ba44fc470ec144124645843ce1d8b343e5a6).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8f57a2b6067de7abfbb5f32ad7055307308add51b34f179f3a214d80913c71fc).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -84,23 +84,77 @@ const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
+const INSPECTION_BYTES = 10_485_760;
+const scenarioSchema = value => typeof value === 'string' && value.startsWith('prompt-runtime.program-scenario');
+const oversizedMessage = test => `${test.path}: ${test.size} bytes exceeds the ${LIMITS.test}-byte test-file allowance.${test.uncertain ? ` Discovery is uncertain: ${test.uncertain}; the inspection budget is ${INSPECTION_BYTES} bytes.` : ''}`;
+const requireEligibleTests = tests => {
+  const unsafe = tests.find(test => test.discoveryError);
+  if (unsafe) throw unsafe.discoveryError;
+  const oversized = tests.filter(test => test.size > LIMITS.test);
+  if (oversized.length) throw new PreflightError(4, oversized.map(oversizedMessage).join('\n'));
+};
+
+// Snapshot a bounded regular-file read. Validate parents and the open descriptor
+// both before and after reading, so replacement or growth cannot expand the read.
+function discoveryBytes(root, path, stat) {
+  let fd;
+  try {
+    if (!stat.isFile() || !sameStat(stat, inspectParentsAndStat(root, path)))
+      throw new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
+    fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (!sameStat(stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
+    const length = Math.min(Number(stat.size), Number(stat.size) > INSPECTION_BYTES ? 65_536 : INSPECTION_BYTES);
+    const bytes = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const count = readSync(fd, bytes, offset, length - offset, offset);
+      if (!count) throw unstableSource;
+      offset += count;
+    }
+    if (!sameStat(stat, fstatSync(fd, { bigint: true })) || !sameStat(stat, inspectParentsAndStat(root, path))) throw unstableSource;
+    return bytes;
+  } catch (error) {
+    if (error instanceof PreflightError) throw error;
+    if (error === unstableSource) throw new PreflightError(5, `${path}: files changed during discovery; stop other edits and try again.`);
+    throw new PreflightError(4, `${path}: unreadable or unsafe discovery file (${error.code || error.message}).`);
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
-  const visible = new Set(), tests = [], stories = [];
+  const visible = new Set(), tests = [], stories = [], jsonTitles = new Map();
   for (const path of files) {
-    const stat = statOf(join(root, path));
-    if (!stat?.isFile()) continue;
-    visible.add(path);
-    if (path.endsWith('.json') && stat.size <= LIMITS.test) {
-      const text = readText(root, path);
-      if (!text.includes('prompt-runtime.program-scenario')) continue;
+    let stat;
+    try { stat = statOf(join(root, path)); }
+    catch (error) { throw new PreflightError(4, `${path}: unreadable discovery file (${error.code || error.message}).`); }
+    if (!stat) continue;
+    if (path.endsWith('.json')) {
+      let text;
+      try { text = discoveryBytes(root, path, stat).toString('utf8'); }
+      catch (error) { tests.push({ path, discoveryError: error }); continue; }
+      const size = Number(stat.size);
+      visible.add(path);
+      jsonTitles.set(path, titleOf(text));
+      if (size > INSPECTION_BYTES) {
+        // A partial object cannot establish final keys: duplicates may follow.
+        const first = text.match(/[^ \t\r\n]/)?.[0];
+        if (first && '["-0123456789tfn'.includes(first)) continue;
+        tests.push({ path, size, uncertain: 'the bounded prefix cannot establish final top-level schema and Story keys' });
+        continue;
+      }
       let doc;
-      try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
-      if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
-    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
-      // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
-      const text = readText(root, path);
-      if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
+      try { doc = JSON.parse(text); }
+      catch (error) {
+        if (text.includes('prompt-runtime.program-scenario')) tests.push({ path, size, error: error.message });
+        continue;
+      }
+      if (scenarioSchema(doc?.schema_version)) tests.push({ path, size, doc });
+    } else if (stat.isFile()) {
+      visible.add(path);
+      if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
+        const text = readText(root, path);
+        if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
+      }
     }
   }
   for (const test of tests) {
@@ -108,7 +162,7 @@ export function findTests({ root, files = gitFiles(root) }) {
     const story = stories.find(item => item.path === storyPath);
     test.storyPath = storyPath;
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) ? titleOf(readText(root, storyPath)) : null) ?? test.story;
+    test.title = story?.title ?? (storyPath && visible.has(storyPath) ? (jsonTitles.has(storyPath) ? jsonTitles.get(storyPath) : titleOf(readText(root, storyPath))) : null) ?? test.story;
   }
   const named = new Set(tests.map(test => test.storyPath));
   const warnings = stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`);
@@ -117,7 +171,7 @@ export function findTests({ root, files = gitFiles(root) }) {
 
 // STORY words: a test path, a story path, a story name or a test file name. Returns {selected, unknown}.
 export function selectTests(found, words = []) {
-  if (!words.length) return { selected: [...found.tests], unknown: [] };
+  if (!words.length) { requireEligibleTests(found.tests); return { selected: [...found.tests], unknown: [] }; }
   const selected = new Set(), unknown = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
@@ -125,7 +179,13 @@ export function selectTests(found, words = []) {
     if (!hits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
-  return { selected: found.tests.filter(test => selected.has(test)), unknown };
+  const rows = found.tests.filter(test => selected.has(test));
+  if (unknown.length) {
+    const unsafe = found.tests.find(test => test.discoveryError);
+    if (unsafe) throw unsafe.discoveryError;
+  }
+  requireEligibleTests([...rows, ...(unknown.length ? found.tests.filter(test => test.uncertain) : [])]);
+  return { selected: rows, unknown };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
@@ -585,8 +645,9 @@ function checkTest(root, found, test, prompts) {
   return null;
 }
 
-// Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
+// Rules P1-P10 for eligible selected tests. Discovery and size refusals stop before lint.
 export function preflight({ root, found, selected }) {
+  requireEligibleTests(selected);
   const prompts = new Map(), warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
@@ -879,8 +940,11 @@ function captureOnce(root, { tests, appMap = null }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) add(path, SOURCE_CONFIG);
     }
-    const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
-    for (const path of selected) add(path, 'Selected test', 'test');
+    const selected = tests ?? selectTests(findTests({ root, files: names })).selected.map(test => test.path);
+    for (const path of selected) {
+      add(path, 'Selected test', 'test');
+      requireEligibleTests([{ path, size: payload.get(path).size }]);
+    }
     if (appMap) add(appMap, 'App map', 'app-map');
     for (let index = 0; index < queue.length; index++) {
       const { path, role } = queue[index], key = `${path}\0${role}`;
