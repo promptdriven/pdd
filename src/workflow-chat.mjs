@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: b19ba100609dbae1953738d5f57c427afa3be17be39e067676a898e88e394336).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 9c28341b59f41ff2e4b73590bd63d2a4f596980d45c74c77eed488e7606ebae5).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readlinkSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, isAbsolute, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
@@ -178,4 +178,137 @@ export async function closeChats(run, ports = {}) {
     } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
   }
   return { warnings };
+}
+
+// A PID alone is reusable. Keep its native birth identity and treat zombies as stopped.
+async function nativeIdentity(pid) {
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      return ['Z', 'X'].includes(fields[0]) ? null : { birth: fields[19], group: Number(fields[2]) };
+    } catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return null; throw error; }
+  }
+  try {
+    const { stdout } = await ordinary('ps', ['-p', String(pid), '-o', 'pgid=,lstart=,stat=']);
+    const match = stdout.trim().match(/^(\d+)\s+(.+?)\s+(\S+)$/);
+    if (!match) throw problem('native_identity_unknown');
+    return match[3].startsWith('Z') ? null : { group: Number(match[1]), birth: match[2] };
+  } catch (error) { if (error.code === 1 && !error.stdout?.trim()) return null; throw error; }
+}
+
+async function nativeProcesses() {
+  const { stdout } = await ordinary('ps', ['-axo', 'pid=,ppid=,pgid=,uid=']);
+  const processes = stdout.trim().split('\n').map(line => line.trim().split(/\s+/).map(Number))
+    .filter(fields => fields.length === 4 && fields.every(Number.isSafeInteger))
+    .filter(([, , , uid]) => typeof process.getuid !== 'function' || uid === process.getuid())
+    .map(([pid, parent, group]) => ({ pid, parent, group, cwd: null }));
+  if (process.platform === 'linux') {
+    for (const item of processes) {
+      try { item.cwd = readlinkSync(`/proc/${item.pid}/cwd`); }
+      catch (error) { if (!['ENOENT', 'ESRCH', 'EACCES', 'EPERM'].includes(error.code)) throw error; }
+    }
+  } else if (processes.length) {
+    const { stdout: directories } = await ordinary('lsof', ['-a', '-p', processes.map(item => item.pid).join(','), '-d', 'cwd', '-Fn']);
+    let pid;
+    for (const line of directories.split('\n')) {
+      if (line.startsWith('p')) pid = Number(line.slice(1));
+      if (line.startsWith('n')) { const item = processes.find(item => item.pid === pid); if (item) item.cwd = line.slice(1); }
+    }
+  }
+  return processes;
+}
+
+function assertNoUnownedWriters(run, processes, infos, stopped = false) {
+  const ignored = new Set(infos.map(info => info.shell_pid));
+  let ancestor = process.pid;
+  while (ancestor && !ignored.has(ancestor)) { ignored.add(ancestor); ancestor = processes.find(item => item.pid === ancestor)?.parent; }
+  const groups = new Set(stopped ? [] : infos.map(info => info.foreground_process_group_id));
+  const descendants = new Set(infos.flatMap(info => info.foreground_processes.map(item => item.pid)).filter(pid => !ignored.has(pid)));
+  let previous;
+  do { previous = descendants.size; for (const item of processes) if (descendants.has(item.parent)) descendants.add(item.pid); } while (descendants.size !== previous);
+  for (const item of processes) {
+    const path = typeof item.cwd === 'string' ? relative(run.root, item.cwd) : null;
+    const inWorktree = path !== null && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+    if (!ignored.has(item.pid) && !groups.has(item.group) && (inWorktree || descendants.has(item.pid)))
+      throw problem('native_descendants_unconfirmed', `A process outside the saved stage groups may still write this worktree (pid ${item.pid}). Stop or inspect it before cancelling; the issue claim stays.`);
+  }
+}
+
+export async function stopChats(run, ports = {}) {
+  const herdr = herdrCommand(ports), identity = ports.nativeIdentity ?? nativeIdentity;
+  const stopGroup = ports.stopProcessGroup ?? (group => process.kill(-group, 'SIGKILL'));
+  const warnings = [], seen = new Set();
+  try {
+    if (!(run.chats ?? []).length && !['completed', 'cancelled'].includes(run.state))
+      throw problem('chat_start_unconfirmed', 'No saved stage agent identity; its absence cannot be confirmed.');
+    const infos = new Map();
+    for (const chat of run.chats ?? []) {
+      if (!chat.paneId) throw problem('native_identity_unknown', 'A saved chat has no pane identity.');
+      const info = (await herdr(['pane', 'process-info', '--pane', chat.paneId])).result?.process_info;
+      if (!info || !Array.isArray(info.foreground_processes)) throw problem('native_identity_unknown', 'Native process information is unavailable.');
+      infos.set(chat.paneId, info);
+    }
+    // The layout may retain an unused initial shell in the run workspace.
+    // Recognize only positively idle shells; another foreground job stays a refusal.
+    for (const workspace of new Set((run.chats ?? []).map(chat => chat.workspaceId).filter(Boolean))) {
+      const panes = (await herdr(['pane', 'list', '--workspace', workspace])).result?.panes;
+      if (!Array.isArray(panes)) throw problem('native_identity_unknown', 'The run workspace panes cannot be inspected.');
+      for (const pane of panes) if (!infos.has(pane.pane_id)) {
+        const info = (await herdr(['pane', 'process-info', '--pane', pane.pane_id])).result?.process_info;
+        if (info?.foreground_process_group_id === info?.shell_pid && Array.isArray(info?.foreground_processes)
+          && info.foreground_processes.every(item => item.pid === info.shell_pid)) infos.set(pane.pane_id, info);
+      }
+    }
+    assertNoUnownedWriters(run, await (ports.nativeProcesses ?? nativeProcesses)(), [...infos.values()]);
+    for (const chat of run.chats ?? []) {
+      if (!chat.paneId || seen.has(chat.paneId)) continue;
+      seen.add(chat.paneId);
+      // Missing UI topology cannot establish that a detached writer died.
+      const info = infos.get(chat.paneId);
+      const group = info?.foreground_process_group_id, shellPid = info?.shell_pid;
+      if (!Number.isSafeInteger(group) || group <= 1 || !Number.isSafeInteger(shellPid) || !Array.isArray(info.foreground_processes))
+        throw problem('native_identity_unknown', `No positive native process information for ${chat.paneId}.`);
+      const foreground = info.foreground_processes.filter(item => item.pid !== shellPid);
+      if (group === shellPid && foreground.length === 0 && !chat.startUnconfirmed) continue;
+      if (group === shellPid || !foreground.length) throw problem('chat_start_unconfirmed', `The launch in ${chat.paneId} remains unconfirmed.`);
+      const belongs = item => {
+        const path = typeof item.cwd === 'string' ? relative(run.root, item.cwd) : '..';
+        return Number.isSafeInteger(item.pid) && item.pid > 1 && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+      };
+      const agent = chat.agent ?? run.agent;
+      const isAgent = item => new RegExp(`(?:^|[\\s/])${agent}(?:$|[\\s/.-])`).test([item.name, ...(Array.isArray(item.argv) ? item.argv : [item.argv ?? ''])].join(' '));
+      if (!foreground.every(belongs) || !foreground.some(isAgent))
+        throw problem('native_identity_mismatch', `The foreground process in ${chat.paneId} is not this run's ${agent} agent.`);
+      const observed = await Promise.all(foreground.map(async item => ({ pid: item.pid, identity: await identity(item.pid) })));
+      if (observed.some(item => !item.identity || item.identity.group !== group)) throw problem('native_identity_changed', 'The native process group changed during inspection.');
+      // Recheck birth and group immediately before signalling, never a PID from an old receipt.
+      for (const item of observed) {
+        const current = await identity(item.pid);
+        if (!current || current.birth !== item.identity.birth || current.group !== group) throw problem('native_identity_changed');
+      }
+      await stopGroup(group);
+      for (let attempt = 0; ; attempt++) {
+        const live = await Promise.all(observed.map(async item => {
+          const current = await identity(item.pid);
+          return current && current.birth === item.identity.birth;
+        }));
+        if (!live.some(Boolean)) break;
+        if (attempt >= 20) throw problem('native_stop_unconfirmed', 'The native process still exists after the stop request.');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      for (let attempt = 0; ; attempt++) {
+        const after = (await herdr(['pane', 'process-info', '--pane', chat.paneId])).result?.process_info;
+        if (after?.foreground_process_group_id === shellPid && Array.isArray(after.foreground_processes)
+          && after.foreground_processes.every(item => item.pid === shellPid)) break;
+        if (attempt >= 20) throw problem('native_stop_unconfirmed', `The pane ${chat.paneId} is not confirmed at its shell.`);
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    assertNoUnownedWriters(run, await (ports.nativeProcesses ?? nativeProcesses)(), [...infos.values()], true);
+  } catch (error) {
+    return { stopped: false, warnings: [`Cannot confirm this run's agents stopped (${error.code ?? 'error'}: ${error.message}).`] };
+  }
+  warnings.push(...(await closeChats(run, ports)).warnings);
+  return { stopped: true, warnings };
 }

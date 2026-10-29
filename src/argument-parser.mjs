@@ -1,10 +1,11 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: b319023a0a9830f2ee108978afc6bb2d88d67d086e1377f18a24050c32b06c36).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 0ed656581a195bbf9b8bded6cc9fc698f9f0e0508a7367937570f1d628338bbf).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
   constructor(message) { super(message); this.name = 'CommandInputError'; this.exitCode = 2; }
 }
 const HELP_WORDS = ['--help', '-h', '-help'];
+const safeRunId = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,160}$/.test(value) && !value.startsWith('-');
 const fail = () => { throw new CommandInputError('Unsupported command or options in PDD Alpha. Run pdd --help for local authoring tools.'); };
 const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.prefix.length);
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
@@ -39,7 +40,7 @@ function parseRoute(route, words) {
       }
       else {
         const value = words[++index];
-        if (!optionValue(option, value)) fail();
+        if (!optionValue(option, value) || word === '--replace' && !safeRunId(value)) fail();
         options[word] = value;
       }
     } else operands.push(word);
@@ -49,7 +50,7 @@ function parseRoute(route, words) {
   for (let index = 0; index < operands.length; index++) {
     const type = route.operands[Math.min(index, route.operands.length - 1)].type;
     const word = operands[index];
-    const valid = type === 'text' || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || type === 'issue'
+    const valid = type === 'text' || type === 'issue-or-run' && safeRunId(word) || type === 'workflow-name' && word.length<=64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(word) || ['issue', 'issue-or-run'].includes(type)
       && /^(?:[1-9][0-9]*|[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+#[1-9][0-9]*|https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*\/?)$/.test(word)
       || type === 'uuid' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(word)
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);

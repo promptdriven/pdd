@@ -23,7 +23,7 @@ function fakeHerdr() {
   const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
-  const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
+  const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, nativePid: 100000 + h.next, agent: null }; h.panes.push(p); return p; };
   const fail = code => { throw Object.assign(Error(code), { code }); };
   h.herdr = async args => {
     h.calls.push(args);
@@ -54,6 +54,11 @@ function fakeHerdr() {
     if (group === 'tab' && verb === 'get') { const t = h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); return { result: { tab: t } }; }
     if (group === 'tab' && verb === 'focus') { h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); h.focus = rest[0]; return { result: { type: 'ok' } }; }
     if (group === 'tab' && verb === 'close') { h.tabs = h.tabs.filter(t => t.tab_id !== rest[0]); return { id: 'cli:tab:close', result: { type: 'ok' } }; }
+    if (group === 'pane' && verb === 'process-info') {
+      const p = h.panes.find(p => p.pane_id === flag('--pane')) ?? fail('pane_not_found');
+      return { result: { process_info: { shell_pid: 90000, foreground_process_group_id: p.agent ? p.nativePid : 90000,
+        foreground_processes: p.agent ? [{ pid: p.nativePid, name: p.agent.agent, cwd: p.cwd, argv: [p.agent.agent] }] : [] } } };
+    }
     if (group === 'pane' && verb === 'run') {
       const p = h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found');
       const command = rest[1], kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
@@ -133,6 +138,8 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock,
     env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
+    nativeIdentity: async pid => f.herdr.panes.some(p => p.nativePid === pid && p.agent) ? { birth: String(pid), group: pid } : null,
+    stopProcessGroup: async group => { for (const p of f.herdr.panes) if (p.nativePid === group) p.agent = null; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
   f.run = () => startRun({ name, issue: '17', agent, cwd: source, packageRoot }, f.ports);
   f.record = () => JSON.parse(readFileSync(join(f.git(source, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd', 'runs', '17', 'status.json'), 'utf8'));
@@ -1481,7 +1488,7 @@ test('BASE5: explicit base failure preserves a cancelled run, worktree and issue
   assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
   const recordFile = join(old.runDir, 'status.json');
   const claimFile = join(f.source, '.git/pdd/worktree-assignments/issues/17.json');
-  const record = readFileSync(recordFile), claim = readFileSync(claimFile);
+  const record = readFileSync(recordFile); assert.equal(existsSync(claimFile), false);
   const original = f.ports.execFile;
   f.ports.execFile = (file, args, opts) => {
     if (file === 'git' && args[0] === 'fetch') throw Error('base unavailable');
@@ -1489,7 +1496,7 @@ test('BASE5: explicit base failure preserves a cancelled run, worktree and issue
   };
   const out = await startRun({ name: 'small-change', issue: '17', base: 'round3/missing', cwd: f.source, packageRoot }, f.ports);
   assert.equal(out.exitCode, 1, out.message);
-  assert.ok(readFileSync(recordFile).equals(record)); assert.ok(readFileSync(claimFile).equals(claim));
+  assert.ok(readFileSync(recordFile).equals(record)); assert.equal(existsSync(claimFile), false);
   assert.ok(existsSync(old.root)); assert.equal(f.git(f.source, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 2);
 });
 
@@ -1576,7 +1583,7 @@ test('CHATFAIL4: a lost launch reply retains the prepared chat, and open reuses 
 });
 
 // Wrong: after an uncertain launch, missing agent inspection automatically sends the first prompt again.
-test('CHATFAIL5: an unconfirmed launch without a live agent refuses another launch and cancellation still wins', async t => {
+test('CHATFAIL5: an unconfirmed launch without native stop evidence retains custody on cancellation', async t => {
   const f = await fixture(t), healthy = f.ports.herdr;
   f.ports.herdr = async args => { if (args[0] === 'pane' && args[1] === 'run') throw closedChannel(); return healthy(args); };
   assert.equal((await f.run()).exitCode, 1);
@@ -1585,9 +1592,11 @@ test('CHATFAIL5: an unconfirmed launch without a live agent refuses another laun
   assert.equal((await openRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
   assert.equal(f.record().chats.length, 1); assert.equal(f.herdr.tabs.length, tabs);
   assert.equal(f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run').length, 0);
-  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  const beforeCancel = f.record();
+  assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 1);
+  assert.deepEqual(f.record(), beforeCancel);
   const row = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0];
-  assert.equal(row.group, 'cancelled'); assert.equal(row.words, 'cancelled'); assert.deepEqual(f.record().waitingFor, { decisions: [], what: null });
+  assert.equal(row.group, 'waiting'); assert.match(row.words, /not confirmed/);
 });
 
 // Wrong: older failed-start records with no chat still fall through to agent-working forever.

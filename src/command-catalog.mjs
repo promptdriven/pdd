@@ -1,11 +1,11 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: c682d2c5cec62f5618983b1a29e7293505b94ea44afee286ac4e492d6995cfd0).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9fcb04aafa9125f6b61234c61e868e7b5681a614fb568208e59b8b589085338f).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
-    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--replace',kind:'text'}],
+    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH] [--replace RUN_ID]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --replace asks to cancel the holding run before starting fresh. pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
@@ -22,8 +22,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
   { id: 'workflow.cancel', prefix: ['workflow', 'cancel'], local: 'workflow-cancel',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },
+    operands: [{name:'issue',type:'issue-or-run'}], options: [],
+    forms: [form('pdd workflow cancel ISSUE|RUN_ID', 'Ask first, confirm the run agents stopped, then cancel and free the issue; keep all work and PRs.')] },
   { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
