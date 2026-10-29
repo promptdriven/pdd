@@ -45,6 +45,7 @@ Pass the runner a `say` port that writes one line to stderr, so slow workflow st
 For local `mcp`, dynamically import [Try MCP](try-mcp.prompt.md) and return `runMcp({cwd, env}, {stdin, stdout, stderr})`. Accept injected `mcpServer` for tests. This route performs no PATH diagnostics, skill checks or stdout chatter; stdout belongs exclusively to MCP. A startup error prints one finite cause to stderr and returns 1.
 
 After setup's existing skills and project-block actions, dynamically import [agent MCP setup](agent-mcp-setup.prompt.md) and await `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm})`. Combine its failure with the existing exit status; preserve the earlier actions even if registration is declined or fails. Accept stdin (default process.stdin) and optional confirm as ports. Only registration is covered by its consent; the existing setup actions retain their behavior.
+<<<<<<< ours
 
 The `runPdd` entry observes the existing public module function in
 `src/pdd-cli.mjs`: supply argv and capture its stdout/stderr ports and returned
@@ -83,3 +84,15 @@ with external effects is invoked; no runtime resource is needed for that path.
 ```
 
 </details>
+||||||| base
+=======
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{"status":"approved","prose_sha256":"7e8db309e8043b24e46d5b9e3d69c92f2a986ca55f3201adff5c430cc30d1693","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]},{"operation":"runPdd","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":3},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"},{"path":"/entries/1/input_schema","convention":"cli"},{"path":"/entries/1/result_schema","convention":"cli"}]}
+```
+
+</details>
+>>>>>>> theirs
