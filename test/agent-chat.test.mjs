@@ -165,6 +165,7 @@ test('negotiated run reaches adapter and reply only for current manual requests'
  },{askAgent:async options=>{captured=options;return{say:'Preparing action',fill:{entry:'prompts/main.prompt.md#main',input:{argv:['list']}},apply:true,run:true};}});
  const bridge=await createAgentBridge(s.context,{},ID,{},'https://runtime.example/s/abc/');await bridge.run();
  assert.equal(captured.supportsRun,true);assert.equal(captured.context.requestKind,kind);
+ assert.deepEqual(s.calls.find(c=>c.path.endsWith('/connect')).body.features,['apply','progress','run_events','expect','save','run']);
  assert.equal(s.calls.find(c=>c.path.endsWith('/reply')).body.run,kind==='chat'?true:undefined);
  }
 });

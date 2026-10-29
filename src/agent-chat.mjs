@@ -1,9 +1,10 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: 8fa26c0a042dfbdd26e911f742b31953d51e57f003321b7306d32bc34b3ac7c5).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 974ba6db4897705cb478312961b636e67ff3641f6303e457281b68263c9eb780).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
 import {cleanText} from './runtime-output.mjs';
 const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
+const FEATURES=['apply','progress','run_events','expect','save','run'];
 const ready=a=>['ready','available'].includes(a?.state);
 const write=(context,text)=>context.ports.stderr.write(`${cleanText(text,context.secrets)}\n`);
 const json=body=>({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -34,11 +35,11 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  let choice=(explicit??byChoice(store.repo(root).agent_choice))?.id;
  if(!known(choice)||(!explicit&&agents.find(a=>a.id===choice)?.state==='not_installed'))choice=agents.find(ready)?.id??agents.find(a=>a.state!=='not_installed')?.id??definitions[0].id;
  const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
- const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice}),30000);
+ const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice,features:FEATURES}),30000);
  if(connected.status===404){write(context,'This runtime does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
  if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd try again.`);
  remember(choice);
- const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>['apply','progress','run_events','expect','save','run'].includes(x)):[];
+ const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>FEATURES.includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
  const secrets=[...(context.secrets??[]),...Object.entries(ports.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v),...definitions.flatMap(d=>Object.entries(d.env??{}).filter(([k,v])=>secretName.test(k)&&typeof v==='string'&&v).map(([,v])=>v))];
  const guide=createTryGuide({root,env:ports.env,model,test,features,secrets,ports:ports.guidePorts});

@@ -15,7 +15,9 @@ Never read arbitrary page-named paths or include environment, credentials or loc
 Use the private `context.agentDefinitions` from runtime-client, or load definitions locally for direct callers before any network access. An empty list is a plain configuration error. Discover each configured definition independently without a model call. The picker and relay receive only `{id,name,state,detail?}`, with names and IDs taken from local definitions, never command, kind or environment. Ignore discovery rows outside those definitions. Explicit --agent matches an exact display name, with builtin lowercase IDs retained as aliases. Unknown explicit choices fail before connecting. Otherwise choose the remembered display name (migrating old builtin IDs), if installed, then first ready/available/installed definition, then the first definition to show unavailable states.
 Persist only the chosen display name in existing private per-repo state, including subsequent page switches. Wire selections and messages use opaque IDs, checked against the local definitions. Each turn passes its matching private definition separately to the adapter with the unchanged base environment; the adapter owns child-only environment merging. Never persist a browser key or messages locally.
 
-POST owner `/agent/connect` with a fresh bridge UUID, discovery states and selection. A 404 means
+POST owner `/agent/connect` with a fresh bridge UUID, discovery states, selection and `features`: the list
+apply/progress/run_events/expect/save/run this client handles. A relay that gets no list assumes a
+released 0.1.9 client and never offers run, so the page never promises a run. A 404 means
 this server has no agent bridge: explain and retain the ordinary Try page. Other failures are plain
 errors; do not silently reconnect or rotate an uncertain connection. Require a same-bridge response
 and a bounded URL-safe browser_key. Open the existing Try link with only `#agent=<key>` added;
