@@ -14,21 +14,13 @@ pdd --version
 
 | It prints | What to do |
 |---|---|
-| `0.1.` and a number, for example `0.1.9` | This is pdd v2. Go to step 2. |
-| A version that starts with `0.0.` | This is the Python pdd (v1). v1 is retired. Do not file an issue. Tell the person to install pdd v2 (below). |
-| `command not found` | pdd is not installed. Tell the person to install pdd v2 (below). |
+| `0.1.` and a number, for example `0.1.10` | This is pdd v2. Go to step 2. |
+| `pdd, version 0.0.` and a number, for example `pdd, version 0.0.310` | This is the Python pdd (v1). v1 is retired. Do not file an issue. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
+| `command not found` | pdd is not installed. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
 
-Install pdd v2 with the lines from the [README](../README.md#install):
+If the person installed pdd v2 and `pdd --version` prints `pdd, version 0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
 
-```sh
-npm install -g github:promptdriven/pdd
-npx skills add promptdriven/pdd#alpha -g
-pdd --version
-```
-
-If the person installed pdd v2 and `pdd --version` prints `0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
-
-If the version is older than the version in the [README](../README.md#install), update pdd first: run the install lines again. Then run the failing command again. Report the problem only if it stays.
+If the version is older than the version in [Install](../README.md#install), update pdd first with the steps in Install. Then run the failing command again. Report the problem only if it stays.
 
 ## 2. Look for the problem first
 
@@ -36,13 +28,13 @@ If the version is older than the version in the [README](../README.md#install), 
 2. Search the open issues with 2 or 3 words from the error message or the command:
 
    ```sh
-   gh issue list -R promptdriven/pdd --state open --search "lint result unknown"
+   gh issue list -R promptdriven/pdd --state open --search "serve 404"
    ```
 
-3. If an open issue has the same problem, add a comment to it. Do not open a second issue. Add only the facts that the issue does not have, for example your versions, your command and your output:
+3. If an open issue has the same problem, add a comment to it. Do not open a second issue. A comment is public too, so do steps 3, 4 and 7 for it: collect only the facts that the issue does not have, remove secrets and private data, and show the comment to the person. Post it only when the person says yes. Write the comment to a file outside the repo:
 
    ```sh
-   gh issue comment 123 -R promptdriven/pdd --body-file comment.md
+   gh issue comment 123 -R promptdriven/pdd --body-file /tmp/pdd-comment.md
    ```
 
 4. If you are not sure that it is the same problem, open a new issue. Write "Maybe the same problem as #123" in the body.
@@ -71,7 +63,7 @@ A report link shows the steps, the checks and the answers of the check, and anyo
 
 ## 4. Remove secrets and private data
 
-A public issue stays public. Read all the text before you file it. Remove:
+An issue or a comment stays public. Read all the text before you post it. Remove:
 
 - tokens, passwords, keys and the output of `gh auth token`;
 - Try links and private chat links;
@@ -138,7 +130,7 @@ Keep facts and guesses apart:
 
 ## 7. File the issue
 
-Show the person the title and the body. File the issue only when the person says yes. The issue is public, and it shows the GitHub account of the person.
+Show the person the title and the body. File the issue only when the person says yes. The issue is public, and it shows the GitHub account of the person. Do the same for a comment on an existing issue (step 2).
 
 Write the body to a file outside the repo. Then run:
 
@@ -150,35 +142,35 @@ Give the person the issue link that `gh` prints. A person without `gh` can use t
 
 ## A good example
 
-Title: `[alpha] pdd check --lint waits 90 seconds, then says "The lint result is unknown"`
+This example is not a real problem. It shows the shape of a good issue.
+
+Title: `[alpha] pdd try --serve answers 404 for a route that my prompt declares`
 
 ~~~markdown
 ### pdd version
-0.1.9
+0.1.10
 
 ### What you did
-I signed up at promptdriven.ai and tried to lint my first Story.
+I tried my HTTP API by hand, with the route that my prompt declares.
 ```sh
-pdd check --lint
+pdd try my-story --serve 8091
+curl -i http://127.0.0.1:8091/api/items
 ```
 
 ### What happened
 ```
-Checking 3 files (29 KB) on the PDD runtime (lint, 0 AI calls)…
-Still checking the files: waiting for an answer · 16 s
-…
-The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.
+HTTP/1.1 404 Not Found
 ```
-Exit code: 3, after 90 seconds. I waited 1 minute and ran it again, as the README says. The result was the same.
+Exit code of curl: 0. The prompt entry has the input schema title `HTTP GET /api/items`. `pdd check my-story` passes.
 
 ### What you expected
-A lint result, or a message that tells me why pdd cannot lint.
+The answer of the prompt for GET /api/items, the same as in the check.
 
 ### Runtime link or run id
-None. pdd printed no link.
+None.
 
 ### Smallest example
-A new repo with one prompt, one Story with 2 criteria and its test file.
+A new repo with one prompt that has one entry, `HTTP GET /api/items`, one Story with 1 criterion and its test file.
 
 ### OS
 macOS 15.3
@@ -187,10 +179,10 @@ macOS 15.3
 v22.20.0
 
 ### Agent
-None. I typed the command in a terminal.
+None. I typed the commands in a terminal.
 
 ### Suspected cause
-My GitHub account may not have PDD Cloud approval yet. I signed up 10 minutes before the command.
+Maybe pdd does not serve the routes of a prompt with only one entry. I did not test a prompt with two entries.
 ~~~
 
 ## A bad example

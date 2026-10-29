@@ -8,7 +8,7 @@ body:
       value: |
         Use this form for a problem with pdd v2 (version 0.1.x). [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md) explains each field. Agents follow the same guide.
 
-        - Run `pdd --version`. It must print `0.1.` and a number. A version that starts with `0.0.` is the retired Python pdd. Do not report it here. Install pdd v2 from the [README](https://github.com/promptdriven/pdd#install).
+        - Run `pdd --version`. It must print `0.1.` and a number. `pdd, version 0.0.` and a number is the retired Python pdd. Do not report it here. Install pdd v2 from the [README](https://github.com/promptdriven/pdd#install).
         - Search the [open issues](https://github.com/promptdriven/pdd/issues) first. If an issue has the same problem, add a comment to it.
         - In the title, write what fails for you, in your words. Do not write a guessed cause.
         - Write one problem in each issue. Never paste tokens, Try links, private repo links or personal data.
@@ -17,7 +17,7 @@ body:
     attributes:
       label: pdd version
       description: The output of `pdd --version`. It starts with `0.1.`.
-      placeholder: "0.1.9"
+      placeholder: "0.1.10"
     validations:
       required: true
   - type: textarea
@@ -36,8 +36,8 @@ body:
       label: What happened
       description: The exact output, copied as text. Add the exit code (run `echo $?` directly after the command).
       placeholder: |
-        The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.
-        Exit code: 3
+        The output, copied as text.
+        Exit code: 1
     validations:
       required: true
   - type: textarea
@@ -51,7 +51,7 @@ body:
     id: link
     attributes:
       label: Runtime link or run id
-      description: The report link that `pdd check` printed, a request ID, or for a workflow run the output of `pdd workflow status N`. Never paste a Try link. Anyone with a Try link can use it.
+      description: The report link that `pdd check` printed, a request ID, or for a workflow run the output of `pdd workflow status N`. Anyone with a report link can open it, so add it only when you agree. Never paste a Try link. Anyone with a Try link can use it.
     validations:
       required: false
   - type: textarea
@@ -95,7 +95,7 @@ body:
     attributes:
       label: Before you submit
       options:
-        - label: I searched the open issues. No open issue has this problem.
+        - label: I searched the open issues.
           required: true
         - label: The text has no tokens, Try links, private repo links or personal data.
           required: true
