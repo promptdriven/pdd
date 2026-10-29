@@ -17,7 +17,7 @@ const selections = [[], ['tests/different-basename.json'], ['different-basename'
 const schema = 'prompt-runtime.program-scenario.v1';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function document(layout, size) {
-  const fields = '"criteria":[{"id":"AC1","text":"Echo text."}],"initial_world":{},"steps":[{"step_id":"echo","entry_path":"prompts/echo.prompt.md","operation":"echo","input":{"text":"PAD"},"checks":[{"criterion_id":"AC1","target":"result","path":"/text","op":"equals","value":""}]}]';
+  const fields = '"criteria":[{"id":"AC1","text":"Echo text."}],"initial_world":{},"steps":[{"step_id":"echo","entry_path":"prompts/echo.prompt.md","operation":"echo","input":{"text":"PAD"},"checks":[{"criterion_id":"AC1","target":"result","path":"/text","op":"equals","value":"PAD"}]}]';
   const identity = `"schema_version":"${schema}","story_path":"user_stories/actual-story.md"`;
   const templates = {
     early: `{${identity},${fields}}`,
@@ -28,9 +28,13 @@ function document(layout, size) {
     array: '["PAD"]',
   };
   const template = templates[layout];
-  const text = template.replace('PAD', Buffer.alloc(size - Buffer.byteLength(template) + 3, 65).toString('ascii'));
+  const slots = template.split('PAD').length - 1;
+  const available = size - Buffer.byteLength(template) + slots * 3;
+  const padding = Buffer.alloc(Math.floor(available / slots), 65).toString('ascii');
+  const text = template.replaceAll('PAD', padding) + ' '.repeat(available % slots);
   assert.equal(Buffer.byteLength(text, 'utf8'), size);
-  JSON.parse(text);
+  const parsed = JSON.parse(text);
+  if (parsed.steps) assert.equal(parsed.steps[0].input.text, parsed.steps[0].checks[0].value);
   return Buffer.from(text);
 }
 // No discovery/selection helper participates in expected-result computation.
