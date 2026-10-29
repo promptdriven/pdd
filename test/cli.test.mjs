@@ -49,7 +49,12 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:test|ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
+  // RUNBOOK §21's installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
+  assert.deepEqual(names.filter(name => name.startsWith('test/')).sort(), [
+    'test/runtime/fake-database.json', 'test/runtime/fake-decision.json', 'test/runtime/fake-factory.json',
+    'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
+  ]);
+  assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);
