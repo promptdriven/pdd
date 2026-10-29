@@ -243,7 +243,7 @@ Use [runtime output step time limits](runtime-output.prompt.md#step-time-limits)
 
 ## Explain failed checks
 
-Pass authored step IDs and short criterion text into runtime output. Preserve a failed check's runtime-contract `diagnosis`, and preserve the failed row's `why`, `who` and `next_step` for text and JSON. The fallback is person-first: `A person decides expected values. The agent may propose a change, and never makes it.` For target `error` with actual `{"missing":true}`, display `got no error (a normal result)`.
+Pass authored step IDs and short criterion text into runtime output. Preserve a failed check's runtime-contract `diagnosis`, and preserve the failed row's `why`, `who` and `next_step` for text and JSON only for failed state; use the first failed check diagnosis when the run-level fields are empty. The fallback is person-first: `A person decides expected values. The agent may propose a change, and never makes it.` For target `error` with actual `{"missing":true}`, display `got no error (a normal result)` only when the step has a result and no error, or diagnosis kind `no-error`/`needs-tool`; otherwise keep the missing object. Use the authored step ID when the report omits it.
 
 For a connected Try guide, report each newly handled saved case’s id/name/Story/result through the optional private context.onAgentCaseSaved callback after addSavedCase returns. Only successful “added to …” outcomes mark guide memory saved; refusals remain refusals. The callback does not change file selection, criteria, append behavior or save authority, and never receives raw saved-test data. A callback exception cannot undo a saved case or prevent collection of later cases.
 

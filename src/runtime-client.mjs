@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: bcc465d0897a186b92f2633f95c1eefa2d377134d17900963db1c4a3db5775f9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: dadc5a765534a98d92403606f012a5b00c39465c42a76d93f785c5fd5d05ec91).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -385,9 +385,13 @@ function addHints(row, root, visible) {
 
 function applyAnswer(row, answer, context) {
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
+  const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, time_limit: view.time_limit, why: view.why ?? row.why, who: view.who ?? row.who, next_step: view.next_step ?? row.next_step,
+    server_seconds: view.server_seconds, time_limit: view.time_limit,
+    why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : view.state === 'unknown' ? view.why ?? row.why : null,
+    who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
+    next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : null,
     engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
