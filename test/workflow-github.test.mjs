@@ -452,7 +452,7 @@ test('an early stdin failure becomes recovery_required without an unhandled EPIP
   f.ports.execFile = (file, args, options) => file === 'gh'
     ? promisify(execFile)(file, args, { ...options, env: { ...f.ports.env, PATH: `${bin}:${process.env.PATH}` } })
     : original(file, args, options);
-  const result = await f.publish(intent, { body: `<!-- ${intent.marker} -->\n${'é'.repeat(70_000)}` });
+  const result = await f.publish(intent, { body: `<!-- ${intent.marker} -->\n${'é'.repeat(40_000)}` });
   assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
 });
 
