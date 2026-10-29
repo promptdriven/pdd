@@ -75,6 +75,8 @@ For a built screen, serve the app in the state shown by its drawing and run, for
 
 See [Check prompts on the PDD runtime](USAGE.md#7-check-prompts-on-the-pdd-runtime) for the exit codes, `pdd check --help` and `pdd try --help` for the options, and `RUNBOOK.md` for the file formats.
 
+The Try page's agent fills the fields directly when supported. It runs the action only when you explicitly ask, in your own words; otherwise you press Run. Actions use the Try budget. Older pages keep manual Fill fields and Run.
+
 ## Try tools for your agent
 
 | Command | What it does |
