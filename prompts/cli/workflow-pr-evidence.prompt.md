@@ -24,7 +24,7 @@ Insert this block above ordinary verdict/runtime/step prose, while keeping struc
 ```json
 {
   "status": "draft",
-  "prose_sha256": "",
+  "prose_sha256": "cc0ce3d089fda311a27c9a8edede6ffd8b50f3ff2d83691e537046195d47e897",
   "entries": [
     {
       "operation": "preparePrEvidence",
