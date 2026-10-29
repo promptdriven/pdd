@@ -111,7 +111,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
       const value = flag => args[args.indexOf(flag) + 1];
       const number = 23 + f.prs.length;
       const pr = { number, url: `https://github.com/example/project/pull/${number}`, state: 'OPEN', headRefName: value('--head'), baseRefName: value('--base'),
-        headRefOid: (await exec('git', ['rev-parse', 'HEAD'], { cwd: opts.cwd })).stdout.trim(), body: readFileSync(value('--body-file'), 'utf8'), title: value('--title'),
+        headRefOid: (await exec('git', ['rev-parse', 'HEAD'], { cwd: opts.cwd })).stdout.trim(), body: String(opts.input ?? ''), title: value('--title'),
         headRepository: { name: 'project' }, headRepositoryOwner: { login: 'example' }, isCrossRepository: false, mergeCommit: null };
       f.prs.push(pr); return { stdout: pr.url + '\n' };
     }
@@ -125,7 +125,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (args[0] === 'pr' && args[1] === 'edit') {
       const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8'); f.edits.push(pr.number); return { stdout: '' };
+      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
