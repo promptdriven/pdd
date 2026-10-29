@@ -839,3 +839,8 @@ Use `schema_version: "prompt-runtime.interface.v2"`, `instance_types: [{"name":"
 Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptdriven.ai/r/eaa3c792-986a-498c-8970-5d67181d179e).
 
 A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
+## Use the Try tools when they are available
+
+The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's Try, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the Try's call budget and appears in the Try page's history; inspect remaining calls before more work.
+
+Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd check`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd try STORY`.

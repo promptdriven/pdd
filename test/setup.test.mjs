@@ -15,7 +15,7 @@ function fixture(t) {
   const pkg = join(sandbox, 'pkg'), home = join(sandbox, 'home'), project = join(sandbox, 'project');
   for (const dir of [pkg, home, project]) mkdirSync(dir);
   for (const name of ['src', 'bin', 'package.json', 'skills', 'RUNBOOK.md']) cpSync(join(root, name), join(pkg, name), { recursive: true });
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex') };
   delete env.CLAUDE_CONFIG_DIR;
   const run = (...args) => spawnSync(process.execPath, [join(pkg, 'bin/pdd.mjs'), 'setup', ...args], { cwd: project, env, encoding: 'utf8', timeout: 10000 });
   return { pkg, project, run };

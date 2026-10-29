@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f3aba32dd40ac1274c8aefc337ff412202c9d76f10a530a613bc3db24c9c44f1).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -66,8 +66,10 @@ const routes = [
       form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
+  { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
+    forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
-    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. A second run changes nothing.')] },
+    forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), operands: Object.freeze(route.operands.map(Object.freeze)),
