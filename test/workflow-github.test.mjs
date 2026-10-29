@@ -264,6 +264,30 @@ test('real disposable Git checkout enforces topic commits, dirt and root-gitdir 
   assert(calls.every(([file, args]) => file !== 'gh' || args[0] === 'repo'));
 });
 
+test('prepare accepts a repository reached through a folder symlink and refuses an outside body', async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'pdd-github-symlink-repo-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const realCwd = join(parent, 'repo'), cwd = join(parent, 'alias'), outside = join(parent, 'outside');
+  await mkdir(realCwd); await mkdir(outside); await symlink(realCwd, cwd, 'dir');
+  const execute = promisify(execFile), git = (...args) => execute('git', args, { cwd, encoding: 'utf8' });
+  await git('init', '--initial-branch=main');
+  await git('config', 'user.name', 'Disposable test'); await git('config', 'user.email', 'test@example.invalid');
+  await git('commit', '--allow-empty', '-m', 'Base');
+  await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git');
+  await git('update-ref', 'refs/remotes/origin/main', 'HEAD'); await git('switch', '-c', 'topic/symlink');
+  await git('commit', '--allow-empty', '-m', 'Committed topic');
+  const ports = { async execFile(file, args, options) {
+    assert.deepEqual(options, { cwd });
+    if (file === 'git') return execute(file, args, { ...options, encoding: 'utf8' });
+    assert.deepEqual(args, ['repo', 'view', 'Acme/Project', '--json', 'nameWithOwner,defaultBranchRef,url']);
+    return { stdout: JSON.stringify({ nameWithOwner: 'Acme/Project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/Acme/Project' }) };
+  } };
+  const bodyFile = join(cwd, 'pr-body.md');
+  const intent = await prepareWorkflowPr({ cwd, runId: 'symlink-run', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main', bodyFile }, ports);
+  assert.equal(intent.bodyFile, bodyFile); assert.match(await readFile(bodyFile, 'utf8'), /pdd-workflow:symlink-run:code/);
+  await assert.rejects(prepareWorkflowPr({ cwd, runId: 'outside-run', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main', bodyFile: join(outside, 'pr-body.md') }, ports), /workflow_github_body_unsafe/);
+});
+
 
 test('rejected push with numeric zero is unknown and cannot continue to create or resend', async t => {
   const f = await fixture(t), intent = await f.prepare(); f.calls.length = 0;
