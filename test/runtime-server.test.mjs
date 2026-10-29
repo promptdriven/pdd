@@ -275,17 +275,17 @@ test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is c
 
 test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and account for calls', async t => {
   const setup = harbor(t);
-  const answerFor = (rerun, calls = 5) => (entry, f) => {
+  const answerFor = (rerun, calls = 5, includeDiagnosis = true) => (entry, f) => {
     if (entry.method !== 'GET') return f.normal(entry);
     const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false }]);
     const first = answer.result.report.samples[0].steps[0];
     first.step_id = 'first-step'; first.checks = [
       { criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false,
-        diagnosis: { rerun: { runs: 3, failed: 3, stable: true } } },
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 3, failed: 3, stable: true } } } : {}) },
       { criterion_id: 'AC2', target: 'result', path: '/customerName', expected: 'Sam', actual: 'Jo', passed: false,
-        diagnosis: { rerun: { runs: 2, failed: 0, stable: true } } }];
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 2, failed: 0, stable: true } } } : {}) }];
     answer.result.report.samples[0].steps.push({ step_id: 'second-step', checks: [
-      { criterion_id: 'AC3', target: 'result', path: '/totalCents', expected: 899, actual: 901, passed: false } }]);
+      { criterion_id: 'AC3', target: 'result', path: '/totalCents', expected: 899, actual: 901, passed: false }] });
     answer.result.report.rerun = rerun;
     answer.usage.calls = calls;
     return { status: 200, json: answer };
@@ -304,12 +304,13 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
   assert.match(noCalls.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
   assert.doesNotMatch(noCalls.out, /more AI calls/);
 
-  const oneRun = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 1, failed: 1, stable: true }] })), ['place-order']);
+  const oneRun = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 1, failed: 1, stable: true }] }, 5, false)), ['place-order']);
   assert.doesNotMatch(oneRun.out, /Rerun:/);
 
-  const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' })), ['place-order'], { '--json': true });
+  const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order']);
+  assert.match(skippedText.out, /Rerun: skipped \(more-than-3-failed-steps\)\./);
+  const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order'], { '--json': true });
   assert.equal(skipped.json.rows[0].rerun.skipped, 'more-than-3-failed-steps');
-  assert.match(skipped.out, /Rerun: skipped \(more-than-3-failed-steps\)\./);
 });
 
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
