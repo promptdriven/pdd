@@ -56,7 +56,7 @@ for (const failure of ['html', '405', '500', 'timeout', 'unreachable']) for (con
   } });
   assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports)), 0, made.ports.stderr.text);
   assert.equal((made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length, 1);
-  assert.ok(reads >= 2, 'an unrecognized reply must not be cached as clear');
+  assert.equal(reads, 1, 'the completed unclear observation is reused for ten seconds');
   assert.equal(fake.posts.filter(e => e.command === 'lint').length, 1); assert.equal(fake.posts.filter(e => e.command === kind).length, 1);
   if (kind === 'check') assert.equal(JSON.parse(made.ports.stdout.text).rows[0].state, 'passed');
 });
@@ -81,13 +81,17 @@ for (const maintenance of [null, { until: 'bad' }, { until: new Date(0).toISOStr
   const made = make(setup, fake); assert.equal(await check(setup, made.ports), 0); assert.equal(maintenanceCount(made.ports), 0);
 });
 
-test('fail-open-then-maintenance: a failed advisory read cannot conceal the next window', async t => {
+test('fail-open-then-maintenance: a failed advisory observation refreshes at its TTL and discovers the next window', async t => {
   const setup = harbor(t); let made, reads = 0, end;
-  const fake = await fakeRuntime(t, (e, f) => { if (e.command === 'check') assert.ok(made.clock.now >= end); return f.normal(e); });
-  made = make(setup, fake); end = made.clock.now + 7000;
+  const fake = await fakeRuntime(t, (e, f) => { if (reads > 1) assert.ok(made.clock.now >= end); return f.normal(e); });
+  made = make(setup, fake); end = made.clock.now + 17_000;
   fake.capacity = () => ++reads === 1 ? { status: 500, json: {} } : { status: 200, json: { maintenance: made.clock.now < end ? { until: new Date(end).toISOString(), reason: 'new window' } : null } };
   assert.equal(await check(setup, made.ports), 0);
-  assert.equal((made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length, 1); assert.equal(maintenanceCount(made.ports), 1); assert.equal(reads, 3);
+  assert.equal(reads, 1); assert.equal(maintenanceCount(made.ports), 0);
+  assert.equal((made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length, 1);
+  const later = make(setup, fake); later.clock.now = made.clock.now + 10_000; made = later;
+  assert.equal(await check(setup, later.ports), 0);
+  assert.equal(maintenanceCount(later.ports), 1); assert.equal(reads, 3);
 });
 
 for (const kind of ['check', 'lint', 'try']) for (const reason of ['local slot', 'maintenance']) for (const interrupted of [false, true]) test(`wait-end-cause: ${kind} ${reason} ${interrupted ? 'interruption' : 'deadline'} before first lint POST`, async t => {
@@ -116,18 +120,29 @@ function memorySlots(made, origin) {
 
 test('lint-probe-deadline: Try dead-owner GET at 89950 is bounded by 50ms and no second GET or POST follows', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('late lint posted'); }), made = make(setup, fake), start = made.clock.now;
-  const mem = memorySlots(made, fake.origin); const realList = mem.files.listRecords; let moved = false, reads = 0, elapsed;
+  const mem = memorySlots(made, fake.origin); const realList = mem.files.listRecords; let moved = false, reads = 0, transportBound;
   for (const id of ['dead-a', 'dead-b']) mem.records.set(join(mem.directory, `${id}.json`), { id, state: 'active', pid: 99, kind: 'check', started_at: start, request_ids: [id] });
   mem.files.listRecords = () => { if (!moved) { moved = true; made.clock.now = start + 89_950; } return realList(); };
   made.ports.slotFiles = mem.files; made.ports.isAlive = pid => pid !== 99; made.ports.env.PDD_MAX_JOBS = '1';
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (fn, ms, ...args) => {
+    if (ms !== 50) return schedule(fn, ms, ...args);
+    transportBound = ms;
+    const handle = schedule(() => {}, 30_000);
+    queueMicrotask(() => { made.clock.now = start + 90_000; fn(...args); });
+    return handle;
+  });
   made.ports.fetch = async (url, init) => {
     if (new URL(url).pathname.startsWith('/v1/runs/')) {
-      reads++; const at = performance.now();
-      return new Promise((done, reject) => init.signal.addEventListener('abort', () => { elapsed = performance.now() - at; made.clock.now = start + 90_000; reject(Object.assign(Error('aborted'), { name: 'AbortError' })); }, { once: true }));
+      reads++;
+      return new Promise((done, reject) => {
+        const abort = () => reject(Object.assign(Error('aborted'), { name: 'AbortError' }));
+        if (init.signal.aborted) abort(); else init.signal.addEventListener('abort', abort, { once: true });
+      });
     }
     return fetch(url, init);
   };
-  assert.equal(await startTry(setup, made.ports), 5); assert.equal(reads, 1); assert.ok(elapsed < 500, `${elapsed}ms exceeds phase GET bound`);
+  assert.equal(await startTry(setup, made.ports), 5); assert.equal(reads, 1); assert.equal(transportBound, 50);
   assert.equal(made.clock.now, start + 90_000); assert.equal(fake.posts.length, 0); assert.equal([...mem.records.values()].filter(row => row.state).length, 2);
 });
 
@@ -220,50 +235,53 @@ test('command return stops heartbeat timers without freeing an uncertain paid le
   assert.equal(jobs.length, 1); assert.deepEqual(jobs[0].request_ids, [fake.posts.find(e => e.command === 'check').request.requestId]);
 });
 
-for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline: later Try ${interrupted ? 'interrupt' : '50ms deadline'} leaves the shared GET intact`, async t => {
-  const a = harbor(t), b = harbor(t);
-  let probing, completed = false, firstFinished = false, madeA, madeB;
-  const probeStarted = new Promise(done => { probing = done; });
-  const fake = await fakeRuntime(t, async (entry, server) => {
-    assert.equal(entry.method, 'GET', 'no job may POST while the paid lease remains uncertain');
-    probing();
-    await new Promise(done => setTimeout(done, 500));
-    completed = true; madeA.clock.now = madeB.clock.now = base + 90_000;
-    return { status: 200, json: server.check('dead-paid', 'running') };
-  });
-  madeA = make(a, fake); madeB = make(b, fake);
-  // Native timer expiry must advance the supplied clock too, so the observer
-  // can recheck the absolute deadline rather than treating a tick as expiry.
-  madeB.ports.timers = {
-    setInterval: (fn, ms) => setInterval(() => { madeB.clock.now += ms; fn(); }, ms), clearInterval,
-  };
-  const base = madeA.clock.now, mem = memorySlots(madeA, fake.origin), deadPath = join(mem.directory, 'dead.json');
+for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline: later Try ${interrupted ? 'interrupt' : 'deadline'} ends before shared GET release`, { timeout: 60_000 }, async t => {
+  const a = harbor(t), b = harbor(t), fake = await fakeRuntime(t, () => assert.fail('deferred transport handles the only read'));
+  const madeA = make(a, fake), madeB = make(b, fake), base = madeA.clock.now;
+  const mem = memorySlots(madeA, fake.origin), deadPath = join(mem.directory, 'dead.json');
   const paid = { id: 'dead', state: 'active', pid: 99, kind: 'check', started_at: base, request_ids: ['dead-paid'] };
   mem.records.set(deadPath, paid);
+  let release, probeSignal, reads = 0, observerTimer, firstFinished = false, secondFinished = false;
+  const transport = async (url, init) => {
+    assert.equal(new URL(url).pathname, '/v1/runs/dead-paid'); reads++; probeSignal = init.signal;
+    await new Promise(done => release = done);
+    madeA.clock.now = base + 90_000;
+    return Response.json(fake.check('dead-paid', 'running'));
+  };
   for (const made of [madeA, madeB]) {
     made.ports.env.PDD_STATE_DIR = a.state; made.ports.env.PDD_MAX_JOBS = '1';
-    made.ports.slotFiles = mem.files; made.ports.isAlive = pid => pid !== 99;
+    made.ports.slotFiles = mem.files; made.ports.isAlive = pid => pid !== 99; made.ports.fetch = transport;
   }
-  let moved = false, interruptTimer, probeSignal;
-  madeB.ports.slotFiles = { ...mem.files, listRecords: () => {
-    if (!moved) {
-      moved = true; madeB.clock.now = base + (interrupted ? 0 : 89_950);
-      if (interrupted) interruptTimer = setTimeout(() => madeB.clock.interrupt(), 30);
-    }
-    return mem.files.listRecords();
-  } };
-  madeA.ports.fetch = (url, init) => { if (new URL(url).pathname.startsWith('/v1/runs/')) probeSignal = init.signal; return fetch(url, init); };
-  t.after(() => clearTimeout(interruptTimer));
-  const first = startTry(a, madeA.ports).finally(() => { firstFinished = true; });
-  await probeStarted;
-  const at = performance.now(), code = await startTry(b, madeB.ports), elapsed = performance.now() - at;
-  // Check safety independently of timing so an old-code failure identifies the
-  // missing observer bound rather than a changed expected effect.
-  assert.equal(code, 5); assert.equal(fake.gets.length, 1); assert.equal(fake.posts.length, 0);
-  assert.deepEqual(mem.records.get(deadPath), paid); assert.equal(madeB.clock.uuids, 1, 'only the waiting ticket needs an ID');
-  assert.ok(elapsed < 200, `later observer took ${elapsed.toFixed(1)}ms while its shared probe takes 500ms`);
-  assert.equal(completed, false); assert.equal(firstFinished, false); assert.equal(probeSignal.aborted, false);
-  assert.equal(await first, 5); assert.equal(completed, true); assert.equal(fake.gets.length, 1); assert.equal(fake.posts.length, 0);
+  const intervals = new Set();
+  madeB.ports.timers = {
+    setInterval: (fn, ms) => { const timer = { fn, ms }; intervals.add(timer); if (ms !== 5000) observerTimer = timer; return timer; },
+    clearInterval: timer => intervals.delete(timer),
+  };
+  const realList = mem.files.listRecords; let moved = false;
+  madeB.ports.slotFiles = { ...mem.files, listRecords: () => { if (!moved) { moved = true; madeB.clock.now = base + (interrupted ? 0 : 89_950); } return realList(); } };
+  const spin = async predicate => {
+    let ended = false; const guard = setTimeout(() => ended = true, 30_000);
+    try { while (!predicate() && !ended) await new Promise(done => setImmediate(done)); assert.equal(!!predicate(), true, 'observer causal boundary was not reached'); }
+    finally { clearTimeout(guard); }
+  };
+  const first = startTry(a, madeA.ports).finally(() => firstFinished = true);
+  await spin(() => release);
+  const second = startTry(b, madeB.ports).finally(() => secondFinished = true);
+  try {
+    await spin(() => observerTimer);
+    if (interrupted) madeB.clock.interrupt();
+    else { assert.equal(observerTimer.ms, 50); madeB.clock.now = base + 90_000; observerTimer.fn(); }
+    // A missing observer bound must fail a semantic causal assertion. The guard
+    // releases transport only to allow cleanup; it is not a latency benchmark.
+    let guard;
+    const outcome = await Promise.race([second.then(() => 'observer-ended'), new Promise(done => { guard = setTimeout(() => done('still-waiting-for-shared-get'), 30_000); })]);
+    clearTimeout(guard);
+    assert.equal(outcome, 'observer-ended');
+    assert.equal(await second, 5); assert.equal(reads, 1); assert.equal(fake.posts.length, 0);
+    assert.deepEqual(mem.records.get(deadPath), paid); assert.equal(madeB.clock.uuids, 1);
+    assert.equal(firstFinished, false); assert.equal(probeSignal.aborted, false); assert.equal(intervals.size, 0);
+  } finally { madeA.clock.now = madeB.clock.now = base + 90_000; release(); await Promise.all([first, second]); }
+  assert.equal(firstFinished, true); assert.equal(secondFinished, true); assert.equal(reads, 1); assert.equal(fake.posts.length, 0);
   assert.deepEqual([...mem.records.values()].filter(row => row.state), [paid]);
 });
 
