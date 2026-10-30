@@ -222,3 +222,161 @@ test('formal bounded Story laws: occurrence identity, exact assertion LCS, skip 
   }
   t.diagnostic(`formal exhaustive comparisons=${comparisons}; report-bound grid=${boundedReports}; collector cases=${collectorChecks}`);
 });
+
+test('formal revised skip values: complete literals and dynamic expressions stay distinct', async t => {
+  const { analyzeTestChanges } = await inventoryModule();
+  // These classifications come from the approved literal-only rule. No source
+  // parsing in the oracle: each source fragment carries its declared meaning.
+  const values = [
+    { source: 'true', skip: true, todo: true },
+    ...['false', 'condition', 'true && condition', 'true || condition', 'true ? x : y',
+      "'reason' + dynamic", '`reason` + dynamic', '`why ${reason}`', "''", '""', '``']
+      .map(source => ({ source, skip: false, todo: false })),
+    ...["'later'", '"later"', '`later`', "'function failed'", '"function failed"', '`function failed`',
+      "'later => now'", '"later => now"', '`later => now`']
+      .map(source => ({ source, skip: true, todo: false })),
+  ];
+  let comparisons = 0;
+  for (const call of ['test', 'it']) for (const key of ['skip', 'todo']) for (const value of values) {
+    for (const position of ['first', 'last']) {
+      const option = `${key}: ${value.source}`;
+      const options = position === 'first' ? `${option}, timeout: 10` : `timeout: 10, ${option}`;
+      const declaration = `${call}("kept", {${options}}, () => {`;
+      const before = [{ name: 'kept' }];
+      const after = [{ name: 'kept', declaration, skips: value[key] ? [declaration] : [] }];
+      for (const [oldCases, newCases] of [[before, after], [after, after]]) {
+        const report = analyzeTestChanges({ files: [{ oldPath: 'test/formal.js', newPath: 'test/formal.js',
+          before: js(oldCases), after: js(newCases) }] });
+        assert.equal(report.available, true);
+        assert.equal(report.details, expectedReport('test/formal.js', oldCases, newCases), declaration);
+        comparisons++;
+      }
+    }
+  }
+  // A literal in an unrelated body object does not become a declaration option.
+  for (const key of ['skip', 'todo']) {
+    const cases = [{ name: 'kept', body: [`consume({${key}: true});`] }];
+    const report = analyzeTestChanges({ files: [{ oldPath: '', newPath: 'test/formal.js', before: '', after: js(cases) }] });
+    assert.equal(report.details, expectedReport('test/formal.js', [], cases));
+    comparisons++;
+  }
+  t.diagnostic(`formal revised literal comparisons=${comparisons}; values=${values.length}; calls=2; keys=2; option positions=2; transitions=2; unrelated body objects=2`);
+});
+
+test('formal revised suite identities are independent of child test occurrences', async t => {
+  const { analyzeTestChanges } = await inventoryModule();
+  const alphabet = [
+    { name: 'a', skipped: false }, { name: 'a', skipped: true },
+    { name: 'b', skipped: false }, { name: 'b', skipped: true },
+  ];
+  const sequences = words(alphabet, 2);
+  const declaration = suite => `describe${suite.skipped ? '.skip' : ''}(${JSON.stringify(suite.name)}, () => {`;
+  const source = suites => suites.map(suite => `${declaration(suite)}\n  test(${JSON.stringify(suite.name)}, () => {});\n});\n`).join('');
+  let comparisons = 0;
+  for (const before of sequences) for (const after of sequences) {
+    const oldOwners = identify(before), newOwners = identify(after);
+    const skips = newOwners.filter(owner => owner.skipped && !oldOwners.some(previous =>
+      sameIdentity(owner, previous) && previous.skipped));
+    // Each suite has one child named like it. Case identities and suite
+    // identities deliberately collide by name, but remain separate owners.
+    const cases = suites => suites.map(suite => ({ name: suite.name }));
+    const expected = expectedReport('test/suites.js', cases(before), cases(after)).replace('New skips: none.\n',
+      skips.length ? skips.map(owner => `New skips: ${quote('test/suites.js')} suite ${label(owner)} ${quote(declaration(owner))}.\n`).join('') : 'New skips: none.\n');
+    const report = analyzeTestChanges({ files: [{ oldPath: 'test/suites.js', newPath: 'test/suites.js',
+      before: source(before), after: source(after) }] });
+    assert.equal(report.available, true);
+    assert.equal(report.details, expected, JSON.stringify({ before, after }));
+    comparisons++;
+  }
+  t.diagnostic(`formal revised suite comparisons=${comparisons}; all suite words length 0..2 over two names × two skip states`);
+});
+
+test('formal revised quoted option data never becomes a literal true option', async t => {
+  const { analyzeTestChanges } = await inventoryModule();
+  const failures = [];
+  let comparisons = 0;
+  // Only a skip string is a recognized string-valued option. A todo string
+  // or an unrelated reason string cannot supply literal skip/todo properties.
+  for (const call of ['test', 'it']) for (const property of ['todo', 'reason']) {
+    for (const delimiter of ["'", '"', '`']) for (const data of ['skip: true,', 'todo: true,']) {
+      const declaration = `${call}("kept", {${property}: ${delimiter}${data}${delimiter}}, () => {`;
+      const before = [{ name: 'kept' }], after = [{ name: 'kept', declaration }];
+      const report = analyzeTestChanges({ files: [{ oldPath: 'test/formal.js', newPath: 'test/formal.js', before: js(before), after: js(after) }] });
+      const expected = expectedReport('test/formal.js', before, after);
+      if (!report.available || report.details !== expected) failures.push({ declaration, expected, actual: report.details });
+      comparisons++;
+    }
+  }
+  t.diagnostic(`formal revised quoted-data comparisons=${comparisons}; calls=2; properties=2; delimiters=3; marker-like strings=2; mismatches=${failures.length}`);
+  assert.deepEqual(failures, [], 'quoted option data cannot introduce literal option properties');
+});
+
+test('formal revised availability and strict assertion cap preserve healthy evidence', async t => {
+  const { analyzeTestChanges } = await inventoryModule();
+  const path = 'test/healthy.js';
+  const before = [{ name: 'kept', assertions: ['assert.ok(old);'] }, { name: 'gone' }];
+  const after = [{ name: 'kept', assertions: ['assert.ok(new);'], body: ['t.skip("later");'], skips: ['t.skip("later");'] }];
+  const healthy = { oldPath: path, newPath: path, before: js(before), after: js(after) };
+  const categories = ['Tests vs base:', 'Changed assertions in kept tests:', 'New skips:'];
+  const reasons = ['candidate blob exceeds 1 MiB', 'binary candidate blob', 'non-UTF-8 candidate blob'];
+  let partial = 0;
+  // Every subset of three disclosed bad-file categories, in both input orders.
+  // Marked content is intentionally unusable and must never affect the budget.
+  for (let mask = 0; mask < 8; mask++) for (const reversed of [false, true]) {
+    const bad = reasons.flatMap((unavailableReason, i) => mask & (1 << i)
+      ? [{ oldPath: `test/bad${i}.js`, newPath: `test/bad${i}.js`, before: '\0', after: 'x'.repeat(1048577), unavailableReason }]
+      : []);
+    const files = [healthy, ...bad];
+    const healthyLines = expectedReport(path, before, after).trimEnd().split('\n').slice(0, -1);
+    const expected = categories.flatMap(category => [
+      ...bad.map(file => `${category} ${quote(file.newPath)} unavailable (${quote(file.unavailableReason)}).`),
+      ...healthyLines.filter(line => line.startsWith(category)),
+    ]).join('\n') + '\n' + disclaimer;
+    const report = analyzeTestChanges({ files: reversed ? files.reverse() : files });
+    assert.equal(report.available, true);
+    assert.equal(report.reason, '');
+    assert.equal(report.details, expected);
+    partial++;
+  }
+  let caps = 0;
+  // All 25 old/new cardinality pairs from this boundary set. Repeated equal
+  // lines make the exact uncapped delta a count difference, independently of LCS.
+  for (const oldCount of [0, 1, 999, 1000, 1001]) for (const newCount of [0, 1, 999, 1000, 1001]) {
+    const line = 'assert.ok(shared);';
+    const oldCases = [{ name: 'large', assertions: Array(oldCount).fill(line) }, ...before];
+    const newCases = [{ name: 'large', assertions: Array(newCount).fill(line) }, ...after];
+    const capped = oldCount * newCount > 1000000;
+    const largeChanges = capped ? [`Changed assertions in kept tests: ${quote(path)} "large" unavailable ("too many assertion lines to compare").`]
+      : Array(Math.abs(oldCount - newCount)).fill(`Changed assertions in kept tests: ${quote(path)} "large" ${
+        oldCount > newCount ? quote(line) : '(added)'} → ${oldCount > newCount ? '(removed)' : quote(line)}.`);
+    const healthyLines = expectedReport(path, before, after).trimEnd().split('\n');
+    healthyLines[0] = `Tests vs base: ${quote(path)} 3 → 2 tests. Removed: 1 ("gone").`;
+    healthyLines.splice(1, 0, ...largeChanges);
+    const report = analyzeTestChanges({ files: [{ oldPath: path, newPath: path, before: js(oldCases), after: js(newCases) }] });
+    assert.equal(report.available, true);
+    assert.equal(report.details, healthyLines.join('\n') + '\n', `${oldCount} × ${newCount}`);
+    caps++;
+  }
+  let candidateLimits = 0;
+  for (const count of [999, 1000, 1001]) for (const documentation of [0, 1001]) {
+    // Every record has two candidate rename sides, but counts only once.
+    const files = Array.from({ length: count }, (_, i) => ({ oldPath: `test/${i}.js`, newPath: `tests/${i}.js`, before: '', after: '' }));
+    files.push(...Array.from({ length: documentation }, (_, i) => ({ oldPath: '', newPath: `docs/${i}.md`, before: '', after: '\0' })));
+    const report = analyzeTestChanges({ files });
+    assert.equal(report.available, count <= 1000, `${count} candidates + ${documentation} docs`);
+    assert.equal(report.reason, count <= 1000 ? '' : 'inventory limit exceeded');
+    candidateLimits++;
+  }
+  let aggregateLimits = 0;
+  const blob = ' '.repeat(1048576);
+  for (const offset of [-1, 0, 1]) {
+    const files = Array.from({ length: 8 }, (_, i) => ({ oldPath: `test/${i}.js`, newPath: `test/${i}.js`, before: blob, after: blob }));
+    if (offset < 0) files[0].before = blob.slice(1);
+    if (offset > 0) files.push({ oldPath: '', newPath: 'test/extra.js', before: '', after: ' ' });
+    const report = analyzeTestChanges({ files });
+    assert.equal(report.available, offset <= 0, `16 MiB ${offset}`);
+    assert.equal(report.reason, offset <= 0 ? '' : 'inventory limit exceeded');
+    aggregateLimits++;
+  }
+  t.diagnostic(`formal revised partial-file subsets/order=${partial}; assertion-product grid=${caps}; candidate-limit grid=${candidateLimits}; aggregate-byte boundary=${aggregateLimits}`);
+});
