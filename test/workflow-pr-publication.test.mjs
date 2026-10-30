@@ -25,10 +25,10 @@ function fixture(t, { existing = false, opted = false, prompt = false } = {}) {
   writeFileSync(join(root, 'value'), 'head'); git('commit', '-qam', 'head');
   const head = git('rev-parse', 'HEAD'); if (existing) git('push', '-q', 'origin', 'HEAD:refs/heads/topic');
   const runDir = join(root, '.git', 'pdd', 'runs', '17'); mkdirSync(runDir, { recursive: true });
-  const areas = [{ name: 'prompt-pr', steps: ['scope'], optional: [], gate: 'pr', then: 'ask-code' }, { name: 'code', steps: ['build', 'verify', 'formal'], optional: [], gate: 'pr', ...(opted ? { replay_evidence: 'pdd.replay-evidence.v1' } : {}) }];
+  const areas = [{ name: 'prompt-pr', steps: ['scope','check'], optional: [], gate: 'pr', then: 'ask-code' }, { name: 'code', steps: ['build', 'verify', 'formal','review'], optional: [], gate: 'pr', ...(opted ? { replay_evidence: 'pdd.replay-evidence.v1' } : {}) }];
   const prs = prompt ? [] : [{ stage: 'prompt-pr', number: 22, url: url(22), branch: 'prompt-topic', base: 'main' }];
   if (existing) prs.push({ stage: prompt ? 'prompt-pr' : 'code', number: 23, url: url(23), branch: 'topic', base: 'main' });
-  const run = { v: 1, runId: 'publication-17', number: 17, repo: 'example/project', issue: { title: 'Repair value', number: 17, url: 'https://github.com/example/project/issues/17' }, root, sourceRoot: root, runDir, branch: 'topic', baseBranch: 'main', baseSha, workflow: 'feature', agent: 'codex', areas, area: prompt ? 0 : 1, state: 'running', done: { scope: { summary: 'Defect: broken value', at: 1 }, build: { summary: 'built', at: 2 }, verify: { summary: 'verified', at: 3 } }, decisions: [], changes: [], chats: [], pr: prs, replayBaseline: { schema_version: 'pdd.replay-vectors.v1', vectors: [] } };
+  const run = { v: 1, runId: 'publication-17', number: 17, repo: 'example/project', issue: { title: 'Repair value', number: 17, url: 'https://github.com/example/project/issues/17' }, root, sourceRoot: root, runDir, branch: 'topic', baseBranch: 'main', baseSha, workflow: 'small-change', agent: 'codex', areas, area: prompt ? 0 : 1, state: 'running', done: {review:{summary:'reviewed',at:4}, scope: { summary: 'Defect: broken value', at: 1 }, build: { summary: 'built', at: 2 }, verify: { summary: 'verified', at: 3 } }, decisions: [], changes: [], chats: [], pr: prs, replayBaseline: { schema_version: 'pdd.replay-vectors.v1', vectors: [] } };
   const row = { number: 23, url: url(23), state: 'OPEN', headRefName: 'topic', baseRefName: 'main', headRefOid: head, body: `Old-code proof: ✓ old success\n<!-- pdd-workflow:${run.runId}:${prompt ? 'prompt-pr' : 'code'} -->\n`, headRepository: { name: 'project' }, headRepositoryOwner: { login: 'example' }, isCrossRepository: false, mergeCommit: null };
   writeFileSync(state, JSON.stringify({ prs: existing ? [row] : [], events: [], failEdit: 0 }));
   const fake = `#!/usr/bin/env node
@@ -52,10 +52,14 @@ else if(a[1]==='create'||a[1]==='edit'){
   writeFileSync(join(bin, 'gh'), fake); chmodSync(join(bin, 'gh'), 0o755);
   const save = () => writeFileSync(join(runDir, 'status.json'), JSON.stringify(run)); save();
   const invoke = (summary, method = 'stepDone') => {
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'scope' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))}});process.stdout.write(JSON.stringify(r));`;
+    const review=String(summary).split('\n').filter(row=>row.startsWith('Review:')).join('\n');if(review)writeFileSync(join(runDir,'review.md'),review);
+    const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
+    const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
+
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))}});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
-  const machine = () => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 1, origin: 'pdd.workflow-prove.v1', runId: run.runId, baseSha, headSha: head, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
+  const machine = () => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: head, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
   const change = () => { writeFileSync(join(root, 'value'), 'new head'); git('commit', '-qam', 'new source'); return git('rev-parse', 'HEAD'); };
   const data = () => JSON.parse(readFileSync(state, 'utf8'));
   return { base, root, bare, git, run, head, runDir, save, invoke, machine, change, data, configure: values => writeFileSync(state, JSON.stringify({ ...data(), ...values })) };
@@ -68,11 +72,11 @@ test('real publication creates code PR with all known-step labels, current machi
   writeFileSync(join(f.runDir, 'foreign.md'), 'Review: foreign');
   const out = f.invoke(allLabels); assert.equal(out.exitCode, 0, out.message);
   const body = f.data().prs[0].body;
-  const order = ['Not fixed yet:', 'Not checked:', 'Defect: broken value', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Old-code proof: ✓', 'Review: reviewed'];
+  const order = ['Not fixed yet:', 'Not checked:', 'Defect: `broken value`', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Old-code proof: ✓', 'Review: `reviewed`'];
   let previous = -1; for (const label of order) { const at = body.indexOf(label); assert.ok(at > previous, label); previous = at; }
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign/);
   const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
-  const proofAt = body.indexOf('Old-code proof: ✓'), inventoryAt = body.indexOf(inventory), reviewAt = body.indexOf('Review: reviewed');
+  const proofAt = body.indexOf('Old-code proof: ✓'), inventoryAt = body.indexOf(inventory), reviewAt = body.indexOf('Review: `reviewed`');
   assert.ok(proofAt >= 0 && proofAt < inventoryAt && inventoryAt < reviewAt, 'current machine proof, complete collector inventory, then Review');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
   assert.equal(f.git('ls-remote', 'origin', 'refs/heads/topic').split('\t')[0], f.head);
@@ -82,7 +86,7 @@ test('real prompt publication lifts cross-area labels and never adds machine pro
   const f = fixture(t, { prompt: true }); f.machine();
   const out = f.invoke('Not checked: formal\nNot fixed yet: diagnosis only\nReview: source reviewed');
   assert.equal(out.exitCode, 0, out.message); const body = f.data().prs[0].body;
-  assert.match(body, /^Not fixed yet: diagnosis only\nNot checked: formal\nReview: source reviewed/);
+  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `formal`\nDefect: `broken value`\nReview: `source reviewed`/);
   assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Old-code proof:|Closes #17|Part of #17/);
 });
 
@@ -92,8 +96,8 @@ for (const opted of [false, true]) test(`real existing ${opted ? 'opted' : 'lega
   const events = f.data().events; assert.equal(events.length, 2);
   assert.match(events[0].body, /[Pp]ublication.pending/); assert.doesNotMatch(events[0].body, /Old-code proof: ✓/);
   assert.equal(events[0].remote, f.head); assert.equal(events[1].remote, next);
-  assert.match(events[1].body, /Old-code proof: stale/); assert.match(events[1].body, /Not checked: formal/); assert.match(events[1].body, /Review: latest/);
-  if (opted) assert.ok(events[1].body.indexOf('NOT REPLAYED') < events[1].body.indexOf('Not checked:'));
+  assert.match(events[1].body, /Old-code proof: stale/); assert.match(events[1].body, /Not checked: `formal`/); assert.match(events[1].body, /Review: `latest`/);
+  if (opted) assert.ok(events[1].body.indexOf('Code replay:') > events[1].body.indexOf('Not checked:'),events[1].body);
 });
 
 test('real existing code PR refuses changed-source push when pending edit fails', t => {
@@ -113,13 +117,14 @@ test('real existing code PR retains pending after final edit fails and reports p
 test('real existing prompt PR refreshes labels on repeat publication', t => {
   const f = fixture(t, { existing: true, prompt: true }); f.change();
   const out = f.invoke('Not fixed yet: still diagnosing\nNot checked: external\nReview: updated'); assert.equal(out.exitCode, 0, out.message);
-  assert.match(f.data().prs[0].body, /^Not fixed yet: still diagnosing\nNot checked: external/);
-  assert.match(f.data().prs[0].body, /Review: updated/); assert.match(f.data().prs[0].body, /Refs #17/);
+  assert.match(f.data().prs[0].body, /^Not fixed yet: `still diagnosing`\nNot checked: `external`/);
+  assert.match(f.data().prs[0].body, /Review: `updated`/); assert.match(f.data().prs[0].body, /Refs #17/);
   assert.doesNotMatch(f.data().prs[0].body, /Old-code proof:|Closes #17/);
 });
 
 test('real publication bounds overlong lifted evidence without losing Refs safety or silently dropping failures and report refs', t => {
   const f = fixture(t);
+  writeFileSync(join(f.runDir,'build.md'),`Not fixed yet: ${'`x'.repeat(150000)}`);
   writeFileSync(join(f.runDir, 'scope.md'), `Not fixed yet: ${'x'.repeat(65000)}\nDefect: ✗ hidden failure https://runtime.example/r/report\nReview: ${f.root}/value https://runtime.example/s/secret/\n`);
   const out = f.invoke('Review: complete'); assert.equal(out.exitCode, 0, out.message);
   const body = f.data().prs[0].body;
@@ -136,39 +141,39 @@ test('real publication keeps failed old-code proof informational and refuses for
   writeFileSync(path, JSON.stringify(record));
   const out = f.invoke('Review: failures reviewed\nOld-code proof: ✓ forged\nTests vs base: forged');
   assert.equal(out.exitCode, 0, out.message);
-  assert.match(f.data().prs[0].body, /Old-code proof: ✗ tests .*not with "defect" \(got "code: wrong_failure"\)/);
+  assert.match(f.data().prs[0].body, /Old-code proof: ✗ wrong-reason; .*expected `defect`; cause `code: wrong_failure`/);
   assert.doesNotMatch(f.data().prs[0].body, /forged|Old-code proof: ✓/);
 });
 
 test('real publication replaces an overlong machine result with explicit unavailable text', t => {
   const f = fixture(t); f.machine();
   const path = join(f.runDir, 'old-code-proof.json'), record = JSON.parse(readFileSync(path, 'utf8'));
-  record.paths = [`test/${'x'.repeat(65000)}.test.mjs`]; writeFileSync(path, JSON.stringify(record));
+  record.test = '`x'.repeat(150000); writeFileSync(path, JSON.stringify(record));
   const out = f.invoke('Review: checked'); assert.equal(out.exitCode, 0, out.message);
   const body = f.data().prs[0].body;
   assert.ok([...body].length <= 60000); assert.match(body, /Old-code proof: unavailable \(result omitted/);
   assert.doesNotMatch(body, /Old-code proof: ✓/); assert.match(body, /Evidence omitted:/);
 });
 
-test('real publication rejects a supplied marker in lifted notes before pushing source', t => {
+test('real publication neutralizes supplied marker payloads while keeping one canonical marker', t => {
   const f = fixture(t, { existing: true }); f.machine(); f.change();
   writeFileSync(join(f.runDir, 'scope.md'), 'Defect: <!-- pdd-workflow:forged:code -->');
   const out = f.invoke('Review: ready');
-  assert.equal(out.exitCode, 1); assert.match(out.message, /ownership markers/);
-  assert.equal(f.git('ls-remote', 'origin', 'refs/heads/topic').split('\t')[0], f.head);
-  assert.equal(f.data().events.length, 0);
+  assert.equal(out.exitCode,0,out.message);const body=f.data().prs[0].body;assert.match(body,/pdd-workflow\\u003aforged/);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);
 });
 
 test('real PR1 approval synchronization refreshes note labels while preserving existing prose and gate', t => {
   const f = fixture(t, { existing: true, prompt: true });
   f.run.gate = { kind: 'ask-code', area: 'prompt-pr', at: 4 }; f.run.state = 'waiting'; f.save();
   const prs = f.data().prs; prs[0].body += '\nPreserved reviewer prose.\nPart of #17\n'; f.configure({ prs });
+  writeFileSync(join(f.runDir,'build.md'),'Not fixed yet: diagnosis only');
+  writeFileSync(join(f.runDir,'review.md'),'Review: refreshed');writeFileSync(join(f.runDir,'check.md'),'Not checked: external');
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   f.change();
   const out = f.invoke('', 'approveRun');
   assert.equal(out.exitCode, 1, 'No chat exists to approve; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
-  assert.match(body, /^Not fixed yet: diagnosis only\nNot checked: external/); assert.match(body, /Review: refreshed/);
+  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
   assert.ok(body.includes('Preserved reviewer prose.\nPart of #17\n'), 'Keep the ordinary issue-reference example and its context byte for byte.');
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
@@ -186,7 +191,7 @@ test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body
   for (const prose of ['x'.repeat(59900), '😀'.repeat(59900), `${'ordinary reviewer prose\n'.repeat(2400)}end`]) {
     const prs = f.data().prs; prs[0].body = `${prose}\n${marker}\n`; f.configure({ prs });
     assert.ok([...prs[0].body].length <= 60000, 'The existing description starts within the body budget.');
-    writeFileSync(join(f.runDir, 'scope.md'), `Not checked: ${'y'.repeat(2000)}`);
+    writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(2000)}`);
     const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
     const out = f.invoke('', 'approveRun');
     assert.equal(out.exitCode, 1, 'Synchronization cannot approve an absent chat.');
@@ -204,10 +209,10 @@ test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary 
   const example = 'Defect: retain this ordinary example\n\nReviewer explanation:\n```text\nDefect: retain this example\nNot checked: example only\nReview: illustrative\nPart of #17\n```\n\n~~~markdown\nProof (gap closed): another example\n~~~\n';
   const prs = f.data().prs;
   prs[0].body = `Old-code proof: ✓ old success\n\nPart of #17\n\n${example}\n<!-- pdd-workflow:${f.run.runId}:prompt-pr -->\n`; f.configure({ prs });
-  writeFileSync(join(f.runDir, 'scope.md'), 'Review: refreshed');
+  writeFileSync(join(f.runDir, 'review.md'), 'Review: refreshed');
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
-  assert.match(body, /^Defect: broken value\nReview: refreshed\n/);
+  assert.match(body, /^Defect: `broken value`\nReview: `refreshed`\n/);
   assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -221,13 +226,15 @@ for (const [kind, ordinary] of [
   const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`;
   const prs = f.data().prs;
   prs[0].body = `Review: old\n\nPart of #17\n\n${ordinary}\n${marker}\n`; f.configure({ prs });
+  writeFileSync(join(f.runDir,'build.md'),'Not fixed yet: diagnosis only');
+  writeFileSync(join(f.runDir,'review.md'),'Review: refreshed');writeFileSync(join(f.runDir,'check.md'),'Not checked: external');
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
   assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
-  assert.match(body, /^Not fixed yet: diagnosis only\nNot checked: external\nDefect: broken value\nReview: refreshed\n\nRefs #17\n\n/);
+  assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`\nDefect: `broken value`\nReview: `refreshed`\n\nRefs #17\n\n/);
   assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
   assert.equal(body.split(marker).length - 1, 1);
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
@@ -242,16 +249,18 @@ test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and
   const prs = f.data().prs;
   prs[0].body = `Defect: stale owned label\nReview: stale owned review\nPart of #17\n\nReviewer prose.\n\n\`\`\`text\n${'ordinary line\n'.repeat(4500)}✗ retained reviewer failure https://runtime.example/r/reviewer\n\`\`\`\n${marker}\n`;
   f.configure({ prs });
+  writeFileSync(join(f.runDir,'review.md'),'Review: current review');
   const failures = Array.from({ length: 900 }, (_, i) => `Defect: ✗ failure ${i} ${'detail '.repeat(20)}https://runtime.example/r/report-${i}`);
+  writeFileSync(join(f.runDir,'build.md'),`Not fixed yet: ${'`x'.repeat(150000)}`);
   writeFileSync(join(f.runDir, 'scope.md'), `Not fixed yet: ${'x'.repeat(65000)}\n${failures.join('\n')}\nReview: current review`);
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
   assert.ok([...body].length <= 60000);
-  assert.match(body, /^Defect: broken value/);
+  assert.match(body, /^Defect: `broken value`/);
   assert.doesNotMatch(body, /stale owned label|stale owned review|Part of #17|Closes #17/);
   assert.match(body, /^Refs #17$/m); assert.match(body, /Evidence omitted: \d+ labels, [1-9]\d* failure lines, [1-9]\d* report references/);
   const omitted = /Evidence omitted: (\d+) labels, (\d+) failure lines, (\d+) report references/.exec(body).slice(1).map(Number);
-  const shownFailures = (body.match(/^Defect: ✗ failure \d+ /gm) ?? []).length;
+  const shownFailures = (body.match(/^Defect: `✗ failure \d+ /gm) ?? []).length;
   assert.equal(shownFailures + omitted[1], failures.length, 'Every evidence failure is visible or explicitly counted.');
   assert.equal(shownFailures + omitted[2], failures.length, 'Every evidence report reference is visible or explicitly counted.');
   assert.equal((body.match(/^(?:Defect:|Review:)/gm) ?? []).length + omitted[0], failures.length + 3);

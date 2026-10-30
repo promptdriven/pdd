@@ -25,9 +25,9 @@ function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=in
   git('checkout','-qb','prompt');writeFileSync(join(root,'prompt.txt'),'published prompt\n');git('add','.');git('commit','-qm','prompt');const promptSha=git('rev-parse','HEAD');git('push','-q',remote,'prompt');git('update-ref','refs/remotes/origin/prompt',promptSha);
   git('checkout','-qb','topic');
   const commonDir=git('rev-parse','--path-format=absolute','--git-common-dir'),runDir=join(commonDir,'pdd/runs/17'),stateDir=join(directory,'state');
-  const area={name:promptPr?'prompt-pr':'code',steps:['formal'],optional:[],gate:'pr',...(promptPr?{then:'ask-code'}:{}),...(opted?{replay_evidence:'pdd.replay-evidence.v1'}:{})};
-  const areas=workflow==='small-change'?[area]:[{name:'prompt-pr',steps:['check'],optional:[],gate:'pr',then:'ask-code'},area];
-  const run={runId:'inventory-run',workflow,repo:'example/project',number:17,issue:{number:17,title:'Inventory review',url:'https://github.com/example/project/issues/17'},root,sourceRoot:root,branch:'topic',baseBranch:'main',baseSha,commonDir,runDir,state:'running',areas,area:areas.length-1,done:{},chats:[],pr:workflow==='small-change'?[]:[{stage:'prompt-pr',number:22,url:'https://github.com/example/project/pull/22',branch:'prompt',base:'main'}],...(workflow==='small-change'?{}:{prBase:'prompt'})};
+  const area={name:promptPr?'prompt-pr':'code',steps:['reproduce','scope','build','verify','review','formal'],optional:[],gate:'pr',...(promptPr?{then:'ask-code'}:{}),...(opted?{replay_evidence:'pdd.replay-evidence.v1'}:{})};
+  const areas=workflow==='small-change'||promptPr?[area]:[{name:'prompt-pr',steps:['check'],optional:[],gate:'pr',then:'ask-code'},area];
+  const run={runId:'inventory-run',workflow,repo:'example/project',number:17,issue:{number:17,title:'Inventory review',url:'https://github.com/example/project/issues/17'},root,sourceRoot:root,branch:'topic',baseBranch:'main',baseSha,commonDir,runDir,state:'running',areas,area:areas.length-1,done:Object.fromEntries(area.steps.filter(step=>step!=='formal').map(step=>[step,{summary:'completed'}])),chats:[],pr:workflow==='small-change'||promptPr?[]:[{stage:'prompt-pr',number:22,url:'https://github.com/example/project/pull/22',branch:'prompt',base:'main'}],...(workflow==='small-change'?{}:{prBase:'prompt'})};
   const f={root,remote,git,run,baseSha,promptSha,prs:[],events:[],edits:[],failCreate:false,failEdit:false};
   const ports={stateDir,env:{HOME:directory},now:()=>Date.now(),execFile:async(file,args,opts)=>{
     if(file==='git') {
@@ -55,14 +55,20 @@ function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=in
     assert.fail(`Unexpected gh ${args.join(' ')}`);
   }};
   writeRun(run,ports);f.ports=ports;f.record=()=>readRun(runDir);
-  f.done=(summary='formal done')=>stepDone({cwd:root,step:'formal',summary},ports);
+  f.done=(summary='formal done')=>{
+    const rows=summary.split('\n');
+    for(const [step,select] of [['review',r=>r.startsWith('Review:')],['verify',r=>/^(?:Not fixed yet:|Proof \()/.test(r)],[workflow==='bug'?'reproduce':'scope',r=>/^(?:Defect:|Not caught because:)/.test(r)]]){
+      const text=rows.filter(select).join('\n');if(text){const path=join(runDir,step+'.md');const warning=step==='verify'&&existsSync(path)?readFileSync(path,'utf8').split('\n').filter(row=>row.startsWith('✗ ')).join('\n'):'';writeFileSync(path,[warning,text].filter(Boolean).join('\n'));}
+    }
+    return stepDone({cwd:root,step:'formal',summary},ports);
+  };
   f.remoteHead=()=>git('--git-dir',remote,'rev-parse','refs/heads/topic');
   return f;
 }
 function artifact(f){const path=join(f.run.runDir,'test-inventory.json');assert.ok(existsSync(path),'publication saved its inventory artifact');return JSON.parse(readFileSync(path,'utf8'));}
-function missingProofBeforeInventory(body) {
-  assert.equal(body.split('\n')[0], 'Old-code proof: not run.');
-  const proofAt=body.indexOf('Old-code proof: not run.'),inventoryAt=body.indexOf('Tests vs base:'),issueAt=body.search(/\n(?:Closes|Refs) #17\n/);
+function missingProofBeforeInventory(body, proof = 'Old-code proof: not run.') {
+  assert.equal(body.split('\n')[0], proof);
+  const proofAt=body.indexOf(proof),inventoryAt=body.indexOf('Tests vs base:'),issueAt=body.search(/\n(?:Closes|Refs) #17\n/);
   assert.ok(proofAt<inventoryAt && inventoryAt<issueAt,'machine proof precedes complete inventory, then issue prose');
 }
 function proveCurrent(f,report) {
@@ -70,7 +76,7 @@ function proveCurrent(f,report) {
   const prefix=`Test inventory commits: ${f.baseSha.slice(0,7)} → ${head.slice(0,7)}.`;
   if(f.run.areas.at(-1).replay_evidence) {
     assert.ok(f.prs[0].body.includes(prefix));
-    const body=f.prs[0].body;assert.ok(body.indexOf('Code replay')<body.indexOf('Old-code proof:')&&body.indexOf('Old-code proof:')<body.indexOf('Tests vs base:'));
+    const body=f.prs[0].body;assert.ok(body.indexOf('Old-code proof:')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Code replay'));
   } else missingProofBeforeInventory(f.prs[0].body);
   assert.ok(f.prs[0].body.includes(report.text.trimEnd()+'\n'+prefix));
   assert.deepEqual(Object.keys(f.record().testInventory).sort(),['baseSha','headSha','saved','text']);
@@ -151,7 +157,7 @@ test('artifact write failure is disclosed without stopping create or changed-sou
 
 test('replay-enabled updates retain pending-before-push and final-edit failures while including the current inventory',async t=>{
   const f=fixture(t,{workflow:'feature',opted:true});writeFileSync(join(f.root,'test/a.mjs'),changed);
-  assert.equal((await f.done()).exitCode,0);assert.ok(f.prs[0].body.includes('Test inventory commits:'));const replayAt=f.prs[0].body.indexOf('Code replay'),inventoryAt=f.prs[0].body.indexOf('Test inventory commits:');assert.ok(replayAt>=0&&replayAt<inventoryAt);
+  assert.equal((await f.done()).exitCode,0);assert.ok(f.prs[0].body.includes('Test inventory commits:'));const replayAt=f.prs[0].body.indexOf('Code replay'),inventoryAt=f.prs[0].body.indexOf('Test inventory commits:');assert.ok(replayAt>=0&&inventoryAt<replayAt);
   f.events=[];writeFileSync(join(f.root,'test/a.mjs'),`test('last', () => {});\n`);assert.equal((await f.done()).exitCode,0);proveCurrent(f,artifact(f));
   const edits=f.events.map((e,i)=>e.kind==='gh'&&e.args[1]==='edit'?i:-1).filter(i=>i>=0),push=f.events.findIndex(e=>e.kind==='git'&&e.args[0]==='push');assert.ok(edits[0]<push&&push<edits[1]);
   f.failEdit=true;writeFileSync(join(f.root,'test/a.mjs'),`test('held', () => {});\n`);const before=f.remoteHead(),failed=await f.done();assert.equal(failed.exitCode,1);assert.equal(f.remoteHead(),before);assert.match(failed.message,/No source was pushed/);
@@ -201,7 +207,7 @@ test('revision failed base fetch never reuses a stale tracking ref and still ref
   writeFileSync(join(f.root,'test/a.mjs'),`test('current', () => {});\n`);
   const result=await f.done();assert.equal(result.exitCode,0,result.message);
   const report=artifact(f);assert.equal(report.available,false);assert.equal(report.baseSha,'');assert.equal(report.headSha,f.remoteHead());
-  missingProofBeforeInventory(f.prs[0].body);assert.match(f.prs[0].body,/^Tests vs base: unavailable/m);assert.ok(f.prs[0].body.includes('Test inventory commits: unavailable.'));
+  missingProofBeforeInventory(f.prs[0].body,'Old-code proof: unavailable.');assert.match(f.prs[0].body,/^Tests vs base: unavailable/m);assert.ok(f.prs[0].body.includes('Test inventory commits: unavailable.'));
   assert.equal(f.record().baseSha,f.baseSha);assert.deepEqual(Object.keys(f.record().testInventory).sort(),['baseSha','headSha','saved','text']);
 });
 
@@ -313,29 +319,29 @@ test('marker-prefix default subprocess publication preserves one canonical marke
 
 test('combined labels cover both PRs, real machine proof, reserved inventory order, failure preambles and warning-light references',async t=>{
   const hostile='pdd-workflow:kept:code @octocat Closes #17';
-  const f=fixture(t,{promptPr:true,before:initial+`test(${JSON.stringify(hostile)}, () => {});\n`});
-  const summary=['Review: needs follow-up','Defect: wrong value','Not checked: formal (agent limit)','Proof (gap closed): regression added','Old-code proof: forged success','Tests vs base: forged inventory'].join('\n');
-  writeFileSync(join(f.run.runDir,'formal.md'),['Not fixed yet: this helps find the cause','Not checked: formal (agent limit)','Not caught because: missing regression','Proof (defect fixed): value corrected','Review: needs follow-up'].join('\n'));
+  const f=fixture(t,{promptPr:true,workflow:'bug',before:initial+`test(${JSON.stringify(hostile)}, () => {});\n`});
+  const summary=['Review: needs follow-up','Defect: wrong value','Not checked: formal (agent limit)','Not fixed yet: this helps find the cause','Not caught because: missing regression','Proof (defect fixed): value corrected','Proof (gap closed): regression added','Old-code proof: forged success','Tests vs base: forged inventory'].join('\n');
+  writeFileSync(join(f.run.runDir,'verify.md'),['Not fixed yet: this helps find the cause','Not checked: formal (agent limit)','Not caught because: missing regression','Proof (defect fixed): value corrected','Review: needs follow-up'].join('\n'));
   writeFileSync(join(f.run.runDir,'unknown.md'),'Defect: foreign note');mkdirSync(join(f.run.runDir,'archived'));writeFileSync(join(f.run.runDir,'archived','formal.md'),'Review: archived');
   writeFileSync(join(f.root,'test/a.mjs'),changed);const first=await f.done(summary);assert.equal(first.exitCode,0,first.message);
-  const labels=['Not fixed yet: this helps find the cause','Not checked: formal (agent limit)','Defect: wrong value','Not caught because: missing regression','Proof (defect fixed): value corrected','Proof (gap closed): regression added'];
+  const labels=['Not fixed yet: `this helps find the cause`','Not checked: `formal (agent limit)`','Defect: `wrong value`','Not caught because: `missing regression`','Proof (defect fixed): `value corrected`','Proof (gap closed): `regression added`'];
   const assertOrder=(body,ordered)=>{let at=-1;for(const line of ordered){const next=body.indexOf(line);assert.ok(next>at,`ordered evidence: ${line}`);at=next;}};
-  const promptBody=f.prs[0].body;assertOrder(promptBody,[...labels,'Review: needs follow-up']);assert.match(promptBody,/^Refs #17$/m);assert.doesNotMatch(promptBody,/Closes #17|Old-code proof:|Tests vs base:|foreign note|Review: archived/);
-  const run=f.record();run.areas.push({name:'code',steps:['verify','formal'],optional:[],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'});run.area=1;run.done={formal:run.done.formal,verify:{summary:'verified'}};run.state='running';run.branch='code-topic';run.prBase='topic';
+  const promptBody=f.prs[0].body;assertOrder(promptBody,[...labels,'Review: `needs follow-up`']);assert.match(promptBody,/^Refs #17$/m);assert.doesNotMatch(promptBody,/Closes #17|Old-code proof:|Tests vs base:|foreign note|Review: archived/);
+  const run=f.record();run.areas.push({name:'code',steps:['build','verify','review','formal'],optional:[],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'});run.area=1;run.done={...run.done,verify:{summary:'verified'}};run.state='running';run.branch='code-topic';run.prBase='topic';
   f.git('checkout','-qb','code-topic');f.git('update-ref','refs/remotes/origin/topic',f.git('rev-parse','topic'));writeRun(run,f.ports);f.prs=[];
   writeFileSync(join(run.runDir,'verify.md'),'✗ 1 vectors fail\n\n## Results\nActual regression failure.\n');
   writeFileSync(join(f.root,'test/a.mjs'),`test('current', () => assert.ok(true));\n`);f.git('add','.');f.git('commit','-qm','combined code');
   const phase=(exitCode,expectedFound=false)=>({exitCode,signal:'',timedOut:false,outputLimited:false,stdoutTail:[],stderrTail:[],expectedFound,error:'',setupError:'',observedError:''});
-  writeFileSync(join(run.runDir,'old-code-proof.json'),JSON.stringify({v:1,origin:'pdd.workflow-prove.v1',runId:run.runId,baseSha:run.baseSha,headSha:f.git('rev-parse','HEAD'),test:'node --test test/a.mjs',expect:'defect',paths:['test/a.mjs'],base:phase(1,true),head:phase(0),outcome:'proved',setupError:'',cleanupError:''}));
+  writeFileSync(join(run.runDir,'old-code-proof.json'),JSON.stringify({v:2,origin:'pdd.workflow-prove.v2',interruptSignal:'',runId:run.runId,baseSha:run.baseSha,headSha:f.git('rev-parse','HEAD'),test:'node --test test/a.mjs',expect:'defect',paths:['test/a.mjs'],base:phase(1,true),head:phase(0),outcome:'proved',setupError:'',cleanupError:''}));
   const code=await f.done(summary);assert.equal(code.exitCode,0,code.message);const body=f.prs[0].body;
-  assertOrder(body,['Code replay: BLOCKED','✗ 1 vectors fail',...labels,'Old-code proof: ✓ tests "test/a.mjs" fail on the old code with "defect" and pass on the new code.','Tests vs base:','Test inventory commits:','Review: needs follow-up','Refs #17']);
-  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Not checked: formal \(agent limit\)$/gm)??[]).length,1);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
+  assertOrder(body,[...labels,'Old-code proof: ✓ `node --test test/a.mjs`','Tests vs base:','Test inventory commits:','Review: `needs follow-up`','✗ 1 vectors fail','Code replay: BLOCKED','Refs #17']);
+  assert.doesNotMatch(body,/Closes #17\n|forged success|forged inventory|foreign note|Review: archived/);assert.equal((body.match(/^Not checked: `formal \(agent limit\)`$/gm)??[]).length,1);assert.equal((body.match(/pdd-workflow:/g)??[]).length,1);assert.ok(body.includes(span(hostile)));assert.equal(f.git('--git-dir',f.remote,'rev-parse','refs/heads/code-topic'),f.git('rev-parse','HEAD'));
 });
 
 test('combined Not checked alone retains Closes and cannot supply forged machine or inventory evidence',async t=>{
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);
   const result=await f.done('Not checked: formal (agent limit)\nOld-code proof: forged success\nTests vs base: forged inventory\nReview: follow-up');assert.equal(result.exitCode,0,result.message);
-  const body=f.prs[0].body;assert.equal(body.split('\n')[0],'Not checked: formal (agent limit)');assert.match(body,/^Closes #17$/m);assert.doesNotMatch(body,/Refs #17|forged success|forged inventory/);
+  const body=f.prs[0].body;assert.equal(body.split('\n')[0],'Not checked: `formal (agent limit)`');assert.match(body,/^Closes #17$/m);assert.doesNotMatch(body,/Refs #17|forged success|forged inventory/);
   assert.ok(body.indexOf('Not checked:')<body.indexOf('Old-code proof: not run.')&&body.indexOf('Old-code proof: not run.')<body.indexOf('Tests vs base:')&&body.indexOf('Test inventory commits:')<body.indexOf('Review:'));
   assert.equal(artifact(f).headSha,f.remoteHead());
 });
@@ -343,7 +349,7 @@ test('combined Not checked alone retains Closes and cannot supply forged machine
 test('combined unchanged source with changed proof, labels, missing custody or unavailable remote retains mandatory pending safety',async t=>{
   for(const kind of ['labels','proof','custody','remote']){
     const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);assert.equal((await f.done()).exitCode,0);
-    if(kind==='labels')writeFileSync(join(f.run.runDir,'formal.md'),'Not fixed yet: newly discovered gap');
+    if(kind==='labels')writeFileSync(join(f.run.runDir,'verify.md'),'Not fixed yet: newly discovered gap');
     if(kind==='proof')writeFileSync(join(f.run.runDir,'old-code-proof.json'),'{');
     if(kind==='custody'){const run=f.record();delete run.pr[0].publicationBodySha256;writeRun(run,f.ports);}
     if(kind==='remote'){const execute=f.ports.execFile;f.ports.execFile=async(file,args,opts)=>file==='git'&&args[0]==='ls-remote'?{code:1,stderr:'remote identity unavailable'}:execute(file,args,opts);}
