@@ -34,9 +34,9 @@ function machine(t,platform='linux',options={}) {
       if(file==='ps'&&args[0]==='-p') {
         const pid=+args[1];counts[pid]=(counts[pid]??0)+1;
         assert.notEqual(pid,7002,'Exclude foreign UID before identity access');
-        if(pid!==7000&&options.gone&&(options.gone!=='after'||counts[pid]>1))throw Object.assign(Error('gone'),{code:1,stdout:'',stderr:''});
+        if(pid!==7000&&(options.reappear&&counts[pid]===1||options.gone&&(options.gone!=='after'||counts[pid]>1)))throw Object.assign(Error('gone'),{code:1,stdout:'',stderr:''});
         if(pid!==7000&&options.identityError)throw Object.assign(Error('ps permission denied'),{code:1,stdout:'',stderr:'EACCES'});
-        return {stdout:pid!==7000&&options.badIdentity?'malformed':`123 Fri Oct 30 01:00:0${pid!==7000&&options.reuse&&counts[pid]>1?1:0} 2026 S\n`,stderr:''};
+        return {stdout:pid!==7000&&options.badIdentity?'malformed':`${pid!==7000&&options.finalUidChanged&&counts[pid]>=3?456:123} Fri Oct 30 01:00:0${pid!==7000&&options.reuse&&counts[pid]>1?1:0} 2026 ${pid!==7000&&options.badState?'?':pid!==7000&&options.reappearZombie&&counts[pid]===1?'Z':'S'}\n`,stderr:''};
       }
       if(file==='lsof') {
         const stdout=`p7000\nfcwd\nn${root}-sibling\n`+(options.lsof??`p7001\nfcwd\nn${cwd}\n`);
@@ -50,11 +50,11 @@ function machine(t,platform='linux',options={}) {
       const pid=+path.split('/')[2];
       if(path.endsWith('/stat')) {
         counts[pid]=(counts[pid]??0)+1;
-        if(pid!==7000&&options.gone&&(options.gone!=='after'||counts[pid]>1))throw gone();
+        if(pid!==7000&&(options.reappear&&counts[pid]===1||options.gone&&(options.gone!=='after'||counts[pid]>1)))throw gone();
         if(pid!==7000&&options.identityError)throw Object.assign(Error('stat access denied'),{code:'EACCES'});
-        return pid!==7000&&options.badIdentity?'invalid stat':stat(pid,pid!==7000&&options.reuse&&counts[pid]>1?'456':'123',pid!==7000&&options.zombie?'Z':'S');
+        return pid!==7000&&options.badIdentity?'invalid stat':stat(pid,pid!==7000&&options.reuse&&counts[pid]>1?'456':'123',pid!==7000&&(options.zombie||options.reappearZombie&&counts[pid]===1)?'Z':pid!==7000&&options.badState?'?':options.state??'S');
       }
-      if(path.endsWith('/status'))return pid!==7000&&options.badUid?'Uid: unreadable\n':`Uid:\t${pid!==7000&&options.changedUid?999:123}\t123\t123\t123\n`;
+      if(path.endsWith('/status'))return pid!==7000&&options.badUid?'Uid: unreadable\n':`Uid:\t${pid!==7000&&(options.changedUid||options.finalUidChanged&&counts[pid]>=3)?999:123}\t123\t123\t123\n`;
       assert.fail(`Unexpected file ${path}`);
     },
     readlink:path=>{reads.push(path);assert.ok(!path.startsWith('/proc/7002/'));if(!path.startsWith('/proc/7000/')&&options.cwdError)throw Object.assign(Error('cwd permission denied'),{code:options.cwdError});return path.startsWith('/proc/7000/')?root+'-sibling':cwd;},
@@ -71,6 +71,9 @@ for(const platform of ['linux','darwin']) for(const [name,options,expected] of [
   ['hidden caller',{hidden:true},false],['missing ps',{psError:true},false],['new live PID',{laterInventory:'7001 123 node\n7003 123 writer\n'},false],
   ['unknown row UID',{inventory:'7001 unknown node\n'},false],['missing current command',{inventory:'7001 123\n'},false],
   ['foreign absent command',{inventory:'7001 123 node\n7002 456\n'},true],
+  ['new final unknown UID',{laterInventory:'7001 123 node\n7003 unknown service\n'},false],
+  ['absence then reused PID',{reappear:true},false],['zombie then reused PID',{reappearZombie:true},false],
+  ['final native UID changed',{finalUidChanged:true},false],['unknown native state',{badState:true},false],
 ]) test(`D1 production ${platform} ${name}`,async t=>{
   const f=machine(t,platform,options),out=await stopChats(run(options.alias?join(f.base,'alias'):f.root),f.ports);
   assert.equal(out.stopped,expected,JSON.stringify(out));assert.equal(f.closed.length,expected?1:0);
@@ -78,13 +81,13 @@ for(const platform of ['linux','darwin']) for(const [name,options,expected] of [
 });
 for(const [name,options,expected] of [
   ['cwd EACCES',{cwdError:'EACCES'},false],['cwd vanished but identity live',{cwdError:'ENOENT'},false],
-  ['zombie',{zombie:true},true],['UID unreadable',{badUid:true},false],['UID changed',{changedUid:true},false],
+  ['traced outside process',{state:'t'},true],['zombie',{zombie:true},true],['UID unreadable',{badUid:true},false],['UID changed',{changedUid:true},false],
 ]) test(`D1 production linux ${name}`,async t=>{
   const f=machine(t,'linux',options),out=await stopChats(run(f.root),f.ports);assert.equal(out.stopped,expected,JSON.stringify(out));
   if(options.cwdError)assert.match(out.warnings[0],new RegExp(`7001.*node.*${options.cwdError}`));
 });
 for(const [name,options,expected] of [
-  ['clean partial exit1',{lsofCode:1},true],['omitted live cwd',{lsofCode:1,lsof:''},false],
+  ['clean partial exit1',{lsofCode:1},true],['foreign unreadable metadata',{lsof:'p7002\nfcwd\nnunreadable\np7001\nfcwd\nn/outside\n'},true],['omitted live cwd',{lsofCode:1,lsof:''},false],
   ['omitted positively gone',{lsofCode:1,lsof:'',gone:'after'},true],['diagnostic exit1',{lsofCode:1,lsofStderr:'permission denied'},false],
   ['hard error',{lsofCode:2},false],['relative cwd',{lsof:'p7001\nfcwd\nnrelative\n'},false],['incomplete cwd',{lsof:'p7001\nfcwd\n'},false],
   ['unknown field',{lsof:'p7001\nfcwd\nxBAD\n'},false],['duplicate cwd',{lsof:'p7001\nfcwd\nn/outside\np7001\nfcwd\nn/outside\n'},false],

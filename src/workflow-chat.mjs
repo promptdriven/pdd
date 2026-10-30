@@ -262,7 +262,7 @@ async function inspectMachineProcesses({ root }, system = {}) {
   const read = system.readFile ?? (path => readFileSync(path, 'utf8'));
   const link = system.readlink ?? readlinkSync, physical = system.realpath ?? realpathSync;
   const reasons = [], processes = [];
-  let currentUid = null;
+  let currentUid = null, physicalRoot = root;
   const cause = error => `${error.code ?? 'inspection_error'}: ${error.message ?? 'inspection failed'}`;
   const absent = error => ['ENOENT', 'ESRCH'].includes(error.code);
   const uidValid = uid => Number.isSafeInteger(uid) && uid >= 0;
@@ -270,7 +270,7 @@ async function inspectMachineProcesses({ root }, system = {}) {
     currentUid = (system.getuid ?? (() => process.getuid()))();
     if (!uidValid(currentUid)) throw Error('Current user UID is unavailable');
     if (!['linux', 'darwin'].includes(platform)) throw Error(`Unsupported OS ${platform}`);
-    physical(root); // A missing or inaccessible physical worktree cannot prove absence.
+    physicalRoot = physical(root); // A missing or inaccessible physical worktree cannot prove absence.
     const list = async () => {
       const reply = await execute('ps', ['-axo', 'pid=,uid=,comm=', '-ww']);
       if (String(reply.stderr ?? '').trim()) throw Error(`ps: ${reply.stderr}`);
@@ -290,8 +290,8 @@ async function inspectMachineProcesses({ root }, system = {}) {
         if (platform === 'linux') {
           const stat = read(`/proc/${pid}/stat`), match = /^(\d+) \(.*\) ([\s\S]*)$/.exec(stat.trim());
           const fields = match?.[2].split(/\s+/);
-          if (+match?.[1] !== pid || fields?.length < 20 || !/^[A-Z]$/.test(fields[0]) || !/^\d+$/.test(fields[19])) throw Error('Malformed /proc process identity');
-          if (['Z', 'X'].includes(fields[0])) return null;
+          if (+match?.[1] !== pid || fields?.length < 20 || !/^[RSDZTtXxKWPI]$/.test(fields[0]) || !/^\d+$/.test(fields[19])) throw Error('Malformed /proc process identity');
+          if (['Z', 'X', 'x'].includes(fields[0])) return null;
           const uid = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m.exec(read(`/proc/${pid}/status`));
           if (!uid || !uidValid(+uid[1])) throw Error('Unreadable process UID');
           return { birth: fields[19], uid: +uid[1] };
@@ -299,7 +299,7 @@ async function inspectMachineProcesses({ root }, system = {}) {
         const { stdout, stderr } = await execute('ps', ['-p', String(pid), '-o', 'uid=,lstart=,stat=']);
         if (String(stderr ?? '').trim()) throw Error(`ps identity: ${stderr}`);
         const match = /^\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\S+)\s*$/.exec(stdout);
-        if (!match || !uidValid(+match[1])) throw Error('Malformed native process birth/UID');
+        if (!match || !uidValid(+match[1]) || !/^[IRUSTZX]/.test(match[3])) throw Error('Malformed native process birth/UID/state');
         return /^[ZX]/.test(match[3]) ? null : { uid: +match[1], birth: match[2].replace(/\s+/g, ' ') };
       } catch (error) {
         if (platform === 'linux' && absent(error) || platform === 'darwin' && error.code === 1 && !String(error.stdout ?? '').trim() && !String(error.stderr ?? '').trim()) return null;
@@ -314,10 +314,10 @@ async function inspectMachineProcesses({ root }, system = {}) {
       if (uidValid(row.uid) && row.uid !== currentUid) continue;
       const item = { ...row, birth: null, cwd: null }; processes.push(item);
       if (!uidValid(row.uid)) { reasons.push(`PID ${row.pid} ${row.command ?? ''}: ps process UID unavailable`); continue; }
-      if (!row.command) reasons.push(`PID ${row.pid}: ps process command unavailable`);
       try {
         const before = await identity(row.pid);
         if (!before) { processes.pop(); continue; }
+        if (!row.command) reasons.push(`PID ${row.pid}: ps process command unavailable`);
         if (before.uid !== row.uid) throw Error('Process UID changed during inspection');
         item.birth = before.birth; pending.set(row.pid, { item, before });
       } catch (error) { reasons.push(`PID ${row.pid} ${row.command}: ${cause(error)}`); }
@@ -335,18 +335,20 @@ async function inspectMachineProcesses({ root }, system = {}) {
           stdout = error.stdout;
         }
         if (typeof stdout !== 'string' || stdout && !stdout.endsWith('\n')) throw Error('Incomplete lsof cwd output');
-        let pid = null, field = false;
+        let pid = null, field = false, foreign = false;
         for (const line of stdout.split('\n').filter(Boolean)) {
           if (/^p[1-9][0-9]*$/.test(line)) {
-            if (pid !== null && !directories.has(pid)) throw Error('Incomplete lsof cwd record');
+            if (pid !== null && !foreign && !directories.has(pid)) throw Error('Incomplete lsof cwd record');
             pid = +line.slice(1); field = false;
             if (!Number.isSafeInteger(pid) || directories.has(pid)) throw Error('Duplicate or invalid lsof PID');
             if (!first.has(pid)) throw Error(`New PID ${pid} appeared in lsof inventory`);
-          } else if (line === 'fcwd' && pid !== null && !field) field = true;
+            foreign = uidValid(first.get(pid).uid) && first.get(pid).uid !== currentUid;
+          } else if (foreign) continue;
+          else if (line === 'fcwd' && pid !== null && !field) field = true;
           else if (line.startsWith('n') && field && !directories.has(pid) && isAbsolute(line.slice(1))) directories.set(pid, line.slice(1));
           else throw Error('Malformed lsof cwd output');
         }
-        if (pid !== null && !directories.has(pid)) throw Error('Incomplete lsof cwd record');
+        if (pid !== null && !foreign && !directories.has(pid)) throw Error('Incomplete lsof cwd record');
       } catch (error) { reasons.push(cause(error)); }
     }
     for (const { item, before } of pending.values()) {
@@ -365,19 +367,28 @@ async function inspectMachineProcesses({ root }, system = {}) {
     }
     const last = await list();
     if (last.get(callerPid)?.uid !== currentUid) reasons.push('Native process inventory lost the calling process or its UID');
-    for (const row of last.values()) if (row.uid === currentUid) {
-      const earlier = first.get(row.pid);
+    for (const row of last.values()) {
+      const earlier = first.get(row.pid), item = processes.find(item => item.pid === row.pid);
+      if (!uidValid(row.uid)) {
+        reasons.push(`PID ${row.pid} ${row.command ?? ''}: final process UID unavailable`);
+        if (!item) processes.push({ ...row, birth: null, cwd: null });
+        continue;
+      }
+      if (row.uid !== currentUid) {
+        if (earlier?.uid === currentUid) reasons.push(`PID ${row.pid}: process UID changed during inspection`);
+        continue; // Positively foreign: no further metadata inspection.
+      }
       const finalIdentity = await identity(row.pid);
-      if (!finalIdentity) continue;
-      const item = processes.find(item => item.pid === row.pid);
-      if (!earlier || earlier.uid !== row.uid || earlier.command !== row.command || item && finalIdentity.birth !== item.birth) {
-        reasons.push(`PID ${row.pid} ${row.command}: process inventory or birth changed during inspection`);
+      if (!finalIdentity) { if (item) processes.splice(processes.indexOf(item), 1); continue; }
+      if (!earlier || earlier.uid !== row.uid || earlier.command !== row.command || !item
+        || finalIdentity.uid !== currentUid || finalIdentity.birth !== item.birth) {
+        reasons.push(`PID ${row.pid} ${row.command ?? ''}: process inventory, UID or birth changed during inspection`);
         if (!item) processes.push({ ...row, birth: null, cwd: null });
       }
     }
     if ((system.getuid ?? (() => process.getuid()))() !== currentUid) reasons.push('Current user UID changed during inspection');
   } catch (error) { reasons.push(cause(error)); }
-  return { currentUid, complete: reasons.length === 0, processes, reason: reasons.join('; ') };
+  return { root: physicalRoot, observation: { currentUid, complete: reasons.length === 0, processes, reason: reasons.join('; ') } };
 }
 
 function requireMachineQuiescence(run, observed) {
@@ -386,8 +397,7 @@ function requireMachineQuiescence(run, observed) {
   if (!validUid(observed?.currentUid)) reasons.push('Current user UID is unknown');
   if (observed?.complete !== true || observed?.reason) reasons.push(observed?.reason || 'Incomplete native process inventory');
   if (!Array.isArray(observed?.processes)) reasons.push('Malformed native process inventory');
-  let root = run.root;
-  try { root = realpathSync(root); } catch { /* Injected physical observations may use synthetic paths. */ }
+  const root = run.root;
   const seen = new Set();
   for (const item of Array.isArray(observed?.processes) ? observed.processes : []) {
     if (validUid(observed.currentUid) && validUid(item?.uid) && item.uid !== observed.currentUid) continue;
@@ -400,10 +410,8 @@ function requireMachineQuiescence(run, observed) {
     if (!command || typeof item?.birth !== 'string' || !item.birth.trim()) reasons.push(`${label}: command or birth identity unavailable`);
     if (typeof item?.cwd !== 'string' || !isAbsolute(item.cwd)) unknown.push(`${label}: cwd is unreadable`);
     else {
-      let cwd = item.cwd;
-      try { cwd = realpathSync(cwd); } catch { /* Synthetic physical observation. */ }
-      const path = relative(root, cwd);
-      if (uidKnown && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)) blockers.push(`${label}${pid !== process.pid && command && typeof item.birth === 'string' && item.birth.trim() && observed.complete === true && !observed.reason && !/^(?:.*\/)?(?:ba|z|fi|da|k)?sh(?:\s|$)|\bpdd(?:\.mjs)?(?:\s|$)/.test(command) ? `; after rechecking its command and identity, use kill -TERM ${pid} if appropriate` : ''}`);
+      const path = relative(root, item.cwd);
+      if (uidKnown && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)) blockers.push(`${label}${pid !== process.pid && command && typeof item.birth === 'string' && item.birth.trim() && observed.complete === true && !observed.reason && observed.processes.filter(row => row?.pid === pid).length === 1 && !/^(?:.*\/)?(?:ba|z|fi|da|k)?sh(?:\s|$)|\bpdd(?:\.mjs)?(?:\s|$)/.test(command) ? `; after rechecking its command and identity, use kill -TERM ${pid} if appropriate` : ''}`);
     }
   }
   if (blockers.length || unknown.length || reasons.length) {
@@ -451,10 +459,16 @@ export async function stopChats(run, ports = {}) {
   };
   try {
     const fallback = async unavailable => {
-      let observed;
-      try { observed = await (ports.inspectMachineProcesses ?? (input => inspectMachineProcesses(input, ports.machineSystem)))({ root: run.root }); }
+      let observed, proofRun = run;
+      try {
+        if (ports.inspectMachineProcesses) observed = await ports.inspectMachineProcesses({ root: run.root });
+        else {
+          const native = await inspectMachineProcesses({ root: run.root }, ports.machineSystem);
+          observed = native.observation; proofRun = { ...run, root: native.root };
+        }
+      }
       catch (error) { observed = { currentUid: null, complete: false, processes: [], reason: `${error.code ?? 'inspection_error'}: ${error.message}` }; }
-      try { requireMachineQuiescence(run, observed); }
+      try { requireMachineQuiescence(proofRun, observed); }
       catch (error) { if (unavailable) error.message = `Herdr ${unavailable.code} (${unavailable.message}). ${error.message}`; throw error; }
       return finishStopped();
     };
