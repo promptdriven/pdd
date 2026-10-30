@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0af99a20ba2d89157e000d0b88b3174d41b03a88fccc13abd6586ee79c21c26b).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-p
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
+import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -515,22 +516,50 @@ function verifyFit(text, room, env) {
   return [...kept, ...(listed.length ? ['', 'Lines that report a failure, from the part not shown:', '', '```text', ...listed, '```'] : []), ...(linked.length ? ['', 'Report references from the part not shown:', '', ...linked] : []), '', note(what)].join('\n');
 }
 
-function prBody(run, area, env, drafts = [], tests = true) {
+const withoutForgedMachineLines = text => String(text ?? '').split('\n').filter(line => !/^(?:Old-code proof:|Tests vs base:)/.test(line)).join('\n');
+async function publicationEvidence(run, area, p) {
+  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, number: run.number,
+    steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
+  return preparePrEvidence({ run: saved, isCode: prLabel(run, area) !== 'PR 1' }, {
+    currentHead: async ({ root }) => {
+      try { return { headSha: await git(p, root, 'rev-parse', '--verify', 'HEAD^{commit}'), error: '' }; }
+      catch { return { headSha: '', error: 'Current Git head unavailable.' }; }
+    }
+  });
+}
+function evidenceFit(lines, room, env) {
+  if (characters(lines.join('\n')) <= room) return lines;
+  const kept = [], omitted = [];
+  let machineRoom = lines.some(line => line.startsWith('Old-code proof:')) ? 100 : 0;
+  let left = Math.max(0, room - 300 - machineRoom);
+  for (const line of lines) {
+    if (line.startsWith('Old-code proof:')) { left += machineRoom; machineRoom = 0; }
+    if (characters(line) + 1 <= left) { kept.push(line); left -= characters(line) + 1; }
+    else {
+      omitted.push(line);
+      const unavailable = 'Old-code proof: unavailable (result omitted; exceeds description budget).';
+      if (line.startsWith('Old-code proof:') && characters(unavailable) + 1 <= left) { kept.push(unavailable); left -= characters(unavailable) + 1; }
+    }
+  }
+  kept.push(`Evidence omitted: ${omitted.length} labels, ${omitted.filter(reportsFailure).length} failure lines, ${omitted.flatMap(line => reportLinks(line, env)).length} report references. The full evidence remains in the run folder.`);
+  return kept;
+}
+function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const index = run.areas.indexOf(area), from = run.areas.slice(0, index).map((item, at) => item.gate === 'pr' ? at + 1 : 0).reduce((a, b) => Math.max(a, b), 0);
   const steps = run.areas.slice(from, index + 1).flatMap(item => item.steps).filter(step => run.done[step]);
-  const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(run.done[step].summary), run)]));
+  const raw = Object.fromEntries(steps.map(step => [step, hideLocalPaths(redactTry(withoutForgedMachineLines(run.done[step].summary)), run)]));
   const summaries = Object.fromEntries(steps.map(step => [step, oneLine(raw[step])]));
   const lines = steps.map(step => `- **${step}**: ${shortLine(summaries[step]) || 'done'}`);
   // Only a PR that covers a verify step carries verify.md (PR 1 never does).
   let verify = null;
   if (steps.includes('verify')) {
-    try { verify = redactTry(readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim()); } catch { verify = '_verify.md was not written in the run folder._'; }
+    try { verify = redactTry(withoutForgedMachineLines(readFileSync(join(run.runDir, 'verify.md'), 'utf8').trim())); } catch { verify = '_verify.md was not written in the run folder._'; }
   }
   const label = prLabel(run, area), ask = askArea(run), pr1 = ask && prOf(run, ask.name);
-  const head = label === 'PR 1' ? [`Part of #${run.number}`, '', `PR 1 of this run: ${tests ? 'the prompt, Story and test cases' : 'the prompt and the Story'}. The code comes in PR 2 only when the person asks for it.`]
-    : label === 'PR 2' ? [`Closes #${run.number}`, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
+  const head = label === 'PR 1' ? [evidence.issueReference, '', `PR 1 of this run: ${tests ? 'the prompt, Story and test cases' : 'the prompt and the Story'}. The code comes in PR 2 only when the person asks for it.`]
+    : label === 'PR 2' ? [evidence.issueReference, '', `PR 2 of this run: the code. It builds on PR 1: ${pr1?.url}.`,
       ...(run.prBase && run.prBase !== run.baseBranch ? [`It is stacked on PR 1's branch \`${run.prBase}\`: merge PR 1 first.`] : [])]
-    : [`Closes #${run.number}`];
+    : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
   // The Runtime check line and its report link go on top (#18).
@@ -546,11 +575,15 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
-  const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
-  const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
-    ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
+  const prefix = [...replay, ...failing];
+  const top = [...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
+  const preparedLines = evidence.lines.map(line => hideLocalPaths(redactTry(line), run));
+  const body = (text, lifted) => hideLocalPaths([...prefix, ...lifted, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+    ...(!noted && hasReportLink([...lines, ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
-  return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body('')), env));
+  const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
+  return verify === null ? body(null, lifted) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - 200 - characters(body('', lifted)), env), lifted);
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
@@ -564,9 +597,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
   const opted = area.replay_evidence === REPLAY_POLICY;
+  let prepared = await publicationEvidence(run, area, p);
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
-  const markedReplayBody = evidence => {
-    const body=prBody({...run,replayEvidence:evidence},area,p.env);
+  const bodyBase = run.prBase ?? run.baseBranch;
+  const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
+  const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
+  const markedReplayBody = (replay, pending = false) => {
+    const evidence = pending && label !== 'PR 1' ? { ...prepared, lines: prepared.lines.map(line => line.startsWith('Old-code proof:') ? 'Old-code proof: publication-pending (source is being published).' : line) } : prepared;
+    const body=prBody({...run,replayEvidence:replay},area,p.env,bodyDrafts,bodyTests,evidence);
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
     return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
   };
@@ -578,8 +616,10 @@ async function publishAreaPr(run, area, p, lines, retry) {
     return null;
   };
   if (existing) {
-    if (opted) {
-      const pending=markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'});
+    if (opted || label !== 'PR 1') {
+      let pending;
+      try { pending=markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'},true); }
+      catch (error) { return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
@@ -588,15 +628,21 @@ async function publishAreaPr(run, area, p, lines, retry) {
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
-    if (opted) {const failed=await editReplay(markedReplayBody(run.replayEvidence),true);if(failed)return failed;}
+    prepared = await publicationEvidence(run, area, p);
+    let finalBody;
+    try { finalBody=markedReplayBody(run.replayEvidence); }
+    catch (error) { return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
+    const failed=await editReplay(finalBody,true);if(failed)return failed;
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
-  const base = run.prBase ?? run.baseBranch;
+  const base = bodyBase;
   // PR 1 says "tests" only when it has a test file (0.1.6 tester: a browser-only Story had none).
-  const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
-  const body = prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests);
+  const tests = bodyTests;
+  let body;
+  try { body = prBody(run, area, p.env, bodyDrafts, tests, prepared); }
+  catch (error) { return fail([...lines, `${oneLine(error.message)} No source was pushed. ${retry}.`].join('\n')); }
   let intent;
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
@@ -715,8 +761,8 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
-        ? 'Gate: show the person the Runtime check line of each Story (one per Story, ✓ or ✗) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Runtime check line of each Story (one per Story, ✓ or ✗) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
+        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
@@ -788,7 +834,10 @@ async function syncPr1(run, p) {
   if (behind && replayEnabled(run)) return {failed:`The prompt branch is behind its published head. Update the worktree from origin/${run.branch}, then run pdd workflow approve ${run.number} again.`};
   if (!ahead && !behind) await refreshReplayBaseline(run,p);
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
-  if (!ahead || behind) return { drafts: approved.length ? await pr1Drafts(run, p) : before, lines: [] };
+  if (!ahead || behind) {
+    const drafts = approved.length ? await pr1Drafts(run, p) : before;
+    return { drafts, lines: await draftDescription(run, pr1, drafts, p) };
+  }
   try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   await refreshReplayBaseline(run,p);
@@ -800,10 +849,20 @@ async function syncPr1(run, p) {
 async function draftDescription(run, pr1, drafts, p) {
   try {
     const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
-    const old = String(body).split('\n').find(line => line.startsWith('Draft prompts: '));
-    if (!old || old === (drafts.length ? draftLine(drafts) : null)) return [];
-    const nextBody = drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
-    await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
+    if (typeof body !== 'string') throw Error('PR 1 description unavailable.');
+    const old = body.split('\n').find(line => line.startsWith('Draft prompts: '));
+    const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
+    const area = askArea(run), evidence = await publicationEvidence(run, area, p), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
+    if (evidence.lines.some(line => line.includes('pdd-workflow:')) || String(draftBody).replace(marker, '').includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
+    const remainder = String(draftBody).replace(marker, '').split('\n')
+      .filter(line => !/^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:)/.test(line))
+      .map(line => new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`).test(line) ? evidence.issueReference : line).join('\n').trim();
+    const safeRemainder = hideLocalPaths(redactTry(remainder), run);
+    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, BODY_BUDGET - 200 - characters(safeRemainder)), p.env);
+    const nextBody = [...lifted, ...(lifted.length ? [''] : []), safeRemainder, '', marker, ''].join('\n');
+    if (nextBody === body) return [];
+    const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
+    if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) { return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
 }
