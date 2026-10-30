@@ -37,7 +37,7 @@ test('REVIEW-PROVE-SETUP: successful setup-looking head output is allowed; 127 d
 });
 for(const signal of ['SIGINT','SIGTERM','SIGHUP']) test(`REVIEW-PROVE-INTERRUPT-${signal}: actual parent signal kills descendants and removes both snapshots`, {timeout:20000},async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');
- const childScript=`const grandchild=require("child_process").spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:"ignore"});process.on("SIGTERM",()=>{});require("fs").writeFileSync(${JSON.stringify(pidFile)},JSON.stringify([process.pid,grandchild.pid]));setInterval(()=>{},1000)`;
+ const childScript=`const grandchild=require("child_process").spawn(process.execPath,["-e",'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'],{stdio:"ignore"});process.on("SIGTERM",()=>{});const fs=require("fs"),pidFile=${JSON.stringify(pidFile)},pending=pidFile+"."+process.pid+".tmp";fs.writeFileSync(pending,JSON.stringify([process.pid,grandchild.pid]));fs.renameSync(pending,pidFile);setInterval(()=>{},1000)`;
  const command=`node -e '${childScript.replaceAll("'", "'\\''")}'`;
  const script=`import {proveRun} from ${JSON.stringify(modulePath)};const r=await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});console.log(JSON.stringify(r));process.exitCode=r.exitCode;`;
  const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);const ended=new Promise(r=>child.on('close',(code,signal)=>r({code,signal})));
