@@ -1,0 +1,74 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-interruption-recovery.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "If I stop a check after its request is recorded but before it is sent, I see \"Stopped before sending.\" for that attempt; saved request recovery still prevents another send and keeps uncertain usage unknown until a matching result is available."
+    },
+    {
+      "id": "AC2",
+      "text": "Two overlapping retries of the same saved batch send exactly one new check, keep its result and four AI calls, and refuse the competing command even when local bookkeeping creates extra IDs."
+    },
+    {
+      "id": "AC3",
+      "text": "A confirmed busy check can try admission more than three times while my wait remains; a deadline or interruption ends waiting, and a lost answer or fresh refusal cannot reuse earlier busy/retry advice."
+    }
+  ],
+  "cases": [
+    {
+      "id": "fresh-interruption-with-claim-adoption",
+      "criterion_id": "AC1",
+      "given": "A normal Check passes lint; synchronize interruption after its permanent claim and slot request registration, before invoking the current check POST. An earlier unrelated uncertain paid reservation remains present. Exercise claim adoption during interrupted result projection.",
+      "required_observation": "The current invocation shows Stopped before sending. and exits 3 with valid JSON when requested; no check POST begins after interruption. Adopt and retain the same recorded request identity and the authoritative unknown accounting, with busy/can_retry false. Release the definitely unsent reservation while preserving the earlier uncertain reservation and its exact IDs. The note never claims that earlier work was unsent."
+    },
+    {
+      "id": "older-ambiguous-save",
+      "criterion_id": "AC1",
+      "given": "An older saved row has a local unsent phase, zero-call label and Stopped before sending. note, but a permanent dispatch claim recovers a check ID. Its matching receipt is missing, unreadable or wrong-ID, separately.",
+      "required_observation": "Adopt the claimed ID, clear stale local advice and safe-retry flags, read only that ID and never POST. No verified terminal receipt leaves execution/accounting unknown and exit 3. Saved wording or phase cannot supply proof that the request was unsent."
+    },
+    {
+      "id": "later-verified-receipt",
+      "criterion_id": "AC1",
+      "given": "A saved interrupted/uncertain attempt with its original claim and ID later has a verified same-ID terminal check receipt: 17/17 checks, four passed criteria, four AI calls. Read the batch, then explicitly retry it.",
+      "required_observation": "Both commands project the verified receipt, passed result and four AI calls, exit 0 and preserve the original ID/receipt without a new check POST. The current result supersedes the interruption note; neither stale uncertainty nor a zero-call label overrides the receipt."
+    },
+    {
+      "id": "same-process-retries-with-bookkeeping",
+      "criterion_id": "AC2",
+      "given": "One saved eligible held check with identical source and passed lint; two overlapping retries in the same process. Hold the owner's actual check POST while the contender runs. Local ticket/lease/claim bookkeeping uses extra injected UUIDs. The matching successful receipt records four AI calls.",
+      "required_observation": "Exactly one actual new check POST and one corresponding paid request identity; the contender exits 3 with read-after-owner advice, allocates no IDs and performs no GET/POST/save. The owner exits 0; saved IDs match the actual POST, receipt and summary retain four calls, and a later batch read retains them without a new POST. Do not require any exact total UUID allocation count."
+    },
+    {
+      "id": "more-than-three-busy-attempts",
+      "criterion_id": "AC3",
+      "given": "Four successive same-ID-per-attempt terminal check capacity refusals each prove dispatch not_started, zero calls, no evaluated checks and complete accounting; Retry-After is one second and the caller deadline leaves room. The next fresh attempt returns a matching passed receipt.",
+      "required_observation": "Admission continues beyond three attempts and reaches the passed receipt within the deadline, honoring backoff and preserving every earlier ID/raw receipt. Only confirmed unstarted attempts get fresh IDs; final accounting comes from the matching receipt, not from attempt count."
+    },
+    {
+      "id": "busy-caller-deadline",
+      "criterion_id": "AC3",
+      "given": "Every capacity attempt has authoritative unstarted/zero-call evidence and one-second backoff; advance the fake clock through more than three attempts to the finite caller deadline.",
+      "required_observation": "Stop at the caller deadline with busy/not-run, exit 5, zero check calls and plain busy/no-checks-ran advice. Keep all IDs/receipts and send/allocate nothing afterward. Assert more than three attempts and bounded termination, never an exact final count."
+    },
+    {
+      "id": "busy-interruption",
+      "criterion_id": "AC3",
+      "given": "After more than three confirmed unstarted capacity attempts, synchronize interruption during the next busy backoff before the caller deadline.",
+      "required_observation": "Stop promptly, send/allocate nothing further, retain all IDs/receipts and existing Check interruption exit 3. Say Stopped. with what was submitted and confirmed, not a wait-ended message or Stopped before sending. for the already submitted capacity attempts."
+    },
+    {
+      "id": "busy-then-lost",
+      "criterion_id": "AC3",
+      "given": "The first check attempt has authoritative zero-call unstarted capacity evidence and stale advice STALE RETRY. The next authorized POST loses its reply; same-ID reads return 410 expired.",
+      "required_observation": "Exactly two check POSTs, no replay of the uncertain second attempt, exit 3 and unknown usage for that attempt. Keep both IDs and the first receipt; clear stale busy/can_retry, why and next_step advice. A later batch read says the result expired, retains same-ID recovery and never offers the old safe retry advice."
+    },
+    {
+      "id": "busy-then-fresh-refusal",
+      "criterion_id": "AC3",
+      "given": "The first attempt has authoritative zero-call unstarted capacity evidence and STALE RETRY advice. The next POST returns 422 source-too-large with the canonical cause test and fresh reason/fix/hint containing a synthetic credential and private server paths.",
+      "required_observation": "Exactly two check POSTs, final refusal exit 4 and no automatic replay. Preserve prior IDs/receipts and fresh refusal diagnostics/accounting; clear stale busy/can_retry and earlier advice. JSON retains the sanitized reason/fix/hint and cause test. Refusal text follows the existing runtime-output contract: retain the fresh reason/fix/hint with secrets and private paths redacted; it need not print arbitrary cause strings. Later reads preserve the final refusal without GET or POST for it."
+    }
+  ]
+}

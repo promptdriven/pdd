@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 574d5a377a4aec6b22016817e5ebd60cb7b18290a7704934228d0da6c3caee40).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 206b7af5baa13465400ab2267be74426e80bec990d9c2d20a7ab00198299451a).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -717,6 +717,7 @@ function noVerdictAdvice(answer, view) {
 }
 
 function applyAnswer(row, answer, context) {
+  context.unsentInterruptions?.delete(row);
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
   const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
@@ -794,7 +795,9 @@ function adoptClaims(context, row) {
     if (claim.reservation && !row.admitting) row.reservation = claim.reservation;
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
-      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null, next_step: null, busy: false, can_retry: false });
+      const unsent = context.unsentInterruptions?.get(row);
+      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true,
+        note: unsent?.id === claim.id ? unsent.note : null, why: null, next_step: null, busy: false, can_retry: false });
     }
   }
 }
@@ -889,7 +892,12 @@ async function sendCheckAttempt(context, row) {
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
-  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+  if (verdict.kind === 'not_sent') {
+    const note = { code: null, message: 'Stopped before sending.' };
+    // Live knowledge owns this attempt's wording only; claim adoption still owns uncertainty.
+    if (context.interrupted) (context.unsentInterruptions ??= new WeakMap()).set(row, { id, note });
+    Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note });
+  }
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') markBusy(context, row, verdict.wait);
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
