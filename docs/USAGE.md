@@ -93,7 +93,7 @@ Important:
 
 The Python pdd (0.0.x) is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
-Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running pdd version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Its `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running pdd version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
 See all of them:
 
@@ -539,7 +539,7 @@ Leftovers can stay in your clones: `.git/pdd`, the `*.pdd-worktrees` folders and
 
 ## 12. Known limits
 
-This is an alpha. These limits are known today:
+This is a pre-release. These limits are known today:
 
 - pdd does not run or check the tests. The agents run them. Read the test output in the PR body before you merge.
 - pdd does not remove old worktrees or branches. See [Clean up after a run](#clean-up-after-a-run).
