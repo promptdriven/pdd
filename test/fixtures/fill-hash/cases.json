@@ -1,0 +1,34 @@
+{
+  "story_path": "user_stories/fill-draft-hash.md",
+  "description": "Native hash-fill vectors, not a prompt-runtime scenario. Each interface is wrapped in one Runtime interface block unless block_count says otherwise; use changed prose for stale approved hashes. A source_bytes string replaces the entire generated prompt verbatim; source_fixture records its repository source. Check message substrings for refusal_contains and warning_contains, and stdout group order for output_order.",
+  "cases": [
+    {"name":"draft","interface":{"status":"draft","prose_sha256":""},"outcome":"filled","changes_hash_only":true},
+    {"name":"status-absent","interface":{"properties":{"READY":{},"region score":{},"region seed":{}}},"source_fixture":"test/fixtures/svg-layout/game.prompt.md","source_bytes":"# 2048-like browser screen\n\nShow score and seed data from game state. Provide four touch-sized direction\nbuttons with ids `move-left`, `move-right`, `move-up` and `move-down`.\n\n![Game layout](game.ui.svg)\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"properties\":{\"READY\":{},\"region score\":{},\"region seed\":{}}}\n```\n</details>\n","outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"status-null","interface":{"status":null,"prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"status-empty","interface":{"status":"","prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"status-invalid","interface":{"status":"pending","prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"malformed","interface_json":"{","outcome":"refused","unchanged":true},
+    {"name":"non-object","interface":[],"outcome":"refused","unchanged":true},
+    {"name":"multiple-statusless-blocks","interface":{},"block_count":2,"outcome":"refused","unchanged":true},
+    {"name":"draft-missing-hash","interface":{"status":"draft"},"outcome":"refused","unchanged":true},
+    {"name":"approved-stale","interface":{"status":"approved","prose_sha256":"stale"},"outcome":"stale","unchanged":true},
+    {"name":"approved-current","interface":{"status":"approved","prose_sha256":"$CURRENT_PROSE_SHA256"},"outcome":"current","unchanged":true},
+    {"name":"missing-status-with-hash","interface":{"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"misspelled-status-with-hash","interface":{"Status":"draft","prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"missing-status-null-hash","interface":{"prose_sha256":null},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"prototype-status-with-hash","interface":{"__proto__":{"status":"draft"},"prose_sha256":""},"outcome":"refused","unchanged":true,"refusal_contains":["\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"neither-key","interface":{},"outcome":"warning","unchanged":true,"warning_contains":["no status","no prose_sha256","skipped","\"status\": \"draft\"","pdd check --fill-hash"]},
+    {"name":"explicit-invalid-without-hash","interface":{"status":null},"outcome":"refused","unchanged":true}
+  ],
+  "replays": [
+    {"name":"draft-beside-unrelated-fixture","cases":["draft","status-absent"],"exit_code":0,"counts":{"filled":1,"current":0,"refused":0,"stale":0},"warnings":1,"tests_required":false},
+    {"name":"warnings-do-not-hide-refusal","cases":["draft","status-absent","status-null"],"exit_code":4,"counts":{"filled":1,"current":0,"refused":1,"stale":0},"warnings":1},
+    {"name":"unreached-approved-stale","cases":["draft","status-absent","approved-stale"],"exit_code":4,"counts":{"filled":1,"current":0,"refused":0,"stale":1},"warnings":1,"tests_required":false},
+    {"name":"only-warnings-nothing-filled","cases":["status-absent","neither-key"],"exit_code":0,"counts":{"filled":0,"current":0,"refused":0,"stale":0},"warnings":2,"tests_required":false},
+    {"name":"own-prompt-missing-status","cases":["missing-status-with-hash"],"exit_code":4,"counts":{"filled":0,"current":0,"refused":1,"stale":0},"warnings":0,"tests_required":false},
+    {"name":"own-prompt-misspelled-status","cases":["misspelled-status-with-hash"],"exit_code":4,"counts":{"filled":0,"current":0,"refused":1,"stale":0},"warnings":0,"tests_required":false},
+    {"name":"all-output-groups","cases":["draft","status-absent","missing-status-with-hash","approved-stale"],"exit_code":4,"counts":{"filled":1,"current":0,"refused":1,"stale":1},"warnings":1,"output_order":["Warning:","Filled prose_sha256:","Refused:","Stale:","Hashes:"]}
+  ],
+  "placements": ["prompts/new.prompt.md", "test/fixtures/unrelated.prompt.md", "examples/unrelated.prompt.md"],
+  "forbidden_effects": ["sign-in", "network request", "AI call", "approval status change"]
+}
