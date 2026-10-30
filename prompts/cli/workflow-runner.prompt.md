@@ -123,7 +123,10 @@ existing parser's `{story,draft,result,line,pass}` rows, including null unnamed
 Stories, DRAFT flags, result boundaries and pass recognition.
 `storyEvidence` reuses the same
 evidence ordering, named-line parsing and source checks; return each latest
-named Story as `{story, pass, current, result}`. Prefer compatible evidence for a
+named Story as `{story, pass, current, result, at}`, retaining the selected
+record's `at` timestamp in epoch milliseconds (0 for a legacy missing timestamp).
+This freshness metadata lets consumers compare receipts from different runs;
+equal timestamps retain the existing stable record order. Prefer compatible evidence for a
 Story, retain partial earlier compatible results, and otherwise report the latest
 unverified record with `current:false`. No record means no row. It must not write
 state, refresh PRs, call models or start chats. Product status may use the rows
