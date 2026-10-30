@@ -81,6 +81,16 @@
       "id": "capacity-cache-scope",
       "given": "concurrent same-owner submissions; separately changed authenticated owner or exact runtime origin/port; refreshed response announces maintenance",
       "required_observation": "concurrent reads coalesce per cache scope; no reuse across owner/origin/port; later maintenance is respected; no credentials or cache fields leak into files or public JSON"
+    },
+    {
+      "id": "coalesced-probe-observer-deadline",
+      "given": "two public Try setups share a pending dead-paid-job observation at the same origin; the initiating GET takes 500 ms within its longer wait, while the later lint observer has only 50 ms left",
+      "required_observation": "the later observer stops at its own remaining wait without awaiting the initiating caller's longer GET; it records and submits no new request, retains the uncertain paid lease, and does not cancel or corrupt the shared read needed by the longer caller"
+    },
+    {
+      "id": "cleared-maintenance-then-capacity-wait",
+      "given": "a capacity maintenance window clears; the next lint admission is confirmed unstarted lint-queue-full, whose retry wait reaches the caller deadline",
+      "required_observation": "the final finite message identifies the current server-capacity wait rather than the already-cleared maintenance window; preserve mode-specific exits, valid existing JSON, zero new check/Try POSTs and all prior request evidence"
     }
   ]
 }
