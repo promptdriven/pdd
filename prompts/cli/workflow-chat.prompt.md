@@ -20,7 +20,6 @@ Herdr transport reads complete stdout/stderr before interpreting JSON or a nonze
 
 Full-access flags stay. Do not pin tool versions. No workflow or native-session lifetime timeouts; the message-readiness deadline below is the local exception. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
 
-
 <a id="explicit-fresh-session"></a>
 ## Explicit fresh session
 
@@ -111,6 +110,6 @@ A submission rejected with `agent_not_found` may return to readiness inspection 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"c27470a22f4272d8cc0c3f219e48736cf575616b6c10ef4b9b818cf627ce13ff","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"8396f800f6a549a3c45f68b932c1dfa5e7b12bf63f9f7554cc1abc7760ab9f39","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

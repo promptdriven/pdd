@@ -226,6 +226,6 @@ The Runtime entry below is scoped to the existing public `changeRun` operation (
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"117891aae602782b4fec20ad5d45dcab746bc55e272b7fc5cd2b5ec826d08518","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"9d3f53f331e6410634b1f19241f559f506514ead23c61289af43819c3d9ff17d","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
