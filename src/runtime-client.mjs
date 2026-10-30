@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c6672385bb051688c30dece7f47f5b295b67379dad67c0f40478121d5f336c21).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3b34bd5d40da916ac615bc5bd41514688950067270471878d08e60ac391321c9).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -61,8 +61,19 @@ function authExecutable(env, preferred) {
 
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
+  const handlers = new Set(); let unsubscribe = null;
+  const subscribe = ports.onInterrupt ?? (handler => {
+    const signals = ['SIGINT', 'SIGHUP', 'SIGTERM'];
+    for (const signal of signals) process.on(signal, handler);
+    return () => { for (const signal of signals) process.off(signal, handler); };
+  });
+  const onInterrupt = handler => {
+    handlers.add(handler);
+    if (!unsubscribe) unsubscribe = subscribe(() => { for (const listener of [...handlers]) listener(); });
+    return () => { handlers.delete(handler); if (!handlers.size) { unsubscribe?.(); unsubscribe = null; } };
+  };
   return {
-    env, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, timers: ports.timers, random: ports.random, captureSource: ports.captureSource ?? captureSource, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -71,10 +82,12 @@ function withDefaults(ports) {
     now: ports.now ?? Date.now, randomUUID: ports.randomUUID ?? randomUUID, pollMs: ports.pollMs ?? 2000, postMs: ports.postMs ?? POST_MS,
     interactive: ports.interactive ?? (!!process.stdout.isTTY && !!process.stdin.isTTY), watchMs: ports.watchMs ?? 5000, stdin: ports.stdin ?? process.stdin,
     sleep: ports.sleep ?? ((ms, signal) => new Promise(done => {
-      const timer = setTimeout(done, ms);
-      signal?.addEventListener('abort', () => { clearTimeout(timer); done(); }, { once: true });
+      if (signal?.aborted) { done(); return; }
+      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); done(); };
+      const timer = setTimeout(finish, ms);
+      signal?.addEventListener('abort', finish, { once: true });
     })),
-    onInterrupt: ports.onInterrupt ?? (handler => { process.on('SIGINT', handler); return () => process.off('SIGINT', handler); }),
+    onInterrupt,
     // open (macOS) or xdg-open (Linux); a launcher that is still busy after 10 s counts as opened.
     openUrl: ports.openUrl ?? (url => new Promise(done => {
       try {
@@ -279,15 +292,17 @@ function localLimit(context) {
     line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using 4.');
   return context.localLimit = Number.isSafeInteger(value) && value > 0 && (raw === undefined || /^[1-9][0-9]*$/.test(String(raw))) ? value : 4;
 }
-function slotPorts(context) {
+function slotPorts(context, deadline = context.deadline) {
   const { ports } = context;
   return { ...(ports.slotFiles ? { files: ports.slotFiles } : {}), ...(ports.isAlive ? { isAlive: ports.isAlive } : {}), ...(ports.pid ? { pid: ports.pid } : {}),
-    deadline: context.deadline, now: ports.now, randomUUID: ports.randomUUID, sleep: ms => ports.sleep(ms, context.signal), interrupted: () => context.interrupted || !!context.stopped || !!context.sendError,
+    ...(ports.timers ? { timers: ports.timers } : {}), ...(ports.random ? { random: ports.random } : {}),
+    onInterrupt: ports.onInterrupt, deadline, now: ports.now, randomUUID: ports.randomUUID, sleep: ms => ports.sleep(ms, context.signal), interrupted: () => context.interrupted || !!context.stopped || !!context.sendError,
     say: message => line(ports.stderr, message), readRun: async id => {
       const { jobs } = await listRuntimeJobs({ stateDir: context.store.dir, origin: context.origin }, { files: ports.slotFiles });
       const owner = jobs.find(row => row.request_ids.includes(id));
       if (!owner) return 'unknown';
-      const reply = await context.runtime.get(id, Math.max(1, Math.min(GET_MS, context.deadline - ports.now()))), answer = reply.json;
+      if (context.interrupted || ports.now() >= deadline) return 'unknown';
+      const reply = await context.runtime.get(id, Math.max(1, Math.min(GET_MS, deadline - ports.now()))), answer = reply.json;
       if (reply.status !== 200 || !sameJob(answer, id, owner.kind)) return 'unknown';
       return confirmedEnd(answer) ? 'ended' : ['queued', 'running'].includes(answer.state) ? 'running' : 'unknown';
     } };
@@ -306,46 +321,93 @@ function queueProgress(context, answer) {
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
 }
+const localMaintenanceEnd = until => new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+}).format(new Date(until));
+function showMaintenance(context, details) {
+  const until = Date.parse(details?.until), reason = cleanText(details?.reason, context.secrets) || 'maintenance';
+  const key = JSON.stringify([details?.until ?? null, reason]);
+  if (context.maintenanceLine !== key) {
+    context.maintenanceLine = key;
+    line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${localMaintenanceEnd(until)}` : ''} (${reason}). pdd waits, then continues.`);
+  }
+}
 function maintenanceNotice(context, verdict, reply) {
   const details = reply.json?.error?.details ?? reply.json?.maintenance ?? {};
-  const until = Date.parse(details.until);
-  if (Number.isFinite(until) && until > context.ports.now()) verdict.wait = Math.max(verdict.wait, until - context.ports.now());
-  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${new Date(until).toISOString()}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
+  const until = Date.parse(details.until), now = context.ports.now();
+  context.admissionMaintenance = { details, end: Math.max(now + verdict.wait, Number.isFinite(until) ? until : now) };
+  verdict.wait = Math.min(60_000, context.admissionMaintenance.end - now);
+  context.waitCause = 'maintenance';
+  showMaintenance(context, details);
 }
 async function waitBudget(context, wait, deadline = context.deadline) {
-  if (context.interrupted || context.ports.now() >= deadline) return false;
-  await context.ports.sleep(Math.max(0, Math.min(wait, deadline - context.ports.now())), context.signal);
+  const end = Math.min(context.ports.now() + wait, deadline);
+  while (!context.interrupted && context.ports.now() < end) {
+    await context.ports.sleep(Math.min(60_000, end - context.ports.now()), context.signal);
+  }
   return !context.interrupted && context.ports.now() < deadline;
 }
+const capacityCache = new Map();
+async function readCapacity(context, deadline, refresh) {
+  const key = JSON.stringify([context.origin, context.identity.login, context.identity.userId]), now = context.ports.now();
+  let entry = capacityCache.get(key);
+  if (!entry || !entry.pending && (refresh || now < entry.at || now - entry.at >= 10_000)) {
+    entry = { at: now, pending: true };
+    entry.promise = context.runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - now))).then(reply => {
+      entry.pending = false; entry.at = context.ports.now();
+      // Failed advisory reads must never hide later maintenance announcements.
+      if (!(reply.status === 404 || reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) && capacityCache.get(key) === entry)
+        capacityCache.delete(key);
+      return reply;
+    });
+    capacityCache.set(key, entry);
+  }
+  // A coalesced read can belong to a longer-lived caller. Bound this observer by
+  // its own remaining phase budget without cancelling another caller's request.
+  const remaining = deadline - context.ports.now();
+  if (!Number.isFinite(remaining)) return entry.promise;
+  let timer, stop;
+  try {
+    return await Promise.race([entry.promise, new Promise(done => {
+      stop = () => done({ lost: true });
+      timer = setTimeout(stop, Math.max(0, remaining)); context.signal?.addEventListener('abort', stop, { once: true });
+    })]);
+  } finally { clearTimeout(timer); context.signal?.removeEventListener('abort', stop); }
+}
 async function capacityReady(context, deadline) {
+  let refresh = !!context.admissionMaintenance;
   while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
-    const reply = await context.runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - context.ports.now())));
+    const reply = await readCapacity(context, deadline, refresh);
     const blocked = blockingAnswer(reply);
     const stop = blocked || (reply.status === 401 ? AUTH_TEXT : gateText(reply) ? 'The runtime opens soon.' : null);
     if (stop) { context.stopped = { code: 'blocked', message: stop }; throw new Stop(5, stop); }
-    if (reply.status === 404) return true;
-    if (reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) {
-      const maintenance = reply.json.maintenance, until = Date.parse(maintenance?.until);
-      if (!Number.isFinite(until) || until <= context.ports.now()) return true;
-      const when = new Date(until).toISOString();
-      line(context.ports.stderr, `The runtime is in maintenance until ${when} (${cleanText(maintenance.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
-      if (!await waitBudget(context, until - context.ports.now(), deadline)) return false;
-    } else {
-      if (reply.unreachable) throw new Stop(5, reply.unreachable);
-      line(context.ports.stderr, 'Waiting to read runtime capacity; no new job was sent.');
-      if (!await waitBudget(context, retryAfter(reply.headers), deadline)) return false;
+    const understood = reply.status === 404 || reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance');
+    if (!understood && !context.capacityWarning) {
+      context.capacityWarning = true;
+      line(context.ports.stderr, 'Warning: runtime capacity could not be read; continuing with ordinary runtime admission.');
     }
+    const maintenance = reply.status === 200 ? reply.json?.maintenance : null, until = Date.parse(maintenance?.until);
+    const pending = context.admissionMaintenance;
+    const future = Number.isFinite(until) && until > context.ports.now();
+    const end = Math.max(future ? until : 0, pending?.end ?? 0);
+    if (end <= context.ports.now()) { context.admissionMaintenance = null; context.maintenanceLine = null; return true; }
+    context.waitCause = 'maintenance';
+    if (future) showMaintenance(context, maintenance); else if (pending) showMaintenance(context, pending.details);
+    if (!await waitBudget(context, Math.min(60_000, end - context.ports.now()), deadline)) return false;
+    refresh = true;
   }
   return false;
 }
 async function admission(context, kind, target, deadline = context.deadline) {
+  context.waitCause = 'a local slot';
   const reservation = await acquireRuntimeSlot({ stateDir: context.store.dir, origin: context.origin, limit: localLimit(context), kind,
-    deadline: Number.isFinite(deadline) ? deadline : null }, slotPorts(context));
+    deadline: Number.isFinite(deadline) ? deadline : null }, slotPorts(context, deadline));
   if (!reservation) return false;
   target.reservation = reservation;
+  context.reservations ??= new Set(); context.reservations.add(reservation);
   let ready = false;
   try { ready = await capacityReady(context, deadline); return ready && !context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline; }
-  finally { if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context)); target.reservation = null; } }
+  finally { if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context, deadline)); target.reservation = null; } }
 }
 
 // One answer to a POST, as the row table of the spec.
@@ -574,13 +636,13 @@ function saveBatch(context) {
 }
 function saveAnswer(context, id, json) { if (isObject(json)) context.store.write(join(context.folder, `${id}.json`), json); }
 
-async function postJob(context, path, command, request, row, timeoutMs) {
+async function postJob(context, path, command, request, row, timeoutMs, deadline = context.deadline) {
   const id = request.requestId;
   const target = row ?? context.lint;
   if (context.interrupted || context.stopped || context.sendError) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
-  const registered = await recordRuntimeRequest(target.reservation, id, slotPorts(context));
+  const registered = await recordRuntimeRequest(target.reservation, id, slotPorts(context, deadline));
   if (registered === false) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
-  if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= context.deadline) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+  if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
   context.store.posted(context.folder, id);
   if (row) { if (!row.request_ids.includes(id)) row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
   saveBatch(context);
@@ -658,8 +720,8 @@ async function sendCheckAttempt(context, row) {
 }
 
 // GET one open row once.
-async function readRow(context, row) {
-  const id = row.request_ids.at(-1), end = row.lost ? row.read_until ?? context.deadline : context.deadline;
+async function readRow(context, row, deadline = Infinity) {
+  const id = row.request_ids.at(-1), end = Math.min(deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   if (!id) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
   // A network problem while reading says so once; pdd keeps reading the same IDs.
@@ -703,13 +765,13 @@ const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answ
 async function runLint(context, complete = false) {
   const agent = context.agentLimit ?? !context.ports.interactive;
   const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
-  let attempts = 0;
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
-  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
-  const pause = async wait => {
+  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
+  const pause = async (wait, maintenance = false) => {
+    context.waitCause = maintenance ? 'maintenance' : 'server capacity';
     if (context.interrupted || context.ports.now() >= lintEnd) return false;
-    line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
+    if (!maintenance) line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
     return waitBudget(context, wait, lintEnd);
   };
   for (;;) {
@@ -717,10 +779,10 @@ async function runLint(context, complete = false) {
     if (context.ports.now() >= lintEnd) return busy();
     if (!await admission(context, 'lint', context.lint, lintEnd)) return busy();
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
-    context.lint.request_ids.push(request.requestId); attempts++;
-    const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())));
-    if (verdict.kind === 'busy') { if (await pause(verdict.wait)) continue; return busy(); }
-    if (verdict.kind === 'not_sent') return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    context.lint.request_ids.push(request.requestId);
+    const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
+    if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
+    if (verdict.kind === 'not_sent') return busy();
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // Unknown dispatch still reads only this ID; only a confirmed terminal capacity refusal permits another attempt.
@@ -756,7 +818,7 @@ async function checkBatch(context, rows) {
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
   const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', ...extra }); };
-  if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
+  if (context.interrupted) { notSent('not_run', { note: lint.note ?? { code: null, message: 'Stopped before sending.' } }); return; }
   if (lint.kind === 'pending') {
     context.lintPending = true;
     notSent('not_run', { note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
@@ -877,7 +939,7 @@ function runFiles(cwd, words, options, ports) {
   const selected = select(found, normalized, root), coverage = bindingCoverage({ root, found, selected });
   const tests = selected.map(test => test.path);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-  const capture = captureSource(root, { tests, appMap });
+  const capture = ports.captureSource(root, { tests, appMap });
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
@@ -894,7 +956,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
-  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   context.warnings = [...svgWarnings, ...found.warnings];
   if (!context.json) for (const warning of svgWarnings) line(ports.stderr, warning);
@@ -910,6 +972,13 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
     for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); throw new Stop(3, pendingLintMessage(context, lint.answer)); }
+  if (lint.kind === 'not_run' && lint.note?.code === 'lint-busy' && context.json) {
+    for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
+    saveBatch(context); line(ports.stderr, lint.note.message);
+    line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
+      rows: rows.map(row => ({ story: row.story, title: row.title, test: row.test, state: row.state, refusals: row.refusals })), warnings: context.warnings }));
+    return 5;
+  }
   if (lint.kind === 'not_run' || lint.kind === 'stop') throw new Stop(5, `${lint.note.message}${lint.note.code && lint.note.code !== 'blocked' ? ` (${lint.note.code})` : ''}`);
   const answer = lint.answer, program = answer?.result?.report?.program;
   const problems = lint.kind === 'refused' ? [{ ...lint.refusal, path: null }]
@@ -988,7 +1057,13 @@ async function readUnsentLint(context, rows) {
   if (!held.length) return;
   let answer = context.store.read(join(context.folder, `${id}.json`));
   if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
-    const read = judgeGet(await context.runtime.get(id), id, 'lint');
+    const remaining = context.deadline - context.ports.now();
+    if (context.interrupted || remaining <= 0) {
+      context.lintPending = !!lint.pending;
+      context.lintUnknown = !!lint.unknown || !context.lintPending;
+      return;
+    }
+    const read = judgeGet(await context.runtime.get(id, Math.min(GET_MS, remaining)), id, 'lint');
     if (read.kind === 'blocked') throw new Stop(5, read.message);
     if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
@@ -1036,9 +1111,12 @@ function heldForLint(row) {
       || /lint result is unknown.*sent no checks/i.test(row.note?.message ?? '')
       || row.phase === 'lint' && row.note?.code === 'lint-finished');
 }
+function validSavedCallCeiling(row) {
+  return Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000;
+}
 function validSavedCheck(row) {
   const text = value => typeof value === 'string' && !!value.trim();
-  if (!Number.isInteger(row.max_calls) || row.max_calls < 1 || row.max_calls > 1000
+  if (!validSavedCallCeiling(row)
     || !Number.isInteger(row.criteria_total) || row.criteria_total <= 0
     || !Array.isArray(row.steps) || !row.steps.length) return false;
   const ids = new Set(), criteria = new Set();
@@ -1060,9 +1138,10 @@ async function continueHeld(context, candidates, saved) {
   candidates = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
   if (!candidates.length) return;
   if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
+    || !candidates.every(validSavedCallCeiling)
     || (saved.intent === undefined && !candidates.every(validSavedCheck))
     || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0)) {
-    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
+    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch lacks valid original call ceilings, unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
     return;
   }
   if (context.lintPending || context.lintUnknown) return;
@@ -1072,7 +1151,7 @@ async function continueHeld(context, candidates, saved) {
   const verdicts = judgeLint(lint, candidates, context.root, context.visible, context.secrets);
   if (!verdicts || verdicts.size || globalRefusals.length) return;
   let capture;
-  try { capture = captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null }); }
+  try { capture = context.ports.captureSource(context.root, { tests: saved.rows.map(row => row.test), appMap: null }); }
   catch (error) {
     if (!(error instanceof PreflightError)) throw error;
     context.continuationNotice = `No checks were sent for the lint-held rows: the saved source cannot be verified. ${error.message}`;
@@ -1133,12 +1212,13 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
       const wait = capacityDelay(admission.error);
       if (wait !== null) { markBusy(context, row, wait); return; }
     }
-    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     const answer = store.read(join(context.folder, `${id}.json`));
+    // Local terminal receipts remain available even when another row used the network wait.
     if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) { await finishReservation(context, row, answer); applyAnswer(row, answer, context); return; }
+    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (['queued', 'running', 'unknown'].includes(row.state)) {
       row.lost = true;
-      await readRow(context, row);
+      await readRow(context, row, context.deadline);
       if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
     } else if (answer) applyAnswer(row, answer, context);
   });
@@ -1152,10 +1232,12 @@ async function recoverRestarts(context) {
   const eligible = context.rows.filter(row => {
     adoptClaims(context, row);
     const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
-    return !row.restart_used && sameJob(answer, id, 'check') && restarted(answer);
+    return !row.restart_used && !row.restart_pending && !row.admitting && !context.restartDecisions?.has(id) && sameJob(answer, id, 'check') && restarted(answer);
   });
   if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
-  const capture = captureSource(context.root, { tests: context.rows.map(row => row.test), appMap: null });
+  context.restartDecisions ??= new Set();
+  for (const row of eligible) context.restartDecisions.add(row.request_ids.at(-1));
+  const capture = context.ports.captureSource(context.root, { tests: context.rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
   context.capture = capture;
   const selected = [];
@@ -1173,7 +1255,8 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
-  const capture = captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
+  if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
+  const capture = context.ports.captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   if (!lint || !sameJob(lint, lintId, 'lint') || lint.state !== 'passed' || context.lint.unknown || context.lint.pending)
@@ -1268,7 +1351,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
         let promptPaths;
         if (words.length) {
           const { found, normalized } = localSetup(cwd, words), selected = select(found, normalized, root);
-          promptPaths = captureSource(root, { tests: selected.map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
+          promptPaths = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null }).files.map(file => file.path).filter(path => path.endsWith('.prompt.md'));
         }
         const warnings = lintSvgLayouts({ root, files, promptPaths }), summary = `SVG layout lint: ${warnings.length} warnings. 0 AI calls. No checks were sent.`;
         line(ports.stdout, context.json ? JSON.stringify({ repo: root, exit_code: 0, warnings, summary_line: summary }) : [...warnings, summary].join('\n'));
@@ -1302,7 +1385,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
       return error.exitCode;
     }
     throw error;
-  } finally { release(); }
+  } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
 async function runBatch(context, cwd, words, options, setRelease) {
@@ -1325,7 +1408,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.warnings = [...found.warnings, ...checked.warnings, ...sharedSourceFiles(root, found.visible)];
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
-  const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -1484,7 +1567,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
-    const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -1568,7 +1651,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (verdict.admission) store.write(join(context.folder, `${request.requestId}.admission.json`), verdict.admission);
       if (verdict.kind === 'busy') {
         await finishReservation(context, setup, { state: 'not_run' });
-        line(ports.stderr, verdict.maintenance ? 'The runtime is in maintenance. pdd waits, then continues.' : 'The runtime is busy. Waiting to start your Try…');
+        if (!verdict.maintenance) line(ports.stderr, 'The runtime is busy. Waiting to start your Try…');
         if (await waitBudget(context, verdict.wait)) continue;
         delete repoState.tries[test.path]; store.saveRepo(root, repoState);
         throw new Stop(context.interrupted ? 3 : 5, 'The runtime stayed busy until the Try setup wait ended.');
@@ -1618,7 +1701,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
     throw error;
-  } finally { release(); }
+  } finally { release(); await Promise.all([...(context.reservations ?? [])].map(reservation => releaseRuntimeSlot(reservation, { ended: false }, slotPorts(context)))); }
 }
 
 // pdd try --stop [STORY]: find the Try by its story name in the state record, so it works on any branch (real-user issue 14).
