@@ -290,11 +290,6 @@ const chatFailureWords = run => {
 const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : activeChatFailure(run) ? chatFailureWords(run)
   : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
   : `chat startup is not confirmed. Run pdd workflow open ${run.number} after Herdr is available.`;
-function recordChatFailure(run, error, phase, p) {
-  run.chatFailure = { area: run.areas[run.area].name, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
-  if (!ended(run)) run.state = 'waiting';
-  writeRun(run, p);
-}
 function clearChatFailure(run) {
   if (!run.chatFailure) return;
   delete run.chatFailure;
@@ -394,11 +389,13 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   const first = workflow.areas[0];
   try { await startNextChat(run, p, packageRoot); }
   catch (error) {
-    run.warnings.push(`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`); writeRun(run, p);
+    const fresh = readRun(run.runDir);
+    if (fresh?.runId === run.runId && !ended(fresh)) {
+      fresh.warnings.push(`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`); writeRun(fresh, p);
+    }
     return fail([...warnings, `The worktree is ready at ${a.worktreePath}, but the ${first.name} chat startup was not confirmed (${error.code === 'ENOENT' ? causeOf(error) : `${error.code ?? 'error'}: ${oneLine(error.message)}`}).`,
       `Start it with: pdd workflow open ${number}`].join('\n'));
   }
-  writeRun(run, p);
   const chat = run.chats[0];
   return done([...warnings,
     `Started ${name} for ${run.repo}#${number} "${oneLine(run.issue.title)}".`,
@@ -1022,16 +1019,16 @@ const noReply = (evidence, who) => evidence?.code === 'user_message_missing' ? `
 const agentMarker = env => env.CLAUDECODE ? `CLAUDECODE=${env.CLAUDECODE}` : env.CODEX_THREAD_ID ? 'CODEX_THREAD_ID is set' : 'stdin is not a terminal';
 
 async function startNextChat(run, p, packageRoot) {
-  const area = run.areas[run.area];
+  const area = run.areas[run.area], original = structuredClone(run);
+  const prior = [...(run.chats ?? [])].reverse().find(chat => chat.area === area.name);
   p.say(`Starting the ${area.name} chat in Herdr…`);
   try {
     run.chats.push(await startChat({ run, area: area.name, message: await areaMessage(run, run.area, p, packageRoot) }, p));
-    clearChatFailure(run);
-    writeRun(run, p);
+    saveChatObservations(original, prior, run.chats.at(-1), p);
     return run.chats.at(-1);
   } catch (error) {
     if (error.chat?.area === area.name) run.chats.push(error.chat);
-    recordChatFailure(run, error, 'start', p);
+    saveChatObservations(original, prior, error.chat, p, { error, phase: 'start' });
     throw error;
   }
 }
@@ -1498,6 +1495,38 @@ function saveAreaObservations(run, original, observed, p) {
   }
   writeRun(fresh, p);
 }
+// Default open and startup own chat observations, never a stale workflow snapshot.
+function saveChatObservations(run, original, observed, p, { error, phase = 'open', reset = false } = {}) {
+  const fresh = readRun(run.runDir);
+  if (!fresh || fresh.runId !== run.runId || ended(fresh)) return;
+  const area = original?.area ?? observed?.area ?? run.areas[run.area].name;
+  const selected = [...(fresh.chats ?? [])].reverse().find(chat => chat.area === area);
+  if (JSON.stringify(selected) !== JSON.stringify(original)) return;
+  // A late allocation or missing-start reset cannot claim a now-historical area.
+  if ((!original || reset) && fresh.area !== run.area) return;
+  if (reset) {
+    fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
+    fresh.chats = fresh.chats.filter(chat => chat !== selected);
+  } else if (selected && observed) {
+    for (const key of ['tabId', 'paneId', 'terminalId', 'session', 'resumedAt', 'startUnconfirmed']) {
+      if (Object.hasOwn(observed, key)) selected[key] = observed[key];
+      else delete selected[key];
+    }
+  } else if (observed) fresh.chats.push(observed);
+  if (fresh.areas[fresh.area].name === area && JSON.stringify(fresh.chatFailure) === JSON.stringify(run.chatFailure)) {
+    const stateFields = ['state', 'area', 'done', 'gate', 'question', 'approvalRecord', 'decisions'];
+    const unchanged = stateFields.every(key => JSON.stringify(fresh[key]) === JSON.stringify(run[key]));
+    if (error) {
+      fresh.chatFailure = { area, phase, code: oneLine(error.code ?? 'error').slice(0, 100), message: oneLine(error.message ?? 'Herdr request failed').slice(0, 500), at: p.now() };
+      if (unchanged) fresh.state = 'waiting';
+    } else if (fresh.chatFailure) {
+      if (unchanged) clearChatFailure(fresh);
+      else delete fresh.chatFailure;
+    }
+  }
+  writeRun(fresh, p);
+  return true;
+}
 async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
@@ -1510,6 +1539,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
   const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
+  let defaultOriginal = chat ? structuredClone(chat) : undefined;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
   const missing = missingHome(run, p.env);
@@ -1560,28 +1590,26 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }
-    if (!chat) { chat = await startNextChat(run, p, packageRoot); started = true; }
+    if (!chat) { chat = await startNextChat(run, p, packageRoot); defaultOriginal = structuredClone(chat); started = true; }
     p.say(`Opening the ${chat.area} chat in Herdr…`);
     const opened = await openChat({ run, chat }, p);
     if (opened.restartAvailable) {
       if (areaOriginal) return fail(`The ${chat.area} chat has an unconfirmed missing tab. Inspect its saved identity.`);
       if (historical) return fail(`The historical ${chat.area} chat has an unconfirmed missing tab. Inspect its saved identity.`);
-      run.abandonedChats = [...(run.abandonedChats ?? []), { ...chat, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
-      run.chats = run.chats.filter(item => item !== chat);
       const message = `The saved tab and agent are gone. The stale start was cleared; the run and worktree are kept. Run pdd workflow open ${run.number} to start the ${chat.area} chat again.`;
-      recordChatFailure(run, { code: 'chat_start_reset', message }, 'open', p);
+      if (!saveChatObservations(run, defaultOriginal, chat, p, { error: { code: 'chat_start_reset', message }, reset: true }))
+        return fail('The run changed during chat inspection. Its latest progress and chat custody are kept.');
       return fail(message);
     }
     if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
-    else { if (!historical) clearChatFailure(run); writeRun(run, p); }
+    else saveChatObservations(run, defaultOriginal, chat, p);
     const where = `Herdr session pdd, tab "${chat.label}"`;
     return done([started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
     if (newSession) return fail(`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${error.code ?? 'error'}: ${oneLine(error.message)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`);
     if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
-    else if (historical) writeRun(run, p);
-    else recordChatFailure(run, error, chat ? 'open' : 'start', p);
+    else saveChatObservations(run, defaultOriginal, chat, p, { error, phase: chat ? 'open' : 'start' });
     return fail(`pdd could not open the ${run.areas[selected].name} chat (${error.code ?? 'error'}: ${oneLine(error.message)}).`);
   }
 }
