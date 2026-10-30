@@ -209,6 +209,10 @@ current files for its submitted snapshots. Missing legacy snapshots remain
 unavailable until a new actual Check. Do not use unrelated rows' dependencies or
 a whole batch SHA as the Story's freshness identity.
 
+For equal original Check timestamps, prefer a real evaluated failed Check over
+a passed Check. Resolve other equal-time/equal-result choices deterministically
+without implying chronology. A strictly later original Check always wins.
+
 New reference-backed Try records also retain uploaded effective prompt hashes
 and the corresponding contract provenance. Apply the existing pinned-prompt
 freshness promise to the expanded current prompt bytes before connected reuse,
