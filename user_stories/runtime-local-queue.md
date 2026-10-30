@@ -7,6 +7,8 @@ I can see my place while other local agents use the runtime.
 1. Each waiting job keeps one ticket in oldest-first order for the next free local slot.
 2. While I wait, pdd reports the local busy count, limit and number ahead of me.
 3. Interruption or the caller deadline removes my waiting ticket without submitting its job.
+4. A waiting ticket or claim abandoned for 60 seconds cannot block my turn when its process ID has been reused.
+5. Only the first waiting ticket competes for a free slot; twelve contenders with three slots make progress without a contention stall.
 
 ## Rules to check
 

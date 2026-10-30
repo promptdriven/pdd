@@ -9,6 +9,8 @@ I can leave a command waiting during announced maintenance and continue afterwar
 3. A runtime without the capacity endpoint can still accept work under its ordinary submission rules.
 4. Maintenance waiting obeys the caller deadline and interruption.
 5. Authentication, access and unrelated service errors retain their existing handling.
+6. Even when maintenance ends more than 24.8 days away, pdd waits at most 60 seconds at a time and stays responsive without rapid polling or repeated unchanged notices.
+7. An unrecognized capacity response or read failure prints one warning and continues with ordinary admission rules; only clear future maintenance creates a maintenance wait.
 
 ## Rules to check
 

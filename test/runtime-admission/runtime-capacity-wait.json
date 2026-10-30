@@ -17,6 +17,18 @@
     {
       "id": "AC4",
       "text": "pdd never resends a check for capacity when it may have started."
+    },
+    {
+      "id": "AC5",
+      "text": "The lint wait limit also bounds dead-owner reads and saving a request ID before submission, including the 90-second agent lint wait during Try setup."
+    },
+    {
+      "id": "AC6",
+      "text": "When my lint wait ends for a local slot or maintenance, pdd names that wait and does not claim that the server stayed busy after 0 lint attempts."
+    },
+    {
+      "id": "AC7",
+      "text": "Submissions by the same authenticated owner at the same runtime reuse a clear capacity observation for about 10 seconds."
     }
   ],
   "cases": [
@@ -44,6 +56,31 @@
       "id": "defaults",
       "given": "agent 90 s; terminal Check; Try existing allowance",
       "required_observation": "agent stops 90 s; terminal Check unlimited; no new Try flag"
+    },
+    {
+      "id": "lint-probe-deadline",
+      "given": "agent Try has five-minute setup budget but lint deadline at 90000 ms; dead-owner GET starts at 89950 ms and does not answer",
+      "required_observation": "GET timeout <=50 ms, effective lint admission ends at 90000, no request-ID registration or lint/Try POST afterward, no 30-second overrun for another dead row; existing potential paid lease is retained"
+    },
+    {
+      "id": "lint-record-deadline",
+      "given": "agent Try lint reservation acquired; local request recording is contended until effective lint deadline 90000 ms, earlier than setup deadline",
+      "required_observation": "recording returns false at lint deadline, no lint .posted evidence or POST is authorized, unsent reservation can release; interruption has same no-send result"
+    },
+    {
+      "id": "wait-end-cause",
+      "given": "Check, explicit lint and Try setup separately wait for local slot or maintenance until lint deadline before first lint POST; also interrupt variants",
+      "required_observation": "plain result names local-slot wait or maintenance as appropriate, no server-busy-after-0-attempts claim; zero check calls, no check/Try POST, existing exit5 or door125 retained; JSON stdout remains valid with its existing schema"
+    },
+    {
+      "id": "capacity-cache",
+      "given": "same owner and origin, clear capacity at clock 0; submissions at 0, 9999 and 10000 ms",
+      "required_observation": "first two share one capacity GET; expiry permits refresh at 10000; no extra GET per POST inside TTL; ordinary authenticated admission and saved request evidence remain required"
+    },
+    {
+      "id": "capacity-cache-scope",
+      "given": "concurrent same-owner submissions; separately changed authenticated owner or exact runtime origin/port; refreshed response announces maintenance",
+      "required_observation": "concurrent reads coalesce per cache scope; no reuse across owner/origin/port; later maintenance is respected; no credentials or cache fields leak into files or public JSON"
     }
   ]
 }

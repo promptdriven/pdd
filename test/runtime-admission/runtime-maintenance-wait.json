@@ -21,6 +21,14 @@
     {
       "id": "AC5",
       "text": "Authentication, access and unrelated service errors retain their existing handling."
+    },
+    {
+      "id": "AC6",
+      "text": "Even when maintenance ends more than 24.8 days away, pdd waits at most 60 seconds at a time and stays responsive without rapid polling or repeated unchanged notices."
+    },
+    {
+      "id": "AC7",
+      "text": "An unrecognized capacity response or read failure prints one warning and continues with ordinary admission rules; only clear future maintenance creates a maintenance wait."
     }
   ],
   "cases": [
@@ -68,6 +76,41 @@
       "id": "other-failure",
       "given": "401/not-invited/cloud-unavailable/legacy opens-soon separately",
       "required_observation": "existing immediate gate, no maintenance loop"
+    },
+    {
+      "id": "far-until-capacity",
+      "given": "synthetic clock 0, capacity maintenance until 2592000000 ms (30 days), terminal wait; first sleep reaches 60000 then recheck; interrupt after second chunk",
+      "required_observation": "each sleep >0 and <=60000; capacity rechecked after each chunk, no overflow to 1 ms/hot loop, one unchanged-window notice; no POST during window or after interruption"
+    },
+    {
+      "id": "far-until-admission",
+      "given": "capacity 404; confirmed not-started 503 maintenance until 2592000000 ms with Retry-After, then bounded waits; interrupt or finite deadline separately",
+      "required_observation": "same <=60000 ms positive chunks and rechecks apply to admission maintenance; no unsafe retry, no repeated unchanged notice, no overflow; original raw UTC until, usage and request IDs retained"
+    },
+    {
+      "id": "unrecognized-capacity-fail-open",
+      "given": "capacity HTML 200, 405, unrecognized 500, timeout and unreachable read separately; ordinary submission accepts",
+      "required_observation": "one finite stderr warning per command, continue to existing admission within remaining deadline, no indefinite capacity wait; zero-call lint then ordinary check/Try path; valid unchanged JSON output"
+    },
+    {
+      "id": "fail-open-keeps-admission-gates",
+      "given": "unrecognized capacity read followed by submission 401, not-invited, no-cloud-access, update-required, cloud-unavailable, legacy opens-soon or uncertain POST separately",
+      "required_observation": "ordinary gate handling remains authoritative; no silent wait, new paid retry or fabricated success; uncertain POST is read only by its saved ID"
+    },
+    {
+      "id": "capacity-gates-before-fail-open",
+      "given": "capacity itself returns recognized 401, not-invited, no-cloud-access, update-required, cloud-unavailable and legacy opens-soon separately",
+      "required_observation": "existing stop behavior takes precedence; zero new submission POSTs and no maintenance loop"
+    },
+    {
+      "id": "unclear-and-past-until",
+      "given": "capacity contains maintenance null, malformed until or past until separately",
+      "required_observation": "no maintenance wait; preserve ordinary submission/admission and do not invent a future end time"
+    },
+    {
+      "id": "fail-open-then-maintenance",
+      "given": "first submission sees unrecognized capacity and warns; a later refreshed read in same command announces valid future maintenance",
+      "required_observation": "warning is not repeated; failed read is not cached as clear and cannot hide the later maintenance window; pause before new POST with local end time and reason"
     }
   ]
 }
