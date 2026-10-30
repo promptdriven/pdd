@@ -183,8 +183,10 @@ test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body
     const prs = f.data().prs; prs[0].body = `${prose}\n${marker}\n`; f.configure({ prs });
     assert.ok([...prs[0].body].length <= 60000, 'The existing description starts within the body budget.');
     writeFileSync(join(f.runDir, 'scope.md'), `Not checked: ${'y'.repeat(2000)}`);
+    const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
     const out = f.invoke('', 'approveRun');
     assert.equal(out.exitCode, 1, 'Synchronization cannot approve an absent chat.');
+    assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1, 'Each approval synchronization edits PR 1 once.');
     const body = f.data().prs[0].body;
     assert.ok([...body].length <= 60000, `Whole PR 1 description has ${[...body].length} code points.`);
     assert.equal(body.split(marker).length - 1, 1);
@@ -201,6 +203,8 @@ test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary 
   writeFileSync(join(f.runDir, 'scope.md'), 'Review: refreshed');
   assert.equal(f.invoke('', 'approveRun').exitCode, 1);
   const body = f.data().prs[0].body;
+  assert.match(body, /^Defect: broken value\nReview: refreshed\n/);
+  assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
 });
