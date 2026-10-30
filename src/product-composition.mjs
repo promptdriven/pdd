@@ -1,6 +1,6 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 2fc3096b56933fe7a37bd95e8d2ff7236b7f93e5e078cbd2f9ce74223118e34a).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 96f106abd292a9081be70d8b5f7af5aec43b6e326bf084fbe65c110c03685057).
 import { basename, join } from 'node:path';
-import { checkInput, interfaceBlocks, selectTests } from './runtime-preflight.mjs';
+import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
 import { expandSource, isJsonNumber, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
@@ -145,15 +145,16 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
   const cached = new Map();
   const read = (path, optional = false) => {
     if (cached.has(path)) return cached.get(path);
-    try {
-      const value = ports.readFile(join(root, path));
-      const text = typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString('utf8') : null;
-      if (text === null) badMap(`${path}: the file reader did not return UTF-8 bytes.`);
-      cached.set(path, text); return text;
-    } catch (error) { if (optional && error.code === 'ENOENT') return null; throw error; }
+    const stat = ports.statFile(join(root, path));
+    if (stat?.is_symlink) throw new PreflightError(4, `${path}: symbolic links are not allowed.`);
+    if (!stat?.exists) { if (optional) return null; badMap(`${path}: required source file is missing.`); }
+    const value = ports.readFile(join(root, path));
+    const text = typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString('utf8') : null;
+    if (text === null) badMap(`${path}: the file reader did not return UTF-8 bytes.`);
+    cached.set(path, text); return text;
   };
   const files = {
-    stat({ path }) { const text = read(path, true); return { exists: text !== null, is_symlink: false, size: text === null ? 0 : Buffer.byteLength(text) }; },
+    stat({ path }) { return ports.statFile(join(root, path)); },
     read({ path }) { return { content: read(path) }; },
   };
   try {

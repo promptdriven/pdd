@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: bd0ef7a4375486bbb7f7dade9f3861fca6bfc3d441db957e1e8d0494d3abf319).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 03445cd1ad917920ba738cc8ff8070f8dbfd2b5d9d2be1088b22eb51a4e1e5d1).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';

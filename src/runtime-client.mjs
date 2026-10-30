@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 82f61a7590d4dce5097aa06c5f4325e4854a428c8adff13b7b6ed95743618774).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 72c0e2e17bead1e9add9abf57f38ee3417a9f95a9fe986a6ab80e2b2b0798144).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -10,12 +10,12 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
-import { catalogRecords, compareCopies } from './contract-refs.mjs';
+import { catalogRecords, compareCopies, expandSource, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
-import { selectJourneys } from './product-composition.mjs';
+import { composeProductTry, selectJourneys } from './product-composition.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -1461,6 +1461,45 @@ function oneTest(found, words, root) {
   return selected[0];
 }
 
+function productTest(found, words, journey, root) {
+  if (journey === undefined && words.length) return oneTest(found, words, root);
+  let paths;
+  try { paths = selectJourneys(found.tests.map(test => ({ testPath: test.path, storyPath: test.storyPath })), journey); }
+  catch (error) { throw new Stop(2, error.message); }
+  if (!paths.length && journey === undefined) return oneTest(found, words, root);
+  const requested = words.length ? new Set(select(found, words, root).map(test => test.path)) : null;
+  const selected = found.tests.filter(test => paths.includes(test.path) && (!requested || requested.has(test.path)));
+  if (selected.length !== 1) throw new Stop(2, ['Product Try needs one journey scenario. Choose an explicit Story or test:', ...storyList({ tests: selected })].join('\n'));
+  return selected[0];
+}
+
+function captureProductTry(root, test, options) {
+  let composition;
+  const capture = captureSource(root, { tests: [test.path], appMap: 'app/maps/product.json', prepareSource(snapshot) {
+    const readFile = path => {
+      const local = relative(root, path).split(sep).join('/');
+      if (!snapshot.statFile(local).exists) throw Object.assign(Error(`${local} is missing.`), { code: 'ENOENT' });
+      return snapshot.readFile(local);
+    };
+    composition = composeProductTry({ root,
+      ...(options['--parts'] !== undefined ? { parts: options['--parts'].split(',').map(part => part.trim()) } : {}),
+      ...(options['--journey'] !== undefined ? { journey: options['--journey'], testPath: test.path } : {}) },
+    { readFile, statFile: path => snapshot.statFile(relative(root, path).split(sep).join('/')) });
+    const outputs = new Map(composition.files.map(file => [file.path, file.content]));
+    const files = { stat({ path }) { return outputs.has(path) ? { exists: true, is_symlink: false, size: Buffer.byteLength(outputs.get(path)) } : snapshot.statFile(path); },
+      read({ path }) { return { content: outputs.get(path) ?? snapshot.readFile(path).toString('utf8') }; } };
+    const scenario = parseJsonValue(snapshot.readFile(test.path).toString('utf8'));
+    if (options['--journey'] !== undefined) {
+      // Discovery predates capture: the selected snapshot must still be this journey.
+      selectJourneys([{ testPath: test.path, storyPath: scenario.story_path }], options['--journey']);
+    }
+    scenario.initial_world = { $seed: composition.seedPath };
+    const expanded = expandSource({ path: test.path, text: stringifyJsonValue(scenario), format: 'scenario' }, files);
+    return [...composition.files.map(file => ({ path: file.path, bytes: file.content })), { path: test.path, bytes: expanded.text }];
+  } });
+  return { capture, composition };
+}
+
 async function readUntil(context, id, command, isDone, ms, label) {
   const end = Math.min(context.deadline ?? Infinity, context.ports.now() + ms), tick = progressTicker(context.ports.stderr, context.ports.now);
   let last = null;
@@ -1560,6 +1599,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   const ports = withDefaults(givenPorts), context = { ports, interrupted: false, doorMode: !!(options['--cli'] || options['--serve']) };
   let release = () => {};
   try {
+    const productMode = options['--product'] === true;
+    if (options['--product'] !== undefined && !productMode || (!productMode && ['--parts', '--journey'].some(key => options[key] !== undefined))) throw new Stop(2, '--parts and --journey require --product.');
+    if (productMode && options['--app-map'] !== undefined) throw new Stop(2, '--product builds its app map; omit --app-map.');
     const requestedBudget = requestedCalls(options['--max-calls']);
     if (options['--agent'] !== undefined && (typeof options['--agent'] !== 'string' || !options['--agent'].trim() || ['--no-wait','--stop','--save-last','--cli','--serve'].some(key => options[key] !== undefined))) throw new Stop(2, '--agent chooses a configured agent name for an ordinary connected pdd try; omit --no-wait and door modes.');
     const doorModes = ['--cli', '--serve', '--save-last'].filter(key => options[key]);
@@ -1582,15 +1624,22 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
-    const test = oneTest(found, normalized, root), repoState = store.repo(root), record = repoState.tries?.[test.path];
+    const appMap = productMode ? 'app/maps/product.json' : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    const test = productMode ? productTest(found, normalized, options['--journey'], root) : oneTest(found, normalized, root);
+    const repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
     const checked = preflight({ root, found, selected: [test] }), row = localRows(checked.rows)[0];
     if (row.state === 'refused') {
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story input was refused.');
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
-    const capture = captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const prepared = productMode ? captureProductTry(root, test, options) : null;
+    const capture = prepared?.capture ?? captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    const productSetup = prepared ? { parts: prepared.composition.parts, journey: options['--journey'] ?? null, source_sha256: capture.sha256 } : null;
+    if (prepared) {
+      line(ports.stderr, `Product parts: ${prepared.composition.parts.join(', ')}. ${prepared.composition.labels.map(label => label.title).join('; ')}`);
+      line(ports.stderr, `One tap runs up to ${prepared.composition.tapOperations} operations (limit 40 calls per tap).`);
+    }
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -1609,6 +1658,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       if (answer) await finishReservation(context, record, answer);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
+      if (live && !options['--new'] && (productSetup || record.product_setup) && !isDeepStrictEqual(productSetup, record.product_setup ?? null)) throw new Stop(4, 'The product Try setup changed. Use --new to replace the existing Try; its session is kept.');
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
       if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The runtime did not confirm this Try’s current budget. No budget change or reopen was sent.');
       if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This runtime does not support raising this Try’s budget yet. The same Try and saved data are kept.');
@@ -1659,7 +1709,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
       const uploadedSeed=capture.sources.find(file=>file.path===test.path);
       store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
-        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references } } });
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references, ...(productSetup ? { product_setup: productSetup } : {}) } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -1718,6 +1768,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
   } catch (error) {
     if (options['--cli'] || options['--serve'] || options['--save-last']) { line(ports.stderr, `pdd try: ${cleanText(error.message || 'The Try could not start.', context.secrets ?? [])}`); return error.exitCode === 2 ? 2 : 125; }
     if (error instanceof Stop || error instanceof PreflightError) { line(ports.stderr, error.message); return error.exitCode; }
+    if (options['--product'] === true && error.code) { line(ports.stderr, `${error.code}: ${cleanText(error.message)}`); return 4; }
     throw error;
   } finally { release(); }
 }
