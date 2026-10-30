@@ -164,7 +164,9 @@ standalone `and` or `/`; identical trimmed actors coalesce and multiple actors
 fail. Parent and child paths have independent owners.
 
 Explicit Schema targets take precedence; otherwise one canonical declared record
-named or linked in a row supplies the schema. Ambiguous/unknown inference warns
+designated by a schema link, exact inline-code identifier or whole plain Key/What it holds
+cell supplies the schema. Ordinary prose, path components and Writer/Readers labels
+do not designate records. Ambiguous/unknown inference warns
 that seed values were not checked; it never guesses a plural, array wrapper or
 template. JSON members validate beside primitive metadata; annotations, resources,
 simulation and seed data are not searched for schemas. Files with no schemas

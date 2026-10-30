@@ -30,8 +30,10 @@ and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
 Each world-table row has one writer. A Schema target can describe the whole
 value, for example `contracts/world.md#orders` for an array. When omitted, a
-unique declared record named or linked in the row supplies its schema; otherwise
-the check reports unchecked declarations. Leading slash Key or Path cells are
+unique declared record designated by a schema link, exact inline-code identifier
+or whole plain Key/What it holds cell supplies its schema. Prose words, path
+components and Writer/Readers labels do not select records. Without a unique
+selection, the check reports unchecked declarations. Leading slash Key or Path cells are
 exact JSON Pointers. Key namespace declarations such as `/kv/shop` cover the
 root seed container without assigning a writer to its parents. A declared key
 may be absent initially; uncovered top-level seed keys need declarations.

@@ -136,9 +136,14 @@ the same key/path are problems; blanks supply no conflicting mapping. Do not
 require product parts.
 
 A nonblank Schema cell takes precedence. Otherwise find known declared records
-linked or named by exact record-name tokens anywhere in the ownership row,
-including What it holds. Known records include valid recognized JSON members as
-well as Markdown and root schemas. Naming or linking one such member uniquely
+designated in the row by a schema link, an inline-code span whose complete content is an exact
+record identifier, or a whole plain Key or What it holds cell exactly equal to
+a record name. Links and code spans may occur in Key, Path, What it holds or
+other descriptive cells; Writer and Readers actor labels never designate schemas.
+Ordinary prose words and the terminal component of a world path do not designate
+records: neither "Run events: work resumed" nor `/wire/work` selects `work`.
+Known records include valid recognized JSON members as well as Markdown and
+root schemas. Naming or linking one such member uniquely
 selects that member as an authority; this does not promote its unselected siblings
 or every implicit member globally. Resolve links relative to world.md and use canonical
 record identities: repeated mentions of one identity coalesce. Exactly one

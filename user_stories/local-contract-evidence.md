@@ -15,9 +15,11 @@
 Writer cells split on commas, standalone and, and slash; repeated trimmed actors
 coalesce. Recognized JSON members validate independently; annotation-only payloads,
 resources, simulation and seeds remain data unless a schema target is explicit.
-An explicit Schema wins; otherwise exactly one canonical declared identity named
-or linked in a row selects its schema. Unknown or ambiguous inference leaves a
-warning, never an invented mismatch. Missing-schema counts use unique declared
+An explicit Schema wins; otherwise exactly one canonical declared identity designated
+by a schema link, exact inline-code identifier in a non-actor cell, or whole
+plain Key/What it holds cell selects its schema. Ordinary prose, path components
+and Writer/Readers actor labels do not designate records. Unknown or ambiguous
+inference leaves a warning, never an invented mismatch. Missing-schema counts use unique declared
 keys/paths, including absent and symbolic declarations. Declared same-field-set
 shape disagreements warn once per pair, including small records. Warnings alone
 exit 0 and never hide genuine problems. Leading slash means JSON Pointer under
