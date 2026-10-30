@@ -98,6 +98,21 @@
         "AC4"
       ],
       "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK authored eligibility: visible later chains cannot authorize ignored direct or folder paths",
+      "criterion_ids": [
+        "AC3",
+        "AC5"
+      ],
+      "baseline_expectation": "ERR_ASSERTION at safe visible source acceptance; current bad code fails ignored authored refusal"
+    },
+    {
+      "name": "LINK contracts boundary: safe source acceptance preserves standalone command no-follow refusal",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "baseline_expectation": "ERR_ASSERTION at safe source acceptance; current bad code fails standalone command refusal"
     }
   ],
   "not_replayed": [
