@@ -12,10 +12,11 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const checks = fake => fake.posts.filter(p => p.command === 'check');
 async function fixture(t) {
-  const setup = harbor(t); let delay = false;
+  const setup = harbor(t); let delay = false, held = null;
   const fake = await fakeRuntime(t, async (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);
     if (e.command === 'lint') return { status: 200, json: f.lint(id) };
+    if (held && e.command === 'check') { const current = held; held = null; current.entered.resolve(); await current.resume.promise; }
     if (delay) await pause(40);
     const answer = f.check(id); answer.usage.calls = 4;
     return { status: 200, json: answer };
@@ -31,7 +32,7 @@ async function fixture(t) {
   const saved = read(file);
   Object.assign(saved.rows[0], { phase: 'local', state: 'not_run', request_ids: [], eligible: true, can_retry: true, busy: true, retry_at: null });
   writeFileSync(file, JSON.stringify(saved)); delay = true;
-  return { setup, env, fake, run, batch, folder, file };
+  return { setup, env, fake, run, batch, folder, file, holdCheck: () => { const current = { entered: deferred(), resume: deferred() }; held = current; return current; } };
 }
 function passed(r) {
   assert.equal(r.code, 0, r.err + r.out);
@@ -41,7 +42,9 @@ function passed(r) {
 
 test('2675: two same-process retries send one check and keep its receipt and accounting', async t => {
   const r = await fixture(t), before = checks(r.fake).length;
-  const results = await Promise.all([r.run({ '--retry': r.batch }), r.run({ '--retry': r.batch })]);
+  const gate = r.holdCheck(), first = r.run({ '--retry': r.batch }); await gate.entered.promise;
+  const second = await r.run({ '--retry': r.batch }); gate.resume.resolve();
+  const results = [await first, second];
   assert.equal(checks(r.fake).length - before, 1, 'only one held check may be sent');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
@@ -68,10 +71,12 @@ function worker(r, options, words = []) {
 
 test('2675: separate processes admit one retry and refuse the live competitor', async t => {
   const r = await fixture(t), before = checks(r.fake).length;
-  const a = worker(r, { '--retry': r.batch }), b = worker(r, { '--retry': r.batch });
-  t.after(() => { a.child.kill(); b.child.kill(); });
+  const gate = r.holdCheck(), a = worker(r, { '--retry': r.batch }); await gate.entered.promise;
+  const b = worker(r, { '--retry': r.batch });
+  t.after(() => { a.child.kill(); b.child.kill(); gate.resume.resolve(); });
   await Promise.all([a.started, b.started]);
-  const results = await Promise.all([a.done, b.done]);
+  const second = await b.done; gate.resume.resolve();
+  const results = [await a.done, second];
   assert.equal(checks(r.fake).length - before, 1, 'an in-memory lock is insufficient');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
@@ -118,12 +123,12 @@ test('2675: acquisition is a runtime-faked boundary and releases after source re
   assert.equal(acquired, 2); assert.equal(released, 2);
 });
 
-for (const kind of ['live', 'dead', 'malformed', 'guard']) test(`2675: native lock handles ${kind} owners without unsafe age expiry`, async t => {
+for (const kind of ['live', 'dead', 'foreign', 'malformed', 'guard']) test(`2675: native lock handles ${kind} owners without unsafe age expiry`, async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function', 'native lock boundary must exist');
   const folder = temp(t), lock = join(folder, 'batch.lock'), guard = join(folder, 'batch.lock.claim');
   let deadPid;
   if (kind === 'dead') { const child = spawn(process.execPath, ['-e', '']); deadPid = child.pid; await new Promise(done => child.on('close', done)); }
-  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : JSON.stringify({ pid: kind === 'dead' ? deadPid : process.pid, host: hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
+  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : JSON.stringify({ pid: kind === 'dead' ? deadPid : process.pid, host: kind === 'foreign' ? 'another-host' : hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
   if (kind === 'dead') {
     const warnings = []; const release = await client.acquireRuntimeBatchLock(folder, { onWarning: line => warnings.push(line) });
     assert.equal(warnings.length, 1); assert.match(warnings[0], /recover|dead|abandon/i);
