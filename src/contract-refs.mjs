@@ -61,7 +61,7 @@ function writeJson(value, {canonical = false, collect = true, tooBig = () => { t
     if (!object(item) && !Array.isArray(item)) { append(JSON.stringify(item)); return; }
     if (!collect && measured.has(item)) { size += measured.get(item); if (size>LIMIT) tooBig(); return; }
     const initialSize = size;
-    const layout = !canonical && layouts.get(item), keys = canonical ? Object.keys(item).sort() : keysOf(item);
+    const layout = !canonical && layouts.get(item), keys = canonical && !Array.isArray(item) ? Object.keys(item).sort() : keysOf(item);
     if (layout && layout.keys.every(key => Object.hasOwn(item,key)) && keys.length >= layout.keys.length) {
       let offset = layout.start;
       for (const entry of layout.entries) {
