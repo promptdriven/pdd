@@ -58,14 +58,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (\"gone\", \"also gone\").\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (`\"gone\"`, `\"also gone\"`).\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC1",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (\"gone\", \"also gone\").\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 3 → 2 tests. Removed: 2 (`\"gone\"`, `\"also gone\"`).\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -109,14 +109,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (\"lost\").\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (`\"lost\"`).\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC2",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (\"lost\").\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/deleted.test.mjs\" 1 → 0 tests. Removed: 1 (`\"lost\"`).\nTests vs base: \"test/old.test.mjs\" → \"test/renamed.test.mjs\" 1 → 1 tests. Removed: none.\nTests vs base: \"tests/-新\\tline\\nname.test.mjs\" 0 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"

@@ -30,7 +30,7 @@ Recognize line-leading JS `test(` or `it(`, optionally with `.only`, `.skip` or 
 
 A conventional JS body may be inline on its declaration line, otherwise it ends at the first `});` line with the declaration's indentation; Python ends on the next nonblank, noncomment line at equal/lower indentation, and Go on the first unindented `}`. Nested recognized declarations belong to their own case; assertion lines belong to the innermost enclosing recognized body. Declarations with no body (such as a todo) have none. Unrecognized/multiline constructs can be missed; never describe this as complete coverage.
 
-Kept identity is static name plus its occurrence number in source order within the corresponding file pair. Nested suite names do not change this identity. Match renamed files using Git's supplied rename pair. A case name change is removal plus addition. A file deletion removes all its recognized cases. Duplicate names remain separate occurrences; later occurrences display ` [N]` after the quoted name.
+Kept identity is static name plus its occurrence number in source order within the corresponding file pair. Nested suite names do not change this identity. Match renamed files using Git's supplied rename pair. A case name change is removal plus addition. A file deletion removes all its recognized cases. Duplicate names remain separate occurrences; later occurrences display ` [N]` after the rendered name.
 
 ## Assertion and skip changes
 
@@ -42,11 +42,15 @@ Also recognize line-leading `describe(` / `describe.skip(` with a complete stati
 
 ## Report format
 
-Order files lexically by new path, or old path for deletion, using JavaScript string order; preserve declaration and changed-line source order inside each file. Display a rename as `OLD → NEW`; other files use their existing path. All source-derived paths, names and lines are JSON string literals using standard JSON string escaping: short escapes `\t`, `\n`, `\r`, `\b` and `\f` for tab, newline, carriage return, backspace and form feed, and JSON Unicode escapes for other control characters. Then escape `&`, `<`, `>`, backtick, pipe, colon, `@` and `#` as HTML numeric entities (`&#64;` and `&#35;` for the added characters), and explicitly escape bidirectional formatting characters as JSON Unicode escapes. This prevents data from creating headings, links, HTML or workflow markers. Keep exact raw path/name/line identity internally; no trim or whitespace collapse.
+Order files lexically by new path, or old path for deletion, using JavaScript string order; preserve declaration and changed-line source order inside each file. Display a rename as `OLD → NEW`; other files use their existing path. Keep exact raw path/name/line identity internally; no trim or whitespace collapse.
+
+Every source-derived test or suite name, assertion line and skip marker line is a JSON string literal, including its opening and closing double quotes, inside a Markdown code span wherever it appears in the report. First apply standard JSON string escaping: short escapes `\t`, `\n`, `\r`, `\b` and `\f` for tab, newline, carriage return, backspace and form feed, and JSON Unicode escapes for other control characters; retain explicit JSON Unicode escaping for bidirectional formatting characters. Preserve a line-ending carriage return as `\r`. Do not HTML-entity-escape any content of these literals, including `&`, `<`, `>`, backticks, pipe, colon, `@` or `#`. Surround the complete literal with matching backtick runs of length one greater than the longest consecutive backtick run inside that literal (one backtick when it contains none). The double quotes are the payload boundaries, so add no padding, trim nothing and preserve leading/trailing spaces and backticks inside the quotes. This code span prevents names and source lines from creating GitHub mentions, issue links, closing keywords, HTML or Markdown structure. Duplicate occurrence suffixes such as ` [2]` remain outside the span.
+
+Paths and unavailable reasons retain their existing JSON-literal format: apply the same JSON/control/bidirectional escaping, then HTML numeric entities for `&`, `<`, `>`, backtick, pipe, colon, `@` and `#`. This retained entity format is not a guarantee against GitHub mentions or issue links; the code-span rule above owns that protection for names and source lines.
 
 For each unavailable candidate file pair show `Tests vs base: PATH unavailable (REASON).`, plus `Changed assertions in kept tests: PATH unavailable (REASON).` and `New skips: PATH unavailable (REASON).`; REASON is an escaped JSON string literal. Keep these lines in the corresponding category and lexical file order; a category with any unavailable entry (including a capped assertion comparison) must not also claim `none`. For each healthy changed candidate file show `Tests vs base: PATH B → H tests. Removed: N (NAMES).` Use `Removed: none.` when zero. With no candidate files use `Tests vs base: none.` Then one `Changed assertions in kept tests: PATH NAME OLD → NEW.` per changed pair, or `Changed assertions in kept tests: none.` Finally one `New skips: PATH NAME LINE.` per introduced marker, or `New skips: none.` Use the literal unquoted `(removed)` / `(added)` for absent assertion sides. Every report ends with `Static inventory only; tests were not run.` and a newline.
 
-`details` holds the complete escaped report. `text` is identical when it fits 12,000 Unicode code points. Otherwise retain all file count/removal-count and unavailable-file summary lines (omit names first), then as many complete detail lines as fit, ending with `Inventory details omitted: N lines; full report: test-inventory.json in the run folder.` and the static disclaimer. If even summaries exceed that budget, retain whole summaries that fit and disclose omitted file and detail-line counts. Never truncate inside a quoted value or silently omit evidence.
+`details` holds the complete formatted report. `text` is identical when it fits 12,000 Unicode code points. Otherwise retain all file count/removal-count and unavailable-file summary lines (omit names first), then as many complete detail lines as fit, ending with `Inventory details omitted: N lines; full report: test-inventory.json in the run folder.` and the static disclaimer. If even summaries exceed that budget, retain whole summaries that fit and disclose omitted file and detail-line counts. Never truncate inside a formatted value or silently omit evidence.
 
 An unavailable report has `available:false`, a nonblank bounded reason, and identical text/details: `Tests vs base: unavailable (REASON).\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\nStatic inventory only; tests were not run.\n`. REASON uses the same escaped JSON-literal convention; do not expose raw stderr, host paths or credentials. Use stable reasons `invalid commit identity`, `snapshot unavailable`, `snapshot read failed`, or `inventory limit exceeded` as applicable. Success has `available:true` and empty reason, even when there are removals, changed assertions or explicitly reported unavailable file pairs or per-test assertion comparisons.
 
@@ -58,8 +62,8 @@ None. Runtime `snapshot.read` supplies the native injected snapshot callback. Th
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "808425701270a0ddcff10d0ce48788a7589643cd89aa65b6c1e5299cf8bfde98",
+  "status": "draft",
+  "prose_sha256": "88e42ed505d61387130c612cca84542ee0b7cd2aee6828cde66d10de316e9e93",
   "entries": [
     {
       "operation": "analyzeTestChanges",

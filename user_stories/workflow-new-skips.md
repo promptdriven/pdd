@@ -14,4 +14,6 @@ Skips are differences between the exact resolved comparison commits, including x
 
 ## Review status
 
-The reviewed contract is approved following the fresh scoped check: the four synthetic cases passed all 12 checks (receipt in PLAN.md). The original cases retain their inputs, criteria and step identities; two report strings received explicitly person-approved @-escaping updates. Across the three Stories, the 31 other expected checks remain unchanged. Native regression proof must cover each new skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.
+Current formatting draft: NOT CHECKED / NOT APPROVED. The earlier scoped result of 3/3 criteria and 12/12 checks is historical and does not validate this draft. The original inputs, criteria, check positions and operators remain unchanged; only report-value formatting changes are proposed for person review. The earlier two person-approved @-entity expectation changes remain historical; this draft replaces that format with the inventory owner's JSON-literal code spans.
+
+Native regression proof must cover each skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.

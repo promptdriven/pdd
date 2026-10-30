@@ -46,14 +46,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"assert.equal(stderr, '');\" → \"assert.match(stderr, /PATH selects&#58;/);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" `\"PATH2\"` `\"assert.equal(stderr, '');\"` → `\"assert.match(stderr, /PATH selects:/);\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC1",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"assert.equal(stderr, '');\" → \"assert.match(stderr, /PATH selects&#58;/);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" `\"PATH2\"` `\"assert.equal(stderr, '');\"` → `\"assert.match(stderr, /PATH selects:/);\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -78,14 +78,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"test(\\\"PATH2\\\", () =&#62; assert.equal(stderr, \\\"\\\"));\" → \"test(\\\"PATH2\\\", () =&#62; assert.match(stderr, /PATH selects&#58;/));\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" `\"PATH2\"` `\"test(\\\"PATH2\\\", () => assert.equal(stderr, \\\"\\\"));\"` → `\"test(\\\"PATH2\\\", () => assert.match(stderr, /PATH selects:/));\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC1",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" \"PATH2\" \"test(\\\"PATH2\\\", () =&#62; assert.equal(stderr, \\\"\\\"));\" → \"test(\\\"PATH2\\\", () =&#62; assert.match(stderr, /PATH selects&#58;/));\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/path.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/path.test.mjs\" `\"PATH2\"` `\"test(\\\"PATH2\\\", () => assert.equal(stderr, \\\"\\\"));\"` → `\"test(\\\"PATH2\\\", () => assert.match(stderr, /PATH selects:/));\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -117,14 +117,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (\"gone\").\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" \"assert.ok(true);\" → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (`\"gone\"`).\nChanged assertions in kept tests: \"test/a.test.mjs\" `\"keep\"` `\"assert.ok(true);\"` → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC2",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (\"gone\").\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" \"assert.ok(true);\" → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 1 tests. Removed: 1 (`\"gone\"`).\nChanged assertions in kept tests: \"test/a.test.mjs\" `\"keep\"` `\"assert.ok(true);\"` → (removed).\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -156,14 +156,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" (added) → \"expect(value).toBe(2);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" `\"keep\"` (added) → `\"expect(value).toBe(2);\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC3",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" \"keep\" (added) → \"expect(value).toBe(2);\".\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/a.test.mjs\" `\"keep\"` (added) → `\"expect(value).toBe(2);\"`.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
