@@ -285,9 +285,9 @@
     "publication.currentHead": {
       "action": "collection.get",
       "world_pointer": "/publication_currentHead",
-      "key_argument_pointer": "",
+      "key_argument_pointer": "/root",
       "value_argument_pointer": null,
-      "item_key_pointer": "/request",
+      "item_key_pointer": "/request/root",
       "item_value_pointer": "/reply",
       "result_template": {},
       "result_value_pointer": ""
@@ -295,9 +295,9 @@
     "publication.readStepNotes": {
       "action": "collection.get",
       "world_pointer": "/publication_readStepNotes",
-      "key_argument_pointer": "",
+      "key_argument_pointer": "/runDir",
       "value_argument_pointer": null,
-      "item_key_pointer": "/request",
+      "item_key_pointer": "/request/runDir",
       "item_value_pointer": "/reply",
       "result_template": {},
       "result_value_pointer": ""
@@ -305,9 +305,9 @@
     "publication.readOldCodeProof": {
       "action": "collection.get",
       "world_pointer": "/publication_readOldCodeProof",
-      "key_argument_pointer": "",
+      "key_argument_pointer": "/runDir",
       "value_argument_pointer": null,
-      "item_key_pointer": "/request",
+      "item_key_pointer": "/request/runDir",
       "item_value_pointer": "/reply",
       "result_template": {},
       "result_value_pointer": ""
