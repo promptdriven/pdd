@@ -1536,7 +1536,7 @@ function tryPromptProblem(root, found, test, record, capture) {
     }
     capture={sources,references,raw_prompt_hashes};
   }
-  if (!isObject(hashes) || !Object.keys(hashes).length || !test.doc?.steps?.every(step=>typeof hashes[step.entry_path]==='string')
+  if (!isObject(hashes) || !Object.keys(hashes).length || (test && !test.doc?.steps?.every(step=>typeof hashes[step.entry_path]==='string'))
     || !Object.entries(hashes).every(([path,expected])=>found.visible.has(path) && capture.raw_prompt_hashes[path]===expected)) return 'A prompt changed or this Try has no source record.';
   const current=Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)]));
   if (isObject(record.effective_prompt_hashes) && Object.keys(hashes).every(path=>typeof record.effective_prompt_hashes[path]==='string')) {
@@ -2036,10 +2036,8 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
   if (saved) {
     const found=findTests({root}), test=found.tests.find(test=>test.path===saved[0]);
-    if (test) {
-      const problem=tryPromptProblem(root,found,test,saved[1]);
-      if (problem) throw new Stop(125,`${problem} Run pdd try STORY --new.`);
-    }
+    const problem=tryPromptProblem(root,found,test,saved[1]);
+    if (problem) throw new Stop(125,`${problem} Run pdd try STORY --new.`);
   }
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
