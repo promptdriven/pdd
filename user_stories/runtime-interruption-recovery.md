@@ -16,7 +16,7 @@ Synchronize interruption after durable claim/request recording and before the ac
 
 For overlapping retries, measure actual check POSTs and their paid request identity. Extra local IDs do not count as paid work; the losing live competitor still allocates no IDs and makes no GET, POST or save. Preserve the receipt and accounting in a later batch read.
 
-Confirmed unstarted capacity may retry without an attempt ceiling inside the caller deadline. Cover more than three attempts, finite timeout and interruption without fixing a final attempt count. Lost or unverifiable execution permits only same-ID reads; fresh refusal keeps its own reason and exit. Neither may inherit busy/retry eligibility or stale advice. Preserve receipts, existing exit codes and secret redaction.
+Confirmed unstarted capacity may retry without an attempt ceiling inside the caller deadline. Apply the [Check upload wait](../prompts/cli/runtime-client.prompt.md#check-admission-and-confirmed-capacity-recovery), including saved absolute times; server advice alone cannot shorten it. Cover more than three attempts, finite timeout and interruption without fixing a final attempt count. Lost or unverifiable execution permits only same-ID reads; fresh refusal keeps its own reason and exit. Neither may inherit busy/retry eligibility or stale advice. Preserve receipts, existing exit codes and secret redaction.
 
 ## Native cases for the code step
 
