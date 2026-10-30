@@ -48,6 +48,12 @@ A reused Try retains its uploaded prompt bytes. Before overwriting a launcher or
 local entry prompt bytes with the original private descriptor (and with the prompt hashes captured at session
 creation). Refuse changed prompts with a --new hint; never relabel old runtime output with a new prompt hash.
 An older session without pinned source hashes needs --new before becoming a CLI.
+
+For shared-reference prompts, apply the runtime client's expanded-prompt
+freshness rule alongside the existing raw pins at CLI opening, invocation and
+case saving. Keep expanded hashes in the private descriptor; a contract-only
+prompt change requires --new. A referenced legacy session without that snapshot
+has an unavailable baseline. Do not add a scenario, seed or world freshness gate.
 Keep the reported before/after world privately alongside the last result. Like the hosted Try Save, the appended
 case records the last command's observed output; it does not rewrite the original scenario's initial_world or
 preceding steps. For a nonempty saved world, print a short reminder to review the saved-data setup before replay.

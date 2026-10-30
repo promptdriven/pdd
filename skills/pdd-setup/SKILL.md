@@ -2,7 +2,7 @@
 name: pdd-setup
 description: Set up a repo for PDD. Use when the person asks to set up PDD, add PDD to a project, or connect the PDD skills to this repo. Adds one short PDD block to CLAUDE.md or AGENTS.md.
 metadata:
-  pdd-skills: 0.1.10
+  pdd-skills: 0.1.11
 ---
 
 # PDD setup

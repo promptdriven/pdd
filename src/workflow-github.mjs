@@ -1,12 +1,16 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: b4c81b91c0b36e79ac40c221d82e7731f1485a5fa7f73e6f44e861a2e3a427ae).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 36d0e5fd080d47226c5d4e249f08028c8b15aebae220b24abc277ad69886b3b2).
 import { execFile } from 'node:child_process';
-import { constants } from 'node:fs';
-import { lstat, open, readFile, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { promisify } from 'node:util';
+import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
 
-const execute = promisify(execFile);
+const execute = (file, args, options) => new Promise((resolve, reject) => {
+  const { input, ...execOptions } = options;
+  const child = execFile(file, args, execOptions, (error, stdout, stderr) => {
+    if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
+    else resolve({ stdout, stderr });
+  });
+  if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
+});
 const fields = 'number,url,state,headRefName,baseRefName,headRefOid,mergeCommit,body,isCrossRepository,headRepository,headRepositoryOwner';
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$/.test(value);
 const text = value => typeof value === 'string' && value.length > 0 && !/[\u0000-\u001f\u007f]/u.test(value);
@@ -39,11 +43,11 @@ function refusal(stderr) {
 }
 
 function dependencies(ports = {}) {
-  const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
-    { cwd, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
-  async function raw(cwd, file, args) {
+  const run = ports.execFile ?? ((file, args, { cwd, input }) => execute(file, args,
+    { cwd, input, encoding: 'utf8', shell: false, maxBuffer: 8 * 1024 * 1024 }));
+  async function raw(cwd, file, args, input) {
     let result;
-    try { result = await run(file, args, { cwd }); }
+    try { result = await run(file, args, { cwd, ...(input === undefined ? {} : { input }) }); }
     catch (error) {
       if (!Number.isInteger(error?.code) || error.code === 0) fail('workflow_github_command_unavailable');
       result = { code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
@@ -58,34 +62,7 @@ function dependencies(ports = {}) {
     if (result.code !== 0) throw Object.assign(new Error('workflow_github_command_failed'), { code: 'workflow_github_command_failed', detail: result.stderr });
     return result.stdout;
   }
-  return { raw, command, readFile: ports.readFile ?? ((file, encoding) => readFile(file,
-    { encoding, flag: constants.O_RDONLY | constants.O_NOFOLLOW })),
-  async writeFile(file, body, encoding) {
-    await assertBodyPath(file);
-    return (ports.writeFile ?? writeBodyFile)(file, body, encoding);
-  } };
-}
-
-
-async function assertBodyPath(file) {
-  if (await realpath(dirname(file)) !== dirname(file)) fail('workflow_github_body_unsafe');
-  try {
-    const entry = await lstat(file);
-    if (!entry.isFile() || entry.nlink !== 1) fail('workflow_github_body_unsafe');
-    return entry;
-  } catch (error) { if (error?.code !== 'ENOENT') throw error; }
-}
-
-async function writeBodyFile(file, body, encoding) {
-  // Open without truncation or following the final link; validate the opened file before modifying it.
-  const handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o666);
-  try {
-    const opened = await handle.stat(), entry = await assertBodyPath(file);
-    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== entry?.dev || opened.ino !== entry?.ino)
-      fail('workflow_github_body_unsafe');
-    await handle.truncate(0);
-    await handle.writeFile(body, encoding);
-  } finally { await handle.close(); }
+  return { raw, command };
 }
 
 function originRepository(remote) {
@@ -133,6 +110,10 @@ function issueSelector(issue) {
   return { repository: match[1], number: Number(match[2]) };
 }
 
+export async function resolveWorkflowRepository({ cwd } = {}, ports = {}) {
+  return repositoryAt(cwd, dependencies(ports));
+}
+
 export async function resolveWorkflowIssue(input, ports = {}) {
   const { cwd, issue } = structuredClone(input ?? {}), selected = issueSelector(issue);
   if (!Number.isSafeInteger(selected.number) || selected.number < 1) fail('workflow_github_issue_invalid');
@@ -156,20 +137,13 @@ function markerBody(body, marker) {
   return true;
 }
 
-async function localTopic(cwd, baseBranch, bodyFile, deps) {
-  if (!text(baseBranch) || !text(bodyFile)) fail('workflow_github_topic_invalid');
-  await assertBodyPath(bodyFile);
+async function localTopic(cwd, baseBranch, deps) {
+  if (!text(baseBranch)) fail('workflow_github_topic_invalid');
   await deps.command(cwd, 'git', ['check-ref-format', '--branch', baseBranch]);
   const root = (await deps.command(cwd, 'git', ['rev-parse', '--show-toplevel'])).trim();
   if (!isAbsolute(root)) fail('workflow_github_root_invalid');
-  const bodyRelative = relative(root, bodyFile), inside = bodyRelative && bodyRelative !== '..'
-    && !bodyRelative.startsWith('..' + sep) && !isAbsolute(bodyRelative);
-  if (inside) {
-    const tracked = await deps.raw(cwd, 'git', ['ls-files', '--error-unmatch', '--', bodyRelative]);
-    if (tracked.code !== 1) fail('workflow_github_body_must_be_untracked');
-  }
   const status = await deps.command(cwd, 'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  if (status.split('\0').filter(Boolean).some(row => !(inside && row === '?? ' + bodyRelative)))
+  if (status.split('\0').filter(Boolean).length)
     fail('workflow_github_worktree_dirty');
   const headBranch = (await deps.command(cwd, 'git', ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
   await deps.command(cwd, 'git', ['check-ref-format', '--branch', headBranch]);
@@ -184,30 +158,25 @@ async function localTopic(cwd, baseBranch, bodyFile, deps) {
 }
 
 export async function prepareWorkflowPr(input, ports = {}) {
-  const { cwd, runId, stageId, repository, baseBranch, bodyFile, title: suppliedTitle } = structuredClone(input ?? {});
-  if (!identifier(runId) || !identifier(stageId) || !repositoryName(repository) || !text(bodyFile)
+  const { cwd, runId, stageId, repository, baseBranch, title: suppliedTitle } = structuredClone(input ?? {});
+  if (!identifier(runId) || !identifier(stageId) || !repositoryName(repository)
     || suppliedTitle !== undefined && (!text(suppliedTitle) || suppliedTitle.length > 256)) fail('workflow_github_intent_invalid');
   const deps = dependencies(ports), actual = await repositoryAt(cwd, deps);
   if (!sameRepo(repository, actual.repository)) fail('workflow_github_repository_mismatch');
-  const file = resolve(cwd, bodyFile), topic = await localTopic(cwd, baseBranch, file, deps);
+  const topic = await localTopic(cwd, baseBranch, deps);
   const title = suppliedTitle ?? (await deps.command(cwd, 'git', ['log', '-1', '--format=%s'])).trim();
   if (!text(title) || title.length > 256) fail('workflow_github_title_invalid');
   const marker = `pdd-workflow:${runId}:${stageId}`;
-  let body;
-  try { body = await deps.readFile(file, 'utf8'); }
-  catch (error) { if (error?.code !== 'ENOENT') throw error; body = title + '\n'; }
-  if (!markerBody(body, marker)) body += (body.endsWith('\n') ? '\n' : '\n\n') + `<!-- ${marker} -->\n`;
-  await deps.writeFile(file, body, 'utf8');
-  return { repository: actual.repository, runId, stageId, ...topic, baseBranch, marker, title, bodyFile: file };
+  return { repository: actual.repository, runId, stageId, ...topic, baseBranch, marker, title };
 }
 
 function intentCopy(value) {
   const intent = structuredClone(value);
-  if (!intent || Object.keys(intent).sort().join(',') !== 'baseBranch,bodyFile,headBranch,headSha,marker,repository,runId,stageId,title'
+  if (!intent || Object.keys(intent).sort().join(',') !== 'baseBranch,headBranch,headSha,marker,repository,runId,stageId,title'
     || !repositoryName(intent.repository) || !identifier(intent.runId) || !identifier(intent.stageId)
     || intent.marker !== `pdd-workflow:${intent.runId}:${intent.stageId}` || !sha(intent.headSha)
     || !text(intent.headBranch) || !text(intent.baseBranch) || intent.headBranch === intent.baseBranch
-    || !text(intent.title) || !text(intent.bodyFile) || !isAbsolute(intent.bodyFile)) fail('workflow_github_intent_invalid');
+    || !text(intent.title)) fail('workflow_github_intent_invalid');
   return intent;
 }
 
@@ -259,21 +228,20 @@ export async function reconcileWorkflowPr(input, ports = {}) {
 export async function publishWorkflowPr(input, ports = {}) {
   let effectStarted = false, unpublishedOnly = false;
   try {
-    const { cwd, intent: supplied, unpublishedOnly: mode = false } = structuredClone(input ?? {});
+    const { cwd, intent: supplied, body, unpublishedOnly: mode = false } = structuredClone(input ?? {});
     if (typeof mode !== 'boolean') fail('workflow_github_recovery_mode_invalid');
     unpublishedOnly = mode;
     const intent = intentCopy(supplied), deps = dependencies(ports);
+    if (!markerBody(body, intent.marker)) fail('workflow_github_marker_missing');
+    if (characters(body) > PR_BODY_LIMIT) return outcome('failed', `The PR description has ${characters(body).toLocaleString('en-US')} characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.`);
     const actual = await repositoryAt(cwd, deps);
     if (!sameRepo(actual.repository, intent.repository)) fail('workflow_github_repository_mismatch');
     const found = await lookup(cwd, intent, deps);
     if (found.state === 'found') return unpublishedOnly
       ? outcome('recovery_required', 'An original PR already exists. Inspect it without unpublished-only publication.') : found.outcome;
     if (found.state !== 'absent') return outcome('recovery_required', 'Cannot confirm the original PR identity. Reconcile the saved intent without another publication.');
-    const topic = await localTopic(cwd, intent.baseBranch, intent.bodyFile, deps);
+    const topic = await localTopic(cwd, intent.baseBranch, deps);
     if (topic.headBranch !== intent.headBranch || topic.headSha !== intent.headSha) fail('workflow_github_source_changed');
-    const body = await deps.readFile(intent.bodyFile, 'utf8');
-    if (!markerBody(body, intent.marker)) fail('workflow_github_marker_missing');
-    if (characters(body) > PR_BODY_LIMIT) return outcome('failed', `The PR description has ${characters(body).toLocaleString('en-US')} characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.`);
     const pushRemote = (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim();
     if (!sameRepo(originRepository(pushRemote), intent.repository)) fail('workflow_github_repository_mismatch');
     if (unpublishedOnly) {
@@ -281,9 +249,9 @@ export async function publishWorkflowPr(input, ports = {}) {
       if (remote.code !== 2 || remote.stdout !== '')
         return outcome('recovery_required', 'The saved remote branch is present or its absence is unconfirmed. Inspect the same intent without publication.');
       // Remote reads can wait for authentication. Revalidate source and body after that boundary.
-      const current = await localTopic(cwd, intent.baseBranch, intent.bodyFile, deps);
+      const current = await localTopic(cwd, intent.baseBranch, deps);
       if (current.headBranch !== intent.headBranch || current.headSha !== intent.headSha
-        || await deps.readFile(intent.bodyFile, 'utf8') !== body) fail('workflow_github_source_changed');
+        || !markerBody(body, intent.marker)) fail('workflow_github_source_changed');
       const currentRepo = await repositoryAt(cwd, deps);
       if (!sameRepo(currentRepo.repository, intent.repository)
         || (await deps.command(cwd, 'git', ['remote', 'get-url', '--push', '--all', 'origin'])).trim() !== pushRemote)
@@ -295,7 +263,7 @@ export async function publishWorkflowPr(input, ports = {}) {
     if (remote?.code !== 0 || remote.stdout.trim() !== `${intent.headSha}\trefs/heads/${intent.headBranch}`)
       await deps.command(cwd, 'git', ['push', 'origin', `${intent.headSha}:refs/heads/${intent.headBranch}`]);
     const created = await deps.raw(cwd, 'gh', ['pr', 'create', '--repo', intent.repository, '--head', intent.headBranch,
-      '--base', intent.baseBranch, '--title', intent.title, '--body-file', intent.bodyFile]);
+      '--base', intent.baseBranch, '--title', intent.title, '--body-file', '-'], body);
     if (created.code !== 0) {
       // Read back first: an exact PR wins. Only GitHub's own refusal with no PR is certain; anything else stays unconfirmed.
       const found = await lookup(cwd, intent, deps);
@@ -309,7 +277,7 @@ export async function publishWorkflowPr(input, ports = {}) {
   } catch {
     return effectStarted || unpublishedOnly
       ? outcome('recovery_required', 'Push or PR creation is unconfirmed. Reconcile this same saved intent; do not publish again.')
-      : outcome('failed', 'Publication did not start. Check the saved intent, repository, clean topic branch and marked body file.');
+      : outcome('failed', 'Publication did not start. Check the saved intent, repository, clean topic branch and marked body.');
   }
 }
 

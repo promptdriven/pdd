@@ -1,5 +1,7 @@
 # PDD runtime runbook
 
+Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
+
 ## 1. What the runtime is
 
 The runtime runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
@@ -129,7 +131,8 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
 - Expected values come from the story and the person. Never take them from a run, a Try or the code.
 - If the story allows two answers, ask the person. Example: "every 10th coffee free" gives $4.95 off, but
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
-- Never change a test to make it pass. Fix the prompt. If you think an expected value is wrong, tell the person.
+- A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.
+  Never change a test to make it pass.
 
 **Possible numeric mismatches.** pdd checks nearby numeric literals as typo advice, not as a verdict. It uses the
 result path and companion checks to distinguish a component from a total. The warning names the test, step/check,
@@ -151,6 +154,8 @@ suppresses nothing. It is local authoring metadata and is not automatically uplo
 and all Runtime checks stay in force.
 
 ## 5. Saved data
+
+The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [record-id fragment in §21](#verify-a-record-id).
 
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
@@ -230,6 +235,9 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   `/internal/store--op-add--hex-616464` counts the calls of `add`.
 - Two prompt files with the same file name get other node names. Give each prompt its own file name.
 - `got {"missing": true}` means that the path names no node. The path is wrong, not the prompt: fix only the path.
+  For the `error` target, pdd prints `got no error (a normal result)` when the step returned a result and no error.
+  Then the path is right, and the prompt did not refuse this input. If pdd still prints `got {"missing": true}` on
+  `error`, an error came back without that field: compare the path with the prompt's declared errors.
   A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
@@ -269,7 +277,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 ## 11. `pdd check`
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
-`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
+`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
 Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
@@ -289,11 +297,29 @@ failed, the real reason and what to do next: pass that line on as it is.
 | Exit | Result | What to do |
 |---|---|---|
 | 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a Try. |
-| 1 | failed | Show the person the failed check. Fix the prompt. Never change the expected value yourself. |
-| 4 | refused | Nothing was judged. Fix the file that pdd names (table below). If the fix changes an expected value, ask the person. |
+| 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
+| 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
 | 3 | unknown or still running | Run `pdd check --read` about every minute until every Story has a result. Never send the check again. |
 | 2 | command error | Wrong command or story name. Run `pdd check --help`. |
+
+**After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.
+1. Read pdd's `Why:`, `Next:` and `Rerun:` lines when pdd prints them. Open "Debug this step" on the report. Read the
+   criterion text, the prompt and the test step.
+2. Tell the person in three lines: the kind, the evidence and the fix you propose.
+3. Act by kind:
+
+| Kind | Evidence | What you do |
+|---|---|---|
+| The prompt is wrong | The Story and the step input give the expected value; the prompt does something else | Fix the prompt. Check that Story once. |
+| The program needs a tool | Only a hash, a digest or exact math shows the right answer | Declare a `compute` resource (section 21, "Hash exact bytes"). Check once. |
+| The test path is wrong | `got {"missing": true}` on `result` or `world` (section 8) | Fix only the path. |
+| The expected value may be wrong | The Story does not give this value, or gives another one | Stop. Ask the person: keep the value (you fix the prompt) or change the test. Give an example. |
+| The Story is unclear | Two answers fit the Story | Stop. Ask the person to decide the rule in the Story. |
+| The answer changes between runs | `Rerun: failed 1 of 3 (unstable)` | Make the rule in the prompt firmer. Do not fit the prompt to one answer. |
+| No verdict | `no verdict ·` with an AI-service or limit cause, or `busy ·` when the remaining checks are busy. Exit 3, 4 or 5 can also hide a failed Story: read each Story line | Tell the person, with pdd's next step. Change no file. Never send it again on your own. |
+
+4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
 - After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
 - A `possible numeric mismatch` is advisory. Confirm the quantities against the Story and prompt; retain a correct
@@ -311,7 +337,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-result-failure` | Often the prose calls a prompt more than `max_calls` | Make the prose and `max_calls` agree. |
 | `run-admission-failed` | Nothing ran (0 AI calls). Often one step's worst case is bigger than `--max-calls` (section 10). Other causes give the same code with no reason | Raise `--max-calls` (at most 1000), or lower `max_calls` in the prompt's `calls`. The interface `limits` do not help. If it stays, tell the person. |
 | `invalid-context` | `context` is not a list of `{"prompt_path", "paths"}` rows, for example a text note (section 2). | Fix the rows, or use `[]`. |
-| `graph-provider-failure` | The AI service failed. No verdict, also when pdd prints `✗ … 1 refused` | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
+| `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
 ## 12. `pdd try` and Save as test
@@ -455,8 +481,9 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
    The expected value comes from the issue and the person.
 2. Run `pdd check <story>` on the CURRENT prompt. Do not change the prompt first.
-3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Fix the
-   prompt first (set draft, fill the hash), and check again until ✓.
+3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Find the
+   cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix
+   rounds, then ask the person.
 4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
    the code fix.
 5. The check report shows before ✗ → after ✓. `pdd try <story>` opens with the issue's input ready.
@@ -490,9 +517,20 @@ Report: https://…/r/617480ac-…
 
 ## 17. Code space: replay evidence and the formal check
 
+On `agent thread limit reached`, follow the workflow skill's checking fallback. Before checking, close finished subagents if supported, then try a fresh checker first. Only after fresh startup failure may verify/formal reuse an agent that wrote no code, tests or prompts in this run. If no eligible checker can run:
+
+- For review, write `Not checked: review (agent limit)` in the review run file; review always needs a fresh agent, never a reused checker.
+- For another unrun check, write `Not checked: <step> (agent limit)` in its run file.
+
+Stop and tell the person to start a new agent session in the run's worktree. No verdict or `workflow done` for unrun checks.
+`pdd workflow open 42` focuses or resumes the same session; it does not start a new one or clear the limit.
+Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
+
 Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
+
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
@@ -507,8 +545,11 @@ identity only. It does not independently prove execution or prompt/code equivale
   the old code). At least one assertion must fail there. A crash does not count.
 - Write the table into `verify.md`: case, criterion, input, expected, prompt check, code (got), result.
   Also show that `tests/<story>.json` is unchanged since prompt space.
-- A ✗ case goes back to `build` (at most 2 rounds). If it still fails, the code-space PR opens with
-  "✗ N vectors fail" as its first line. Keep actual failures; never change expected values to get a pass.
+- In bug and feature, finish the initial build, verify and formal steps with fresh independent review.
+  After the initial review, a ✗ case or review must-fix goes back to `build` (at most 2 repair rounds),
+  then verify, formal and fresh review. The code-space PR keeps the actual `Review:` verdict and remaining
+  must-fix list at the top, plus "✗ N vectors fail" if vectors still fail. No new human gate.
+  Keep actual failures; never change expected values to get a pass.
 
 **The formal check (done by an agent that did not write the code).**
 - Every code-space PR has a "Formal check" section with one result: **Proved (bounded)**, **Proved (solver)**,
@@ -775,6 +816,28 @@ The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The de
 ```
 
 Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/5b26a5ee-1b45-4a79-beb6-ae1dd4c891a3).
+
+### Verify a record id
+
+This is a fragment, not a runnable example. It shows only the two parts that hashing adds. To run it, you also need a Story, a prompt with a full Runtime interface (its `entries`, `prose_sha256` and `limits`), a scenario with steps and checks, and the native module. "Hash exact bytes" above is a complete example.
+
+`verify(record)` gets a record with `text` and `id`, and returns `{"valid": boolean}`. The prompt removes `id`, calls `compute.hash_json` with `{"value": {"text": record.text}}`, and compares the returned lowercase SHA-256 with `id`.
+
+The `resources` entry of the prompt's Runtime interface:
+
+```json
+{"resources":[{"name":"compute","kind":"compute","access":"read","operations":[{"name":"hash_json","access":"read","arguments_schema":{"type":"object","properties":{"value":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}},"required":["value"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}]}]}
+```
+
+The `simulation` entry of the scenario:
+
+```json
+{"simulation":{"compute.hash_json":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"}}}
+```
+
+`hash_json` hashes the runtime's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the runtime's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
+
+Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
 
 ### Inject a fixed-answer callback
 

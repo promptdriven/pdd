@@ -127,7 +127,7 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   const posts = fake.posts.length;
   const read = await check(setup, fake, [batch], { '--read': true });
   assert.equal(read.code, 1, read.err + read.out); assert.equal(fake.posts.length, posts); assert.equal(read.clock.uuids, 0);
-  assert.match(read.out, /FAILED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}AC1 {2}result \/totalCents {2}expected 899, got 900/);
+  assert.match(read.out, /FAILED {2}Place a coffee order \(tests\/place-order\.json\)\n {2}AC1 {2}step [^ ]+ {2}result \/totalCents {2}expected 899, got 900/);
   const last = await check(setup, fake, [], { '--read': true, '--json': true });
   assert.equal(last.code, 1); assert.equal(last.json.batch, batch); assert.equal(fake.posts.length, posts); assert.equal(last.clock.uuids, 0);
   assert.equal(last.json.rows[0].request_id, fake.posts[1].request.requestId);
@@ -205,11 +205,208 @@ test('RUNTIME-SERVER9: a failed check shows one line per failed check, the warni
   assert.equal(result.code, 1, result.err);
   const lines = result.out.split('\n');
   const at = lines.indexOf('FAILED  Place a coffee order (tests/place-order.json)');
-  assert.deepEqual(lines.slice(at + 1, at + 3), ['  AC1  result /totalCents  expected 899, got 900', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
-  assert.match(lines[at + 3], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {3}Next: show the person this check\. Do not change the expected value yourself\.$/);
-  assert.deepEqual(lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1).slice(0, 2),
-    ['  failed  AC1  result /totalCents  expected 899, got 900', '  passed  AC2  result /customerName  expected "Sam", got "Sam"']);
+  assert.deepEqual(lines.slice(at + 1, at + 4), ['  AC1  step sam-orders-espressos-and-a-muffin  result /totalCents  expected 899, got 900', '    Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents ($9.00).', '  Warning: possible numeric mismatch at tests/place-order.json steps[0].checks[0] (result /totalCents): expected 899; user_stories/place-order.md AC1 contains 900. These may be different quantities. Confirm against the Story and prompt; retain a correct expected value. Record a scoped rationale in pdd-numeric-reviews.json if needed (RUNBOOK §4).']);
+  assert.match(lines[at + 4], /^ {2}Next: show this check to the person\. A person decides expected values\. The agent may propose a change, and never makes it\.$/);
+  assert.match(lines[at + 5], /^ {2}Report: http:\/\/127\.0\.0\.1:\d+\/r\/\w+$/);
+  const details = lines.slice(lines.indexOf('Checks for Place a coffee order (tests/place-order.json):') + 1);
+  assert.equal(details[0], '  failed  AC1  step sam-orders-espressos-and-a-muffin  result /totalCents  expected 899, got 900');
+  assert.equal(details.find(line => line.includes('passed  AC2')), '  passed  AC2  step sam-orders-espressos-and-a-muffin  result /customerName  expected "Sam", got "Sam"');
 });
+
+test('RUNTIME-XFIX1: failed checks show the step, short criterion, diagnosis and a missing error plainly', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false, diagnosis: {
+      kind: 'needs-tool', who: 'prompt', why: 'This check needs a SHA-256, and the AI cannot compute one.', next_step: 'Declare compute.hash_json in the Runtime interface.', evidence: ['target error, no error came back'], likely: true } }]);
+    answer.result.who = 'prompt'; answer.result.why = 'This check needs a SHA-256, and the AI cannot compute one.'; answer.result.next_step = 'Declare compute.hash_json in the Runtime interface.';
+    answer.result.report.samples[0].steps[0].step_id = 'tampered';
+    return { status: 200, json: answer };
+  });
+  const text = await check(setup, fake, ['place-order']);
+  assert.equal(text.code, 1, text.err + text.out);
+  assert.match(text.out, /AC1  step tampered  error \/code  expected "validation-error", got no error \(a normal result\)/);
+  assert.match(text.out, /Criterion: An order of 2 Espresso S and 1 Blueberry Muffin L has a total of 900 cents/);
+  assert.match(text.out, /Why: This check needs a SHA-256, and the AI cannot compute one\./);
+  assert.match(text.out, /Next: Declare compute\.hash_json in the Runtime interface\./);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  const row = json.json.rows[0], failed = row.failed_checks[0];
+  assert.equal(failed.step_id, 'tampered'); assert.equal(failed.diagnosis.who, 'prompt'); assert.equal(row.who, 'prompt');
+  assert.equal(row.next_step, 'Declare compute.hash_json in the Runtime interface.');
+});
+
+test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is conservative, and failed JSON reason stays null', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [
+      { criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false,
+        diagnosis: { kind: 'unsure', who: 'test', why: 'check why 1 /srv/private/a', next_step: 'check next 1', evidence: ['evidence /srv/private/b'] } },
+      { criterion_id: 'AC2', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false,
+        diagnosis: { kind: 'path-missing', who: 'test', why: 'check why 2', next_step: 'check next 2' } }]);
+    answer.result.why = 'run why'; answer.result.who = 'runtime'; answer.result.next_step = 'run next';
+    answer.result.report.samples[0].steps[0].step_id = 'diagnosed'; answer.result.report.samples[0].steps[0].error = { message: 'bad input' };
+    return { status: 200, json: answer };
+  });
+  const text = await check(setup, fake, ['place-order']);
+  assert.match(text.out, /expected "validation-error", got \{"missing":true\}/);
+  assert.match(text.out, /Why: check why 1 <server path>/); assert.match(text.out, /Next: check next 1/);
+  assert.match(text.out, /Why: check why 2/); assert.match(text.out, /Next: check next 2/);
+  assert.doesNotMatch(text.out, /run why|run next|\/srv\/private/);
+  const json = await check(setup, fake, ['place-order'], { '--json': true });
+  assert.equal(json.json.rows[0].reason, null); assert.equal(json.json.rows[0].why, 'run why'); assert.equal(json.json.rows[0].next_step, 'run next');
+  const passed = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order'], { '--json': true });
+  assert.equal(passed.json.rows[0].reason, null);
+
+  const noResult = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', op: 'equals', expected: 'validation-error', actual: { missing: true }, passed: false }]);
+    delete answer.result.report.samples[0].steps[0].result;
+    return { status: 200, json: answer };
+  }), ['place-order']);
+  assert.match(noResult.out, /got \{"missing":true\}/);
+
+  const longError = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/message', op: 'equals', expected: 'x'.repeat(90), actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = {};
+    return { status: 200, json: answer };
+  }), ['place-order']);
+  assert.match(longError.out, /got:\n {6}no error \(a normal result\)/);
+});
+
+test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and account for calls', async t => {
+  const setup = harbor(t);
+  const answerFor = (rerun, calls = 5, includeDiagnosis = true) => (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false }]);
+    const first = answer.result.report.samples[0].steps[0];
+    first.step_id = 'first-step'; first.checks = [
+      { criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false,
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 3, failed: 3, stable: true } } } : {}) },
+      { criterion_id: 'AC2', target: 'result', path: '/customerName', expected: 'Sam', actual: 'Jo', passed: false,
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 2, failed: 0, stable: true } } } : {}) }];
+    answer.result.report.samples[0].steps.push({ step_id: 'second-step', checks: [
+      { criterion_id: 'AC3', target: 'result', path: '/totalCents', expected: 899, actual: 901, passed: false }] });
+    answer.result.report.rerun = rerun;
+    answer.usage.calls = calls;
+    return { status: 200, json: answer };
+  };
+  const stable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order']);
+  assert.equal(stable.code, 1);
+  assert.match(stable.out, /Runtime check \(place-order\): ✗ [^\n]*5 AI calls \(2 for reruns\)/);
+  assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
+  assert.doesNotMatch(stable.out, /passed 2 of 2 reruns/);
+  assert.equal((stable.out.match(/Rerun:/g) ?? []).length, 2); assert.doesNotMatch(stable.out, /more AI calls/);
+  assert.match(stable.out, /AC3  step second-step[\s\S]*Rerun: failed 1 of 3 \(unstable\)\. Make the rule in the prompt firmer\./);
+  const stableJson = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order'], { '--json': true });
+  assert.equal(stableJson.code, 1); assert.equal(stableJson.json.rows[0].rerun.calls, 2);
+  assert.equal(stableJson.json.rows[0].failed_checks[0].diagnosis.rerun.failed, 3);
+
+  const noCalls = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 3, failed: 3, stable: true }] }, 1)), ['place-order']);
+  assert.match(noCalls.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
+  assert.doesNotMatch(noCalls.out, /more AI calls/);
+
+  const oneRun = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 1, failed: 1, stable: true }] }, 5, false)), ['place-order']);
+  assert.doesNotMatch(oneRun.out, /Rerun:/);
+
+  const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order']);
+  assert.match(skippedText.out, /Rerun: skipped \(more-than-3-failed-steps\)\./);
+  const skipReasons = ['more-than-3-failed-steps', 'not-failed', 'budget', 'live-resources'];
+  for (const reason of skipReasons) {
+    const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order']);
+    assert.ok(skippedText.out.includes(`Rerun: skipped (${reason}).`));
+    const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order'], { '--json': true });
+    assert.equal(skipped.json.rows[0].rerun.skipped, reason);
+  }
+  const missingUsage = await check(setup, await fakeRuntime(t, (entry, f) => {
+    const reply = answerFor({ calls: 2, steps: [{ step_id: 'first-step', runs: 3, failed: 3, stable: true }] }, 5, false)(entry, f);
+    return Promise.resolve(reply).then(result => { if (result.json?.usage) delete result.json.usage; return result; });
+  }), ['place-order']);
+  assert.doesNotMatch(missingUsage.out, /0 AI calls/); assert.match(missingUsage.out, /2 for reruns/);
+  const invalid = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    answer.result.report.rerun = { calls: -1, steps: [{ step_id: 'first-step', runs: '3', failed: -1, stable: true }] };
+    return { status: 200, json: answer };
+  }), ['place-order'], { '--json': true });
+  assert.equal(invalid.json.rows[0].rerun.calls, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].runs, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].failed, undefined);
+});
+
+test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
+  const setup = harbor(t);
+  const answerFor = ({ checks, result = {}, why = null, who = null, next_step = null, error = null }) => async (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', checks);
+    answer.result.report.samples[0].steps[0].result = result;
+    if (error) answer.result.report.samples[0].steps[0].error = error;
+    answer.result.why = why; answer.result.who = who; answer.result.next_step = next_step;
+    return { status: 200, json: answer };
+  };
+  const multiline = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }] })), ['place-order']);
+  assert.match(multiline.out, /AC1  step sam-orders-espressos-and-a-muffin  result \/stdout\n {4}Criterion:[\s\S]*\n {4}expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+  assert.doesNotMatch(multiline.out, /got no error/);
+
+  const resultMissing = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }], result: { stdout: 'present' } })), ['place-order']);
+  assert.match(resultMissing.out, /target result|result \/stdout/);
+  assert.match(resultMissing.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(resultMissing.out, /got no error/);
+
+  const errorWithResult = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }], result: {}, error: { message: 'bad input' } })), ['place-order']);
+  assert.match(errorWithResult.out, /got \{"missing":true\}/);
+  assert.doesNotMatch(errorWithResult.out, /got no error/);
+
+  const runLevel = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order']);
+  assert.match(runLevel.out, /Why: run-level why/); assert.match(runLevel.out, /Next: run-level next/);
+  const runLevelJson = await check(setup, await fakeRuntime(t, answerFor({ checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }], why: 'run-level why', who: 'runtime', next_step: 'run-level next' })), ['place-order'], { '--json': true });
+  const row = runLevelJson.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+});
+
+test('RUNTIME-XFIX6A: a multiline actual with a short expected value stays in block form', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    return { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: 'line one\nline two', passed: false }]) };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /expected:\n {6}ok\n {4}got:\n {6}line one\n {6}line two/);
+});
+
+test('RUNTIME-XFIX6B: a result target never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/stdout', expected: 'ok', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = { stdout: 'present' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6C: an error plus a real result never uses the no-error wording', async t => {
+  const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'error', path: '/code', expected: 'validation-error', actual: { missing: true }, passed: false }]);
+    answer.result.report.samples[0].steps[0].result = {};
+    answer.result.report.samples[0].steps[0].error = { message: 'bad input' };
+    return { status: 200, json: answer };
+  });
+  const result = await check(setup, fake, ['place-order']);
+  assert.match(result.out, /got \{"missing":true\}/); assert.doesNotMatch(result.out, /got no error/);
+});
+
+test('RUNTIME-XFIX6D: text and JSON use run-level diagnosis fields when no check diagnosis exists', async t => {
+  const setup = harbor(t), answer = (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const result = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    result.result.why = 'run-level why'; result.result.who = 'runtime'; result.result.next_step = 'run-level next';
+    return { status: 200, json: result };
+  };
+  const text = await check(setup, await fakeRuntime(t, answer), ['place-order']);
+  assert.match(text.out, /Why: run-level why/); assert.match(text.out, /Next: run-level next/);
+  const json = await check(setup, await fakeRuntime(t, answer), ['place-order'], { '--json': true });
+  const row = json.json.rows[0];
+  assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
+});
+
 
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
 test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
@@ -227,35 +424,99 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
 
 // Wrong: pdd gives up on a slow check after 10 min, or waits in silence.
 test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
+  const observeProgress = made => {
+    const observed = { sentAt: null, lines: [] }, write = made.ports.stderr.write.bind(made.ports.stderr);
+    made.ports.stderr.write = value => {
+      for (const text of String(value).split('\n')) {
+        if (/^Lint passed\. Sent \d+ checks? at /.test(text)) observed.sentAt = made.clock.now;
+        if (text.startsWith('Still running:')) observed.lines.push({ at: made.clock.now, text });
+      }
+      return write(value);
+    };
+    return observed;
+  };
+  const assertCadence = observed => {
+    assert.equal(typeof observed.sentAt, 'number', 'capture when checks were sent');
+    let previous = observed.sentAt;
+    for (const line of observed.lines) {
+      const gap = line.at - previous;
+      assert.ok(gap >= 30_000 && gap <= 32_000, `${gap}ms: progress every 30s within one 2s poll`);
+      previous = line.at;
+    }
+  };
+  const parseProgress = line => {
+    const match = /^Still running: (\d+) of (\d+) (Stories|Story) done · (\d+) AI calls? so far · \d+ (?:s|min)$/.exec(line.text);
+    assert.ok(match, line.text);
+    return { done: Number(match[1]), total: Number(match[2]), noun: match[3], calls: Number(match[4]) };
+  };
   const setup = harbor(t), sent = new Map();
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
   let clock;
   const fake = await fakeRuntime(t, (entry, f) => {
-    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario });
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario, reads: [] });
     if (entry.method !== 'GET') return f.normal(entry);
-    const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
+    const id = entry.url.split('/').at(-1), { at, test, reads } = sent.get(id);
+    reads.push(clock.now);
     return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
   });
   const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
   clock = made.clock;
+  const observed = observeProgress(made);
   const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
   const err = made.ports.stderr.text, out = made.ports.stdout.text;
   assert.equal(code, 0, err + out);
-  const progress = err.split('\n').filter(text => text.startsWith('Still running'));
-  assert.equal(progress.length, 49, progress.join('\n'));
-  assert.equal(progress[0], 'Still running: 0 of 2 Stories done · 2 AI calls so far · 30 s');
-  assert.equal(progress[7], 'Still running: 1 of 2 Stories done · 2 AI calls so far · 4 min');
-  assert.equal(progress.at(-1), 'Still running: 1 of 2 Stories done · 2 AI calls so far · 24 min');
-  // Polite: one GET for each open row every 2 s, the same as with a limit.
-  assert.equal(fake.gets.length, 30 + 750);
+  assert.ok(observed.lines.length >= 2, 'long-running checks repeatedly report progress');
+  assertCadence(observed);
+  const progress = observed.lines.map(parseProgress);
+  assert.equal(progress[0].done, 0);
+  assert.ok(progress.some(line => line.done === 1), 'the shorter Story finishes while the other remains open');
+  let previousDone = 0, previousCalls = 0;
+  const readableAt = Math.max(...[...sent.values()].map(row => row.reads[0]));
+  for (const [index, line] of progress.entries()) {
+    assert.equal(line.total, 2); assert.equal(line.noun, 'Stories');
+    assert.ok(line.done >= previousDone && line.done <= 1, 'done counts are monotone while a Story remains open');
+    assert.ok(line.calls >= previousCalls && line.calls <= 2, 'known calls are monotone and exclude unknown usage');
+    const at = observed.lines[index].at;
+    assert.ok(line.done <= [...sent.values()].filter(row => at - row.at >= endsAfter[row.test]).length, 'no Story is reported done before its end threshold');
+    if (at > readableAt) assert.equal(line.calls, 2, 'both read rows each report one known call');
+    previousDone = line.done; previousCalls = line.calls;
+  }
+  assert.equal(progress.at(-1).calls, 2);
+  const endedAt = Math.max(...[...sent.values()].map(row => row.reads.at(-1)));
+  assert.ok(observed.lines.at(-1).at <= endedAt, 'progress stops when every row ends');
+  assert.ok(endedAt - observed.lines.at(-1).at <= 32_000, 'progress continues until the final polling interval');
+  // A POST acknowledgement can arrive after the fake clock's first polling tick.
+  // Once both rows are readable, each open row must be read every 2 s.
+  for (const row of sent.values()) {
+    const steadyReads = row.reads.filter(at => at >= readableAt);
+    assert.ok(steadyReads.length >= 2, `${row.test}: repeated reads of the original request`);
+    for (let index = 1; index < steadyReads.length; index++)
+      assert.equal(steadyReads[index] - steadyReads[index - 1], 2000, `${row.test}: read cadence`);
+    assert.ok(row.reads.at(-1) - row.at >= endsAfter[row.test], `${row.test}: waits until completion`);
+  }
+  assert.deepEqual([...new Set(fake.gets.map(get => get.url))].sort(), [...sent.keys()].map(id => `/v1/runs/${id}`).sort());
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.scenario).sort(), Object.keys(endsAfter).sort());
   assert.equal(fake.posts.length, 3);
   assert.doesNotMatch(out, /STILL RUNNING/);
   assert.match(out, /^2 of 2 stories passed\./m);
-  const one = await check(harbor(t), await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry)),
-    ['place-order'], { '--timeout': '1' }, { interactive: true });
-  assert.equal(one.code, 3);
-  assert.deepEqual(one.err.split('\n').filter(text => text.startsWith('Still running')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
-    `Still running. Read the results later with: pdd check --read ${one.batch}`]);
+  const oneSetup = harbor(t), oneFake = await fakeRuntime(t, (entry, f) => entry.method === 'GET'
+    ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
+  const oneMade = portsFor({ HOME: oneSetup.home, PDD_RUNTIME_URL: oneFake.origin, PDD_STATE_DIR: oneSetup.state }, { interactive: true });
+  const oneObserved = observeProgress(oneMade);
+  const oneCode = await runCheck({ words: ['place-order'], options: { '--timeout': '1' }, cwd: oneSetup.repo }, oneMade.ports);
+  assert.equal(oneCode, 3);
+  assert.ok(oneObserved.lines.length >= 1, 'a waiting single Story reports progress');
+  assertCadence(oneObserved);
+  for (const line of oneObserved.lines) assert.deepEqual(parseProgress(line), { done: 0, total: 1, noun: 'Story', calls: 1 });
+  const oneBatch = /pdd check --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(oneMade.ports.stderr.text)?.[1];
+  assert.ok(oneBatch);
+  assert.ok(oneMade.ports.stderr.text.includes(`Still running. Read the results later with: pdd check --read ${oneBatch}`));
+  assert.match(oneMade.ports.stdout.text, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.equal(oneFake.posts.filter(post => post.command === 'check').length, 1);
+  assert.equal(oneFake.posts.length, 2);
+  const oneId = oneFake.posts.find(post => post.command === 'check').request.requestId;
+  assert.ok(oneFake.gets.length > 0);
+  assert.ok(oneFake.gets.every(get => get.url === `/v1/runs/${oneId}`), 'the running row is read without resending');
 });
 
 // Wrong: with no time limit Ctrl-C loses the batch, or a waiting check is said to have hit a timeout.
@@ -276,7 +537,13 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   assert.equal(code, 3, out);
   assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
   assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
-  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: The runtime stayed busy\. No checks ran for this attempt\. Retry this batch later\. \(check-busy\)$/m);
+  const stopped = /^NOT RUN {2}Refuse an item[^:]*: (.+) \(check-busy\)$/m.exec(out)?.[1];
+  const submitted = fake.posts.findLast(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json');
+  assert.match(stopped, /^Stopped\./);
+  assert.match(stopped, /submitted/i);
+  assert.ok(stopped.includes(submitted.request.requestId), 'identify the submitted request whose outcome was confirmed');
+  assert.match(stopped, /confirmed.*(?:not start|unstarted|no (?:checks|work) ran)/i);
+  assert.doesNotMatch(stopped, /wait ended|stayed busy|Stopped before sending/i);
   assert.equal(made.ports.stderr.text.split('\n').filter(text => text.startsWith('Still running')).length, 23);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8')).timeout_min, null);
   done = true;
@@ -338,7 +605,7 @@ test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request
 });
 
 // Wrong: a pdd that was killed mid-send leaves rows that --read shows as passed (exit 0) or never reads.
-test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a row never sent is not run', async t => {
+test('RUNTIME-SERVER12: --read adopts posted claims and keeps genuinely unsent rows not run', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const first = await check(setup, fake, ['place-order']);
   assert.equal(first.code, 0);
@@ -351,7 +618,26 @@ test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a ro
   assert.equal(read.code, 0, read.out); assert.equal(fake.gets.length, gets + 1); assert.equal(fake.gets.at(-1).url, `/v1/runs/${id}`);
   saved.rows[0] = { ...saved.rows[0], state: 'ready', request_ids: [] };
   writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
-  const never = await check(setup, fake, [], { '--read': true });
+  const posts = fake.posts.length;
+  const adopted = await check(setup, fake, [], { '--read': true, '--json': true });
+  assert.equal(adopted.code, 0);
+  assert.equal(adopted.clock.uuids, 0);
+  assert.equal(adopted.json.rows[0].request_id, id, 'the dispatch claim preserves the paid check identity');
+  assert.equal(fake.posts.length, posts, 'erasing row IDs cannot authorize a second POST');
+
+  // A separate producer batch stopped before any dispatch has no paid claim to adopt.
+  const unsent = harbor(t);
+  const stopped = await check(unsent, fake, ['place-order'], {}, { onInterrupt: handler => { handler(); return () => {}; } });
+  assert.equal(stopped.code, 3);
+  assert.equal(fake.posts.length, posts, 'interruption precedes even the lint POST');
+  const unsentFolder = join(unsent.state, 'batches', stopped.batch);
+  const unsentSaved = batchFile(unsent, stopped.batch);
+  assert.deepEqual(unsentSaved.rows[0].request_ids, []);
+  assert.equal(filesUnder(unsentFolder).some(path => path.endsWith('.dispatch.json')), false);
+  unsentSaved.rows[0].state = 'ready';
+  writeFileSync(join(unsentFolder, 'batch.json'), JSON.stringify(unsentSaved));
+  const never = await check(unsent, fake, [], { '--read': true });
+  assert.equal(fake.posts.length, posts);
   assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
   assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
 });
@@ -403,7 +689,7 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
 });
 
 // Wrong: the PR line hides a failure, or --json lacks the line an agent pastes.
-test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
+test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict mark, also as summary_line in --json', async t => {
   const setup = harbor(t);
   const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
     { criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam', actual: 'Sam', passed: true }];
@@ -423,7 +709,7 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
   });
   const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
@@ -544,7 +830,7 @@ test('RUNTIME-SERVER20: expected and got strings print JSON-escaped', async t =>
     [{ criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam\n', actual: 'Sam', passed: false }]) } : f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 1);
-  assert.match(result.out, /^ {2}AC2 {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
+  assert.match(result.out, /^ {2}AC2 {2}step sam-orders-espressos-and-a-muffin {2}result \/customerName {2}expected "Sam\\n", got "Sam"$/m);
 });
 
 // Wrong: a failed CLI output loses its line breaks and is cut near the difference (round-2 tester, Oct 27).
@@ -557,15 +843,20 @@ test('RUNTIME-FAILTEXT1: a failed multi-line string keeps its line breaks, is ne
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'failed', checks) } : f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 1, result.err);
-  const lines = result.out.split('\n'), first = lines.indexOf('  AC1  result /stdout');
+  const lines = result.out.split('\n'), first = lines.findIndex(line => /^  AC1  (?:step \S+  )?result \/stdout$/.test(line));
   const shown = cents => ['      Bill:  $100.00', '      Tip:   $0.00 (0%)', '      Total: $100.00', `      Person 1: $${cents}`, '      Person 2: $33.33', '      Person 3: $33.33',
     '      (ends with a line break)'];
-  assert.deepEqual(lines.slice(first, first + 17), ['  AC1  result /stdout', '    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
+  const firstBlock = lines.slice(first, first + 18).filter(line => !line.startsWith('    Criterion: '));
+  assert.equal(firstBlock[0], '  AC1  step sam-orders-espressos-and-a-muffin  result /stdout');
+  assert.deepEqual(firstBlock.slice(1), ['    expected:', ...shown('33.34'), '    got:', ...shown('33.33')]);
   const window = mark => ['      … 22 lines before', ...Array.from({ length: 20 }, (_, index) => `      line ${index + 23}${index === 2 ? ` ${mark}` : ''}`),
     '      … 18 more lines in the report'];
-  const second = lines.indexOf('  AC2  result /log');
-  assert.deepEqual(lines.slice(second, second + 47), ['  AC2  result /log', '    expected:', ...window('want'), '    got:', ...window('got')]);
-  assert.match(lines[second + 47], /^ {2}Report: http/);
+  const second = lines.findIndex(line => /^  AC2  (?:step \S+  )?result \/log$/.test(line));
+  const secondBlock = lines.slice(second, second + 48).filter(line => !line.startsWith('    Criterion: '));
+  assert.equal(secondBlock[0], '  AC2  step sam-orders-espressos-and-a-muffin  result /log');
+  assert.deepEqual(secondBlock.slice(1), ['    expected:', ...window('want'), '    got:', ...window('got')]);
+  const report = lines.findIndex((line, index) => index > second && /^  Report: http/.test(line));
+  assert.equal(report, second + 49); assert.match(lines[report], /^  Report: http/);
 });
 
 // Refusal items as prompt-runtime #379 sends them (not live yet): plain reason, fix, file, at, where, cause, and message = reason + fix.
@@ -579,7 +870,13 @@ const PLAIN_REFUSALS = [
 // Wrong: a refused check shows only a code, or calls an AI service failure a problem in the test (round-2 report text, Oct 27).
 test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and fix; ai-service says the test is fine; old answers keep their text', async t => {
   const setup = harbor(t);
-  const refusing = refusals => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], refusals) } : f.normal(entry));
+  // This compatibility case deliberately models the old server without run-level advice.
+  const refusing = refusals => fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'refused', [], refusals);
+    Object.assign(answer.result, { outcome: 'Fail', why: 'Checks failed.', next_step: null });
+    return { status: 200, json: answer };
+  });
   const plain = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order']);
   assert.equal(plain.code, 4, plain.err + plain.out);
   const lines = plain.out.split('\n'), at = lines.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
@@ -689,11 +986,11 @@ test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses
 });
 
 // Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
-test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, until a row really fails', async () => {
+test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
   const { summaryLine } = await import('../src/runtime-output.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
-  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: unknown · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: no verdict · /);
   assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
   assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
 });

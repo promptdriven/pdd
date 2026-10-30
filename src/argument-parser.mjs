@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 4ac2e160d589d10d897655a5f4a70ec5057d00961236420188ed2e7cae0b9a0a).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: c05f9a6a1b0eccbe7b248a335fb9c6dbe2fb45c6bea2ddb5ed8bab70d44f79d4).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -21,10 +21,11 @@ const optionValue = (option, value) => option.kind === 'integer'
   ? /^[1-9][0-9]{0,5}$/.test(value ?? '') && Number(value) >= option.min && Number(value) <= option.max
   : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
   : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
-function parseRoute(route, words) {
-  const options = Object.create(null), operands = []; let literal = false;
+function parseRoute(route, words, allowHelp = false) {
+  const options = Object.create(null), operands = []; let literal = false, helpRequested = false;
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
+    if (allowHelp && !literal && index === words.length - 1 && HELP_WORDS.includes(word)) { helpRequested = true; continue; }
     if (word === '--' && route.operands.at(-1)?.type === 'text' && !literal) { literal = true; continue; }
     if (!literal && word.startsWith('-')) {
       const option = route.options.find(option => option.name === word);
@@ -44,6 +45,9 @@ function parseRoute(route, words) {
       }
     } else operands.push(word);
   }
+  if (route.id === 'workflow.run' && /^[1-9][0-9]*$/.test(operands[0] ?? '')) {
+    throw new CommandInputError(`Name the workflow: pdd workflow run small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
+  }
   const minimum = route.operands.filter(item => !item.optional).length;
   if (operands.length < minimum || !route.operands.at(-1)?.repeat && operands.length > route.operands.length) fail();
   for (let index = 0; index < operands.length; index++) {
@@ -55,6 +59,7 @@ function parseRoute(route, words) {
       || type.startsWith('choice:') && type.slice(7).split(',').includes(word);
     if (!valid) fail();
   }
+  if (helpRequested) return help(route.prefix);
   return Object.freeze({ commandId: route.id, local: route.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...options }) });
 }
@@ -65,8 +70,7 @@ export function parseArgv(argv) {
   if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
-    parseRoute(route, words.slice(route.prefix.length));
-    return help(route.prefix);
+    return parseRoute(route, argv.slice(route.prefix.length), true);
   }
   const route = findRoute(argv);
   if (!route && !argv[0].startsWith('-') && !routes.some(candidate => candidate.prefix[0] === argv[0])) {

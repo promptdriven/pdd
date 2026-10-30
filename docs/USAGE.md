@@ -1,6 +1,6 @@
 # PDD Alpha usage guide
 
-This guide is for people who install PDD Alpha 0.1.10 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install PDD Alpha 0.1.11 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -76,7 +76,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" setup  # reports PATH selection and keeps other installs
-pdd --version   # prints 0.1.10
+pdd --version   # prints 0.1.11
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -99,7 +99,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.10
+pdd --version   # PDD Alpha prints 0.1.11
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -132,12 +132,13 @@ The agents that PDD starts always get the full path of PDD Alpha. They are not a
 
 ## 4. The PDD skills
 
-PDD is five skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is six skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
 | [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for runtime checks |
 | `pdd-feature` | A workflow for new behavior |
+| `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
@@ -154,7 +155,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. After you update the pdd command, `pdd setup` replaces an older copy that has this marker. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.10`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.11`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -251,8 +252,8 @@ The areas of the three workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
 | `small-change` | plan (scope), **approve**, build (change, verify, formal) opens one PR, **merge** |
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
@@ -301,14 +302,16 @@ For a page or a screen, the chat recommends `visual`. It writes the app map, so 
 
 ### 6.7 The PRs and the merge
 
-`small-change` makes one PR with the change and its tests. Its body says `Closes #42`.
+`small-change` makes one PR with the change and its tests. Its body says `Refs #42` when an authorized `Not fixed yet:` warning is present; otherwise it says `Closes #42`.
 
 `feature` and `bug` make up to two PRs:
 
 | PR | What it holds | When |
 |---|---|---|
-| PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Part of #42` |
-| PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
+| PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Part of #42` |
+| PR 2 | The code | Only when you ask for it. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Closes #42`, and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
+
+In verify after the last commit, run one `pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"` command that covers all new or changed tests; its line goes on the PR. Its `Old-code proof:` line names the actual command and old/new results. Authorized defect, proof, warning and independent review lines appear above replay status on both PRs; code PRs also show the machine proof.
 
 **Try before PR 1.** After the prompt PR area, the chat shows one `Runtime check` line for each Story, with its report link, and the Try links. Try it. Then approve, or ask for changes. pdd opens PR 1 only after you approve. When there is nothing to try, the chat asks you only to approve.
 
@@ -327,7 +330,7 @@ For all workflows:
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
+- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Runtime check` lines and report links. Runtime report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 - pdd never merges. You review and merge on GitHub.
 
@@ -382,7 +385,7 @@ pdd check --files place-order  # preview only this Story; offline
 pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story
-pdd check --read          # show the last results again; sends nothing new
+pdd check --read          # read saved results; may continue original lint-held checks after lint passes
 pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```
@@ -400,8 +403,8 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | Exit | Result | What to do |
 |---|---|---|
 | 0 | passed | Nothing. |
-| 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
-| 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
+| 1 | a check failed | Look at the failed check. Usually the prompt is wrong, and your agent fixes it. A person decides expected values. The agent may propose a change, and never makes it. |
+| 4 | refused | A file rule or the AI service; nothing was judged. Read the reason under the line. |
 | 5 | not run | Sign-in, a busy server, no AI room, a GitHub account that PDD Cloud has not approved, or an old pdd. Read the one line that pdd prints. |
 | 3 | unknown or still running | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
@@ -526,7 +529,7 @@ Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 npm uninstall -g pdd
 rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change}
 rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change}
-# If you set CLAUDE_CONFIG_DIR, also remove the five pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+# If you set CLAUDE_CONFIG_DIR, also remove the six pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 ```
 
@@ -551,7 +554,7 @@ This is an alpha. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.10` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.11` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says that `codex` or `claude` is not on PATH | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |

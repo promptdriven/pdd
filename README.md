@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd#alpha -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.10`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.11`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -54,6 +54,7 @@ The way to call a skill depends on your agent. You can also write "Use the pdd-f
 | Skill | Use it to |
 |---|---|
 | `pdd-feature` | add new behavior |
+| `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | fix something that is broken |
 | `pdd-small-change` | make a small change that is easy to undo |
 | `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
@@ -100,11 +101,13 @@ Reports (anyone with a link can open it):
 | You see | It means |
 |---|---|
 | `✓` | Every check passed. |
-| `FAILED` | A check failed. pdd shows the criterion, the expected value and the answer. Fix the prompt, or change the expected value. |
-| `REFUSED` | A file breaks a rule, and nothing was judged. Fix the file that pdd names. |
+| `✗` / `FAILED` | A check failed. pdd shows the criterion, the expected value and the answer. Usually the prompt is wrong, and your agent fixes it. A person decides expected values. The agent may propose a change, and never makes it. |
+| `REFUSED` / `no verdict` | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. |
 | `STOPPED` | One test step took more than 10 minutes, and the server stopped it. Make the step smaller. |
 | `DRAFT` | A prompt is still a draft. A DRAFT pass is not an approval. |
 | A report link | A page with each step, check and answer. Anyone with the link can open it. It expires after 7 days. |
+
+Checks show `✓` when all passed and `✗` when a check failed. Without a failed check, pending work shows `running`, even beside a refused check. Busy checks show `busy` when the other checks passed or are also busy. Other refused, not-run or unknown checks show `no verdict`. Exit codes use this order: 3, 5, 4, 1, 0. When failed checks sit beside a higher exit code, pdd explains why.
 
 ### 3. Try
 
@@ -168,7 +171,7 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd check --lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
 | `pdd check [STORY...]` | Run the tests of the Stories on the runtime. |
 | `pdd check --files` | List the files that a check sends. No network. |
-| `pdd check --read` | Show saved check results again. Sends no check. |
+| `pdd check --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
 | `pdd try STORY` | Open a Try page for the Story. |
 | `pdd try STORY --cli` | Run the program as a command line in your terminal. |
 | `pdd try STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
@@ -214,13 +217,14 @@ The skills and the other commands run on your computer.
 | `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
-| `REFUSED` (exit code 4) | Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
+| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
+| `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
 | `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |
 | `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a Try that you do not use, run `pdd try --stop STORY`. |
 | `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new`. |
-| `pdd --version` does not print `0.1.10` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.11` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
@@ -237,7 +241,7 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
 - [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the runtime can check.
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.10).
+- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.11).
 - [Contributing](CONTRIBUTING.md).
 
 ## License

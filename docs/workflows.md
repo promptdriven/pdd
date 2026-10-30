@@ -14,8 +14,8 @@ Each workflow has areas. Each area has steps and ends at a gate. `?` marks an op
 
 | Workflow | Area 1 | Area 2 | Area 3 (only when you ask) |
 |---|---|---|---|
-| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal. pdd opens **PR 2** |
-| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal. pdd opens **PR 2** |
+| `feature` | story: understand, visual?, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
+| `bug` | story: reproduce, prompt-story. Gate **approve** | prompt PR: check, try?. Gate **try it and approve**. pdd opens **PR 1**. Then **code now or stop?** | code: build, verify, formal, review. pdd opens **PR 2** |
 | `small-change` | plan: scope. Gate **approve** | build: change, verify, formal. pdd opens **one PR** | |
 
 PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests that fail on today's code go to PR 2, so merging PR 1 never breaks the main branch. PR 2 holds the code. You can stop at PR 1, merge it, and make PR 2 later.
@@ -33,7 +33,7 @@ What each step does:
 
 | Step | What the subagent does |
 |---|---|
-| scope | States the result, the files, why the change is small and how to undo it. Writes the expected result and names the test command. |
+| scope | States the result, the files, why the change is small and how to undo it. Writes the expected result and names the test command. For a behavior fix, records `Defect:` and `Not caught because:`. |
 | change | Makes only the approved change. If a prompt owns the behavior, it changes the prompt first. Adds a test. |
 | reproduce | Finds the smallest safe input that shows the bug. Writes the expected and the actual result. |
 | understand | States the wanted result, what must not change and what is out of scope. Counts the behaviors. With more than one, writes `user_stories/PLAN.md`. |
@@ -44,8 +44,9 @@ What each step does:
 | build | Builds only what you approved. Tests through the public interface. |
 | verify | Runs the replay test of `RUNBOOK.md` section 17 on the code and on a planted mistake, then the tests and the repo's required checks. Writes the tables first, and the exact commands and their real output last, in a closed `<details>` block. |
 | formal | A fresh subagent that did not write the code runs the formal check of `RUNBOOK.md` section 17 for each Story with `## Rules to check`. Adds one result to `verify.md`, after the tables. |
+| review | A fresh independent subagent that neither built nor verified gets only the issue, Story, Defect block, diff, Old-code proof and Tests vs base, PR 1 body and supplied step summaries, never builder notes or chat history. It must not open build.md, verify.md or formal.md in the run folder. It answers the six questions in `steps/review.md`, inspects source and tests, exercises a real changed path and writes the actual verdict and findings to the run folder. |
 
-If verify or formal finds a failing case, the chat goes back to build in a new subagent, at most 2 times. If a case still fails, PR 2 opens anyway with "✗ N vectors fail" at the top.
+If verify or formal finds a failing case, or review finds must-fixes, the chat returns to a fresh build, then verify, formal and fresh review. There are at most two repair rounds after the initial review. If vectors still fail, PR 2 keeps "✗ N vectors fail" at the top. The PR then opens with the actual `Review: N must-fix` or `Review: no must-fix` verdict and any remaining must-fix list at the top. There is no new human gate. These are agent instructions; metadata orders steps but does not enforce reviewer independence or judgment.
 
 Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting` core rules and review rules. change reads the guide only when it changes a prompt.
 
@@ -70,20 +71,20 @@ chat 2  prompt PR: check, try?
   |     gate: you try it and approve
   |     pdd opens PR 1 (prompt, Story, tests)
   |     "Do you want the code PR now, or stop here and merge PR 1 first?"
-chat 3  code (only when you ask): build, verify, formal
+chat 3  code (only when you ask): build, verify, formal, review
   |     pdd opens PR 2 (code), stacked on PR 1
 you     review and merge on GitHub
 ```
 
 1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
-3. The main chat coordinates and talks with you. It does not write code itself.
-4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets its full brief at once, with file paths, not the chat history. Then the chat waits for it.
-5. After each step, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
+3. The main chat coordinates and talks with you. It writes no code and performs no checks.
+4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
+5. Hold review completion while must-fixes remain and fewer than two repair rounds have run: start a fresh build with the must-fix list. Only after the final review (clear or two repairs used), run `pdd workflow done review`; it opens PR 2. For other steps, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
 8. If you approve, pdd starts a new chat for the next area. That chat gets the outputs of the approved area: the files, the summaries and the run folder.
-9. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR.
+9. Completing the last step of an area with a PR gate pushes the branch and opens the PR. For bug and feature, the review-completion hold in point 5 overrides generic completion after each step: keep PR 2 unopened during repairs.
 10. You merge the PRs on GitHub. `pdd workflow status` reads the PR state. When the last PR is merged, the run is completed.
 
 A workflow can start from a normal checkout or a linked worktree, including one whose primary repository is bare. All linked checkouts share the same issue claims and allocation records in the common Git directory. New run worktrees live beside the primary repository in `<primary-name>.pdd-worktrees/`; a bare `project.git` uses `project.git.pdd-worktrees/`. pdd verifies the origin and physical Git identity and keeps `core.bare` unchanged. A refusal before saving allocation intent leaves no issue claim or allocation record. If intent was saved but allocation is unconfirmed, preserve it and inspect that exact run before trying recovery.
@@ -104,7 +105,7 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 The check comes first, then the Try. At the story gate, the chat can offer a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when visual made an app map.
 
-After the check and try steps, the chat shows one `Runtime check` line for each Story (✓ or ✗) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
+After the check and try steps, the chat shows one `Runtime check` line for each Story (✓, ✗ or no verdict) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body is short:
 
@@ -126,7 +127,7 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 | Stop | The run waits. `status` says that PR 1 is open. If PR 1 is merged and you do not go on, the run ends as "done at PR 1" |
 | Code later: `pdd workflow approve N` at any time | The code area starts. If PR 1 is merged, PR 2 starts from the merged prompts on the saved base branch (`--base BRANCH`, else the repository default) |
 
-PR 2 says `Closes #N` and that it builds on PR 1. If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
+PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button on the Try page while `pdd try` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
 
 ### Who can approve
 
@@ -145,7 +146,7 @@ Each run has a run folder: `.git/pdd/runs/N/` in your clone, where N is the issu
 | `AREA-start.md` (one for each area) | The start message of that area's chat |
 | `STEP.md` (one for each step) | The notes of that step |
 | `verify.md` | The exact test commands and their real output |
-| `pr-body.md` | The PR body that pdd writes |
+| `review.md` | The independent verdict, six answers and concrete must-fix findings |
 
 The code that the steps write is committed on the run's branch, in the run's worktree.
 
@@ -155,6 +156,7 @@ pdd does not run tests. The agents do.
 
 - The verify step runs in a fresh subagent that did not write the code.
 - It runs the new cases, the regression tests and the repo's required checks. When it can, it shows that a new test fails on the old or wrong code, in a throwaway copy.
+- For a small-change behavior fix it writes `Proof (defect fixed):` and `Proof (gap closed):`, and a reason for each removed test or changed assertion.
 - It writes the exact commands, the exit codes and the real output to `verify.md`. It names what no test covers.
 - The body of PR 2, or of the one `small-change` PR, has the step summaries and `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
 
@@ -242,6 +244,7 @@ pdd-mybug/
     build.md
     verify.md
     formal.md
+    review.md
 ```
 
 `workflow.json` lists the areas in order:
@@ -250,7 +253,7 @@ pdd-mybug/
 {"version":2,"areas":[
 {"name":"story","steps":["reproduce","prompt-story"],"optional":[],"gate":"approve"},
 {"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","before":"approve","then":"ask-code"},
-{"name":"code","steps":["build","verify","formal"],"optional":[],"gate":"pr"}]}
+{"name":"code","steps":["build","verify","formal","review"],"optional":[],"gate":"pr"}]}
 ```
 
 - Each area has a `name`, its `steps` in order, the `optional` steps and a `gate`.
