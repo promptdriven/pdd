@@ -1,8 +1,8 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 30488fdde3d31c4418da38f8499545a4148481989ae057fd0d6083256a66a0e5).
+// Generated from prompts/cli/product.prompt.md.
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -59,23 +59,77 @@ const portsFor = given => {
     ['api', `repos/${repository}/issues/${issue}/timeline?per_page=${perPage}&page=${page}`, '--jq', '[.[]|{event,source:{issue:{pull_request:{html_url:.source.issue.pull_request.html_url}}}}]']));
   p.pullRequest ??= async ({ cwd, repository, number }) => parse(await command(p, cwd, 'gh', ['pr', 'view', String(number), '--repo', repository, '--json',
     'number,url,body,state,isDraft,updatedAt,headRefName,isCrossRepository,headRepository,headRepositoryOwner']));
-  p.issueByNumber ??= async ({ cwd, repository, number }) => parse(await command(p, cwd, 'gh', ['api', `repos/${repository}/issues/${number}`, '--jq', '{number,body,user:{login:.user.login},author_association,created_at,state,pull_request,repository_url}']));
+  p.issueByNumber ??= async ({ cwd, repository, number }) => {
+    let reply;
+    try { reply = await p.execFile('gh', ['api', `repos/${repository}/issues/${number}`, '--include'], { cwd }); }
+    catch (error) { reply = error; }
+    const text = typeof reply?.stdout === 'string' ? reply.stdout : '';
+    const header = /^HTTP\/[\d.]+\s+(\d+)[^\r\n]*\r?\n/.exec(text);
+    if (header) {
+      const split = /\r?\n\r?\n/.exec(text), body = split ? text.slice(split.index + split[0].length) : '';
+      const status = Number(header[1]);
+      if (status >= 200 && status < 300) return parse(body);
+      let value; try { value = JSON.parse(body); } catch {}
+      return { status, message: typeof value?.message === 'string' ? value.message : 'GitHub issue lookup failed.' };
+    }
+    if (reply?.code !== undefined && reply.code !== 0 || reply instanceof Error) throw Error('GitHub issue lookup is unavailable.');
+    return parse(text);
+  };
   p.now ??= async () => ({ milliseconds: Date.now() });
-  const statePath = async ({ cwd, repository }) => {
-    const common = (await command(p, cwd, 'git', ['rev-parse', '--git-common-dir'])).trim();
-    if (!common) throw Error('The Git common directory is unavailable.');
-    const key = createHash('sha256').update(`${repository.toLowerCase()}\0${canonicalRoot(cwd)}`).digest('hex');
-    return join(isAbsolute(common) ? common : resolve(cwd, common), 'pdd', 'products', `${key}.json`);
+  const scopes = new Map();
+  const statePath = input => {
+    const key = `${input.cwd}\0${input.repository.toLowerCase()}`;
+    if (!scopes.has(key)) scopes.set(key, (async () => {
+      const common = (await command(p, input.cwd, 'git', ['rev-parse', '--git-common-dir'])).trim();
+      if (!common) throw Error('The Git common directory is unavailable.');
+      const directory = join(canonicalRoot(isAbsolute(common) ? common : resolve(input.cwd, common)), 'pdd', 'products');
+      const name = createHash('sha256').update(input.repository.toLowerCase()).digest('hex');
+      return join(directory, `${name}.json`);
+    })());
+    return scopes.get(key);
   };
   p.readProductState ??= async input => {
-    try { return { json: await readFile(await statePath(input), 'utf8') }; }
-    catch (error) { if (error.code === 'ENOENT') return { json: null }; throw error; }
+    const path = await statePath(input);
+    try { return { json: await readFile(path, 'utf8') }; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    // Only import legacy folder files until the common-directory v2 exists.
+    let names; try { names = await readdir(dirname(path)); } catch (error) { if (error.code === 'ENOENT') return { json: null }; throw error; }
+    const merged = { version: 2, repository: input.repository, bindings: [] };
+    for (const name of names.filter(name => /^[0-9a-f]{64}\.json$/.test(name))) {
+      let old; try { old = JSON.parse(await readFile(join(dirname(path), name), 'utf8')); } catch { continue; }
+      if (old?.version !== 1 || !sameRepo(old.repository, input.repository) || typeof old.productRoot !== 'string' || !Array.isArray(old.bindings)) continue;
+      const legacyKey = createHash('sha256').update(`${old.repository.toLowerCase()}\0${canonicalRoot(old.productRoot)}`).digest('hex');
+      if (name !== `${legacyKey}.json`) continue;
+      for (const row of old.bindings) if (!merged.bindings.some(saved => saved.run === row.run && saved.issue === row.issue)) merged.bindings.push(row);
+      if (old.search && (!merged.search || old.search.at > merged.search.at)) merged.search = old.search;
+    }
+    return { json: merged.bindings.length || merged.search ? JSON.stringify({ ...merged, version: 1, productRoot: input.cwd }) : null };
   };
   p.writeProductState ??= async input => {
     const path = await statePath(input), temporary = `${path}.${randomUUID()}.tmp`;
     await mkdir(dirname(path), { recursive: true });
     try { await writeFile(temporary, input.json, { flag: 'wx', mode: 0o600 }); await rename(temporary, path); }
     finally { await rm(temporary, { force: true }); }
+    return {};
+  };
+  const locks = new Map();
+  p.lockProductState ??= async input => {
+    const path = `${await statePath(input)}.lock`, until = Date.now() + 10000;
+    await mkdir(dirname(path), { recursive: true });
+    for (;;) {
+      try {
+        const file = await open(path, 'wx', 0o600), handle = randomUUID();
+        locks.set(handle, { file, path }); return { handle };
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        if (Date.now() >= until) throw Error('Product state is busy; try the command again.');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+    }
+  };
+  p.unlockProductState ??= async ({ handle }) => {
+    const lock = locks.get(handle); if (!lock) throw Error('Product state lock is not owned by this command.');
+    try { await lock.file.close(); await rm(lock.path); } finally { locks.delete(handle); }
     return {};
   };
   p.currentActor ??= async ({ cwd }) => parse(await command(p, cwd, 'gh', ['api', 'user', '--jq', '{login}']));
@@ -170,28 +224,42 @@ const canonicalPr = (url, repository, number) => {
 };
 const pageSize = 10;
 async function issueLookup(p, cwd, repository, localRuns, warning) {
-  const scope = { cwd, repository }, productRoot = canonicalRoot(cwd);
-  const reply = await p.readProductState(scope);
-  let state = { version: 1, repository, productRoot, bindings: [] };
-  if (!reply || !(reply.json === null || typeof reply.json === 'string')) invalid('Invalid local product state.');
-  if (reply.json !== null) {
-    try { state = JSON.parse(reply.json); } catch { invalid('Invalid local product state JSON.'); }
-    if (!state || state.version !== 1 || !Array.isArray(state.bindings) || state.bindings.some(row => !row || typeof row.run !== 'string' || !row.run
-        || !Number.isSafeInteger(row.issue) || row.issue < 1) || new Set(state.bindings.map(row => row.run)).size !== state.bindings.length)
+  const scope = { cwd, repository }, migration = Symbol('legacy-state');
+  const decode = reply => {
+    if (!reply || !(reply.json === null || typeof reply.json === 'string')) invalid('Invalid local product state.');
+    if (reply.json === null) return { version: 2, repository, bindings: [] };
+    let value; try { value = JSON.parse(reply.json); } catch { invalid('Invalid local product state JSON.'); }
+    if (!value || ![1, 2].includes(value.version) || !Array.isArray(value.bindings)
+        || value.bindings.some(row => !row || typeof row.run !== 'string' || !row.run || !Number.isSafeInteger(row.issue) || row.issue < 1)
+        || new Set(value.bindings.map(row => `${row.run}\0${row.issue}`)).size !== value.bindings.length)
       invalid('Invalid local product bindings.');
-    if (!sameRepo(state.repository, repository) || state.productRoot !== productRoot) {
-      if (state.bindings.length) invalid('Foreign local product bindings.');
-      state = { version: 1, repository, productRoot, bindings: [] };
+    if (!sameRepo(value.repository, repository)) {
+      if (value.bindings.length) invalid('Foreign local product bindings.');
+      return { version: 2, repository, bindings: [] };
     }
-  }
+    return { version: 2, repository, bindings: value.bindings, ...(value.search ? { search: value.search } : {}), [migration]: value.version === 1 };
+  };
+  let state = decode(await p.readProductState(scope));
   const time = (await p.now()).milliseconds;
   if (!Number.isFinite(time)) invalid('Invalid product clock.');
-  const save = () => p.writeProductState({ ...scope, json: JSON.stringify(state) });
+  const mutate = async ({ upsert, remove, search }) => {
+    const lock = await p.lockProductState(scope);
+    if (!lock || typeof lock.handle !== 'string' || !lock.handle) invalid('Invalid product state lock.');
+    try {
+      const latest = decode(await p.readProductState(scope));
+      const commitTime = search ? (await p.now()).milliseconds : time;
+      if (!Number.isFinite(commitTime)) invalid('Invalid product clock.');
+      if (remove) latest.bindings = latest.bindings.filter(row => row.run !== remove.run || row.issue !== remove.issue);
+      if (upsert) latest.bindings = [...latest.bindings.filter(row => row.run !== upsert.run), upsert];
+      if (search && (!Number.isFinite(latest.search?.at) || latest.search.at > commitTime || !Array.isArray(latest.search.items)
+          || latest.search.items.length > 1000 || !latest.search.items.every(rawIssue) || search.at > latest.search.at)) latest.search = search;
+      delete latest[migration];
+      await p.writeProductState({ ...scope, json: JSON.stringify(latest) }); state = latest;
+    } finally { await p.unlockProductState({ handle: lock.handle }); }
+  };
   const bind = async (run, number) => {
-    const old = state.bindings.find(row => row.run === run);
-    if (old?.issue === number) return;
-    if (old) old.issue = number; else state.bindings.push({ run, issue: number });
-    await save();
+    if (!state[migration] && state.bindings.filter(row => row.run === run).length === 1 && state.bindings.some(row => row.run === run && row.issue === number)) return;
+    await mutate({ upsert: { run, issue: number } });
   };
   let actorPromise;
   const actor = () => actorPromise ??= Promise.resolve().then(() => p.currentActor({ cwd })).then(reply =>
@@ -208,29 +276,50 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
   const localFor = (number, run) => localRuns.find(record => record.number === number
     && (record.workflow === undefined || record.workflow === 'feature')
     && (record.productMarker === undefined || record.productMarker === marker(run)));
-  const direct = new Map();
-  const bound = async run => {
+  const direct = new Map(), excluded = new Map();
+  const excludedFor = run => { if (!excluded.has(run)) excluded.set(run, new Set()); return excluded.get(run); };
+  const failure = (run, number, reason, confirmed) => {
+    warning.push(`Warning: Issue #${number} for ${run} is unverified: ${reason}. Run pdd product start ${run} to link it again.`);
+    return { issue: { number }, unverified: true, reason, confirmed };
+  };
+  const inspect = async (run, number) => {
+    let issue;
+    try { issue = await p.issueByNumber({ ...scope, number }); }
+    catch { return failure(run, number, 'GitHub issue lookup is unavailable', false); }
+    let reason, confirmed = false;
+    if (issue && Number.isInteger(issue.status) && typeof issue.message === 'string') {
+      confirmed = issue.status === 404; reason = confirmed ? 'the saved issue is gone (404)' : `GitHub returned HTTP ${issue.status}`;
+    } else if (!issue || issue.number !== number || typeof issue.body !== 'string') reason = 'GitHub returned a malformed issue';
+    else if (!valid(issue, run, number)) { confirmed = true; reason = 'the issue repository or planned-run marker no longer matches'; }
+    else {
+      const verdict = await trust(issue);
+      if (verdict === 'trusted') return { issue, local: localFor(number, run), unverified: false };
+      confirmed = verdict === 'untrusted'; reason = confirmed ? 'the issue author is untrusted' : 'the authenticated account is unavailable';
+    }
+    if (confirmed) {
+      excludedFor(run).add(number);
+      await mutate({ remove: { run, issue: number } });
+    }
+    return failure(run, number, reason, confirmed);
+  };
+  const bound = async (run, repair = false) => {
     if (direct.has(run)) return direct.get(run);
     const numbers = new Set([
-      state.bindings.find(row => row.run === run)?.issue,
+      ...state.bindings.filter(row => row.run === run).map(row => row.issue),
       ...localRuns.filter(record => record.workflow === 'feature' && record.productMarker === marker(run)).map(record => record.number),
-    ].filter(number => number !== undefined));
-    if (!numbers.size) return null;
-    const candidates = [];
+    ].filter(number => Number.isSafeInteger(number) && number > 0 && !excludedFor(run).has(number)));
+    const candidates = [], failed = [];
     for (const number of numbers) {
-      const issue = await p.issueByNumber({ ...scope, number });
-      if (!valid(issue, run, number)) invalid(`Saved issue #${number} for ${run} could not be verified.`);
-      const verdict = await trust(issue);
-      if (verdict === 'untrusted') invalid(`Saved issue #${number} for ${run} is untrusted.`);
-      candidates.push({ issue, unverified: verdict === 'unavailable', local: localFor(number, run) });
+      const candidate = await inspect(run, number);
+      (candidate.unverified ? failed : candidates).push(candidate);
     }
-    candidates.sort((a, b) => Number(a.unverified) - Number(b.unverified)
-      || Number(!!b.local) - Number(!!a.local)
+    candidates.sort((a, b) => Number(!!b.local) - Number(!!a.local)
       || (Date.parse(a.issue.created_at) || 0) - (Date.parse(b.issue.created_at) || 0) || a.issue.number - b.issue.number);
-    const result = candidates[0], number = result.issue.number;
-    if (candidates.length > 1) warning.push(`Warning: Multiple saved issues name ${run}; using issue #${number}.`);
-    if (result.unverified) warning.push(`Warning: Issue #${number} for ${run} is unverified because the authenticated account is unavailable.`);
-    else await bind(run, number);
+    let result = candidates[0] ?? failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
+    if (result && !result.unverified) {
+      if (candidates.length > 1) warning.push(`Warning: Multiple saved issues name ${run}; using issue #${result.issue.number}.`);
+      await bind(run, result.issue.number);
+    }
     direct.set(run, result); return result;
   };
   const cached = state.search;
@@ -251,33 +340,36 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
       if (page * pageSize >= response.total_count) break;
     }
     snapshot = [...found.values()]; fresh = true;
-    state.search = { at: time, items: snapshot }; await save();
+    await mutate({ search: { at: time, items: snapshot } });
   };
-  const select = async run => {
-    const trusted = [];
+  const select = async (run, repair) => {
+    const trusted = [], failed = [];
     for (const saved of snapshot) {
-      if (typeof saved.body !== 'string' || !saved.body.includes(marker(run)) || saved.pull_request) continue;
+      if (excludedFor(run).has(saved.number) || typeof saved.body !== 'string' || !saved.body.includes(marker(run)) || saved.pull_request) continue;
       if (!ownProductMarker(saved.body, run)) { warning.push(`Warning: Ignored issue #${saved.number} with ambiguous planned-run markers.`); continue; }
       if (!fresh && await trust(saved) !== 'trusted') { warning.push(`Warning: Ignored untrusted issue #${saved.number} for ${run}.`); continue; }
-      const issue = fresh ? saved : await p.issueByNumber({ ...scope, number: saved.number });
-      if (!valid(issue, run, saved.number)) invalid(`Cached issue #${saved.number} for ${run} could not be verified.`);
-      if (await trust(issue) === 'trusted') trusted.push(issue);
-      else warning.push(`Warning: Ignored untrusted issue #${issue.number} for ${run}.`);
+      if (!fresh) {
+        const candidate = await inspect(run, saved.number);
+        if (candidate.unverified) { failed.push(candidate); continue; }
+        trusted.push(candidate.issue);
+      } else if (valid(saved, run, saved.number) && await trust(saved) === 'trusted') trusted.push(saved);
+      else warning.push(`Warning: Ignored untrusted issue #${saved.number} for ${run}.`);
     }
     trusted.sort((a, b) => Number(!!localFor(b.number, run)) - Number(!!localFor(a.number, run))
       || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
     if (trusted.length > 1) warning.push(`Warning: Multiple trusted issues name ${run}; using issue #${trusted[0].number}.`);
-    if (!trusted.length) return null;
+    if (!trusted.length) return failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
     await bind(run, trusted[0].number);
     return { issue: trusted[0], local: localFor(trusted[0].number, run), unverified: false };
   };
   return { bound, bind, async find(run, create = false) {
-    const known = await bound(run); if (known) return known;
+    const known = await bound(run, create); if (known) return known;
     if (snapshot === null) await refresh();
-    let selected = await select(run);
-    if (!selected && create && !fresh) { await refresh(); selected = await select(run); }
+    let selected = await select(run, create);
+    if (!selected && create && !fresh) { await refresh(); selected = await select(run, create); }
     return selected;
   } };
+
 }
 const ownProductMarker = (body, run) => new Set(body.match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? []).size === 1
   && body.split(/\r?\n/).some(line => line === marker(run));
@@ -344,14 +436,14 @@ async function progress(input, given, target) {
   const parent = localRuns.find(run => run.workflow === 'product'), warning = cycles(product), views = new Map();
   const planReady = product.runs.some(run => run.needs.includes('plan PR')) ? await basePlan(p, { cwd, baseBranch: parent?.baseBranch ?? repo.defaultBranch }) : true;
   const lookup = await issueLookup(p, cwd, repo.repository, localRuns, warning);
-  const targetBound = target ? await lookup.bound(target) : null;
+  const targetBound = target ? await lookup.bound(target, true) : null;
   const plannedRuns = targetBound ? product.runs.filter(run => run.run === target) : product.runs;
   for (const run of plannedRuns) await lookup.bound(run.run);
   const details = [];
   try {
     for (const run of plannedRuns) {
       const selected = await lookup.find(run.run, run.run === target), { issue = null, local = null, unverified = false } = selected ?? {};
-      if (unverified) { details.push({ run, issue, local: null, prs: [], evidence: [], fromPr: null, done: false, unverified: true }); continue; }
+      if (unverified) { details.push({ run, issue, local: null, prs: [], evidence: [], fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
       const prs = issue ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning) : [];
       const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
       const latest = [...prs].filter(pr => runtimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
@@ -430,7 +522,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
     const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;
-    if (selected.unverified) throw Error(`Saved issue #${issue.number} for ${run} is unverified; the authenticated account is unavailable.`);
+    if (selected.unverified) throw Error(`Saved issue #${issue.number} for ${run} is unverified: ${selected.reason}. Run pdd product start ${run} to link it again.`);
     const parent = localRuns.find(record => record.workflow === 'product');
     if (!issue) {
       const contractFiles = product.size === 'small' ? [] : [...new Set([...boundaries.filter(row => planned.part === 'all' || [row.From, row.To].includes(planned.part)).map(row => row.Contract), 'contracts/world.md'])];

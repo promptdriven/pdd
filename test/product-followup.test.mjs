@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { productStart, productStatus, runProduct } from '../src/product.mjs';
 const marker = run => `<!-- pdd-product: run=${run} -->`;
 const issue = (run, number, extra = {}) => ({ number, body: marker(run), user: { login: 'maintainer' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z', state: 'OPEN', ...extra });
 function setup(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'pdd-followup-'));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-followup-')));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), cwd, { recursive: true });
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -125,13 +125,16 @@ test('unavailable account on a bound self exception keeps only an unverified hin
   assert.equal(f.s.creates.length, 0); assert.equal(f.s.starts.length, 0);
 });
 
-test('an invalid or unreadable saved issue never authorizes replacement', async t => {
+test('confirmed invalid saved issues can relink while unknown replies fail closed', async t => {
   for (const mode of ['foreign-marker', 'number', 'untrusted', 'transport']) {
     const f = setup(t);
     f.ports.readProductState = async () => ({ json: JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [{ run: 'phone-1', issue: 80 }] }) });
     f.ports.issueByNumber = async () => { if (mode === 'transport') throw Error('not accessible'); return issue(mode === 'foreign-marker' ? 'server-1' : 'phone-1', mode === 'number' ? 81 : 80, mode === 'untrusted' ? { author_association: 'NONE', user: { login: 'outsider' } } : {}); };
-    const out = await productStart({ cwd: f.cwd, run: 'phone-1' }, f.ports);
-    assert.equal(out.exitCode, 1, mode); assert.equal(f.s.creates.length, 0); assert.equal(f.s.starts.length, 0); assert.equal(f.s.searches.length, 0);
+    const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+    const confirmed = ['foreign-marker', 'untrusted'].includes(mode);
+    assert.equal(out.exitCode, confirmed ? 0 : 1, mode);
+    assert.equal(f.s.creates.length, confirmed ? 1 : 0); assert.equal(f.s.starts.length, 0);
+    assert.equal(f.s.searches.length, confirmed ? 1 : 0);
   }
 });
 
@@ -203,7 +206,7 @@ else { process.stderr.write('Unexpected gh call: ' + JSON.stringify(a)); process
   const stateFiles = readdirSync(join(f.cwd, '.git/pdd/products'));
   assert.equal(stateFiles.length, 1); assert.ok(stateFiles[0].endsWith('.json'));
   const state = JSON.parse(readFileSync(join(f.cwd, '.git/pdd/products', stateFiles[0]), 'utf8'));
-  assert.equal(state.repository, 'example/coffee'); assert.equal(state.productRoot, f.cwd);
+  assert.equal(state.repository, 'example/coffee'); assert.equal(state.version, 2); assert.equal('productRoot' in state, false);
   assert.deepEqual(state.bindings, [{ run: 'phone-1', issue: 201 }]); assert.equal(state.search.items.length, 11);
 });
 

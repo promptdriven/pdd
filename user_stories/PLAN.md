@@ -16,3 +16,7 @@
 5. [Keep my prepared run issue](product-issue-binding.md): durable issue identity before search indexing.
 6. [Reuse one product search](product-search-cache.md): one shared query and a short local snapshot across commands.
 7. [Continue when my account lookup is unavailable](product-unavailable-actor.md): untrusted claims cannot break product commands.
+8. [Repair one broken run link](product-repair-link.md): isolate a deleted link and relink it explicitly.
+9. [Keep an uncertain run link](product-unresolved-link.md): retain unresolved hints without blocking other runs.
+10. [Reuse my run link in another checkout](product-worktree-links.md): reuse compatible legacy state across worktrees.
+11. [Keep my other saved run links](product-state-updates.md): preserve other bindings during coordinated updates.

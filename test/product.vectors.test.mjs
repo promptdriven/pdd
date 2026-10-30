@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as product from '../src/product.mjs';
 
 const pointer = (value, path) => path === '' ? value : path.split('/').slice(1).reduce((item, token) => item?.[token.replace(/~1/g, '/').replace(/~0/g, '~')], value);
-for (const name of ['map', 'status', 'next', 'start', 'issue-binding', 'search-cache', 'unavailable-actor']) {
+for (const name of ['map', 'status', 'next', 'start', 'issue-binding', 'search-cache', 'unavailable-actor', 'repair-link', 'unresolved-link', 'worktree-links', 'state-updates']) {
   test(`product-${name}: original prompt-space vectors at public module boundaries`, async () => {
     const scenario = JSON.parse(readFileSync(new URL(`./runtime/product-${name}.json`, import.meta.url)));
     const world = structuredClone(scenario.initial_world), calls = {};
@@ -20,6 +20,8 @@ for (const name of ['map', 'status', 'next', 'start', 'issue-binding', 'search-c
     };
     let fallbackState = null;
     const ports = {
+      lockProductState: async args => invoke('productState.lock', args),
+      unlockProductState: async args => invoke('productState.unlock', args),
       readProductState: async args => scenario.simulation['productState.read'] ? invoke('productState.read', args) : ({ json: fallbackState }),
       writeProductState: async args => { if (scenario.simulation['productState.write']) return invoke('productState.write', args); fallbackState = args.json; return {}; },
       now: async () => scenario.simulation['clock.now'] ? invoke('clock.now', {}) : ({ milliseconds: 0 }),

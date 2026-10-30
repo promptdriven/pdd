@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -14,11 +14,13 @@ const pr = (run, number, extra = {}) => ({ number, url: `https://github.com/exam
   updatedAt: '2026-10-02T00:00:00Z', headRefName: `topic-${number}`, isCrossRepository: false, headRepository: { name: 'coffee' }, headRepositoryOwner: { login: 'example' }, ...extra });
 const xref = (number, extra = {}) => ({ event: 'cross-referenced', source: { issue: { pull_request: { html_url: `https://github.com/example/coffee/pull/${number}` } } }, ...extra });
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'pdd-product-review-'));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-product-review-')));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), cwd, { recursive: true });
   const state = { issues: [], runs: [], prs: [], events: {}, starts: [], creates: [], reads: [], actor: 'person', views: [], closed: [] };
   const ports = {
+    lockProductState: async () => ({ handle: 'owned-test-lock' }),
+    unlockProductState: async () => ({}),
     readProductState: async () => ({ json: state.productState ?? null }),
     writeProductState: async ({ json }) => { state.productState = json; return {}; },
     now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),

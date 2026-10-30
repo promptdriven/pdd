@@ -10,6 +10,8 @@ const marker = run => `<!-- pdd-product: run=${run} -->`;
 function fixture() {
   const state = { issues: [], rows: [], local: false, split: false, created: 0, starts: [] };
   const ports = {
+    lockProductState: async () => ({ handle: 'owned-test-lock' }),
+    unlockProductState: async () => ({}),
     readProductState: async () => ({ json: state.productState ?? null }),
     writeProductState: async ({ json }) => { state.productState = json; return {}; },
     now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),
