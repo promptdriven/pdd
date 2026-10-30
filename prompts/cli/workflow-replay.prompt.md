@@ -36,6 +36,8 @@ Native temporary views use realpath-resolved scratch directories, including unde
 symlinked TMPDIR. Resolve the declaration parent directory with realpath before
 reading; allow symlink ancestors but still refuse a final symlink or hardlink.
 Use `git cat-file --batch` for immutable blob reads rather than per-file processes.
+Refuse a `.git` path segment in any letter case, including `.GIT`, in all
+selected paths and temporary-view tree entries before writing them into the view.
 
 A declaration is version `pdd.replay-adoption.v1`, with `repository` (canonical
 owner/repo), `commit` (full immutable commit ID), nonempty unique repo-relative
@@ -103,6 +105,15 @@ Do not add internal bytes to the helper's public result, Runtime snapshot or use
 At runtime the supplied fake models this native port, not actual Git or byte hashing.
 Clean native causes to one finite line (at most 1000 characters), removing private
 absolute paths, credentials and Try URLs; keep a useful operation/cause explanation.
+For a missing declared scenario, name whether the approved or current source is
+missing it and retain its repo-relative path, including a deleted worktree file.
+Declaration-shape refusals must identify the failed rule: more than 200 scenario
+paths names the count and limit, a missing `scenarios` key names that key and its
+absence, duplicate paths name the duplicate and its repo-relative path, and
+noncanonical paths name the path and canonical-path problem (for example
+`./tests/a.json`). Never leave these causes empty. Invalid absolute path input
+must still be sanitized. Runtime declaration transport permits malformed scenario
+lists so this module, rather than schema admission, owns their diagnosis.
 
 Validate declaration version/types, nonempty unique prompt and scenario paths and assertion
 fields; malformed declarations block as invalid-approval. Require 64 lowercase hex
@@ -207,7 +218,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "a0c545df8f33e4ba83dda0fc1906ea0b7a0437c28117ce80758942e3024e8457",
+  "prose_sha256": "be29d21c583f2fcedd6dec7941b94414733ddd4eef99ff36ef4b850e5e633e47",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
@@ -391,10 +402,7 @@ let an agent's free-form PASS summary replace this status.
                         "type": "array",
                         "items": {
                           "type": "string"
-                        },
-                        "minItems": 1,
-                        "maxItems": 200,
-                        "uniqueItems": true
+                        }
                       }
                     },
                     "required": [
@@ -402,8 +410,7 @@ let an agent's free-form PASS summary replace this status.
                       "repository",
                       "commit",
                       "prompts",
-                      "approval",
-                      "scenarios"
+                      "approval"
                     ],
                     "additionalProperties": false
                   },

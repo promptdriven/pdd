@@ -19,7 +19,7 @@ explicitly opt in to replay evidence; adoption never enables a custom workflow's
 Before releasing a cancelled-run claim, allocating a worktree, saving a run or starting
 Herdr, validate the selected base content through `adoptReplayCorpus` in
 [replay evidence](workflow-replay.prompt.md#corpus-adoption). Failure exits 2 with a
-finite repair reason and the replay owner's cleaned native cause when available; retain historical runs, branches and files unchanged.
+finite repair reason and the replay owner's cleaned native cause when available; retain historical runs, branches and files unchanged. A failed startup fetch explicitly says that the fetch failed; a generic source-selection or local-operation failure alone is insufficient. Keep private absolute paths, credentials and Try URLs out of that diagnostic.
 
 After worktree allocation, revalidate its actual content before saving an active run
 or starting Herdr; report failure without fabricating success if it differs.
