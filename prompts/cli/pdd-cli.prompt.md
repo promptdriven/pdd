@@ -34,7 +34,7 @@ Native authoring/generation uses existing imported project APIs and their owner 
 
 ## Workflow dispatch
 
-The runner routes (start, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
 For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Interpreter resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
@@ -69,7 +69,7 @@ pdd never merges.
 
 ## Help forms
 
-The ordered help-form list consists first of the canonical form and description for catalog route `workflow.request-uptake`, then exactly the lines below in their displayed order. The first entry uses that route's prefix followed by `REQUEST_ID --summary TEXT` and its catalog-owned agent uptake description; resolve it by stable id rather than a copied public verb. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix. This complete list, including the catalog-derived first entry, defines the manifest and root help.
+The ordered help-form list consists of the lines below in their displayed order, inserting the canonical form and description for catalog route `workflow.request-uptake` immediately after the ask line. That inserted entry uses that route's prefix followed by `REQUEST_ID --summary TEXT` and its catalog-owned agent uptake description; resolve it by stable id rather than a copied public verb. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix. This complete list, including the catalog-derived inserted entry, defines the manifest and root help.
 
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
@@ -163,8 +163,8 @@ finite local cause and returns 5. Catalog owns all syntax.
 
 ```json
 {
-  "status":"approved",
-  "prose_sha256": "d38af6c630b39b7a4e3a27689b7eba222d252d71aefeee34bbe475fa833bbadb",
+  "status": "approved",
+  "prose_sha256": "28553c05e3dc8277231b868731852d68890816d36734ec8b007ad599c71c2d65",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

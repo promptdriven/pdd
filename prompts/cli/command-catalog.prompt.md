@@ -8,7 +8,7 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring 
 
 ## Names
 
-`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'start'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and start. A rename changes `NAMES` and those words together.
+`NAMES` is the one place for the words of five commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'start', requestUptake: 'ack'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and start. A rename changes `NAMES` and those words together.
 
 Each of these routes lists `formerly`, the words that people typed before. The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms:
 
@@ -28,7 +28,7 @@ There is no `session` route and no `workflow feature|bug|small-change` chat rout
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.run `workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
-- `workflow.request-uptake` (local `workflow-request-uptake`): the public verb is `ack`. Define that spelling in one private constant, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values; consumers find this route by its stable id, never by duplicating the public verb.
+- `workflow.request-uptake` (local `workflow-request-uptake`): the public verb comes only from `NAMES.requestUptake`, used for both the `['workflow', verb]` prefix and help form `pdd workflow <verb> REQUEST_ID --summary TEXT`. Require one text operand and text option `--summary` (dispatch enforces its presence). Help describes an agent in a run worktree recording that it took up one delivered change request, with a short note. Keep all five existing exports, including `NAMES` with its existing keys and values plus the uptake key; consumers find this route by its stable id, never by duplicating the public verb.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
 - workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
@@ -40,7 +40,7 @@ No resume, attach, run IDs, decisions flag or native argument passthrough. The a
 
 ## Workflow runner help
 
-Describe the runner routes in plain words without preview labels. workflow.run says that pdd starts a chat and exits, and that pdd later pushes the branch and opens a real PR. Keep route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts.
+Describe the runner routes in plain words without preview labels. workflow.run says that pdd starts a chat and exits, and that pdd later pushes the branch and opens a real PR. Keep route IDs, prefixes, local dispositions, operands/options/forms and parser/completion behavior consistent with their contracts. Place the uptake route help beside done and ask, after ask; preserve the earlier root-help commands and their order.
 
 ## Interpreter routes
 
