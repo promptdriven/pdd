@@ -100,7 +100,7 @@ Reports (anyone with a link can open it):
 | You see | It means |
 |---|---|
 | `✓` | Every check passed. |
-| `FAILED` | A check failed. pdd shows the criterion, the expected value and the answer. Fix the prompt, or change the expected value. |
+| `FAILED` | A check failed. pdd shows the criterion, the expected value and the answer. Usually the prompt is wrong, and your agent fixes it. A person decides expected values. The agent may propose a change, and never makes it. |
 | `REFUSED` | A file breaks a rule, and nothing was judged. Fix the file that pdd names. |
 | `STOPPED` | One test step took more than 10 minutes, and the server stopped it. Make the step smaller. |
 | `DRAFT` | A prompt is still a draft. A DRAFT pass is not an approval. |
@@ -168,7 +168,7 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd check --lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
 | `pdd check [STORY...]` | Run the tests of the Stories on the runtime. |
 | `pdd check --files` | List the files that a check sends. No network. |
-| `pdd check --read` | Show saved check results again. Sends no check. |
+| `pdd check --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
 | `pdd try STORY` | Open a Try page for the Story. |
 | `pdd try STORY --cli` | Run the program as a command line in your terminal. |
 | `pdd try STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
@@ -215,6 +215,7 @@ The skills and the other commands run on your computer.
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
 | `REFUSED` (exit code 4) | Read the code and the fix under the line, and fix the file. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
+| `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
 | `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |
 | `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |
