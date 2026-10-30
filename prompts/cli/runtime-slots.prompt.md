@@ -18,7 +18,7 @@ For tickets and active reservations, a known owned snapshot consists of id, pid,
 
 Only a verified owned transition advances the accepted snapshot: waiting-to-active promotion changes state/start time, and registration appends a previously absent request ID in order. A duplicate succeeds without changing the request list. Registration through a separately resolved native port advances the live owner's heartbeat snapshot only after its verified mutation. A write cannot authenticate itself merely by becoming the latest file contents.
 
-Reservations remain ordinary `{id,directory}` references, including saved/adopted references and existing active records without an acquisition in this process. Do not require a new field, token, port, local-owner registration or global gate. When no owned snapshot is known, preserve those existing active-record registration/release calls and their errors; absence of a local owner alone is not a refusal. Historical ownership cannot be independently proved from such a reference. This does not permit bypassing a known owner's predecessor check. Ended false stops ownership work while retaining uncertain paid-job evidence and the same returned reservation object's snapshot for a later ended true release. Retaining that evidence must not keep released references alive or restart ended heartbeat work.
+Reservations remain ordinary `{id,directory}` references, including saved/adopted references and existing active records without an acquisition in this process. Do not require a new field, token, port, local-owner registration or global gate. When no owned snapshot is known, preserve those existing active-record registration/release calls and their errors; absence of a local owner alone is not a refusal. Historical ownership cannot be independently proved from such a reference. This does not permit bypassing a known owner's predecessor check. Ended false stops ownership work while retaining uncertain paid-job evidence and the same returned reservation object's snapshot for a later ended true release. That object's known snapshot takes precedence over a newer owner at the same path. Retaining that evidence must not keep released references alive or restart ended heartbeat work.
 
 ### Owner freshness and paid-job leases
 
@@ -74,7 +74,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "fe9cdb1e90bd7b67f1dd1f681b93d19fd23b3b97688b6bce5e904c5dbb05305a",
+  "prose_sha256": "89c31d8a5f6f62e432729989a215a7cd0c13fb38b7013d69e0758e0fc76023aa",
   "entries": [
     {
       "operation": "listRuntimeJobs",
