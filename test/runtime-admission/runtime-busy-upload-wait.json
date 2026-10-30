@@ -1,0 +1,110 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-busy-upload-wait.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When the runtime confirms a busy check never started, I can keep waiting without a fixed attempt limit, with at least 10 seconds between busy uploads and any longer server delay respected."
+    },
+    {
+      "id": "AC2",
+      "text": "When Check capacity is usable and full, my next upload waits for a free Check slot or 60 seconds from the busy answer, while still respecting the minimum delay."
+    },
+    {
+      "id": "AC3",
+      "text": "If capacity information is unsupported, absent or unusable, my check can try again after the minimum delay without treating missing information as free capacity."
+    },
+    {
+      "id": "AC4",
+      "text": "A deadline, Ctrl-C, maintenance or an access refusal prevents further uploads even when the capacity hold would otherwise end."
+    },
+    {
+      "id": "AC5",
+      "text": "Reading or explicitly retrying my saved batch preserves the original retry times, selected files, request history and call limits."
+    },
+    {
+      "id": "AC6",
+      "text": "A check that may have started is recovered by its original request ID and is never replayed as a busy check."
+    }
+  ],
+  "cases": [
+    {
+      "id": "fallback-upload-rate",
+      "criterion_id": "AC1",
+      "given": "An agent Check has its 90-second caller wait, immediate passed lint, unsupported capacity 404 and repeated confirmed-unstarted complete zero-call busy receipts; each busy reply advises Retry-After 1 second.",
+      "required_observation": "More than 3 and at most 10 actual Check uploads before the finite deadline; consecutive busy uploads are at least 10000 ms apart and none begins at/after deadline. Preserve all posted request IDs/raw receipts; end busy/not-run exit 5 with zero Check calls and existing advice. No per-attempt Check ID, dispatch claim or archive upload while only waiting; no global attempt-count cap."
+    },
+    {
+      "id": "four-busy-then-pass",
+      "criterion_id": "AC1",
+      "given": "Unsupported capacity 404; four confirmed-unstarted complete zero-call busy receipts with Retry-After 1 second, then a matching passed check receipt; caller wait 90 seconds and identical source/call ceilings throughout.",
+      "required_observation": "The fifth Check POST can succeed after at least 40000 ms of busy waits and before deadline; preserve all five POST identities and receipts, matching final usage and original ceilings. Continue beyond three attempts without allocating an ID for mere waiting."
+    },
+    {
+      "id": "longer-advice",
+      "criterion_id": "AC1",
+      "given": "A confirmed-unstarted busy Check answer arrives at time 0 with Retry-After 75 seconds; usable Check occupancy remains full; caller deadline 90000 ms.",
+      "required_observation": "No new Check ID/claim/upload before 75000 ms, including at the 60000 ms capacity bound. After 75000 ms ordinary guarded admission may send one fresh Check attempt despite continued full occupancy; preserve prior evidence."
+    },
+    {
+      "id": "full-then-free",
+      "criterion_id": "AC2",
+      "given": "Busy answer at time 0 advises 1 second; usable Check running/limit counts remain 4/4 through minimum wait, then an eligible shared capacity observation at 30000 ms reports 3/4; caller wait 90 seconds.",
+      "required_observation": "No replacement upload while observed full before 30000 ms; after minimum wait and the observed free slot, ordinary guarded admission can dispatch before 60000 ms. Use small authenticated GETs/cache outside local claims, without extra attempt IDs or archive uploads just to wait."
+    },
+    {
+      "id": "full-hold-bound",
+      "criterion_id": "AC2",
+      "given": "Busy answer at time 0 advises 1 second; usable Check occupancy stays 4/4 throughout; finite wait 90 seconds and all other gates permit dispatch.",
+      "required_observation": "No replacement upload before 60000 ms; at the 60000 ms hold bound ordinary guarded admission may resume without requiring a free count. Minimum backoff remains satisfied; do not reset the bound at each capacity observation."
+    },
+    {
+      "id": "zero-limit-full",
+      "criterion_id": "AC2",
+      "given": "Busy answer at time 0 advises 1 second; supported Check occupancy remains running 0/limit 0; all other gates permit dispatch within 90 seconds.",
+      "required_observation": "Treat limit 0 as full rather than free: no replacement upload until 60000 ms capacity bound; ordinary guards still apply at that bound."
+    },
+    {
+      "id": "absent-unusable-occupancy",
+      "criterion_id": "AC3",
+      "given": "Separately capacity 404, a recognized non-maintenance response with absent Check occupancy, malformed Check counts and an unclear capacity read; busy answer at time 0 advises 1 second, caller wait 90 seconds.",
+      "required_observation": "Missing/unusable data supplies no free count or new hard refusal. Existing unsupported/warning/fail-open behavior permits ordinary guarded Check admission after at least 10000 ms; unclear results share the existing cache scope/TTL and finite per-command warning behavior. No exact GET count is required."
+    },
+    {
+      "id": "short-deadline",
+      "criterion_id": "AC4",
+      "given": "A confirmed busy answer at time 0 advises 1 second and caller deadline is 9000 ms; repeat with usable full occupancy and caller deadline 45000 ms.",
+      "required_observation": "The minimum wait or full-capacity hold reaches the caller deadline without a replacement Check ID, claim or POST. Preserve earlier receipts, zero Check usage and existing busy/not-run exit 5; allocate/send nothing afterward."
+    },
+    {
+      "id": "interrupt-capacity-wait",
+      "criterion_id": "AC4",
+      "given": "Busy Check answer at time 0 advises 1 second, usable occupancy stays full; Ctrl-C at 15000 ms before deadline and capacity bound.",
+      "required_observation": "No replacement Check ID/claim/upload; retain earlier IDs/confirmed receipts and uncertain unrelated leases. Existing Check exit 3 and valid JSON remain; text says Stopped. with what was sent/confirmed, not wait-ended or Stopped before sending. for the posted attempt."
+    },
+    {
+      "id": "maintenance-precedence",
+      "criterion_id": "AC4",
+      "given": "Busy Check answer at time 0 advises 1 second; a supported capacity observation then announces maintenance until 120000 ms. Caller deadline 90000 ms, so the 60000 ms capacity bound falls inside maintenance.",
+      "required_observation": "No replacement Check ID/claim/upload at 60000 ms or before caller deadline. Respect bounded maintenance waits/local-time notice and existing exit/accounting; capacity fallback cannot bypass maintenance."
+    },
+    {
+      "id": "access-precedence",
+      "criterion_id": "AC4",
+      "given": "During a confirmed-busy Check capacity wait, shared observation returns recognized 401, no-cloud-access, not-invited, cloud-unavailable or update-required separately before the hold ends.",
+      "required_observation": "Apply the existing matching stop behavior and exit/advice, preserving earlier evidence; no capacity-fallback replacement, archive upload or new Check ID. Do not turn an access stop into unclear fail-open."
+    },
+    {
+      "id": "saved-retry-times",
+      "criterion_id": "AC5",
+      "given": "Busy answer at time 0 advises 1 second and usable occupancy stays full. First invocation is interrupted at 5000 ms; read at 7000 ms, then explicitly retry at 20000 ms with identical owner/repo/source/caps and a wait ending after 60000 ms. Separately retry at 8000 ms with unsupported capacity 404, and repeat with Retry-After 75 seconds.",
+      "required_observation": "GET-only read creates no attempt and preserves the original 10000 ms minimum and 60000 ms capacity bound. Full-capacity retry may dispatch after 60000 ms under ordinary guards rather than starting another 60 seconds; the unsupported variant waits the remaining minimum until 10000 ms, and the 75 second variant cannot dispatch before 75000 ms. All prior IDs/receipts and original source/caps remain intact."
+    },
+    {
+      "id": "unknown-is-not-busy",
+      "criterion_id": "AC6",
+      "given": "Separately a lost POST reply, wrong-ID/command receipt, unknown/positive calls, evaluated checks, incomplete accounting and expired/unverifiable evidence; capacity later shows a free slot or 60000 ms passes.",
+      "required_observation": "No capacity replacement or fresh request ID regardless of elapsed time/free capacity. Recover accepted/uncertain submissions by their original IDs under existing lifecycle, retain unknown/known accounting and paid leases, and preserve the separately authorized restart exception without broadening it."
+    }
+  ]
+}
