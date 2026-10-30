@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 116818248b2b0f4ab5e6fc8e37d6d14dc518c225e1a9bbeb62b96eb6b9bdb9b1).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 415f8506fee0d8926088170a8be8edc83ad0361ba9dc9fb0706509c498d37f22).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
@@ -58,7 +58,8 @@ export function parseAgentAuthStatus({agent,result} = {}) {
  if(agent!=='codex')return 'unavailable';
  const text=`${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');
  const negative=/\bnot\s+(?:logged|signed)\s+in\b|\b(?:login|sign[ -]?in)\s+required\b/i.test(text);
- const positive=/\blogged in\b|\bapi key configured\b/i.test(text);
+ const affirmative=text.replace(/\bnot\s+(?:logged|signed)\s+in\b/gi,'');
+ const positive=/\blogged in\b|\bapi key configured\b/i.test(affirmative);
  if(positive&&negative)return 'unavailable';
  if([0,1].includes(result.code)&&negative)return 'signed_out';
  return result.code===0&&positive?'ready':'unavailable';
