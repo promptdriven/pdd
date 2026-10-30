@@ -1365,11 +1365,15 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
             const native = (await herdr(['agent', 'get', replacement.paneId])).result?.agent;
             const workspaceReply = await herdr(['workspace', 'list']), paneReply = await herdr(['pane', 'list', '--workspace', replacement.workspaceId]);
             const workspaces = workspaceReply?.result?.workspaces, panes = paneReply?.result?.panes;
-            const workspace = Array.isArray(workspaces) && workspaces.find(item => item.workspace_id === replacement.workspaceId);
+            const validRows = (rows, key) => Array.isArray(rows) && rows.every(row => row && typeof row[key] === 'string' && row[key]) && new Set(rows.map(row => row[key])).size === rows.length;
+            const inventoryValid = validRows(workspaces, 'workspace_id') && validRows(panes, 'pane_id') && panes.every(row => ['tab_id', 'workspace_id', 'terminal_id', 'cwd'].every(key => typeof row[key] === 'string' && row[key]));
+            const workspace = inventoryValid && workspaces.find(item => item.workspace_id === replacement.workspaceId);
             const samePanes = Array.isArray(panes) && panes.filter(item => item.tab_id === replacement.tabId);
             const owned = workspaceReply?.result?.type === 'workspace_list' && paneReply?.result?.type === 'pane_list' && workspace?.worktree?.checkout_path === run.root && workspace.worktree.repo_key === run.commonDir && workspace.worktree.is_linked_worktree === true && samePanes?.length === 1 && samePanes[0].pane_id === replacement.paneId && samePanes[0].workspace_id === replacement.workspaceId && samePanes[0].terminal_id === replacement.terminalId && samePanes[0].cwd === run.root;
-            const nativeId = native?.agent_session?.kind === 'id' ? native.agent_session.value : null;
-            if (owned && tab?.tab_id === replacement.tabId && tab.workspace_id === replacement.workspaceId && native?.pane_id === replacement.paneId && native.agent === replacement.agent && (!validSessionId(replacement.session?.id) || !validSessionId(nativeId) || replacement.session.id === nativeId)) {
+            const descriptor = native?.agent_session;
+            const sessionValid = descriptor == null || typeof descriptor === 'object' && !Array.isArray(descriptor) && descriptor.kind === 'id' && validSessionId(descriptor.value) && (descriptor.agent === undefined || descriptor.agent === native.agent);
+            const nativeId = descriptor?.value ?? null;
+            if (owned && tab?.tab_id === replacement.tabId && tab.workspace_id === replacement.workspaceId && native?.pane_id === replacement.paneId && native.agent === replacement.agent && ['unknown', 'working', 'idle', 'blocked', 'done'].includes(native.agent_status) && sessionValid && (!validSessionId(replacement.session?.id) || nativeId === null || replacement.session.id === nativeId)) {
               delete installed.startUnconfirmed;
               if (validSessionId(nativeId)) installed.session = { agent: installed.agent, id: nativeId };
               pending.replacement = { ...installed }; pending.phase = 'launched'; clearChatFailure(run); writeRun(run, p);

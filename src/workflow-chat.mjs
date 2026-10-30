@@ -210,9 +210,12 @@ export async function restartChat({ run, chat, message }, ports = {}) {
     let observed;
     try { observed = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!observed || observed.agent !== (chat.agent ?? run.agent) || observed.pane_id !== chat.paneId) throw invalid(); }
     catch (error) { if (error.code !== 'agent_not_found' || chat.startUnconfirmed) throw error; }
-    const nativeId = observed?.agent_session?.kind === 'id' && validSessionId(observed.agent_session.value) ? observed.agent_session.value : null;
+    const descriptor = observed?.agent_session;
+    if (observed && (!['unknown', 'working', 'idle', 'blocked', 'done'].includes(observed.agent_status) ||
+      descriptor != null && (typeof descriptor !== 'object' || Array.isArray(descriptor) || descriptor.kind !== 'id' || !validSessionId(descriptor.value) || descriptor.agent !== undefined && descriptor.agent !== observed.agent))) throw invalid();
+    const nativeId = descriptor?.value ?? null;
     if (chat.startUnconfirmed && !observed) throw problem('chat_start_unconfirmed', 'Inspect the same saved agent before replacing it.');
-    if (chat.startUnconfirmed && nativeId && validSessionId(chat.session?.id) && nativeId !== chat.session.id) throw invalid();
+    if (nativeId && validSessionId(chat.session?.id) && nativeId !== chat.session.id) throw invalid();
     const id = uuid(), at = now(), archive = join(run.runDir, 'abandoned-chats', `${id}-start.md`);
     if (!validSessionId(id) || !Number.isSafeInteger(at) || at < 0) throw problem('invalid_replacement_identity');
     const original = { ...chat, ...(nativeId ? { session: { agent: chat.agent ?? run.agent, id: nativeId } } : {}), originalMessageFile: chat.messageFile, messageFile: archive };
