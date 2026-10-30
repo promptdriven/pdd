@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1aa8d6cf37f8a992058f56fee492124a10741b1679bf3b8a42f074cb9b9ca2ae).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -16,14 +16,14 @@ const routes = [
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [],
-    forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--expect-gate',kind:'text'},{name:'--expect-step',kind:'text'}],
+    forms: [form('pdd workflow approve [ISSUE] [--expect-gate ID|--expect-step STEP]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
-    operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
-    forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
+    operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [{name:'--expect-gate',kind:'text'},{name:'--expect-step',kind:'text'}],
+    forms: [form('pdd workflow changes ISSUE TEXT… [--expect-gate ID|--expect-step STEP]', 'Send a change request to the same area chat; the gate stays open.')] },
   { id: 'workflow.cancel', prefix: ['workflow', 'cancel'], local: 'workflow-cancel',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow cancel ISSUE', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--expect-gate',kind:'text'},{name:'--expect-step',kind:'text'}],
+    forms: [form('pdd workflow cancel ISSUE [--expect-gate ID|--expect-step STEP]', 'Cancel the run and close its Herdr tabs; keep the worktree and branch.')] },
   { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
@@ -31,8 +31,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Try links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--expect-gate',kind:'text'},{name:'--expect-step',kind:'text'}],
+    forms: [form('pdd workflow open ISSUE [--expect-gate ID|--expect-step STEP]', 'Focus or attach the current area chat; resume it if its session ended.')] },
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
     form('pdd', 'Show local alpha commands.'), form('pdd --help', 'Show local alpha commands.'),
     form('pdd -h', 'Show local alpha commands.'), form('pdd help', 'Show local alpha commands.') ] },
