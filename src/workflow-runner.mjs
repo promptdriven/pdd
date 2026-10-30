@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ea506802f19992df26ecf40be3a64cb5ef5f1fa8dda45519c38a4625df1c3029).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0cb8867ca7eb14bb9374aa0f7ede58c6e1f9ce411300c43c3f56f9e37bcf4762).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun as storeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
@@ -23,7 +23,6 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const WORKFLOW_START_COMMAND = `pdd ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.run').prefix.join(' ')}`;
 const CHANGE_PREFIX = 'The person asks for changes';
 const ANSWER_PREFIX = 'The person answers your question';
 // At the code gate a chat reply must say yes in plain words; at other gates any reply from the person counts.
@@ -74,52 +73,6 @@ function deps(ports = {}) {
   const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
-}
-// Only these callers reconcile a loaded run. Storage and journal ownership stay unchanged.
-const runBaselines = new WeakMap();
-const sameSaved = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-function trackRun(run) {
-  if (!runBaselines.has(run)) runBaselines.set(run, structuredClone(run));
-  return run;
-}
-function mergeRunChanges(before, intended, latest, field) {
-  // Keep live references (notably the selected area) when durable content agrees.
-  if (sameSaved(intended, latest)) return intended;
-  if (sameSaved(before, intended)) return latest;
-  // Clearing an observed question/gate must not clear a replacement saved meanwhile.
-  if ((field === 'question' || field === 'gate') && intended === null && !sameSaved(before, latest)) return latest;
-  if (Array.isArray(before) && Array.isArray(intended) && Array.isArray(latest)) {
-    // Existing records retain their positions; local appends follow any newer appends.
-    return latest.flatMap((value, index) => index >= before.length ? [value]
-      : index < intended.length ? [mergeRunChanges(before[index], intended[index], value)] : [])
-      .concat(intended.slice(before.length));
-  }
-  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-  if (object(before) && object(intended) && object(latest)) {
-    const merged = { ...latest };
-    for (const key of new Set([...Object.keys(before), ...Object.keys(intended)])) {
-      if (!Object.hasOwn(intended, key)) delete merged[key];
-      else merged[key] = mergeRunChanges(before[key], intended[key], latest[key], key);
-    }
-    return merged;
-  }
-  return intended;
-}
-function writeRun(run, p) {
-  const before = runBaselines.get(run);
-  if (before) {
-    const latest = readRun(run.runDir);
-    if (latest) {
-      const merged = mergeRunChanges(before, run, latest);
-      if (merged !== run) {
-        for (const key of Object.keys(run)) delete run[key];
-        Object.assign(run, merged);
-      }
-    }
-  }
-  storeRun(run, p);
-  if (before) runBaselines.set(run, structuredClone(run));
-  return run;
 }
 // The real reason of a failed gh, git or Herdr call, in plain words.
 function causeOf(error) {
@@ -651,7 +604,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const reviewAt = evidence.lines.findIndex(line => line.startsWith('Review:'));
   const slot = reviewAt < 0 ? evidence.lines.length : reviewAt;
   const preparedLines = [...evidence.lines.slice(0, slot), ...inventory, ...evidence.lines.slice(slot)].map(line => hideLocalPaths(redactTry(line), run));
-  const body = (text, lifted) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`${WORKFLOW_START_COMMAND} ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = (text, lifted) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
@@ -846,7 +799,6 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
-  trackRun(run);
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
   if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
   const area = run.areas[run.area], lines = [];
@@ -1128,7 +1080,6 @@ export async function askPerson({ text, cwd }, ports) {
   const p = deps(ports);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow ask works only in a run worktree. cd to the worktree that pdd made for this run.');
-  trackRun(run);
   if (ended(run)) return done(`The run for #${run.number} is ${run.state}. Stop working on it.`);
   const question = String(text ?? '').trim().slice(0, 500);
   if (!question) return fail('Write the question after pdd workflow ask.');
@@ -1188,30 +1139,35 @@ function readDeliveryJournal(run, p) {
   return journal;
 }
 const uptakeQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
-const uptakeCommand = id => `pdd ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
-const deliveryTime = value => value == null ? 'unknown' : String(value);
-const uptakeReceipt = entry => `Request ${entry.id}: delivered at ${deliveryTime(entry.deliveredAt)}; ${entry.ackedAt == null ? 'not yet acknowledged by the agent' : `acknowledged at ${entry.ackedAt}: ${entry.ackSummary ?? ''}`}.`;
+const uptakeCommand = (id, p) => `${p.pdd ?? pddFor(p, PACKAGE_ROOT)} ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
+const deliveryTime = (value, p = {}) => value == null ? 'unknown' : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(p.timeZone ? { timeZone: p.timeZone } : {}) }).format(new Date(value));
+const uptakeReceipt = (entry, p) => `Request ${entry.id}: delivered at ${deliveryTime(entry.deliveredAt, p)}; ${entry.ackedAt == null ? 'not yet acknowledged by the agent' : `acknowledged at ${deliveryTime(entry.ackedAt, p)}: ${entry.ackSummary ?? ''}`}.`;
 function requestSnapshot(run, p) {
   try {
     const entries = readDeliveryJournal(run, p).requests;
     return { requests: entries.filter(entry => entry.kind === 'change' && entry.state === 'delivered')
       .map(entry => ({ id: entry.id, text: entry.text, area: entry.area, deliveredAt: entry.deliveredAt ?? null, ackedAt: entry.ackedAt ?? null, ackSummary: entry.ackSummary ?? null })),
+      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
+      uncertainRequests: entries.filter(entry => !entry.inFlight && entry.state === 'uncertain').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
       inFlightRequests: entries.filter(entry => entry.inFlight).map(({ id, text, area, paneId }) => ({ id, text, area, paneId })) };
   } catch { return { requests: null, inFlightRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
 }
-const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Original area ${entry.area}, pane ${entry.paneId}. Check the original chat; type the request there if absent. pdd will not automatically resend it.`;
-function requestLines(snapshot, { openOnly = false } = {}) {
+const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
+function requestLines(snapshot, { openOnly = false, agent = false, ended = false, p = {} } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
-  return [...snapshot.requests.filter(entry => !openOnly || entry.ackedAt == null).map(entry =>
-    `${uptakeReceipt(entry)} Area ${entry.area}: ${entry.text}`), ...snapshot.inFlightRequests.map(protectedRequestAdvice)];
+  return [...snapshot.requests.filter(entry => !ended && (!openOnly || entry.ackedAt == null)).map(entry =>
+    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? ". Tell the person about this outstanding request." : ""}`), ...snapshot.pendingRequests.map(entry => `Request ${entry.id}: pending, saved for the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
 }
 function doneWithRequests(result, run, p) {
   if (result.exitCode !== 0) return result;
-  const lines = requestLines(requestSnapshot(run, p), { openOnly: true });
-  return lines.length ? { ...result, message: `${result.message}\nwarning: ${lines.join('\n')}` } : result;
+  const snapshot = requestSnapshot(run, p);
+  // Completion warnings concern delivered changes; other custody states remain
+  // visible in status without directing an agent to inspect its own chat.
+  const lines = requestLines({ ...snapshot, pendingRequests: [], uncertainRequests: [], inFlightRequests: [] }, { openOnly: true, agent: true, p });
+  return lines.length ? { ...result, message: `${result.message}\nwarning: ${lines.join('\nwarning: ')}` } : result;
 }
 export async function acknowledgeRequest({ requestId, summary, cwd }, ports) {
-  const p = deps(ports), hint = `Use ${uptakeCommand(typeof requestId === 'string' ? requestId : 'REQUEST_ID')}.`;
+  const p = deps(ports), hint = `Use ${uptakeCommand(typeof requestId === 'string' ? requestId : 'REQUEST_ID', p)}.`;
   if (typeof requestId !== 'string' || !requestId.trim() || typeof summary !== 'string' || !oneLine(summary)) return fail(`Provide a request id and a short summary. ${hint}`);
   const run = await runForWorktree(cwd, p);
   if (!run || !['running', 'waiting'].includes(run.state)) return fail(`Acknowledgement requires an active run worktree. ${hint}`);
@@ -1219,10 +1175,10 @@ export async function acknowledgeRequest({ requestId, summary, cwd }, ports) {
     const entry = await deliveryJournal(run, p, journal => {
       const entry = journal.requests.find(entry => entry.id === requestId);
       if (!entry || entry.kind !== 'change' || entry.state !== 'delivered' || entry.inFlight) throw Error('Request is not a delivered change in this run');
-      if (entry.ackedAt == null) { entry.ackedAt = p.now(); entry.ackSummary = oneLine(summary); }
+      if (entry.ackedAt == null) { entry.ackedAt = p.now(); entry.ackSummary = oneLine(summary).slice(0, 500); }
       return { ...entry };
     }, { recover: false });
-    return done(`Agent uptake recorded. ${uptakeReceipt(entry)}`);
+    return done(`Agent uptake recorded. ${uptakeReceipt(entry, p)}`);
   } catch (error) { return fail(`Could not acknowledge request ${requestId}: ${oneLine(error.message).slice(0, 300)}. ${hint}`); }
 }
 
@@ -1272,8 +1228,8 @@ export async function changeRun({ ref, text, cwd }, ports) {
   const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
   const uncertain = () => fail(`Your request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
-  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
-  const already = () => done(`Your request was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted)}` : ''}`);
+  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${accepted.id !== entry.id ? 'Your request is saved pending. ' : ''}${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
+  const already = () => done(`Your request was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted, p)}` : ''}`);
   const failure = sent => {
     if (sent.uncertain) return uncertain();
     if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
@@ -1304,7 +1260,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
       if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id)}`;
+        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -1361,7 +1317,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
       return failure({ code: 'chat_target_changed' });
     }
     return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
-      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`) + (!answer ? `\n${uptakeReceipt(accepted)}` : '') + (warnings ? `\n${warning}` : ''));
+      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`) + (!answer ? `\n${uptakeReceipt(accepted, p)}` : '') + (warnings ? `\n${warning}` : ''));
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
   finally { activeDeliveries.delete(owner.token); }
 }
@@ -1381,7 +1337,6 @@ export async function cancelRun({ ref, cwd }, ports) {
 
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
-  trackRun(run);
   const cwd = existsSync(run.root) ? run.root : run.sourceRoot, before = JSON.stringify([run.state, run.pr]);
   for (const pr of run.pr) Object.assign(pr, await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd, url: pr.url }, p.commandPorts));
   const last = run.pr.at(-1), area = run.areas.find(item => item.name === last.stage);
@@ -1479,13 +1434,13 @@ async function listStatus(runs, { json, cancelled, scope }, p) {
   for (const run of runs) {
     const item = summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p));
     const snapshot = requestSnapshot(run, p);
-    all.push({ ...item, ...snapshot, line: [item.line, ...requestLines(snapshot, { openOnly: true })].join('\n') });
+    all.push({ ...item, ...snapshot, line: [item.line, ...requestLines(snapshot, { openOnly: true, ended: ended(run), p })].join('\n') });
   }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (json) return done(JSON.stringify({ runs: shown.map(({ line, ...item }) => item) }, null, 2));
-  if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, `Start one with: ${WORKFLOW_START_COMMAND} NAME ISSUE`].join('\n'));
+  if (!shown.length) return done([`No pdd runs ${scope}.${hidden ? ` ${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.` : ''}`, 'Start one with: pdd workflow run NAME ISSUE'].join('\n'));
   return done([...shown.map(item => item.line),
     ...(hidden ? [`${hidden} cancelled run${hidden > 1 ? 's' : ''} hidden; add --cancelled to see ${hidden > 1 ? 'them' : 'it'}.`] : []),
     `Review without resuming: pdd workflow view ${shown[0].ref}`, `Open one: pdd workflow open ${shown[0].ref}`].join('\n'));
@@ -1502,7 +1457,7 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   const run = found.run, facts = ended(run) ? {} : await gateFacts(run, p), chat = await chatState(run, p);
   const snapshot = requestSnapshot(run, p);
   if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot }] }, null, 2)); }
-  return done([detail(run, chat, facts), ...requestLines(snapshot)].join('\n'));
+  return done([detail(run, chat, facts), ...requestLines(snapshot, { p })].join('\n'));
 }
 
 export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {

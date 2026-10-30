@@ -1,14 +1,10 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 189eff393f41646ffc50ee6047ae73c53ff83444f89159d03729865e87c47b1a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: bb8f8a4014a813cf58ff9c38e585294ffd162ce3e8b8cfc4dc0361950420b02e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
-const { test, lint, simulate, start } = NAMES;
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start', ack: 'ack' });
+const { test, lint, simulate, start, ack } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
-const REQUEST_UPTAKE_VERB = 'ack';
 const routes = [
-  { id: 'workflow.request-uptake', prefix: ['workflow', REQUEST_UPTAKE_VERB], local: 'workflow-request-uptake',
-    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
-    forms: [form(`pdd workflow ${REQUEST_UPTAKE_VERB} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
@@ -31,6 +27,9 @@ const routes = [
   { id: 'workflow.ask', prefix: ['workflow', 'ask'], local: 'workflow-ask',
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
+  { id: 'workflow.request-uptake', prefix: ['workflow', ack], local: 'workflow-request-uptake',
+    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
+    forms: [form(`pdd workflow ${ack} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
     operands: [{name:'issue',type:'issue',optional:true}], options: [],
     forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
