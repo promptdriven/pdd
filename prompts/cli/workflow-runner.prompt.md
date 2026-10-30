@@ -40,6 +40,12 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 
 `ref` is an issue number, `owner/repo#N` or an issue URL ([selection](workflow-runs.prompt.md)). Without ref, use the run of the current worktree, or the only run of this repository that waits for a person.
 
+### Caller expectations for mutating commands
+
+`approveRun`, `changeRun`, `cancelRun`, and `openRun` accept optional caller expectations `expectGate` (from `--expect-gate ID`) and `expectStep` (from `--expect-step STEP`). Before any command-specific approval, question, chat, filesystem, branch, GitHub or other effect, read the saved run state once and compare every supplied expectation with the current state. A matching expectation continues through the command's existing behavior and effects. A mismatch returns the one documented stale-expectation exit code, identifies the current gate or step, and leaves the run record, approvals, questions, chats, files, branches and publication effects unchanged. Calls that supply no expectation preserve today's unconditional behavior.
+
+The public contract must define the stable gate ID, whether both expectation options may be supplied, malformed or unknown expectation handling, the current-step meaning, the fixed stale-expectation exit code and refusal wording before implementation. Do not derive an ID or error code from private record fields without that decision.
+
 ## Rules
 
 - No timeouts, no polling loop, no foreground controller and no test runs. Source fingerprints below bind evidence; they do not create execution snapshots.

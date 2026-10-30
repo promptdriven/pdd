@@ -1,0 +1,14 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/stale-workflow-expectations.md",
+  "criteria": [
+    {"id": "AC1", "text": "`pdd workflow approve`, `changes`, `cancel`, and `open` accept the documented `--expect-gate ID` and `--expect-step STEP` options; calls without either option retain their existing command forms and behavior."},
+    {"id": "AC2", "text": "When the supplied expectation matches the run's current gate or step, each command proceeds with its existing behavior and effects."},
+    {"id": "AC3", "text": "When the supplied expectation does not match the current run state, the command refuses with the single documented stale-expectation exit code, identifies the current gate or step, and performs no run, approval, question, chat, file, branch, or publication change."},
+    {"id": "AC4", "text": "Supplying an expectation never causes a command to act against a later state after the run has advanced; the guard is evaluated from the saved state immediately before the command's existing effects."}
+  ],
+  "initial_world": {"kv": {"run": {"gate": {"area": "stories", "at": "approve", "kind": "approve"}, "step": "prompt-story", "effects": 0}}},
+  "simulation": {"store.load": {"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"}, "store.save": {"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"}},
+  "context": [],
+  "steps": []
+}
