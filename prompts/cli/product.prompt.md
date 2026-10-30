@@ -44,8 +44,15 @@ shared evidence owner decides whether a saved local result matches its files.
 All three commands use the same trusted issue selection below.
 
 Combine workflow evidence with `savedStoryEvidence` from the runtime client,
-including standalone checks made before any workflow step completes. Saved
-checks are progress only: they never complete a run, approve a prompt or satisfy
+including standalone checks made before any workflow step completes. For the
+default saved-evidence binding, create one runtime-client
+`createSavedStoryEvidenceReader` per status, next or start invocation and share
+it across that invocation's saved-evidence reads. A later invocation creates a
+fresh reader so edited files are observed. Existing injected
+`savedStoryEvidence` callbacks and the `savedChecks.evidence` Runtime binding
+remain unchanged; source-capture keys and hash comparisons belong to the
+runtime client.
+Saved checks are progress only: they never complete a run, approve a prompt or satisfy
 Needs. Read saved checks rooted in product cwd for planned Stories even when no
 workflow record exists. A verified local workflow additionally authorizes its
 saved run.root, with the same comparison root as workflow evidence, including
