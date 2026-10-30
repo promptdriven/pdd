@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcf80ff95fe3f5bdf3d88e6ac3d8fabf8acc6d40d2848e6df30e0824516afcac).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 12ad803a6bcaeefbbc17e548cde077c05234bc24960dfe831c078ce76e899c44).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer } = {}) {
+  stdin = process.stdin, confirm, mcpServer, workflowProve, provePorts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -82,6 +82,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) {
         line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
+      }
+    }
+    case 'workflow-prove': {
+      if (!plan.options['--test'] || !plan.options['--expect']) {
+        line(stderr, 'pdd workflow prove requires nonblank --test and --expect.'); return 2;
+      }
+      try {
+        const module = workflowProve ?? await import('./workflow-prove.mjs');
+        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd }, provePorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch (error) {
+        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`); return 1;
       }
     }
     case 'workflow-view': {
