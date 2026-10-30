@@ -51,10 +51,25 @@ Before any search, read local product state and directly look up this run's save
 issue binding, or an issue named by a local feature record with this exact
 `productMarker`. Validate the actual issue's repository, positive number, exact
 single marker and author trust below. A binding is a lookup hint, never authority.
-An unavailable, malformed or no-longer-valid bound issue is a finite dependency
-error; do not silently create a replacement. The account-lookup exception below
-takes precedence for read commands when unavailable identity alone prevents trust. For start, resolve its target first:
-a valid binding returns/reuses that issue without searching unrelated runs.
+A bad saved binding or local feature hint affects only its planned run. Status
+marks that run `unverified`, with the issue number, a reason and the action
+"Run `pdd product start RUN` to link it again"; next carries the same warning.
+Do not read its PRs, count evidence, offer it ready, or advance its dependents.
+Other planned runs remain usable, including explicit starts for other runs.
+
+A confirmed 404, foreign repository, wrong/missing marker, or author known to be
+untrusted invalidates the hint. Drop that persisted run/issue binding and exclude
+that same issue from local hints and cached selection in this command. Read
+commands leave the affected run unverified for this invocation. An explicit
+start of that run may discover and save a trusted replacement, or create after
+a complete fresh search proves no eligible issue; it must not repeatedly fail
+on the invalid local record. A transport failure, malformed lookup, non-404 HTTP
+failure, or unavailable actor identity leaves the issue unresolved: retain the
+hint, isolate the run, and fail its explicit start with the reason and repair
+action, without creation or workflow launch. Such uncertainty never proves
+absence. Apply the same distinction to direct revalidation of cached candidates.
+For start, resolve its target first: a valid binding returns/reuses that issue
+without searching unrelated runs.
 
 For unresolved runs, use one shared repository issue-search query for the prefix
 `<!-- pdd-product: run=` across this product's commands, then exact-match the
@@ -68,8 +83,8 @@ Read the complete relevant search result. Transport failure, malformed pages,
 `incomplete_results`, or the search ceiling without completeness proof is a
 finite dependency error, never an empty search authorizing creation. Deduplicate
 responses by issue number. Persist only complete raw search snapshots for 60,000
-milliseconds, scoped by repository and canonical product root under Git common
-pdd state. A snapshot is usable only at age 0 through 59,999 milliseconds;
+milliseconds, scoped by verified repository and Git common directory. A snapshot
+is usable only at age 0 through 59,999 milliseconds;
 malformed, future-dated, expired or foreign-scope snapshots are misses. Across
 separate CLI processes status, next and start reuse a valid snapshot. Before
 creating from a cached negative, refresh the shared query once; a query freshly
@@ -82,14 +97,9 @@ COLLABORATOR, or its `user.login` is the current authenticated person's login.
 Compare logins case-insensitively. Resolve the current actor only for that
 exception, once per command. A failed lookup or malformed/missing/blank login
 memoizes unavailable identity: candidates requiring that exception are untrusted,
-while repository-associated candidates remain eligible. For status/next, a bound
-issue that needs only this unavailable identity exception retains its binding as
-an unverified lookup hint: show its issue number with state `unverified`, warn,
-and continue other runs. Do not read its PRs, count its evidence, mark it done,
-offer it ready, or advance its dependents. For start, the same unverifiable
-binding returns a finite failure without creation or workflow launch. Identity
-lookup failure itself never throws; start fails closed because trust for a
-known binding remains unresolved. Unbound candidates remain untrusted and do
+while repository-associated candidates remain eligible. Unavailable identity for
+a saved hint follows the unresolved-hint rule above; identity lookup failure
+itself never throws. Unbound candidates remain untrusted and do
 not prevent the commands from continuing.
 An outsider's marker cannot claim the run or cause its text to be run.
 
@@ -204,7 +214,8 @@ flowchart TD
     R[Named planned run] --> B{Saved issue binding?}
     B -->|Yes| V{Direct issue valid and trusted?}
     V -->|Yes| U[Reuse issue]
-    V -->|No or unavailable| X[Finite dependency error]
+    V -->|Invalid| E
+    V -->|Unknown| X[Retain hint; target fails closed]
     B -->|No| E{Trusted exact marker found?}
     E -->|Yes| U
     E -->|No after fresh search| C[Create one issue]
@@ -235,7 +246,8 @@ its map ID first, such as `P01-menu.md` (use the first planned ID for its exampl
 fakes from contracts and `contracts/` must not change. Include exactly one run
 marker. Pass multiline text as data (a body argument or body file), never shell
 code. Repeated sequential starts reuse the issue, including a closed one; do not
-create another. Concurrent start locking is outside this promise.
+create another. Exactly-once issue creation by concurrent starts of the same
+run is outside this promise.
 
 After saving the issue binding, `--no-run` returns it. Otherwise invoke
 `startRun({name:'feature', issue:N, agent, cwd, packageRoot})` once. Keep the
@@ -267,9 +279,11 @@ GitHub's changing record envelope.
 | Callback | Actual outside observation |
 |---|---|
 | `issuePage({cwd,repository,marker,page,perPage})` | Raw Search response `{items,total_count,incomplete_results}` for the shared product marker prefix, all states. Page is one-based; perPage is ten or less. |
-| `issueByNumber({cwd,repository,number})` | Raw issue identity/body, author, association, creation time and state from the requested repository issue endpoint; no selection or trust verdict. |
+| `issueByNumber({cwd,repository,number})` | Raw issue identity/body, author, association, creation time and state from the requested repository issue endpoint, or the actual HTTP failure `{status,message}`; transport failure throws. No selection or trust verdict. |
 | `readProductState({cwd,repository})` | `{json}` containing raw saved JSON text, or null for absent state. |
 | `writeProductState({cwd,repository,json})` | `{}` after atomically replacing that product state with the supplied JSON text. |
+| `lockProductState({cwd,repository})` | `{handle}` after acquiring exclusive state access for this repository/common-directory scope; handle is an owned opaque string. |
+| `unlockProductState({handle})` | `{}` after releasing only that owned lock. |
 | `now()` | `{milliseconds}`: current Unix epoch milliseconds. |
 | `timelinePage({cwd,repository,issue,page,perPage})` | One raw issue-timeline event array, with the same bounded page size. |
 | `pullRequest({cwd,repository,number})` | Actual PR fields needed for number/URL, body, state/draft, updated time, head branch and same-repository/fork proof. |
@@ -278,13 +292,36 @@ GitHub's changing record envelope.
 | `closeBaseSource({handle})` | `{}` after releasing only the view owned by that non-null handle. |
 
 State adapters store data beneath the Git common directory, keyed by verified
-repository and canonical product root; they never write product source files.
-The module owns decoding, validation and selection. Its version-1 state contains
-`version:1`, `repository`, `productRoot`, a `bindings` array of `{run,issue}` and
-optional `search:{at,items}` with raw projected issue records. Only correctly
-scoped, well-formed positive-integer bindings are usable. Malformed binding
-state is a finite error before creation, not evidence that no issue exists.
-Missing state is empty. Cache corruption alone invalidates the snapshot.
+repository, so every checkout of that repository shares bindings and snapshots.
+They never write product source files. The module uses these raw adapters;
+filesystem realpath of cwd is not a module decision or state-scope condition.
+The module owns decoding, validation and selection. Version-2 state contains
+`version:2`, `repository`, `bindings:[{run,issue}]` and optional
+`search:{at,items}` with raw projected issue records; no productRoot. Only
+well-formed positive-integer bindings for this repository are usable. Missing
+state is empty; malformed binding state is a finite error before creation,
+not absence. Cache corruption alone invalidates the snapshot.
+
+Native adapters retain compatible version-1 folder-keyed state from within the
+same Git common directory: its fields are `version:1`, `repository`,
+`productRoot`, `bindings` and optional `search`. A different productRoot does not
+discard that repository's links. Merge distinct run/issue hints; retain conflicting
+legacy hints for normal trust and local-run selection, never choose arbitrarily.
+Read both accepted versions; persist version 2. Foreign-repository state is not
+imported. Once repository-wide version-2 state exists, it is authoritative: do
+not reimport version-1 hints removed by committed version-2 updates or deletions.
+Migration and state replacement use the same coordination below.
+
+Every state mutation acquires lockProductState, rereads current state under the
+lock, and merges only this command's explicit changes. An upsert changes its
+run's binding; a deletion names both run and observed issue and removes only that
+pair, preserving a concurrent replacement. Untouched bindings survive. Replace
+the search snapshot only with a newer complete snapshot; a stale writer must
+not resurrect a deleted binding or overwrite a newer snapshot. Atomically write
+the merged state, then release the owned lock in finally, including on errors.
+Do not hold the state lock over GitHub or workflow operations. Atomic reads may
+be lock-free. This protects different-run updates and deletions; it does not
+promise exactly-once concurrent issue creation.
 
 The base adapter may allocate a private local Git snapshot from an existing
 local ref. It copies no credentials, performs no network fetch and changes no
@@ -301,7 +338,8 @@ storyEvidence. github.repository binds resolveRepository; github.issuePage,
 github.timelinePage and github.pullRequest serialize their raw callbacks;
 github.currentActor returns its raw reply as json (including malformed replies).
 github.issueByNumber serializes its raw callback reply. productState.read/write
-bind the raw state callbacks, and clock.now binds now; none computes a verdict.
+bind the raw state callbacks; productState.lock/unlock bind their lock lifecycle,
+and clock.now binds now; none computes a verdict.
 repository.planOnBase returns present and
 is read only when a need names `plan PR`. repository.openBaseSource and
 repository.closeBaseSource bind the view lifecycle. github.run remains the
@@ -326,7 +364,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "30488fdde3d31c4418da38f8499545a4148481989ae057fd0d6083256a66a0e5",
+  "status": "draft", "prose_sha256": "030cad8239ade5672a78be1a828129361b1f45fffff8fcaed306dac1434efdbf",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
@@ -340,7 +378,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
     {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},{"name":"issuePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"marker":{"type":"string"}},"required":["cwd","repository","page","perPage","marker"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"timelinePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"issue":{"type":"integer","minimum":1}},"required":["cwd","repository","page","perPage","issue"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"pullRequest","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"currentActor","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"issueByNumber","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
     {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}},{"name":"openBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"root":{"oneOf":[{"type":"string"},{"type":"null"}]},"handle":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root","handle"],"additionalProperties":false}},{"name":"closeBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
     {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
-    {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
+    {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}},{"name":"lock","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false}},{"name":"unlock","access":"write","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
     {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]}
   ],
   "limits": {"max_steps":20,"max_model_calls":12}, "conventions": []
