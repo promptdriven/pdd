@@ -16,6 +16,8 @@ I can run several local agents without exceeding my shared runtime limit.
 
 The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
+Signal checks synchronize with the actual claim/admission boundary before interruption, then verify termination, cleanup and no new dispatch while preserving uncertain leases. Do not depend on a short signal timer winning a race against another short pause.
+
 ## Native cases for the code step
 
 [Requirement-derived native cases](../test/runtime-admission/runtime-local-slots.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.

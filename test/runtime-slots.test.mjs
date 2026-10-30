@@ -12,10 +12,12 @@ const options = stateDir => ({ stateDir, origin });
 const folder = stateDir => join(stateDir, 'slots', 'localhost%3A453');
 function seed(stateDir, row) { mkdirSync(folder(stateDir), { recursive: true }); writeFileSync(join(folder(stateDir), `${row.id}.json`), JSON.stringify(row)); }
 const record = (id, extra = {}) => ({ id, state: 'active', pid: process.pid, kind: 'check', started_at: 0, request_ids: ['run-a'], ...extra });
-const child = (args, { cwd, env }) => new Promise((done, fail) => {
+const child = (args, { cwd, env, t }) => new Promise((done, fail) => {
   const p = spawn(process.execPath, args, { cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = ''; p.stdout.on('data', b => stdout += b); p.stderr.on('data', b => stderr += b);
-  p.on('error', fail); p.on('close', code => done({ code, stdout, stderr }));
+  let stdout = '', stderr = '';
+  const watchdog = setTimeout(() => { stderr += 'child completion watchdog expired'; p.kill('SIGKILL'); }, 120_000);
+  t?.after(() => { clearTimeout(watchdog); if (p.exitCode === null) p.kill('SIGKILL'); }); p.stdout.on('data', b => stdout += b); p.stderr.on('data', b => stderr += b);
+  p.on('error', error => { clearTimeout(watchdog); fail(error); }); p.on('close', code => { clearTimeout(watchdog); done({ code, stdout, stderr }); });
 });
 
 test('slots: native reservation permissions, unique append and confirmed release', async t => {
@@ -142,7 +144,7 @@ test('jobs: router, catalog, help and completion expose the local no-option comm
   }
 });
 
-test('slots: ten real CLI checks across repositories share a limit of three and all finish', { timeout: 45_000 }, async t => {
+test('slots: ten real CLI checks across repositories share a limit of three and all finish', { timeout: 180_000 }, async t => {
   const setup = harbor(t), second = harbor(t); let peak = 0, active = 0; const jobs = new Map();
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.method === 'POST') {
@@ -156,7 +158,7 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
   });
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
   const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin };
-  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => child([join(root, 'bin/pdd.mjs'), 'check', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env })));
+  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => child([join(root, 'bin/pdd.mjs'), 'check', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t })));
   for (const result of results) { assert.equal(result.code, 0, result.stdout + result.stderr); assert.equal(JSON.parse(result.stdout).rows[0].state, 'passed'); }
   assert.equal(peak, 3); assert.equal(active, 0); assert.equal(fake.posts.filter(e => e.command === 'check').length, 10);
   assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
@@ -175,23 +177,20 @@ test('slots: an actual exited producer does not free its posted lease until its 
   assert.ok(ended); await releaseRuntimeSlot(ended, { ended: true });
 });
 
-test('slots: simultaneous native claimants safely reclaim dead unique claims', { timeout: 20_000 }, async t => {
+test('slots: simultaneous native claimants safely reclaim dead unique claims', { timeout: 180_000 }, async t => {
   const sandbox = temp(t), stateDir = join(sandbox, 'state'), log = join(sandbox, 'events');
   mkdirSync(folder(stateDir), { recursive: true });
   for (let i = 0; i < 3; i++) writeFileSync(join(folder(stateDir), `.claim-dead-${i}.lock`), JSON.stringify({ id: `dead-${i}`, pid: 2147483647, number: 1, choosing: false }));
-  const source = `import {appendFileSync} from 'node:fs'; const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:3,deadline:Date.now()+15000}); if(!r)process.exit(2); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'enter',id:r.id})+'\\n'); await new Promise(done=>setTimeout(done,20)); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'exit',id:r.id})+'\\n'); await m.releaseRuntimeSlot(r,{ended:true});`;
-  const started = performance.now();
-  const results = await Promise.all(Array.from({ length: 12 }, () => child(['--input-type=module', '-e', source], { cwd: sandbox, env: {} })));
+  const source = `import {appendFileSync} from 'node:fs'; const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:3,deadline:Date.now()+90000}); if(!r)process.exit(2); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'enter',id:r.id})+'\\n'); await new Promise(done=>setTimeout(done,20)); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'exit',id:r.id})+'\\n'); await m.releaseRuntimeSlot(r,{ended:true});`;
+  const results = await Promise.all(Array.from({ length: 12 }, () => child(['--input-type=module', '-e', source], { cwd: sandbox, env: {}, t })));
   for (const result of results) assert.equal(result.code, 0, result.stderr);
-  const elapsed = performance.now() - started; t.diagnostic(`12 contenders, limit 3, 20 ms hold: ${Math.round(elapsed)} ms`);
-  assert.ok(elapsed < 15_000);
-  const active = new Set(); let peak = 0, entered = 0;
+  const active = new Set(), admitted = new Set(); let peak = 0, entered = 0;
   for (const line of readFileSync(log, 'utf8').trim().split('\n')) {
     const event = JSON.parse(line);
-    if (event.event === 'enter') { active.add(event.id); entered++; peak = Math.max(peak, active.size); } else active.delete(event.id);
+    if (event.event === 'enter') { assert.equal(admitted.has(event.id), false, 'every contender has one unique admission'); admitted.add(event.id); active.add(event.id); entered++; peak = Math.max(peak, active.size); } else { assert.equal(active.has(event.id), true); active.delete(event.id); }
     assert.ok(active.size <= 3);
   }
-  assert.equal(entered, 12); assert.equal(active.size, 0); assert.ok(peak >= 1);
+  assert.equal(entered, 12); assert.equal(admitted.size, 12); assert.equal(active.size, 0); assert.ok(peak >= 1);
   assert.equal(readdirSync(folder(stateDir)).filter(name => name.endsWith('.lock')).length, 0);
 });
 

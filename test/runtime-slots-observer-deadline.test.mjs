@@ -9,12 +9,12 @@ import { fakeRuntime, temp } from './runtime-fake.mjs';
 const flush = () => new Promise(done => setImmediate(done));
 const paid = { id: 'dead', state: 'active', pid: 2147483647, kind: 'check', started_at: 0, request_ids: ['paid'] };
 
-test('long-native-observer-deadline: default timers preserve a 30-day wait through one shared 150ms GET', async t => {
-  let began;
-  const started = new Promise(done => { began = done; });
+test('long-native-observer-deadline: native timers preserve a 30-day wait until the shared GET is released', { timeout: 120_000 }, async t => {
+  let began, release, observed;
+  const started = new Promise(done => { began = done; }), observerStarted = new Promise(done => observed = done);
   const fake = await fakeRuntime(t, async entry => {
     assert.equal(entry.method, 'GET'); assert.equal(entry.url, '/v1/runs/paid');
-    began(); await new Promise(done => setTimeout(done, 150));
+    began(); await new Promise(done => release = done);
     return { status: 200, json: { state: 'ended' } };
   });
   const stateDir = temp(t), directory = join(stateDir, 'slots', encodeURIComponent(new URL(fake.origin).host));
@@ -24,7 +24,7 @@ test('long-native-observer-deadline: default timers preserve a 30-day wait throu
   const warning = value => { if (value.name === 'TimeoutOverflowWarning') warnings.push(value.message); };
   process.on('warning', warning); t.after(() => process.off('warning', warning));
   const options = { stateDir, origin: fake.origin, kind: 'lint', limit: 1 };
-  const first = acquireRuntimeSlot({ ...options, deadline: Date.now() + 2000 }, {
+  const first = acquireRuntimeSlot({ ...options, deadline: Date.now() + 90_000 }, {
     readRun: async id => (await (await fetch(`${fake.origin}/v1/runs/${id}`)).json()).state,
   }).then(async reservation => {
     if (reservation) await releaseRuntimeSlot(reservation, { ended: true });
@@ -34,12 +34,17 @@ test('long-native-observer-deadline: default timers preserve a 30-day wait throu
   let settled = false;
   const second = acquireRuntimeSlot({ ...options, deadline: Date.now() + 2_592_000_000 }, {
     readRun: () => assert.fail('a borrower must reuse the initiating GET'),
+    timers: { setInterval: (fn, ms) => { if (ms !== 5000) observed(); return setInterval(fn, ms); }, clearInterval },
   }).then(reservation => { settled = true; return reservation; });
-  await new Promise(done => setTimeout(done, 30));
+  let guard;
+  const observedBoundary = await Promise.race([observerStarted.then(() => true), new Promise(done => { guard = setTimeout(() => done(false), 30_000); })]);
+  clearTimeout(guard);
+  if (!observedBoundary) { release(); await Promise.all([first, second]); assert.fail('shared-read observer never reached its independent timer boundary'); }
   const early = settled, leaseBeforeEnd = (await listRuntimeJobs(options)).jobs.find(row => row.id === 'dead');
+  release();
   const firstReservation = await first, secondReservation = await second;
   if (secondReservation) await releaseRuntimeSlot(secondReservation, { ended: true });
-  assert.equal(early, false, 'the far deadline must not become a 1ms expiry');
+  assert.equal(early, false, 'the observer cannot finish before its shared GET is released');
   assert.deepEqual(leaseBeforeEnd?.request_ids, ['paid']);
   assert.ok(firstReservation); assert.ok(secondReservation);
   assert.equal(fake.gets.length, 1); assert.equal(fake.posts.length + fake.jsonPosts.length, 0);
