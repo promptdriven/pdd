@@ -12,7 +12,7 @@
     },
     {
       "id": "AC3",
-      "text": "If the new code fails, the report says \"head-fails\", includes the observed cause and short actual output tail and exits 1 even when the old code fails with \"defect-x\"."
+      "text": "If the new code fails, the report says \"head-fails\", includes the observed cause and short actual output tail before a trailing TAP summary when available and exits 1 even when the old code fails with \"defect-x\"."
     },
     {
       "id": "AC4",
@@ -28,7 +28,7 @@
     },
     {
       "id": "AC7",
-      "text": "The v2 saved result keeps parent interruption separately from child signals, the computed old base and captured head, exact command and expectation, copied paths, phase exits, final output and observed excerpt; the immutable saved run base stays unchanged, cleanup always runs, and each report names the command and actual base/head exits with safe code spans rather than claiming copied files were executed tests."
+      "text": "The v2 saved result keeps parent interruption separately from child signals, the computed old base and captured head, exact command and expectation, copied paths, phase exits, final output and observed excerpt; the immutable saved run base stays unchanged, cleanup always runs, and each report names the command and actual base/head exits with safe code spans preserving literal command quotes and backslashes with visible control escapes rather than claiming copied files were executed tests."
     },
     {
       "id": "AC8",
@@ -303,6 +303,38 @@
             "runId": "run-safe-proof-values",
             "runDir": "/runs/safe-proof-values",
             "root": "/repo/safe-proof-values",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/literal-command-controls"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-literal-command-controls",
+            "runDir": "/runs/literal-command-controls",
+            "root": "/repo/literal-command-controls",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/head-fails-tap-tail"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-head-fails-tap-tail",
+            "runDir": "/runs/head-fails-tap-tail",
+            "root": "/repo/head-fails-tap-tail",
             "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
             "baseBranch": "alpha"
           },
@@ -2617,6 +2649,92 @@
               "baseSha": "0000000000000000000000000000000000000131"
             }
           }
+        },
+        {
+          "call_index": 18,
+          "args": {
+            "root": "/repo/literal-command-controls",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000195",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000131"
+            }
+          }
+        },
+        {
+          "call_index": 19,
+          "args": {
+            "root": "/repo/head-fails-tap-tail",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000195",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000131"
+            }
+          }
         }
       ]
     },
@@ -2983,6 +3101,54 @@
             "worktree": "/snap/safe-proof-values/head",
             "error": ""
           }
+        },
+        {
+          "call_index": 31,
+          "args": {
+            "root": "/repo/literal-command-controls",
+            "commit": "0000000000000000000000000000000000000131",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/literal-command-controls/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 32,
+          "args": {
+            "root": "/repo/literal-command-controls",
+            "commit": "0000000000000000000000000000000000000195",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/literal-command-controls/head",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 33,
+          "args": {
+            "root": "/repo/head-fails-tap-tail",
+            "commit": "0000000000000000000000000000000000000131",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/head-fails-tap-tail/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 34,
+          "args": {
+            "root": "/repo/head-fails-tap-tail",
+            "commit": "0000000000000000000000000000000000000195",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/head-fails-tap-tail/head",
+            "error": ""
+          }
         }
       ],
       "result_template": null,
@@ -3222,6 +3388,38 @@
             "root": "/repo/safe-proof-values",
             "headSha": "0000000000000000000000000000000000000195",
             "worktree": "/snap/safe-proof-values/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 16,
+          "args": {
+            "root": "/repo/literal-command-controls",
+            "headSha": "0000000000000000000000000000000000000195",
+            "worktree": "/snap/literal-command-controls/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 17,
+          "args": {
+            "root": "/repo/head-fails-tap-tail",
+            "headSha": "0000000000000000000000000000000000000195",
+            "worktree": "/snap/head-fails-tap-tail/base",
             "paths": [
               "test/new.test.mjs",
               "test/fixtures/seed.json",
@@ -3855,6 +4053,94 @@
               "setupError": ""
             }
           }
+        },
+        {
+          "call_index": 29,
+          "args": {
+            "command": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:",
+            "cwd": "/snap/literal-command-controls/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 30,
+          "args": {
+            "command": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:",
+            "cwd": "/snap/literal-command-controls/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 31,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/head-fails-tap-tail/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 32,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/head-fails-tap-tail/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "AssertionError: defect-x\n  expected: open\n  actual: closed\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 1",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
         }
       ],
       "result_template": null,
@@ -4053,6 +4339,32 @@
             "worktrees": [
               "/snap/safe-proof-values/base",
               "/snap/safe-proof-values/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 16,
+          "args": {
+            "root": "/repo/literal-command-controls",
+            "worktrees": [
+              "/snap/literal-command-controls/base",
+              "/snap/literal-command-controls/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 17,
+          "args": {
+            "root": "/repo/head-fails-tap-tail",
+            "worktrees": [
+              "/snap/head-fails-tap-tail/base",
+              "/snap/head-fails-tap-tail/head"
             ]
           },
           "result": {
@@ -5314,7 +5626,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✓ ``printf \\\"@octocat #17 `x` pdd-workflow\\u003a\\\"``: old-code exit `1`; output contains ``@octocat #17 `x` pdd-workflow\\u003a``; new-code exit `0`."
+          "value": "Old-code proof: ✓ ``printf \"@octocat #17 `x` pdd-workflow\\u003a\"``: old-code exit `1`; output contains ``@octocat #17 `x` pdd-workflow\\u003a``; new-code exit `0`."
         },
         {
           "criterion_id": "AC7",
@@ -5340,6 +5652,131 @@
             "test/fixtures/seed.json",
             "tests/renamed.test.mjs"
           ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "literal-command-controls",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/literal-command-controls",
+        "test": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✓ `printf \"C:\\tmp\\q\"\\r\\n\\t\\u0000\\u007f\\u0085\\u2028\\u2029 pdd-workflow\\u003a`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/17/record/test",
+          "op": "equals",
+          "value": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/17/record/expect",
+          "op": "equals",
+          "value": "defect-x"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/17/record/outcome",
+          "op": "equals",
+          "value": "proved"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "head-fails-tap-tail",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/head-fails-tap-tail",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `AssertionError: defect-x`; tail `AssertionError: defect-x\\n  expected: open\\n  actual: closed`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/18/record/head/stdoutTail",
+          "op": "equals",
+          "value": [
+            "AssertionError: defect-x",
+            "  expected: open",
+            "  actual: closed",
+            "1..1",
+            "# tests 1",
+            "# suites 0",
+            "# pass 0",
+            "# fail 1",
+            "# cancelled 0",
+            "# skipped 0",
+            "# todo 0",
+            "# duration_ms 1"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/18/record/head/observedError",
+          "op": "equals",
+          "value": "AssertionError: defect-x"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/18/record/outcome",
+          "op": "equals",
+          "value": "head-fails"
         },
         {
           "criterion_id": "AC7",
