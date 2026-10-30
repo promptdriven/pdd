@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
 import {openRun,approveRun,stepDone,runStatus} from '../src/workflow-runner.mjs';
 import {fixture,packageRoot} from './helpers/workflow-runner-fixture.mjs';
 const lost=()=>Object.assign(Error('lost reply'),{code:'server_unavailable'});
@@ -46,7 +47,7 @@ for (const present of [false,true]) test(`pane_not_found requires inventory abse
  f.ports.herdr=async args=>{if(args[0]==='tab'&&args[1]==='close'){if(!present)await healthy(args);throw lost();}return healthy(args);};
  await open(f,{newSession:true});const record=f.record().chatReplacement;
  f.ports.findNativeSessions=async()=>[{id:record.original.session.id}];
- f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get')throw Object.assign(Error('missing pane'),{code:'pane_not_found'});return healthy(args);};
+ f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get'&&args[2]===record.original.paneId)throw Object.assign(Error('missing pane'),{code:'pane_not_found'});return healthy(args);};
  const count=runs(f).length,out=await open(f,{newSession:true});
  assert.equal(out.exitCode,present?1:0,out.message);
  if(present)assert.equal(runs(f).length,count,'Present pane never permits resume from pane_not_found');
@@ -56,4 +57,23 @@ test('replacement tab retains the exact area label',async t=>{
  const f=await fixture(t);await f.run();const area=f.record().chats.at(-1).area;
  assert.equal((await open(f,{newSession:true})).exitCode,0);
  const chat=f.record().chats.at(-1);assert.equal(f.herdr.tabs.find(tab=>tab.tab_id===chat.tabId).label,area,'Visible label must be the area without attempt UUID');
+});
+
+for(const boundary of ['close','create','launch-check'])test(`progress at ${boundary} forbids a fresh historical launch`,async t=>{
+ const f=await fixture(t);await f.run();const healthy=f.ports.herdr;let advanced=false;
+ const advance=()=>{const saved=f.record();saved.area=1;saved.done.scope={summary:'concurrent progress'};writeFileSync(saved.runDir+'/status.json',JSON.stringify(saved));advanced=true;};
+ f.ports.herdr=async args=>{const reply=await healthy(args);
+   if(!advanced && (boundary==='close'&&args[0]==='tab'&&args[1]==='close' || boundary==='create'&&args[0]==='tab'&&args[1]==='create' || boundary==='launch-check'&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared'))advance();
+   return reply;};
+ // Empty prepared panes throw agent_not_found, so publish progress before returning that inspection too.
+ if(boundary==='launch-check')f.ports.herdr=async args=>{if(!advanced&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared')advance();return healthy(args);};
+ const before=runs(f).length,out=await open(f,{newSession:true});assert.equal(advanced,true);
+ assert.equal(runs(f).length,before,'Checkpoint reread must prevent dispatch after concurrent area progress');
+ assert.equal(out.exitCode,0,out.message);assert.equal(f.record().chatReplacement.phase,'ended');assert.equal(f.record().area,1);
+});
+test('cancellation before final launch checkpoint prevents dispatch',async t=>{
+ const f=await fixture(t);await f.run();const healthy=f.ports.herdr;let cancelled=false;
+ f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared'){
+ const saved=f.record();saved.state='cancelled';saved.cancelled={state:'cancelled',at:f.clock};writeFileSync(saved.runDir+'/status.json',JSON.stringify(saved));cancelled=true;}return healthy(args);};
+ const before=runs(f).length;assert.equal((await open(f,{newSession:true})).exitCode,1);assert.equal(cancelled,true);assert.equal(runs(f).length,before);assert.equal(f.record().state,'cancelled');
 });
