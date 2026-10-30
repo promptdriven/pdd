@@ -36,7 +36,7 @@ function project(t, kinds = ['cli', 'http', 'screen'], map = kinds.includes('htt
 async function harness(t, setup) {
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.url.endsWith('/model')) return { status: 200, json: { entries: ['http', 'http-two'].filter(k => existsSync(join(setup.repo, `prompts/${k}.prompt.md`))).map(k => ({ entry_path: `prompts/${k}.prompt.md`, operation: 'main', input_schema: object({}), http: { method: 'GET', path: k === 'http' ? '/health' : '/other' } })), calls: { cap: 400, remaining: 400 }, app_map: existsSync(join(setup.repo, 'app-map.json')) } };
-    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId, ['cli', 'http', 'screen', 'screen-two', 'cli-two'].map(k => ({ path: `prompts/${k}.prompt.md`, admission_state: 'draft', state: 'draft', interface: { calls: [] } }))) };
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId, ['cli', 'http', 'http-two', 'screen', 'screen-two', 'cli-two'].map(k => ({ path: `prompts/${k}.prompt.md`, admission_state: 'draft', state: 'draft', interface: { calls: [] } }))) };
     if (entry.command === 'try') { const job = f.tryJob(entry.request.requestId); f.jobs.set(entry.request.requestId, job); return { status: 200, json: job }; }
     return { status: 200, json: f.jobs.get(entry.url.split('/').at(-1)) };
   });
