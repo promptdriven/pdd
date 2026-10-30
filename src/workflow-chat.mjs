@@ -240,7 +240,11 @@ export async function restartChat({ run, chat, message }, ports = {}) {
     await checkpoint('prepared');
     replacement.startUnconfirmed = true;
     await checkpoint('launchRequested');
-    try { await herdr(['pane', 'run', replacement.paneId, chatCommand({ agent, cwd: run.root, messageFile, sessionId, configDir })]); }
+    try {
+      const reply = await herdr(['pane', 'run', replacement.paneId, chatCommand({ agent, cwd: run.root, messageFile, sessionId, configDir })]);
+      // Herdr acknowledges pane run with an empty JSON object; other replies leave dispatch uncertain.
+      if (!reply || typeof reply !== 'object' || Array.isArray(reply) || Object.keys(reply).length !== 0) throw problem('chat_start_unconfirmed', 'The pane launch reply was not confirmed. Inspect the saved replacement attempt.');
+    }
     catch (error) { error.chat = { ...replacement }; throw error; }
     delete replacement.startUnconfirmed;
     await checkpoint('launched');
