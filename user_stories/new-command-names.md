@@ -23,7 +23,7 @@ Each old name runs the same code as today, with the same options, effects, exit 
 
 `pdd test`, `pdd lint`, `pdd playground` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`, with the same options. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json. `pdd lint` takes --local and the lint options. `pdd test --lint` works like `pdd lint` and prints no notice. Forbidden: an old name that changes its options, effects or exit code, or a new refusal for `pdd test --lint`.
 
-An old name prints its notice once, on stderr, after a good parse and before any other line, also for its help. Forbidden: the notice on stdout, the notice twice, the notice on a usage error (exit 2) or the notice for a new name.
+An old name prints its notice once, on stderr, after a good parse and before any other line, also for its help. Forbidden: the notice on stdout, the notice twice, the notice on a parser usage error (exit 2 before the command runs) or the notice for a new name. A later refusal by the command itself may follow the notice.
 
 Help and shell completion show only the new names. Old names still parse. Forbidden: an old name in `pdd --help`, in a help form or in the completion choices.
 
