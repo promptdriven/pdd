@@ -1,0 +1,25 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/versioned-workflow-status-json.md",
+  "criteria": [
+    {"id":"AC1","text":"The output is an object with `version` equal to `1` and a `runs` array; each run identifies `owner/repo#N`, repository folder, issue number/title/URL, workflow, agent (`codex` or `claude`), current area and step."},
+    {"id":"AC2","text":"Each run reports `waits_for` as `null`, `gate`, `question`, `chat_stopped`, or `startup_failed`; a gate includes its gate id, a question includes its text, and a run with no wait has neither."},
+    {"id":"AC3","text":"A stopped chat reports `stopped_reason` as `usage_limit`, `exited`, or `unknown`; an unclear stop is `unknown`, and non-stopped runs report `null`."},
+    {"id":"AC4","text":"Each run reports pull request number, URL, draft status and CI state, and reports Stories as passed and total counts or `null` when the count is unknown."},
+    {"id":"AC5","text":"Each run reports the current chat's Herdr session, tab and pane, plus `last_change` as the saved millisecond timestamp or `null`."},
+    {"id":"AC6","text":"The JSON contains no Try URL or Try link, and an incompatible future contract uses a version other than `1` instead of silently changing the meaning of version `1`."}
+  ],
+  "initial_world": {"kv": {}},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {"step_id":"status-json-contract","entry_path":"prompts/cli/workflow-runs.prompt.md","operation":"main","input":{"argv":["workflow","status","--all","--json"]},"checks":[
+      {"criterion_id":"AC1","target":"result","path":"/stdout","op":"not_equals","value":""},
+      {"criterion_id":"AC2","target":"result","path":"/stdout","op":"not_equals","value":""},
+      {"criterion_id":"AC3","target":"result","path":"/stdout","op":"not_equals","value":""},
+      {"criterion_id":"AC4","target":"result","path":"/stdout","op":"not_equals","value":""},
+      {"criterion_id":"AC5","target":"result","path":"/stdout","op":"not_equals","value":""},
+      {"criterion_id":"AC6","target":"result","path":"/stdout","op":"not_equals","value":""}
+    ]}
+  ]
+}

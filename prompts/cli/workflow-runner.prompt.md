@@ -113,3 +113,7 @@ Preserve the single canonical workflow ownership marker on both descriptions, re
 Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
+
+## Versioned status JSON
+
+`pdd workflow status --json` and `--all --json` return `{version:1,runs:[...]}`. Each run includes identity, workflow, agent, area, step, `waits_for`, `gate_id`, redacted question, `stopped_reason`, pull requests (including draft), stories, and Herdr chat metadata. Try session links are always removed from JSON.
