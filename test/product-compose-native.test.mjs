@@ -156,3 +156,16 @@ test('next-screen resolution prefers a literal local slash ID, then selected qua
   f.editMap('phone', map => { map.handlers[0].next.screen = 'missing/counter'; });
   assert.throws(() => f.compose(), error => error.code === 'invalid-product-map' && /missing\/counter/.test(error.message));
 });
+
+
+test('missing or malformed required map fields fail finitely before JSON serialization', () => {
+  const fields = ['schema_version', 'name', 'initial_screen', 'initial_route', 'initial_state', 'state_schema', 'synthetic', 'screens', 'router', 'routes', 'handlers', 'stylesheets'];
+  for (const field of fields) {
+    const f = fixture(); f.editMap('phone', map => { delete map[field]; });
+    assert.throws(() => f.compose({ parts: ['phone'] }), error => error.code === 'invalid-product-map', field);
+  }
+  for (const [field, value] of [['router', 7], ['initial_route', {}], ['synthetic', null], ['name', ''], ['screens', null], ['initial_state', []]]) {
+    const f = fixture(); f.editMap('phone', map => { map[field] = value; });
+    assert.throws(() => f.compose({ parts: ['phone'] }), error => error.code === 'invalid-product-map', field);
+  }
+});

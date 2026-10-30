@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
 import { fakeRuntime, portsFor, sha, temp } from './runtime-fake.mjs';
@@ -105,4 +105,44 @@ test('product option errors and ambiguous skeletons refuse before sign-in or upl
   assert.equal((await open(setup, fake, { '--product': true })).code, 2);
   assert.equal(fake.posts.length, 0);
   assert.equal(fake.gets.length, 0);
+});
+
+
+test('stop rejects product setup flags before authentication or stopping another journey', async t => {
+  for (const extra of [{ '--product': true }, { '--product': true, '--parts': 'phone' }, { '--product': true, '--journey': 'J999' }]) {
+    const setup = coffee(t), fake = await fakeRuntime(t, trying);
+    assert.equal((await open(setup, fake, { '--product': true })).code, 0);
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin });
+    let authCalls = 0;
+    const gh = ports.gh;
+    ports.gh = (...args) => { authCalls++; return gh(...args); };
+    const before = { posts: fake.posts.length, gets: fake.gets.length, deletes: fake.deletes.length };
+    const code = await runTry({ cwd: setup.repo, options: { '--stop': true, ...extra } }, ports);
+    assert.equal(code, 2);
+    assert.equal(authCalls, 0);
+    assert.deepEqual({ posts: fake.posts.length, gets: fake.gets.length, deletes: fake.deletes.length }, before);
+  }
+});
+
+test('product reuse tolerates metadata edits and legacy hashes without uploading or resetting its world', async t => {
+  const setup = coffee(t), fake = await fakeRuntime(t, trying);
+  assert.equal((await open(setup, fake, { '--product': true, '--journey': 'J1' })).code, 0);
+  const statePath = join(setup.state, 'repos', readdirSync(join(setup.state, 'repos'))[0]);
+  const saved = JSON.parse(readFileSync(statePath, 'utf8'));
+  const originalId = saved.tries['tests/J1.json'].id;
+  saved.tries['tests/J1.json'].product_setup.source_sha256 = 'legacy non-gating upload metadata';
+  writeFileSync(statePath, JSON.stringify(saved));
+  const story = join(setup.repo, setup.scenario.story_path);
+  writeFileSync(story, readFileSync(story, 'utf8') + '\nA local Story note.\n');
+  const reused = await open(setup, fake, { '--product': true, '--journey': 'J1' });
+  assert.equal(reused.code, 0, reused.err + reused.out);
+  assert.doesNotMatch(reused.err, /One tap runs/);
+  const scenario = JSON.parse(readFileSync(join(setup.repo, 'tests/J1.json'), 'utf8'));
+  scenario.steps[0].step_id += '-local';
+  writeFileSync(join(setup.repo, 'tests/J1.json'), JSON.stringify(scenario));
+  assert.equal((await open(setup, fake, { '--product': true, '--journey': 'tests/J1.json' })).code, 0);
+  assert.equal((await open(setup, fake, { '--product': true, '--journey': setup.scenario.story_path })).code, 0);
+  assert.equal(fake.posts.length, 2);
+  assert.equal(fake.deletes.length, 0);
+  assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).tries['tests/J1.json'].id, originalId);
 });
