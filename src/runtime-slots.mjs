@@ -177,13 +177,13 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingId) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
     // This acquisition still owns its original ticket even if wall time jumps
     // before the next heartbeat. Other owners retain ordinary expiry rules.
-    if (row.state === 'waiting' && row.id === waitingId) continue;
+    if (snapshotKey(row) === snapshotKey(waitingTicket)) continue;
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
@@ -237,7 +237,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   try {
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
-      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, id);
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket);
       if (ended()) break;
       // Dead waiters are safe to remove by immutable ticket path without a claim.
       for (const item of snapshots.filter(item => item.row.state === 'waiting')) {
