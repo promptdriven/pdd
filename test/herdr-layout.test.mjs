@@ -216,9 +216,10 @@ test('2615: independent clones start, reopen and cancel without rebinding peer w
  await mkdir(thirdSource);await mkdir(thirdCwd);await f.init(thirdSource,'alice/coffee');
  const third={runId:randomUUID(),sourceRoot:thirdSource,commonDir:join(thirdSource,'.git'),cwd:thirdCwd};
  const thirdLayout=await f.open(third);
- const {createHash}=await import('node:crypto');
- assert.equal(f.workspaces.find(w=>w.workspace_id===thirdLayout.repoWorkspaceId).label,
-  `alice/coffee@${createHash('sha256').update(third.commonDir).digest('hex').slice(0,12)}`);
+ const thirdLabel=f.workspaces.find(w=>w.workspace_id===thirdLayout.repoWorkspaceId).label;
+ assert(thirdLabel.startsWith('alice/coffee@'));
+ assert(!original.some(w=>w.label===thirdLabel));
+ assert.notEqual(thirdLabel,'alice/coffee');
  await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,...second,layout},f.ports),f.ports);
  assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:second.commonDir},f.ports),true);
  assert(!f.workspaces.some(w=>w.workspace_id===layout.repoWorkspaceId));
@@ -232,7 +233,7 @@ test('2615: independent clones start, reopen and cancel without rebinding peer w
  assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
 });
 
-test('2615: a later matching legacy repository entry wins over the first same-origin clone', async t => {
+test('2615: a hand-edited repeated repository key selects the matching clone and refuses ambiguity', async t => {
  const f=await fixture(t),first=await f.open();
  const sourceRoot=join(f.root,'legacy-clone'),cwd=join(f.root,'legacy-run');
  await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
@@ -257,3 +258,67 @@ test('2615: a later matching legacy repository entry wins over the first same-or
  await assert.rejects(f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir},f.ports),/layout_allocation_uncertain/);
  assert.equal(f.calls.filter(args=>['create','open','rename','close'].includes(args[1])).length,mutations);
 });
+
+
+test('2615: a new clone uses the free short label despite a closed peer workspace in the registry', async t => {
+ const f=await fixture(t),first=await f.open();
+ f.workspaces.splice(f.workspaces.findIndex(w=>w.workspace_id===first.repoWorkspaceId),1);
+ const peers=structuredClone(f.workspaces),sourceRoot=join(f.root,'fresh-clone'),cwd=join(f.root,'fresh-run');
+ await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+ const next=await f.open({runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ assert.equal(f.workspaces.find(w=>w.workspace_id===next.repoWorkspaceId).label,'coffee');
+ assert.deepEqual(f.workspaces.slice(0,peers.length),peers);
+ assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
+});
+
+test('2615: canceling the short-label clone makes that label available while another clone stays open', async t => {
+ const f=await fixture(t),first=await f.open(),sourceRoot=join(f.root,'peer'),cwd=join(f.root,'peer-run');
+ await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+ const peer=await f.open({runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ await f.module.withHerdrLayoutLock(async()=>{
+  await f.module.closeHerdrRunLayout({...f.input,layout:first},f.ports);
+  assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),true);
+ },f.ports);
+ const peerRows=structuredClone(f.workspaces),newCwd=join(f.root,'restart');await mkdir(newCwd);
+ const restarted=await f.open({runId:randomUUID(),cwd:newCwd});
+ assert.equal(f.workspaces.find(w=>w.workspace_id===restarted.repoWorkspaceId).label,'coffee');
+ assert.deepEqual(f.workspaces.slice(0,peerRows.length),peerRows);
+ assert(f.workspaces.some(w=>w.workspace_id===peer.repoWorkspaceId));
+});
+
+for(const holder of ['free owner/repo label','unrelated workspace']) {
+ test(`2615: different-repository qualification preserves stable peer labels with ${holder}`, async t => {
+  const f=await fixture(t),first=await f.open();
+  const clone=async name=>{
+   const sourceRoot=join(f.root,name),cwd=join(f.root,name+'-run');
+   await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+   const input={runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd};
+   return {input,layout:await f.open(input)};
+  };
+  const second=await clone('second'),third=await clone('third');
+  const stable=f.workspaces.find(w=>w.workspace_id===third.layout.repoWorkspaceId).label;
+  assert(stable.startsWith('alice/coffee@'));
+  // Leave two active alice/coffee clones: the short name and a stable qualified name.
+  await f.module.withHerdrLayoutLock(async()=>{
+   await f.module.closeHerdrRunLayout({...f.input,...second.input,layout:second.layout},f.ports);
+   assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:second.input.commonDir},f.ports),true);
+  },f.ports);
+  let unrelated;
+  if(holder==='unrelated workspace') {
+   unrelated={workspace_id:'personal',label:'alice/coffee',worktree:{checkout_path:'/personal'}};
+   f.workspaces.push(structuredClone(unrelated));
+  }
+  const before=f.calls.length,sourceRoot=join(f.root,'bob'),cwd=join(f.root,'bob-run');
+  await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'bob/coffee');
+  const bob=await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+  const label=f.workspaces.find(w=>w.workspace_id===first.repoWorkspaceId).label;
+  if(unrelated) {
+   assert(label.startsWith('alice/coffee@'));assert.notEqual(label,stable);
+   assert.deepEqual(f.workspaces.find(w=>w.workspace_id===unrelated.workspace_id),unrelated);
+  } else assert.equal(label,'alice/coffee');
+  assert.equal(f.workspaces.find(w=>w.workspace_id===third.layout.repoWorkspaceId).label,stable,'qualification uses the common directory and does not replace a stable peer label');
+  assert.equal(f.workspaces.find(w=>w.workspace_id===bob.repoWorkspaceId).label,'bob/coffee');
+  assert.deepEqual(f.calls.slice(before).filter(args=>args[0]==='workspace'&&args[1]==='rename'),
+   [['workspace','rename',first.repoWorkspaceId,label]],'only the short-label owned workspace needs a rename');
+ });
+}
