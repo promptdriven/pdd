@@ -87,14 +87,14 @@ test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not 
   }
 });
 
-// Wrong: too many Try links are retried, or pdd picks a test when several exist.
-test('RUNTIME-TRY4: 429 is exit 5 with the server\'s reason; no STORY with many tests lists them (exit 2)', async t => {
+// Confirmed server capacity waits; ambiguous Story selection remains a local error.
+test('RUNTIME-TRY4: confirmed capacity waits until exit 5; no STORY with many tests lists them (exit 2)', async t => {
   const setup = harbor(t);
   const busy = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 429, headers: { 'retry-after': '5' }, json: { error: { code: 'server-full', message: 'The runtime is busy. Try again later.' }, dispatch: 'not_started' } } : trying()(entry, f));
   const full = await tryStory(setup, busy, ['place-order']);
-  assert.equal(full.code, 5); assert.match(full.err, /The runtime is busy\. Try again later\./);
-  assert.equal(busy.posts.filter(post => post.command === 'try').length, 1);
+  assert.equal(full.code, 5); assert.match(full.err, /busy.*wait|wait.*busy/i);
+  assert.ok(busy.posts.filter(post => post.command === 'try').length > 3);
   const many = await tryStory(setup, busy, []);
   assert.equal(many.code, 2); assert.match(many.err, /place-order/); assert.match(many.err, /unknown-item/);
   const one = harbor(t, repo => rmSync(join(repo, 'tests/unknown-item.json')));

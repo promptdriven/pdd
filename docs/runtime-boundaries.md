@@ -16,6 +16,8 @@ behavior verdict. If server access is outside the task's permission, leave those
 unverified. When server access is allowed, explicit `--lint` requests complete diagnostics and prints the problems the server reports;
 correct them and check again before submitting a behavior check.
 
+The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [RUNBOOK §21 record-id fragment](../RUNBOOK.md#verify-a-record-id) for the resource and simulation entries and the native binding limits.
+
 ## Native factories and JSON operations
 
 Factories, constructors and objects of methods can bind through Runtime interface v2:
@@ -52,10 +54,11 @@ native tests cover. Neither a passing check nor a simulation approves a workflow
 ## Read call usage as evidence
 
 A check that pdd never posts has zero check AI calls, including one held behind unfinished lint.
-The lint result can remain unknown while that check was not run. `pdd check --read BATCH` reads
-existing work and sends no new check.
+The lint result can remain unknown while that check was not run. `pdd check --read BATCH` reads existing work; only guarded saved-lint continuation or a confirmed one-time service-restarted replacement can send a check. UUID call reads remain GET-only.
 
 For a submitted run, keep the server's accounting result. If it reports unknown usage or
 incomplete accounting, a raw `provider_calls: 0` does not prove zero cost. Keep the run's call
 ceiling reserved until complete evidence resolves it; do not resubmit the same run to obtain a
 number. Share its report with the PDD team.
+
+The runtime-slots snapshot interface binds the actual files.listRecords port. Supplied records can establish listing order and preserved fields. Local exclusive-create races, process death, crash cleanup, private file permissions and CLI dispatch require native tests; no snapshot replay establishes those effects. See the [shared admission plan](../user_stories/PLAN.md#shared-runtime-admission-2631).

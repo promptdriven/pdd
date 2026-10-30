@@ -1,0 +1,143 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/runtime-jobs.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "I can inspect the active and waiting local runtime jobs, retaining their kinds, process IDs and request IDs, without contacting the runtime."
+    },
+    {
+      "id": "AC2",
+      "text": "The listing puts active jobs first and waiting jobs in oldest-first order, with stable identity order for equal times."
+    }
+  ],
+  "initial_world": {
+    "reads": []
+  },
+  "simulation": {
+    "files.listRecords": {
+      "action": "port.write",
+      "world_pointer": "/reads",
+      "result_template": {
+        "jobs": [
+          {
+            "id": "wait-b",
+            "state": "waiting",
+            "pid": 103,
+            "kind": "try",
+            "started_at": 20,
+            "request_ids": []
+          },
+          {
+            "id": "active-a",
+            "state": "active",
+            "pid": 101,
+            "kind": "check",
+            "started_at": 10,
+            "request_ids": [
+              "request-a"
+            ]
+          },
+          {
+            "id": "wait-a",
+            "state": "waiting",
+            "pid": 102,
+            "kind": "lint",
+            "started_at": 20,
+            "request_ids": []
+          },
+          {
+            "id": "wait-old",
+            "state": "waiting",
+            "pid": 104,
+            "kind": "check",
+            "started_at": 5,
+            "request_ids": []
+          }
+        ]
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "local-snapshot",
+      "entry_path": "prompts/cli/runtime-slots.prompt.md",
+      "operation": "listRuntimeJobs",
+      "input": {
+        "stateDir": "/state",
+        "origin": "https://runtime.test:8443"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/jobs",
+          "op": "equals",
+          "value": [
+            {
+              "id": "active-a",
+              "state": "active",
+              "pid": 101,
+              "kind": "check",
+              "started_at": 10,
+              "request_ids": [
+                "request-a"
+              ]
+            },
+            {
+              "id": "wait-old",
+              "state": "waiting",
+              "pid": 104,
+              "kind": "check",
+              "started_at": 5,
+              "request_ids": []
+            },
+            {
+              "id": "wait-a",
+              "state": "waiting",
+              "pid": 102,
+              "kind": "lint",
+              "started_at": 20,
+              "request_ids": []
+            },
+            {
+              "id": "wait-b",
+              "state": "waiting",
+              "pid": 103,
+              "kind": "try",
+              "started_at": 20,
+              "request_ids": []
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/jobs/2/id",
+          "op": "equals",
+          "value": "wait-a"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/reads",
+          "op": "equals",
+          "value": [
+            {
+              "directory": "/state/slots/runtime.test%3A8443"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/runtime-slots-files-listRecords",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

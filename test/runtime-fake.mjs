@@ -32,6 +32,10 @@ const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCen
 export async function fakeRuntime(t, answer) {
   const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
   const server = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/capacity') {
+      const reply = fake.capacity ? await fake.capacity({ method: req.method, url: req.url, headers: req.headers }, fake) : { status: 404, json: { error: { code: 'not-found' } } };
+      res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers }); res.end(JSON.stringify(reply.json)); return;
+    }
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks), entry = { method: req.method, url: req.url, headers: req.headers };
@@ -59,8 +63,8 @@ export async function fakeRuntime(t, answer) {
   fake.lint = (id, prompts = [{ path: PLACE, state: 'approved', admission_state: 'approved', interface: { calls: [] } }], refused = []) =>
     fake.job(id, 'lint', 'passed', { exitCode: 0, refusals: [], report: { verdict: 'passed', program: { prompts, refused_prompts: refused } } });
   fake.check = (id, state = 'passed', checks = PASSED_CHECKS, refusals = []) => fake.job(id, 'check', state, ['queued', 'running'].includes(state) ? null
-    : { exitCode: state === 'passed' ? 0 : 1, outcome: state === 'passed' ? 'Pass' : 'Fail', refusals, who: null, why: state === 'passed' ? 'All checked criteria passed.' : 'Checks failed.',
-      next_step: null, report: { samples: [{ sample: 1, steps: [{ checks }] }], evaluation: { requested_model: 'gpt-6.1-sol' },
+    : { exitCode: state === 'passed' ? 0 : 1, outcome: state === 'passed' ? 'Pass' : ['refused', 'unknown'].includes(state) ? 'Inconclusive' : 'Fail', refusals, who: null, why: state === 'passed' ? 'All checked criteria passed.' : ['refused', 'unknown'].includes(state) ? 'No verdict. The runtime could not judge this test.' : 'Checks failed.',
+      next_step: ['refused', 'unknown'].includes(state) ? 'Tell the person the reason. Do not resend it automatically.' : null, report: { samples: [{ sample: 1, steps: [{ checks }] }], evaluation: { requested_model: 'gpt-6.1-sol' },
         criterion_results: [...new Set(checks.map(check => check.criterion_id))].map(id => ({ criterion_id: id, status: checks.every(check => check.criterion_id !== id || check.passed) ? 'passed' : 'failed' })) } },
     state === 'refused' ? 0 : 1);
   fake.tryJob = (id, url = `${fake.origin}/s/${'t'.repeat(43)}/`, session = 'running') => fake.job(id, 'try', 'passed',
@@ -79,11 +83,13 @@ export async function fakeRuntime(t, answer) {
 // In-process ports: a fake clock (sleep moves time), a fake gh and spies on IDs and interrupts.
 export function portsFor(env, extra = {}) {
   const clock = { now: Date.parse('2026-10-27T16:27:47Z'), uuids: 0, gh: [] };
+  const interrupts = new Set();
+  clock.interrupt = () => { for (const handler of [...interrupts]) handler(); };
   const ports = { env, agentBridge: false, stdout: sink(), stderr: sink(), pollMs: 2000, interactive: false,
     now: () => clock.now, sleep: async ms => { clock.now += ms; await new Promise(done => setImmediate(done)); },
     randomUUID: () => { clock.uuids += 1; return randomUUID(); },
     gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },
-    onInterrupt: handler => { clock.interrupt = handler; return () => { clock.interrupt = null; }; }, ...extra };
+    onInterrupt: handler => { interrupts.add(handler); return () => { interrupts.delete(handler); }; }, ...extra };
   return { ports, clock };
 }
 

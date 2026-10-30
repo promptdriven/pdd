@@ -1,10 +1,10 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: 7a8cd3af7e3bdac3f55b668af7850fb9da6ec1e83fe90e30323d0f2736c87924).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: 81527229faba4c628b6b7cf6f7e67a5b662caf33b57fd83e36bb573374fb108a).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readPrompt } from './runtime-preflight.mjs';
+import { gitFiles, readPrompt } from './runtime-preflight.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCase } from './runtime-client.mjs';
 
@@ -13,6 +13,16 @@ const hash = text => createHash('sha256').update(text).digest('hex');
 const quote = word => /^[A-Za-z0-9_./:@%+=,-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const fail = message => { const e = new Error(message); e.exitCode = WRAPPER_EXIT; throw e; };
+function checkEffectivePrompts(root, rawHashes, effectiveHashes) {
+  const visible=new Set(gitFiles(root));
+  for (const path of Object.keys(rawHashes ?? {})) {
+    const prompt=readPrompt(root,visible,path);
+    if (!prompt.text) fail('A prompt is unavailable. Run pdd try STORY --cli --new.');
+    if (effectiveHashes?.[path]) {
+      if (hash(prompt.text)!==effectiveHashes[path]) fail('A prompt or shared contract changed since this Try. Run pdd try STORY --cli --new.');
+    } else if (prompt.references?.length) fail('This Try reference baseline is unavailable. Run pdd try STORY --cli --new.');
+  }
+}
 function regular(path) {
   const stat = lstatSync(path);
   if (stat.isSymbolicLink()) fail('Refusing a symbolic link in Try files.');
@@ -58,8 +68,9 @@ export async function openCli(context, test, sessionId, options) {
   const { root, ports, store, identity, origin } = context;
   const { step, prompt, entry, name } = cliEntry(context, test);
   const record = store.repo(root).tries?.[test.path];
-  if (record?.prompt_hashes?.[step.entry_path] !== hash(prompt.text)) fail('The CLI prompt changed or this Try has no source record. Run pdd try STORY --cli --new.');
+  if (record?.prompt_hashes?.[step.entry_path] !== hash(readFileSync(join(root,step.entry_path)))) fail('The CLI prompt changed or this Try has no source record. Run pdd try STORY --cli --new.');
   for (const [path, expected] of Object.entries(record.prompt_hashes)) if (hash(readFileSync(join(root, path))) !== expected) fail('A prompt dependency changed since this Try. Run pdd try STORY --cli --new.');
+  checkEffectivePrompts(root,record.prompt_hashes,record.effective_prompt_hashes);
   const bin = safeBin(root), shim = join(bin, name);
   if (existsSync(shim)) {
     regular(shim);
@@ -83,7 +94,7 @@ export async function openCli(context, test, sessionId, options) {
   const usage = tryUsage(metadata);
   ports.stderr.write(`${tryUsageLine(usage)}\n`);
   const descriptor = { callCap: usage.cap, version: 1, root, sessionId, origin, login: identity.login, prompt: step.entry_path, operation: step.operation,
-    ghPath: ghPath ? resolve(ghPath) : null, promptHashes: record.prompt_hashes, name, inputSchema: entry.input_schema, originalPath: test.path, storyPath: test.doc.story_path, criteria: test.doc.criteria,
+    ghPath: ghPath ? resolve(ghPath) : null, promptHashes: record.prompt_hashes, effectivePromptHashes:record.effective_prompt_hashes, name, inputSchema: entry.input_schema, originalPath: test.path, storyPath: test.doc.story_path, criteria: test.doc.criteria,
     criterion: step.checks[0]?.criterion_id, storyHash: hash(readFileSync(join(root, test.doc.story_path))),
     promptHash: hash(prompt.text), stateDir: store.dir, repoState: join(store.folder('repos'), `${store.repoKey(root)}.json`) };
   writePrivate(descriptorPath, descriptor);
@@ -121,6 +132,7 @@ export async function runShim(descriptorPath, argv, givenPorts = {}) {
     if (d.version !== 1 || !d.sessionId || !d.root || realpathSync(d.root) !== d.root) fail('The Try session record is invalid. Run pdd try STORY --cli again.');
     const last = invalidate(d, descriptorPath), input = { argv };
     if (Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(d.root, path))) !== expected)) fail('The CLI prompt changed since this Try. Run pdd try STORY --cli --new.');
+    checkEffectivePrompts(d.root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
     if (d.inputSchema.properties?.stdin && !ports.stdin.isTTY) {
       const parts = []; let bytes = 0;
       for await (const chunk of ports.stdin) { const part = Buffer.from(chunk); bytes += part.length; if (bytes > 1024 * 1024) fail('Piped stdin exceeds 1 MiB.'); parts.push(part); }
@@ -153,6 +165,7 @@ export async function saveLast({ root, store, identity, ports }) {
   if (last.state !== 'confirmed') fail('The last command result is unknown; there is no confirmed output to save.');
   if (last.saved) { ports.stdout.write('The last command is already saved.\n'); return 0; }
   if (hash(readFileSync(join(root, d.storyPath))) !== d.storyHash || Object.entries(d.promptHashes ?? { [d.prompt]: d.promptHash }).some(([path, expected]) => hash(readFileSync(join(root, path))) !== expected)) fail('The Story or prompt changed since this Try. Open a new Try and run the command again.');
+  checkEffectivePrompts(root,d.promptHashes ?? {[d.prompt]:d.promptHash},d.effectivePromptHashes);
   const step = { step_id: `try-${last.id}`, entry_path: d.prompt, operation: d.operation, input: last.input,
     checks: [{ criterion_id: d.criterion, target: 'result', path: '', op: 'equals', value: last.result }] };
   const message = saveDoorCase(root, { id: last.id, name: 'Recorded terminal command', story_path: d.storyPath, original_path: d.originalPath,

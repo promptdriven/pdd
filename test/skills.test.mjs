@@ -17,7 +17,7 @@ const AREAS = {
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
     ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
 };
-const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
+const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', 'pdd-product', ...Object.keys(AREAS)];
 // 0.1.7: the size that counts is what one agent loads. The main chat loads SKILL.md; each subagent loads one step file
 // and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules
 // (1.6 KB since the round-2 cli test: a CLI has one program prompt).
@@ -384,8 +384,14 @@ test('SKILLS24: the story gate may offer a Try before the check; the order stays
 
 // Wrong (2048 run, 0.1.7): 47 follow-up messages and 15 timed-out waits to the step subagents.
 test('SKILLS25: the main chat gives each subagent its full brief at once, then waits once with a long time-out', () => {
-  const line = '- Run each step in a new subagent, never reused, so verify never checks its own code. Give the step file and paths at once, not chat history. Wait with one long time-out; avoid small follow-ups.';
-  for (const name of Object.keys(AREAS)) assert.ok(read(`${name}/SKILL.md`).split('\n').includes(line) || read(`${name}/SKILL.md`).includes('Give it its full brief at once: the step file and file paths, not the chat history. Then wait for it with one long time-out.'), name);
+  for (const name of Object.keys(AREAS)) {
+    const brief = read(`${name}/SKILL.md`).split('\n').find(line => /step file/i.test(line) && /paths/i.test(line));
+    assert.ok(brief, `${name}: complete step brief`);
+    assert.match(brief, /at once/i, name);
+    assert.match(brief, /no chat history|not.*history/i, name);
+    assert.match(brief, /wait once.*long.*time-out|wait.*one long/i, name);
+    assert.match(brief, /\b(?:no|avoid) small follow-ups/i, name);
+  }
 });
 
 // Wrong (0.1.7 trim): a rule grows a second home in the same skill, so the skill grows and the copies drift.
@@ -556,4 +562,109 @@ test('SKILLS41: review completion is held during repairs and released only by th
     assert.match(final, /PR 2/);
     assert.doesNotMatch(pending, /(?:^|; )run `workflow done review`/);
   }
+});
+
+// #2623: instruction structure only; this does not simulate agent tools or exhausted sessions.
+const checkingRecovery = () => RUNBOOK().split(/^## 17\. /m)[1]?.split(/^## /m)[0] ?? '';
+const instruction = (text, tokens) => text.split('\n').find(line => tokens.every(token => token.test(line))) ?? '';
+
+test('SKILLS42: checking closes supported tools and tries fresh startup before reuse', () => {
+  for (const name of Object.keys(AREAS)) {
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /read[^\n]*pdd-prompting RUNBOOK §17[^\n]*before checks/i, name);
+    const checking = instruction(checkingRecovery(), [/close/i, /fresh/i, /reuse/i]);
+    assert.ok(checking, `${name}: checking startup branch`);
+    assert.match(checking, /close.*finished subagents.*if supported/i, name);
+    assert.match(checking, /fresh checker.*first/i, name);
+    assert.ok(checking.search(/close/i) < checking.search(/fresh/i), `${name}: close before fresh startup`);
+    assert.match(checking, /only after.*startup failure.*reuse/i, name);
+  }
+});
+
+test('SKILLS43: reuse is limited to checking agents with no code anywhere in this run', () => {
+  for (const name of Object.keys(AREAS)) {
+    const skill = read(`${name}/SKILL.md`);
+    // Reject the obsolete global ban; retain the builder restriction and main-chat exclusion.
+    assert.doesNotMatch(skill, /run each step[^\n]*new subagent, never reused/i, name);
+    const steps = instruction(skill, [/fresh subagents/i, /builders/i]);
+    assert.ok(steps, `${name}: ordinary steps use fresh agents`);
+    assert.match(steps, /never reuse.*builders/i, name);
+    assert.match(steps, /never.*let.*check.*code/i, name);
+    assert.match(instruction(skill, [/main/i, /coordinat/i]), /no code or checks/i, name);
+    const reuse = instruction(skill, [/startup failure/i, /reuse/i]);
+    assert.ok(reuse, `${name}: reuse requires fresh startup failure`);
+    assert.match(reuse, /only verify\/formal.*reuse.*after startup failure/i, name);
+    assert.match(reuse, /no code, tests or prompts.*this run/i, name);
+  }
+});
+
+test('SKILLS44: no eligible checker stops with missing-check evidence and a new session', () => {
+  const recovery = checkingRecovery();
+  assert.match(recovery, /if no eligible checker can run/i);
+  assert.ok(recovery.includes('`Not checked: <step> (agent limit)`'));
+  assert.match(instruction(recovery, [/Not checked: <step>/]), /run file/i);
+  assert.match(recovery, /stop.*tell the person.*start a new agent session.*run's worktree/i);
+  assert.match(recovery, /no verdict.*workflow done.*unrun checks/i);
+  // open resumes the existing session; it must never be offered as fresh-session recovery.
+  const open = instruction(recovery, [/`pdd\s+workflow\s+open\b[^`]*`/i]);
+  assert.match(open, /focuses or resumes.*same session/i);
+  assert.match(open, /does not.*new.*or clear.*limit/i);
+  for (const name of Object.keys(AREAS)) {
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /read[^\n]*RUNBOOK §17[^\n]*unrun checks[^\n]*recovery/i, name);
+    assert.doesNotMatch(skill, /new session[^\n]*`pdd workflow open/i, name);
+  }
+});
+
+test('SKILLS45: RUNBOOK section 17 names the agent limit and points to workflow recovery', () => {
+  for (const text of [readFileSync(join(root, 'RUNBOOK.md'), 'utf8'), RUNBOOK()]) {
+    const section = text.split(/^## 17\. /m)[1]?.split(/^## /m)[0];
+    assert.ok(section, 'code-space evidence section');
+    const recovery = section.split('\n').find(line => line.includes('`agent thread limit reached`'));
+    assert.ok(recovery, 'agent-limit message in section 17');
+    assert.match(recovery, /workflow skill.*fallback/i);
+  }
+});
+
+// c857 allowed verify/formal and earlier review agents through the same broad reuse branch.
+test('SKILLS46: review never reuses checkers and every repair round gets a fresh review', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const skill = read(`${name}/SKILL.md`);
+    const reuse = instruction(skill, [/reuse/i, /startup failure/i]);
+    assert.match(reuse, /only verify\/formal.*reuse/i, `${name}: reuse excludes review`);
+    assert.doesNotMatch(reuse, /verify\/formal\/review/i, name);
+    const review = instruction(skill, [/review/i, /always fresh/i]);
+    assert.ok(review, `${name}: separate fresh-review branch`);
+    assert.match(review, /no.*build.*verify.*formal.*prior reviews/i, name);
+    assert.match(review, /prior review.*context/i, name);
+    assert.match(review, /blocked.*RUNBOOK §17/i, name);
+    const repairs = instruction(skill, [/repair rounds/i]);
+    assert.match(repairs, /repair rounds.*fresh build.*then fresh review/i, name);
+  }
+  const recovery = checkingRecovery();
+  const reviewStop = instruction(recovery, [/Not checked: review \(agent limit\)/]);
+  assert.ok(reviewStop.includes('`Not checked: review (agent limit)`'), 'exact review missing-check label');
+  assert.match(reviewStop, /review.*run file/i);
+  assert.match(reviewStop, /always.*fresh.*never.*reused/i);
+  assert.match(recovery, /stop.*tell the person/i);
+  assert.match(recovery, /no verdict.*workflow done.*unrun checks/i);
+  const docs = readFileSync(join(root, 'docs/workflows.md'), 'utf8');
+  assert.doesNotMatch(docs, /each step.*fresh subagent.*never reuses/i);
+  assert.match(docs, /only after startup fails.*verify or formal.*reuse.*no code, tests or prompts.*this run/i);
+  const reviewDocs = instruction(docs, [/review/i, /fresh/i, /prior review/i]);
+  assert.match(reviewDocs, /no.*build.*verify.*formal.*prior review/i);
+  assert.match(reviewDocs, /no prior review context/i);
+  assert.match(reviewDocs, /every repair round/i);
+});
+
+// A session restart alone is not evidence that a previously missing check ran.
+test('SKILLS47: actual checks replace missing-check evidence in the run record and verify copy', () => {
+  const replacement = instruction(checkingRecovery(), [/replace/i, /Not checked:/]);
+  assert.ok(replacement, 'missing-check replacement branch');
+  assert.match(replacement, /only after.*check.*runs.*replace/i);
+  assert.ok(replacement.includes('`Not checked:`'));
+  assert.match(replacement, /real result.*step's run file.*any copy.*`verify\.md`/i);
+  assert.match(replacement, /never.*both/i);
+  for (const name of Object.keys(AREAS))
+    assert.match(read(`${name}/SKILL.md`), /read[^\n]*RUNBOOK §17[^\n]*result replacement/i, name);
 });
