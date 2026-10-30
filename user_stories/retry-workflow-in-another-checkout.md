@@ -11,3 +11,4 @@ As a person working in more than one clone, I want to start and reopen my workfl
 
 5. A new clone uses the short repository name when that label is free, even if another clone still has an ownership record or a qualified workspace.
 6. When a different repository has the same short name, only PDD-owned repository workspaces are renamed to available qualified labels; another workspace holding a label stays untouched, and an already qualified peer keeps its label.
+7. The first run of a custom workflow with one code area (build, verify, formal, review) using Codex succeeds in a second independent normal clone of the same origin while the first clone's run is active; each first code chat starts in its own allocated worktree, and the first clone's workspaces and agent stay untouched, without canceling, retrying, or reopening either run.
