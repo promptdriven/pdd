@@ -1,4 +1,4 @@
 {"version":2,"areas":[
 {"name":"story","steps":["reproduce","prompt-story"],"optional":[],"gate":"approve"},
 {"name":"prompt-pr","steps":["check","try"],"optional":["try"],"gate":"pr","before":"approve","then":"ask-code"},
-{"name":"code","replay_evidence":"pdd.replay-evidence.v1","steps":["build","verify","formal"],"optional":[],"gate":"pr"}]}
+{"name":"code","replay_evidence":"pdd.replay-evidence.v1","steps":["build","verify","formal","review"],"optional":[],"gate":"pr"}]}
