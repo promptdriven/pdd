@@ -845,7 +845,7 @@ async function runRead(context, batchWord, quiet = false) {
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, secrets: [identity.token], warnings: saved.warnings ?? [], timeoutMin: saved.timeout_min ?? null,
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, checks: null, failed_checks: [], all_checks: [],
+  const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, checks: null, failed_checks: [], all_checks: [],
     ...(!row.request_ids?.length && ['not_run', 'refused', 'ready'].includes(row.state) ? { calls: 0, phase: 'local' } : {}) }));
   Object.assign(context, { rows, visible: findTests({ root }).visible, reading: true });
   // A pdd that was killed can leave rows that never got an answer: read them if they were posted.

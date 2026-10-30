@@ -68,6 +68,47 @@ test('REVIEW server why accepts only no-verdict advice and drops legacy generic 
     const read = await run(setup, fake, { '--json': true, '--read': first.json.batch });
     assert.equal(read.json.rows[0].why, legacyWhy === 'Checks failed.' ? null : legacyWhy);
   }
+  for (const [state, source, why] of [
+    ['refused', 'local', 'Checks failed.'], ['not_run', 'local', 'Checks failed.'],
+    ['unknown', 'local', 'Checks failed.'], ['unknown', 'transport', 'Checks failed.'],
+    ['unknown', 'transport', 'The answer to the request was lost.'],
+    ['unknown', 'local', 'The answer to the request was lost.'],
+    ['refused', 'cached', 'Checks failed.'], ['failed', 'local', 'Checks failed.'],
+  ]) await t.test(`saved ${state} ${source}: ${why}`, async t => {
+    const setup = harbor(t); let reading = false, gets = 0;
+    const fake = await fakeRuntime(t, (e, f) => {
+      if (reading && e.method === 'GET') { gets++; return { destroy: true }; }
+      if (e.command === 'check') return { status: 200, json: f.check(e.request.requestId, 'refused', [], [{ code: 'service', reason: 'Unavailable' }]) };
+      return f.normal(e);
+    });
+    const first = await run(setup, fake), folder = `${setup.state}/batches/${first.json.batch}`;
+    const path = `${folder}/batch.json`, saved = JSON.parse(readFileSync(path));
+    const id = saved.rows[0].request_ids.at(-1);
+    Object.assign(saved.rows[0], { state, why, lost: source === 'transport', phase: source === 'local' ? 'local' : 'server' });
+    if (source === 'local') saved.rows[0].request_ids = [];
+    if (source === 'cached') {
+      const answer = JSON.parse(readFileSync(`${folder}/${id}.json`));
+      Object.assign(answer.result, { why: 'Checks failed.', outcome: 'Inconclusive' });
+      writeFileSync(`${folder}/${id}.json`, JSON.stringify(answer));
+    } else rmSync(`${folder}/${id}.json`);
+    writeFileSync(path, JSON.stringify(saved)); reading = true;
+    const read = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+    const expected = state === 'failed' || why !== 'Checks failed.' ? why : source === 'transport' ? 'pdd could not read this run yet.' : null;
+    assert.equal(read.json.rows[0].why, expected);
+    assert.equal(read.json.rows[0].state, state);
+    if (state === 'failed') assert.equal(read.json.rows[0].reason, null);
+    else {
+      assert.notEqual(read.json.rows[0].reason?.message, 'Checks failed.');
+      if (source === 'transport') assert.equal(read.json.rows[0].reason.message, expected);
+    }
+    assert.equal(JSON.parse(readFileSync(path)).rows[0].why, expected);
+    const text = await run(setup, fake, { '--read': first.json.batch });
+    if (state !== 'failed' && why === 'Checks failed.') assert.doesNotMatch(text.text, /Checks failed\./);
+    else assert.ok(text.text.includes(expected));
+    assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
+    assert.equal(gets, source === 'transport' ? 2 : 0);
+  });
+
 });
 test('REVIEW busy retry to lost response or fresh refusal never inherits retry advice', async t => {
   for (const mode of ['busy', 'lost', 'refused']) {
