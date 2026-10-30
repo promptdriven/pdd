@@ -12,6 +12,14 @@ One durable ticket per waiting job retains its original timestamp through conten
 
 An active record holds its unique id, state active, owner pid, kind, started_at (epoch milliseconds), and request_ids. Module function `recordRuntimeRequest(reservation, requestId, ports)` durably appends the ID without duplicates before dispatch, preserving earlier IDs. Module function `releaseRuntimeSlot(reservation, {ended}, ports)` releases only when ended is confirmed, or no dispatch was possible; ended false retains the record. Local timeout/interruption does not prove a posted job ended. Remove an interrupted waiter's ticket without releasing another job's reservation.
 
+### Owned record transitions
+
+For tickets and active reservations, a known owned snapshot consists of id, pid, state, kind, started_at and the complete ordered request_ids. Before registration, promotion, refresh or own-record cleanup, verify the current predecessor against that snapshot; matching only ID/PID, path or active state is insufficient. Registration validates under the existing claim immediately before its update. A changed predecessor is foreign even at the same path with the same ID/PID: registration throws the existing finite local-state-unavailable error without appending, refreshing or transferring ownership. Release and signal cleanup stop this owner's refresh work but preserve the foreign file, including when ended is true for the original job.
+
+Only a verified owned transition advances the accepted snapshot: waiting-to-active promotion changes state/start time, and registration appends a previously absent request ID in order. A duplicate succeeds without changing the request list. Registration through a separately resolved native port advances the live owner's heartbeat snapshot only after its verified mutation. A write cannot authenticate itself merely by becoming the latest file contents.
+
+Reservations remain ordinary `{id,directory}` references, including saved/adopted references and existing active records without an acquisition in this process. Do not require a new field, token, port, local-owner registration or global gate. When no owned snapshot is known, preserve those existing active-record registration/release calls and their errors; absence of a local owner alone is not a refusal. Historical ownership cannot be independently proved from such a reference. This does not permit bypassing a known owner's predecessor check. Ended false stops ownership work while retaining uncertain paid-job evidence and the same returned reservation object's snapshot for a later ended true release. Retaining that evidence must not keep released references alive or restart ended heartbeat work.
+
 ### Owner freshness and paid-job leases
 
 While this command owns a waiting ticket, active reservation or claim lock, refresh that file about every 5 seconds, including during slow outside operations.
@@ -66,7 +74,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "2b96f62000aa607361393dcc22d10f25d95215ddf4917ccfa8aca8b9009dbf72",
+  "prose_sha256": "fe9cdb1e90bd7b67f1dd1f681b93d19fd23b3b97688b6bce5e904c5dbb05305a",
   "entries": [
     {
       "operation": "listRuntimeJobs",
