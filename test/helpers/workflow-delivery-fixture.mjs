@@ -10,7 +10,7 @@ const exec = promisify(callbackExec);
 const packageRoot = resolve(import.meta.dirname, '../..');
 const issueUrl = 'https://github.com/example/project/issues/17';
 // A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
-function fakeHerdr() {
+export function fakeHerdr() {
   const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null };
   const id = prefix => `${prefix}${h.next++}`;
   const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
@@ -73,7 +73,7 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
   git(source, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
   git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
-  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
+  const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [], elapsed: 0 };
   async function execFile(file, args, opts) {
     if (file === 'git' && args[0] === 'push') {
       f.pushes.push(args);
@@ -121,13 +121,17 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
-  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock,
+  f.ports = { execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, elapsedNow: () => f.elapsed,
     env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };
   f.run = () => startRun({ name, issue: '17', agent, cwd: source, packageRoot }, f.ports);
   f.record = () => JSON.parse(readFileSync(join(f.git(source, 'rev-parse', '--path-format=absolute', '--git-common-dir'), 'pdd', 'runs', '17', 'status.json'), 'utf8'));
-  f.tick = (ms = 1000) => { f.clock += ms; };
+  f.journal = () => {
+    try { return JSON.parse(readFileSync(join(f.record().runDir, 'delivery-journal.json'), 'utf8')).requests; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; return f.record().deliveryRequests ?? []; }
+  };
+  f.tick = (ms = 1000) => { f.clock += ms; f.elapsed += ms; };
   f.agentPorts = extra => ({ ...f.ports, isTTY: false, env: { ...f.ports.env, PDD_AGENT_SESSION: '1' }, ...extra });
   return f;
 }

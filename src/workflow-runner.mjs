@@ -1,7 +1,8 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 588296baf5251581963f76eea5d8b220868bac1f677549fe4850f0999681f673).
-import { execFile as execFileCallback } from 'node:child_process';
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fbe6257892cb0c5f6c05f5c21687d649c48a706dcb2260f54d740d5cb1069e3f).
+import { execFile as execFileCallback, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import * as nativeDeliveryFiles from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -11,7 +12,7 @@ import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
-import { startChat, sendToChat, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -1088,111 +1089,264 @@ export async function askPerson({ text, cwd }, ports) {
     `The person answers in this chat, or from their shell with: pdd workflow changes ${run.number} "answer". Then go on with the step and run done as usual.`].join('\n'));
 }
 
+// Complete token records live in a persistent namespace. Contenders may both yield,
+// but cannot both win: the later publication must see the earlier owner's record.
+const deliverySignals = new WeakMap();
+function processBirth(pid) {
+  try {
+    if (process.platform === 'linux') {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      return { alive: true, birth: stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[19] };
+    }
+    const birth = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+    if (birth) return { alive: true, birth };
+  } catch { /* Only a separate confirmed absence establishes death. */ }
+  try { process.kill(pid, 0); return { alive: null }; }
+  catch (error) { return { alive: error.code === 'ESRCH' ? false : null }; }
+}
+function onDeliverySignal(p, cleanup) {
+  const signals = p.processSignals ?? process;
+  let state = deliverySignals.get(signals);
+  if (!state) {
+    state = { cleanups: new Set(), handlers: new Map() };
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      const hadListeners = signals.listeners(signal).length > 0;
+      const handler = () => {
+        for (const release of [...state.cleanups]) release();
+        if (!hadListeners) (p.terminateSignal ?? (name => process.kill(process.pid, name)))(signal);
+      };
+      state.handlers.set(signal, handler); signals.on(signal, handler);
+    }
+    deliverySignals.set(signals, state);
+  }
+  state.cleanups.add(cleanup);
+  return () => {
+    state.cleanups.delete(cleanup);
+    if (!state.cleanups.size) {
+      for (const [signal, handler] of state.handlers) signals.removeListener(signal, handler);
+      deliverySignals.delete(signals);
+    }
+  };
+}
+function deliveryClaim(path, p) {
+  const fs = { ...nativeDeliveryFiles, ...p.deliveryFiles }, identity = p.processIdentity ?? processBirth;
+  const pid = p.ownerPid ?? process.pid, token = (p.deliveryToken ?? randomUUID)();
+  const self = identity(pid);
+  if (!Number.isInteger(pid) || !self?.alive || typeof self.birth !== 'string' || !self.birth || !/^[A-Za-z0-9_-]+$/.test(token)) throw Error('Cannot verify this sender identity');
+  try { fs.mkdirSync(path, { mode: 0o700 }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  if (!fs.lstatSync(path).isDirectory()) throw Object.assign(Error('Unverifiable claim'), { code: 'delivery_busy' });
+  const owner = { pid, birth: self.birth, token }, leaf = join(path, `${token}.json`), temporary = `${path}.${token}.tmp`;
+  try { fs.writeFileSync(temporary, JSON.stringify(owner), { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, leaf); }
+  finally { try { fs.unlinkSync(temporary); } catch { /* Already published, or never created. */ } }
+  let unregister = () => {};
+  const release = () => {
+    try {
+      const current = JSON.parse(fs.readFileSync(leaf, 'utf8'));
+      if (current.token === token && current.pid === pid && current.birth === self.birth) fs.unlinkSync(leaf);
+    } catch { /* Never delete an unverifiable or replaced record. */ }
+    unregister();
+  };
+  try {
+    for (const name of fs.readdirSync(path)) {
+      if (name === `${token}.json`) continue;
+      const otherPath = join(path, name);
+      let bytes, other;
+      try { bytes = fs.readFileSync(otherPath, 'utf8'); other = JSON.parse(bytes); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw Object.assign(Error('Unverifiable claim'), { code: 'delivery_busy' }); }
+      if (!Number.isInteger(other.pid) || other.pid < 1 || typeof other.birth !== 'string' || !other.birth || typeof other.token !== 'string' || name !== `${other.token}.json`) throw Object.assign(Error('Malformed claim'), { code: 'delivery_busy' });
+      let observed;
+      try { observed = identity(other.pid); } catch { observed = null; }
+      const dead = observed?.alive === false || observed?.alive === true && typeof observed.birth === 'string' && observed.birth !== other.birth;
+      if (!dead) throw Object.assign(Error('Delivery in progress'), { code: 'delivery_busy' });
+      // Unique token paths are never reused; another reclaimer may remove this exact record.
+      try { if (fs.readFileSync(otherPath, 'utf8') === bytes) fs.unlinkSync(otherPath); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    unregister = onDeliverySignal(p, release);
+    return release;
+  } catch (error) { release(); throw error; }
+}
+function deliveryJournal(run, p, action) {
+  const fs = { ...nativeDeliveryFiles, ...p.deliveryFiles }, path = join(run.runDir, 'delivery-journal.json');
+  const release = deliveryClaim(join(run.runDir, '.delivery-journal.lock'), p);
+  try {
+    let journal;
+    try { journal = JSON.parse(fs.readFileSync(path, 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      journal = { requests: (readRun(run.runDir)?.deliveryRequests ?? []).map(entry => ({ ...entry })) };
+    }
+    if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
+      typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change'].includes(entry.kind) ||
+      typeof entry.area !== 'string' || !entry.area || !(entry.paneId === null || typeof entry.paneId === 'string' && entry.paneId) || !Number.isFinite(entry.at) ||
+      ['inFlight', 'retryOwed'].some(key => entry[key] !== undefined && typeof entry[key] !== 'boolean') ||
+      entry.unboundAt !== undefined && !Number.isFinite(entry.unboundAt)) || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
+    const result = action(journal);
+    const temporary = `${path}.${(p.deliveryToken ?? randomUUID)()}.tmp`;
+    try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, path); }
+    finally { try { fs.unlinkSync(temporary); } catch { /* No temporary file remains after publication. */ } }
+    return result;
+  } finally { release(); }
+}
+
 export async function changeRun({ ref, text, cwd }, ports) {
-  const p = deps(ports);
+  const p = deps(ports), elapsedNow = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   let run = found.run;
-  const area = run.areas[run.area], chat = currentChat(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  const request = String(text ?? ''), normalized = oneLine(request), answer = Boolean(openQuestion(run));
-  if (normalized && !answer && run.gate && looksLikeApproval(normalized)) return { exitCode: 2, message: `This looks like an approval. To approve, run: pdd workflow approve ${run.number}\nNothing was sent to the chat.` };
-  if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
-  if (!normalized) return fail('Write the change request after the issue number.');
-  const kind = answer ? 'answer' : 'change', sameTarget = entry => entry.area === area.name && entry.paneId === chat.paneId;
+  const request = oneLine(text);
+  if (!request) return fail('Write the change request after the issue number.');
+  const area = run.areas[run.area]; let chat = currentChat(run);
+  const answer = Boolean(openQuestion(run)), kind = answer ? 'answer' : 'change';
   const latest = () => readRun(run.runDir);
-  const targetCurrent = saved => saved && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId;
-  const retry = `Retry: pdd workflow changes ${run.number} ${shell(request)}`;
-  const kept = `Your exact request is kept. ${retry}`;
+  const quoted = `'${request.replace(/'/g, `'\\''`)}'`;
+  const retry = `Retry: pdd workflow changes ${run.number} ${quoted}`;
+  const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
+  const uncertainWarning = `An earlier request is uncertain. Check the original chat: pdd workflow open ${run.number}. pdd will not automatically resend that request.`;
   const failure = sent => {
-    if (sent.uncertain) return fail(`Submission to the original ${area.name} chat is uncertain (${sent.code}). Inspect the original chat: pdd workflow open ${run.number}. The request is kept; pdd will not automatically resend it or later requests for this chat.`);
-    if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept} Inspect the original chat before retrying.`);
-    if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept} Wait briefly, then retry; open it if needed: pdd workflow open ${run.number}`);
+    if (sent.uncertain) return fail(`Submission to the original ${area.name} chat is uncertain (${sent.code}). Check the original chat: pdd workflow open ${run.number}. Your request is kept; pdd will not automatically resend that request.`);
+    if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
+    if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept}`);
     if (sent.code === 'agent_blocked') return fail(`The ${area.name} chat shows a question dialog. Answer it in the chat: pdd workflow open ${run.number}. ${kept}`);
-    return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). Open it: pdd workflow open ${run.number}. ${kept}`);
+    if (sent.code === 'agent_not_found') return fail(`The ${area.name} chat is not running. ${kept}`);
+    if (sent.code === 'herdr_status_unknown') return fail(`The ${area.name} chat status is not ready for input. ${kept}`);
+    return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). ${kept}`);
   };
-  const journalLock = join(run.runDir, '.delivery-journal.lock');
-  const withJournal = action => {
-    const fd = openSync(journalLock, 'wx', 0o600);
-    try { return action(); }
-    finally { closeSync(fd); unlinkSync(journalLock); }
-  };
+  const targetCurrent = saved => saved && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat?.paneId;
+  const matches = entry => entry.area === area.name && entry.paneId === (chat?.paneId ?? null);
+  const acceptedTarget = entry => matches(entry) || entry.area === area.name && entry.paneId === null;
+  let accepted, already = false, approval = false;
   try {
-    withJournal(() => {
-      run = latest();
-      if (!run) throw Error('Saved run unavailable');
-      run.deliveryRequests ??= [];
-      if (!run.deliveryRequests.some(entry => sameTarget(entry) && ['pending', 'uncertain'].includes(entry.state) && entry.kind === kind && entry.text === request)) {
-        run.deliveryRequests.push({ id: randomUUID(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(),
-          question: run.question ?? null, gate: run.gate ?? null });
+    deliveryJournal(run, p, journal => {
+      // A joined answer's receipt keeps its kind even after its question was cleared.
+      const receipt = journal.requests.find(entry => matches(entry) && entry.text === request && entry.state === 'delivered' && entry.retryOwed);
+      if (receipt) { receipt.retryOwed = false; accepted = { ...receipt }; already = true; return; }
+      if (!answer && run.gate && looksLikeApproval(request)) { approval = true; return; }
+      accepted = journal.requests.find(entry => acceptedTarget(entry) && entry.text === request && (entry.state === 'uncertain' || entry.inFlight))
+        ?? journal.requests.find(entry => acceptedTarget(entry) && entry.kind === kind && entry.text === request && entry.state === 'pending');
+      if (!accepted) {
+        accepted = { id: (p.deliveryToken ?? randomUUID)(), text: request, kind, area: area.name, paneId: chat?.paneId ?? null, state: 'pending', at: p.now(),
+          question: run.question ?? null, gate: run.gate ?? null, ...(!chat ? { unboundAt: p.now() } : {}) };
+        journal.requests.push(accepted);
       }
-      writeRun(run, p);
+      accepted = { ...accepted };
     });
-  } catch { return fail(`Could not save your exact request; it was not sent. Repair the run folder and retry: ${retry}`); }
-  // Serialize dispatch across CLI processes, while overlapping callers can still retain their text.
-  const lock = join(run.runDir, `.delivery-${createHash('sha256').update(`${area.name}\0${chat.paneId}`).digest('hex')}.lock`);
-  const claim = () => {
-    const fd = openSync(lock, 'wx', 0o600);
-    try { writeFileSync(fd, String(process.pid)); } finally { closeSync(fd); }
-  };
-  try { claim(); }
-  catch {
-    return fail(`Delivery to the original ${area.name} chat is in progress or its claim needs inspection. Open it: pdd workflow open ${run.number}. ${kept}`);
+  } catch (error) {
+    return fail(error.code === 'delivery_busy' ? `Another command is saving a request. Wait briefly, then retry. ${retry}`
+      : `Could not save your request; it was not sent. Check the run folder and retry. ${retry}`);
+  }
+  if (approval) return { exitCode: 2, message: `This looks like an approval. To approve, run: pdd workflow approve ${run.number}\nNothing was sent to the chat.` };
+  if (already) return done(`Your request was already delivered to the ${area.name} chat.`);
+  const intentBegan = elapsedNow(), intentBudget = Math.min(30_000, Math.max(0, (accepted.unboundAt ?? p.now()) + 30_000 - p.now()));
+  const intentRemaining = () => Math.min((accepted.unboundAt ?? p.now()) + 30_000 - p.now(), intentBudget - Math.max(0, elapsedNow() - intentBegan));
+  if (accepted.unboundAt !== undefined && intentRemaining() <= 0) return failure({ code: 'chat_still_starting' });
+  if (!chat) {
+    while (true) {
+      run = latest();
+      if (!run || ended(run) || run.areas[run.area]?.name !== area.name) return failure({ code: 'chat_target_changed' });
+      chat = currentChat(run);
+      if (chat) { if (intentRemaining() <= 0) return failure({ code: 'chat_still_starting' }); break; }
+      const left = intentRemaining();
+      if (left <= 0) return fail(`The ${area.name} chat has not appeared yet. ${kept}`);
+      await (p.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))))(Math.min(250, left));
+    }
   }
   try {
-    const queue = run.deliveryRequests.filter(entry => sameTarget(entry) && entry.state !== 'delivered');
-    for (const accepted of queue) {
+    deliveryJournal(run, p, journal => {
+      for (const entry of journal.requests) if (entry.area === area.name && entry.paneId === null && entry.at + 30_000 > p.now()) entry.paneId = chat.paneId;
+      accepted = { ...journal.requests.find(entry => entry.id === accepted.id) };
+    });
+  } catch { return fail(`Could not bind the saved request to its original chat. ${kept}`); }
+  const lock = join(run.runDir, `.delivery-${createHash('sha256').update(`${area.name}\0${chat.paneId}`).digest('hex')}.lock`);
+  let release;
+  try { release = deliveryClaim(lock, p); }
+  catch {
+    let acknowledged = false;
+    try { deliveryJournal(run, p, journal => {
+      const entry = journal.requests.find(item => item.id === accepted.id);
+      if (entry?.state === 'delivered') { entry.retryOwed = false; acknowledged = true; }
+      else if (entry?.state === 'pending') entry.retryOwed = true;
+    }); } catch {
+      return fail(`Delivery to the original ${area.name} chat is in progress. Your request is kept, but its retry receipt could not be saved. Check the original chat: pdd workflow open ${run.number} before submitting again.`);
+    }
+    if (acknowledged) return done(`Your request was already delivered to the ${area.name} chat.`);
+    return fail(`Delivery to the original ${area.name} chat is in progress or needs inspection. ${kept}`);
+  }
+  try {
+    let queue, warnings = false;
+    deliveryJournal(run, p, journal => {
+      for (const entry of journal.requests.filter(matches)) if (entry.inFlight) { entry.state = 'uncertain'; entry.code = 'acknowledgement_unknown'; delete entry.inFlight; }
+      const current = journal.requests.find(entry => entry.id === accepted.id);
+      if (current?.state === 'delivered') { current.retryOwed = false; already = true; }
+      queue = journal.requests.filter(entry => matches(entry) && entry.state !== 'delivered').map(entry => ({ ...entry }));
+    });
+    if (already) return done(`Your request was already delivered to the ${area.name} chat.`);
+    for (const entry of queue) {
+      if (entry.state === 'uncertain') { warnings = true; continue; }
       run = latest();
       if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
-      const entry = run.deliveryRequests?.find(item => item.id === accepted.id);
-      if (entry?.state === 'delivered') continue;
-      if (!entry || entry.state === 'uncertain' || entry.inFlight) {
-        return failure({ code: entry?.code ?? 'acknowledgement_unknown', uncertain: true });
-      }
       const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
         : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.`;
-      let custodyFailed = false;
-      const sent = await sendToChat(chat, message, { ...p, beforeSubmit: () => {
-        try { return withJournal(() => {
-          const current = latest();
-          if (!targetCurrent(current)) return false;
-          const intent = current.deliveryRequests?.find(item => item.id === entry.id);
-          if (!intent) return false;
-          // A lost final save must leave durable uncertainty, never an automatically replayable request.
-          intent.inFlight = true;
-          writeRun(current, p); return true;
-        }); } catch { custodyFailed = true; return false; }
-      } });
+      let custodyFailed = false, marked = false, intentExpired = false;
+      // An unbound area's original acceptance window also caps its later pane wait.
+      const starts = [chat.startedAt, chat.resumedAt].filter(Number.isFinite);
+      const deliveryChat = entry.unboundAt === undefined ? chat : { ...chat, startedAt: Math.min(starts.length ? Math.max(...starts) : entry.unboundAt, entry.unboundAt), resumedAt: undefined };
+      if (entry.unboundAt !== undefined && intentRemaining() <= 0) return failure({ code: 'chat_still_starting' });
+      const transport = herdrCommand(p);
+      const guardedHerdr = async args => {
+        try { return await transport(args); }
+        catch (error) {
+          if (args[0] === 'agent' && args[1] === 'prompt' && ['agent_not_found', 'agent_blocked'].includes(error.code)) {
+            try { deliveryJournal(run, p, journal => {
+              const saved = journal.requests.find(item => item.id === entry.id);
+              if (saved?.state === 'pending') { delete saved.inFlight; saved.code = error.code; }
+            }); marked = false; } catch { custodyFailed = true; }
+          }
+          throw error;
+        }
+      };
+      const sent = await sendToChat(deliveryChat, message, { ...p, herdr: guardedHerdr,
+        ...(entry.unboundAt === undefined ? {} : { now: () => Math.max(p.now(), entry.unboundAt + 30_000 - intentRemaining()) }),
+        beforeSubmit: () => {
+          if (entry.unboundAt !== undefined && intentRemaining() <= 0) { intentExpired = true; return false; }
+          try { return deliveryJournal(run, p, journal => {
+            if (!targetCurrent(latest())) return false;
+            const saved = journal.requests.find(item => item.id === entry.id);
+            if (!saved || saved.state !== 'pending' || saved.inFlight && !marked) return false;
+            saved.inFlight = true; marked = true; return true;
+          }); } catch { custodyFailed = true; return false; }
+        }
+      });
+      if (intentExpired) return failure({ code: 'chat_still_starting' });
       if (custodyFailed) return fail(`Could not save submission intent; your request was not sent. ${kept}`);
-      let result;
-      try { result = withJournal(() => {
-        run = latest();
-        if (!run) return fail('Could not read the saved request after submission. Inspect the original chat before retrying; delivery may be uncertain.');
-        const saved = run.deliveryRequests?.find(item => item.id === entry.id);
-        if (!saved) return fail('Could not find the saved request after submission. Inspect the original chat before retrying; delivery may be uncertain.');
-        if (!sent.ok) {
+      try {
+        deliveryJournal(run, p, journal => {
+          const saved = journal.requests.find(item => item.id === entry.id);
+          if (!saved) throw Error('Saved request unavailable');
           delete saved.inFlight;
-          saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code;
-          try { writeRun(run, p); }
-          catch { return fail('Could not save the delivery result. Inspect the original chat before retrying; delivery may be uncertain.'); }
-          return failure(sent);
-        }
-        const now = p.now(); delete saved.inFlight; saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code;
-        run.changes.push({ stage: entry.area, round: run.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
-        const sameQuestion = JSON.stringify(run.question ?? null) === JSON.stringify(entry.question);
-        const sameGate = JSON.stringify(run.gate ?? null) === JSON.stringify(entry.gate);
-        if (targetCurrent(run)) {
-          if (sameQuestion) run.question = null;
-          if (entry.kind === 'answer') { if (!run.gate && !run.question) run.state = 'running'; }
-          else if (sameGate && run.gate) run.gate.at = now;
-        }
-        writeRun(run, p);
-      }); } catch { return fail('Could not save the submission acknowledgement. Inspect the original chat before retrying; delivery may be uncertain.'); }
-      if (result) return result;
+          if (!sent.ok) { saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code; return; }
+          const now = p.now(); saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code;
+          run = latest();
+          if (!run) throw Error('Saved run unavailable');
+          run.changes.push({ stage: entry.area, round: run.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
+          if (targetCurrent(run)) {
+            if (JSON.stringify(run.question ?? null) === JSON.stringify(entry.question)) run.question = null;
+            if (entry.kind === 'answer') { if (!run.gate && !run.question) run.state = 'running'; }
+            else if (run.gate && JSON.stringify(run.gate) === JSON.stringify(entry.gate)) run.gate.at = now;
+          }
+          writeRun(run, p);
+        });
+      } catch { return fail('Could not save the submission acknowledgement. Check the original chat before retrying; delivery may be uncertain.'); }
+      if (!sent.ok) { const result = failure(sent); return warnings ? { ...result, message: `${result.message}\n${uncertainWarning}` } : result; }
     }
-    return done(answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
-      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
-  } finally { try { unlinkSync(lock); } catch { /* Retained claims require inspection, never duplicate dispatch. */ } }
+    if (queue.find(entry => entry.id === accepted.id)?.state === 'uncertain') return failure({ code: accepted.code ?? 'acknowledgement_unknown', uncertain: true });
+    return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
+      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`) + (warnings ? `\n${uncertainWarning}` : ''));
+  } catch (error) {
+    return fail(`Could not update the saved request. Check the original chat before retrying (${error.code ?? 'journal unavailable'}).`);
+  } finally { release(); }
 }
 
 export async function cancelRun({ ref, cwd }, ports) {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 656754b67d3fbd5ba98e827cffaddde713d7bedf7206f3d63519a8cf3fc61ebd).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 1f4436c6ff50f23604eded3e62ff4a450aba3ab5153fc6384565ed4b29fdaf27).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync } from 'node:fs';
@@ -100,30 +100,37 @@ export async function startChat({ run, area, message }, ports = {}) {
 }
 
 export async function sendToChat(chat, text, ports = {}) {
-  const now = ports.now ?? Date.now, sleep = ports.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const now = ports.now ?? Date.now, elapsedNow = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
+  const sleep = ports.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const starts = [chat.startedAt, chat.resumedAt].filter(Number.isFinite);
   const deadline = starts.length ? Math.max(...starts) + 30_000 : -Infinity;
+  const budget = Math.min(30_000, Math.max(0, deadline - now())), began = elapsedNow();
+  const remaining = () => Math.min(deadline - now(), budget - Math.max(0, elapsedNow() - began));
   const herdr = herdrCommand(ports);
   let retry = false;
   const wait = async () => {
-    const remaining = deadline - now();
-    if (remaining <= 0) return false;
-    await sleep(Math.min(250, remaining));
-    return now() < deadline;
+    const left = remaining();
+    if (left <= 0) return false;
+    await sleep(Math.min(250, left));
+    return remaining() > 0;
   };
   while (true) {
-    if (retry && now() >= deadline) return { ok: false, code: 'chat_still_starting' };
+    if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
     const live = await chatSession(chat, ports);
-    if (!live.alive) {
-      if (live.code !== 'agent_not_found') return { ok: false, code: live.code ?? 'herdr_status_unknown' };
-      if (now() >= deadline) return { ok: false, code: retry ? 'chat_still_starting' : 'agent_not_found' };
+    if (live.status === 'blocked' && live.alive) return { ok: false, code: 'agent_blocked' };
+    const ready = live.alive && ['idle', 'working', 'done'].includes(live.status);
+    if (!ready) {
+      if (!live.alive && live.code !== 'agent_not_found') return { ok: false, code: live.code ?? 'herdr_status_unknown' };
+      if (remaining() <= 0) return { ok: false, code: retry ? 'chat_still_starting' : live.alive ? 'herdr_status_unknown' : 'agent_not_found' };
       if (!await wait()) return { ok: false, code: 'chat_still_starting' };
       retry = true; continue;
     }
-    if (retry && now() >= deadline) return { ok: false, code: 'chat_still_starting' };
-    // The runner may have advanced or replaced this pane while readiness was awaited.
-    if (ports.beforeSubmit && !await ports.beforeSubmit()) return { ok: false, code: 'chat_target_changed' };
-    const withinStartup = now() < deadline;
+    if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
+    try {
+      if (ports.beforeSubmit && !await ports.beforeSubmit()) return { ok: false, code: 'chat_target_changed' };
+    } catch { return { ok: false, code: 'chat_target_changed' }; }
+    if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
+    const withinStartup = remaining() > 0;
     try { await herdr(['agent', 'prompt', chat.paneId, text]); return { ok: true }; }
     catch (error) {
       const code = error.code ?? 'herdr_failed';

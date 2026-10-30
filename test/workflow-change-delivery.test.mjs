@@ -26,7 +26,7 @@ test('2677 latest resume gives readiness time and working submits exact text onc
   assert.equal(inspections, 3); assert.equal(clock, 100_500); assert.deepEqual(result, { ok: true });
   assert.deepEqual(calls.at(-1), ['agent', 'prompt', 'original', text]); assert.equal(calls.filter(a => a[1] === 'prompt').length, 1);
 });
-test('2677 missing submission retries readiness within the original deadline', async () => {
+test('2677 missing submission retries readiness within the original deadline', async t => {
   let clock = 0, inspections = 0, submits = 0;
   const result = await sendToChat({ paneId: 'original', startedAt: 0 }, 'retry', {
     now: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
@@ -34,6 +34,15 @@ test('2677 missing submission retries readiness within the original deadline', a
     }
   });
   assert.deepEqual(result, { ok: true }); assert.equal(submits, 2); assert.equal(inspections, 2); assert.equal(clock, 250);
+  const f = await started(t), healthy = f.ports.herdr; let attempts = 0;
+  f.ports.herdr = async args => { if (args[1] === 'prompt' && ++attempts === 1) return missing(); return healthy(args); };
+  f.ports.sleep = async ms => {
+    assert.equal(f.journal()[0].state, 'pending');
+    assert.ok(!f.journal()[0].inFlight, 'confirmed rejection restores durable pending before another wait or crash');
+    f.tick(ms);
+  };
+  assert.equal((await changeRun({ ref:'17', text:'Retry a rejected submission', cwd:f.source }, f.ports)).exitCode, 0);
+  assert.equal(attempts, 2); assert.equal(f.journal()[0].state, 'delivered');
 });
 test('2677 ambiguous submission returns uncertainty and never retries', async () => {
   let submits = 0, inspections = 0;
@@ -70,7 +79,7 @@ test('2677 pending request stays on its pane while an independent target accepts
   const prompts = [];
   f.ports.herdr = async args => { if (args[1] === 'get') return live; if (args[1] === 'prompt') { prompts.push(args); return {}; } return healthy(args); };
   assert.equal((await changeRun({ ref: '17', text: 'Independent request', cwd: f.source }, f.ports)).exitCode, 0);
-  assert.equal(f.record().deliveryRequests?.filter(r => r.paneId === first && r.state === 'pending').length, 1);
+  assert.equal(f.journal().filter(r => r.paneId === first && r.state === 'pending').length, 1);
   assert.equal(prompts.length, 1); assert.equal(prompts[0][2], 'independent'); assert.ok(prompts[0][3].includes('Independent request'));
 });
 test('2677 identical text as change then answer retains kind and FIFO identity', async t => {
@@ -84,7 +93,7 @@ test('2677 identical text as change then answer retains kind and FIFO identity',
   assert.deepEqual(f.record().changes.map(r => [r.text, Boolean(r.answer)]), [['Use blue', false], ['Use blue', true]]);
   assert.equal(f.record().question, null);
 });
-test('2677 failed acknowledgement save cannot cause automatic duplicate submission', async t => {
+test('2677 failed acknowledgement save cannot cause automatic duplicate submission', { skip: process.geteuid?.() === 0 ? 'chmod cannot deny writes to root' : false }, async t => {
   const f = await started(t), healthy = f.ports.herdr, runDir = f.record().runDir; let submits = 0;
   f.ports.herdr = async args => { const result = await healthy(args); if (args[1] === 'prompt') { submits++; chmodSync(runDir, 0o500); } return result; };
   let first;
@@ -114,4 +123,34 @@ test('2677 overlapping changes keep later text without duplicate dispatch', asyn
   assert.equal((await changeRun({ ref: '17', text: 'Second request', cwd: f.source }, f.ports)).exitCode, 0);
   assert.equal(prompts.length, 2); assert.ok(prompts[0].includes('First request')); assert.ok(prompts[1].includes('Second request'));
   assert.deepEqual(f.record().changes.map(r => r.text), ['First request', 'Second request']);
+});
+
+test('2677 injected custody failure never submits, including privileged callers', async t => {
+  const f = await started(t); let submits = 0;
+  const healthy = f.ports.herdr;
+  f.ports.deliveryFiles = { ...await import('node:fs'), writeFileSync: () => { throw Object.assign(Error('denied'), { code: 'EACCES' }); } };
+  f.ports.herdr = async args => { if (args[1] === 'prompt') submits++; return healthy(args); };
+  const result = await changeRun({ ref: '17', text: 'Must retain before send', cwd: f.source }, f.ports);
+  assert.equal(submits, 0, 'failure to save custody must prevent transport');
+  assert.notEqual(result.exitCode, 0); assert.match(result.message, /save.*not sent/is);
+  delete f.ports.deliveryFiles;
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(f.record().runDir + '/delivery-journal.json', JSON.stringify({requests:[{id:'malformed',text:'retained',state:'pending'}]}));
+  const malformed = await changeRun({ ref:'17', text:'Do not replace malformed custody', cwd:f.source }, f.ports);
+  assert.notEqual(malformed.exitCode,0); assert.equal(submits,0,'malformed journal must not be reset and permit submission');
+});
+
+test('2677 injected acknowledgement save failure retains in-flight uncertainty', async t => {
+  const f = await started(t), fs = await import('node:fs'), healthy = f.ports.herdr; let submits = 0, deny = false;
+  f.ports.deliveryFiles = { ...fs, writeFileSync: (...args) => {
+    if (deny && String(args[0]).includes('delivery-journal.json')) throw Object.assign(Error('denied'), { code: 'EACCES' });
+    return fs.writeFileSync(...args);
+  } };
+  f.ports.herdr = async args => { const result = await healthy(args); if (args[1] === 'prompt') { submits++; deny = true; } return result; };
+  const first = await changeRun({ ref: '17', text: 'Possibly delivered', cwd: f.source }, f.ports);
+  assert.notEqual(first.exitCode, 0, 'an unsaved acknowledgement must not claim durable delivery');
+  deny = false;
+  const second = await changeRun({ ref: '17', text: 'Possibly delivered', cwd: f.source }, f.ports);
+  assert.notEqual(second.exitCode, 0); assert.equal(submits, 1, 'persisted submission intent must prevent duplicate transport');
+  assert.match(second.message, /uncertain|check/i);
 });
