@@ -1,11 +1,11 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2ed5d87284c4bff2c061b6c82f687e7439bfaa6e84299d79965ca8c2d495a33c).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: abd808aa05e5dacf5f364d3732913fa0ae9e59482b958de13cd6ab55d9a7f092).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
-import { PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { findSkills, setupSkills } from './skills-install.mjs';
@@ -38,7 +38,7 @@ export function renderHelp(prefix = []) {
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
     'Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).',
-    'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
+    `workflow ${NAMES.start} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`,
     'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
@@ -50,6 +50,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
+  // A former name: its one notice goes to stderr before any other line, so stdout (--json, mcp) stays exact.
+  if (plan.notice) line(stderr, plan.notice);
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
       const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
@@ -154,7 +156,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     }
     case 'runtime-jobs':
       try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
-      catch (error) { line(stderr, `Local runtime jobs could not be read.${reason(error)}`); return 5; }
+      catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
     case 'contracts': case 'contracts-sync':
       try {
         const commands = contracts ?? await import('./contracts.mjs');
@@ -181,6 +183,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
-    default: line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
+    default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   }
 }

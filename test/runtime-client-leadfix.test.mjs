@@ -19,7 +19,7 @@ const gates = [
   { status: 503, json: { error: { code: 'cloud-unavailable' } } },
   { status: 503, text: 'The runtime opens soon.' },
 ];
-const maintenanceCount = ports => (ports.stderr.text.match(/The runtime is in maintenance/g) ?? []).length;
+const maintenanceCount = ports => (ports.stderr.text.match(/The interpreter is in maintenance/g) ?? []).length;
 
 for (const via of ['capacity', 'admission']) for (const interrupted of [true, false]) test(`far-until-${via}: bounded positive chunks, rechecks and one notice (${interrupted ? 'interrupt' : 'deadline'})`, async t => {
   const setup = harbor(t); let made, capacityReads = 0;
@@ -55,7 +55,7 @@ for (const failure of ['html', '405', '500', 'timeout', 'unreachable']) for (con
     return response(failure === 'html' ? { status: 200, text: '<html>proxy</html>' } : { status: Number(failure), json: {} });
   } });
   assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports)), 0, made.ports.stderr.text);
-  assert.equal((made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length, 1);
+  assert.equal((made.ports.stderr.text.match(/Warning: interpreter capacity/g) ?? []).length, 1);
   assert.equal(reads, 1, 'the completed unclear observation is reused for ten seconds');
   assert.equal(fake.posts.filter(e => e.command === 'lint').length, 1); assert.equal(fake.posts.filter(e => e.command === kind).length, 1);
   if (kind === 'check') assert.equal(JSON.parse(made.ports.stdout.text).rows[0].state, 'passed');
@@ -88,7 +88,7 @@ test('fail-open-then-maintenance: a failed advisory observation refreshes at its
   fake.capacity = () => ++reads === 1 ? { status: 500, json: {} } : { status: 200, json: { maintenance: made.clock.now < end ? { until: new Date(end).toISOString(), reason: 'new window' } : null } };
   assert.equal(await check(setup, made.ports), 0);
   assert.equal(reads, 1); assert.equal(maintenanceCount(made.ports), 0);
-  assert.equal((made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length, 1);
+  assert.equal((made.ports.stderr.text.match(/Warning: interpreter capacity/g) ?? []).length, 1);
   const later = make(setup, fake); later.clock.now = made.clock.now + 10_000; made = later;
   assert.equal(await check(setup, later.ports), 0);
   assert.equal(maintenanceCount(later.ports), 1); assert.equal(reads, 3);

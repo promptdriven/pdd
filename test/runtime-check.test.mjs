@@ -205,13 +205,13 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   const { repo, home } = harbor(t), env = { ...process.env, HOME: home, PDD_RUNTIME_URL: 'http://127.0.0.1:9' };
   delete env.CLAUDE_CONFIG_DIR;
   const pdd = (...args) => spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), ...args], { cwd: repo, env, encoding: 'utf8', timeout: 20000 });
-  const help = pdd('check', '--help');
-  assert.equal(help.status, 0); assert.match(help.stdout, /pdd check --fill-hash/); assert.match(help.stdout, /pdd check --read \[BATCH\|CALL_ID\]/);
-  assert.match(help.stdout, /pdd check --lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
-  assert.match(help.stdout, /pdd check --lint --local \[STORY\.\.\.\] \[--json\]/);
-  assert.match(help.stdout, /pdd check --screen URL --drawing PATH \[--json\]/);
-  assert.doesNotMatch(help.stdout, /--request/);
-  assert.match(pdd('try', '--help').stdout, /pdd try --stop \[STORY\]/);
+  const help = pdd('test', '--help'), lint = pdd('lint', '--help');
+  assert.equal(help.status, 0); assert.match(help.stdout, /pdd test --fill-hash/); assert.match(help.stdout, /pdd test --read \[BATCH\|CALL_ID\]/);
+  assert.equal(lint.status, 0); assert.match(lint.stdout, /pdd lint \[STORY\.\.\.\] \[--json\] +.*sends no checks/);
+  assert.match(lint.stdout, /pdd lint --local \[STORY\.\.\.\] \[--json\]/);
+  assert.match(help.stdout, /pdd test --screen URL --drawing PATH \[--json\]/);
+  for (const text of [help.stdout, lint.stdout]) assert.doesNotMatch(text, /--request|--lint|pdd test --local/);
+  assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
   for (const args of [['check', '--max-calls', '0'], ['check', '--max-calls', '1001'], ['check', '--timeout', 'x'], ['try', '--tab', 'phone'],
     ['check', '--request', 'nope'], ['check', '--fill-hash', '--json'], ['check', '--files', '--json'], ['check', '--read', 'a', 'b'],
