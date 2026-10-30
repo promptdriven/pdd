@@ -80,7 +80,7 @@ test('2675: a batch read holds ownership across its refresh and cannot overwrite
   const fake = await fakeRuntime(t, async (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);
     if (e.command === 'lint') return { status: 200, json: f.lint(id) };
-    if (gate && e.method === 'GET') { entered.resolve(); await resume.promise; }
+    if (gate && e.method === 'GET') { gate = false; entered.resolve(); await resume.promise; }
     return { status: 200, json: f.check(id) };
   });
   const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
@@ -167,4 +167,43 @@ test('2675: UUID receipt read bypasses batch ownership and leaves its projection
   let calls = 0;
   const result = await r.run({ '--read': true }, [id], { acquireBatchLock: async () => { calls++; throw new Error('must not lock UUID read'); } });
   assert.equal(calls, 0); passed(result); assert.deepEqual(readFileSync(r.file), bytes);
+});
+
+
+test('2675: a process killed after dispatch leaves its ID recoverable without another POST', async t => {
+  const setup = harbor(t), posted = deferred(), resume = deferred(); let gate = false;
+  const fake = await fakeRuntime(t, async (e, f) => {
+    const id = e.request?.requestId ?? e.url.split('/').at(-1);
+    if (e.command === 'lint') return { status: 200, json: f.lint(id) };
+    if (gate && e.command === 'check') { gate = false; posted.resolve(id); await resume.promise; }
+    const answer = f.check(id); answer.usage.calls = 4;
+    return { status: 200, json: answer };
+  });
+  const env = { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin };
+  const { ports } = portsFor(env);
+  await client.runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports);
+  const batch = JSON.parse(ports.stdout.text).batch, folder = join(setup.state, 'batches', batch), file = join(folder, 'batch.json'), saved = read(file);
+  Object.assign(saved.rows[0], { phase: 'local', state: 'not_run', request_ids: [], eligible: true, can_retry: true, busy: true, retry_at: null }); writeFileSync(file, JSON.stringify(saved));
+  gate = true; const before = checks(fake).length;
+  const owner = worker({ setup, env }, { '--retry': batch }); t.after(() => { owner.child.kill('SIGKILL'); resume.resolve(); });
+  const id = await posted.promise;
+  assert.deepEqual(read(file).rows[0].request_ids, [id], 'ID is durable before dispatch');
+  owner.child.kill('SIGKILL'); await owner.done; resume.resolve();
+  const recovered = worker({ setup, env }, { '--retry': batch }); t.after(() => recovered.child.kill());
+  const result = await recovered.done; passed(result);
+  assert.equal(checks(fake).length - before, 1, 'dead owner recovery reads its submitted ID');
+  assert.deepEqual(read(file).rows[0].request_ids, [id]);
+  assert.ok(fake.gets.some(e => e.url.endsWith(id)));
+  assert.equal(existsSync(join(folder, 'batch.lock')), false);
+});
+
+test('2675: native busy timeout leaves persisted data and the live owner intact', async t => {
+  assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
+  const r = await fixture(t), bytes = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json')), before = r.fake.posts.length;
+  const release = await client.acquireRuntimeBatchLock(r.folder); t.after(release);
+  const result = await r.run({ '--retry': r.batch, '--timeout': '0.0001' });
+  assert.equal(result.code, 3); assert.match(result.err, /pdd check --read/);
+  assert.equal(readFileSync(join(r.folder, 'batch.lock'), 'utf8'), String(process.pid));
+  assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary); assert.equal(r.fake.posts.length, before);
+  release();
 });
