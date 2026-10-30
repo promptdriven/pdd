@@ -1,6 +1,6 @@
-# PDD Alpha usage guide
+# PDD usage guide
 
-This guide is for people who install PDD Alpha 0.1.11 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.11 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox` and Claude Code with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -47,7 +47,7 @@ PDD needs Node.js 22 or newer. The other tools work with the versions you have. 
 | Codex CLI | [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli/). Then run `codex login`. |
 | Claude Code (optional) | [code.claude.com](https://code.claude.com/docs/en/overview). Start `claude` once and sign in. |
 
-Codex is the default agent. PDD Alpha is tested on macOS and Linux. Windows is not tested.
+Codex is the default agent. PDD is tested on macOS and Linux. Windows is not tested.
 
 ## 2. Install
 
@@ -86,20 +86,20 @@ Important:
 
 - Always install and update with the full `github:promptdriven/pdd` line, or append `#alpha` to select that branch.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
-- Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace PDD Alpha with it. You can see this with `npm outdated -g`.
+- Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ## 3. If you have the old Python pdd
 
-v1 is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
+The Python pdd (0.0.x) is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
-Run Alpha by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running Alpha version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. Alpha’s `--version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" setup`. Setup names the running pdd version, lists executable paths in order (using `which -a pdd` when available), and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
 See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # PDD Alpha prints 0.1.11
+pdd --version   # this pdd prints 0.1.11
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -112,13 +112,13 @@ hash -r                       # forget the old path (zsh users can also run: reh
 which -a pdd
 ```
 
-If you want to keep the old one, call PDD Alpha by its full path:
+If you want to keep the old one, call this pdd by its full path:
 
 ```sh
 "$(npm prefix -g)/bin/pdd" --version
 ```
 
-Activating an environment later, for example `conda activate pdd`, can reorder PATH and shadow Alpha again. Activate the environment first, then prepend the directory containing Alpha’s `pdd` command and clear the shell cache:
+Activating an environment later, for example `conda activate pdd`, can reorder PATH and shadow this pdd again. Activate the environment first, then prepend the directory that contains this `pdd` command and clear the shell cache:
 
 ```sh
 conda activate pdd
@@ -126,9 +126,9 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 hash -r
 ```
 
-Use the absolute Node-plus-Alpha command printed by the diagnostic when the environment selects a different Node installation or Alpha is running from a source checkout.
+Use the absolute Node-plus-pdd command printed by the diagnostic when the environment selects a different Node installation or pdd is running from a source checkout.
 
-The agents that PDD starts always get the full path of PDD Alpha. They are not affected by your PATH. Only the commands that you type are.
+The agents that PDD starts always get the full path of this pdd. They are not affected by your PATH. Only the commands that you type are.
 
 ## 4. The PDD skills
 
@@ -539,7 +539,7 @@ Leftovers can stay in your clones: `.git/pdd`, the `*.pdd-worktrees` folders and
 
 ## 12. Known limits
 
-This is an alpha. These limits are known today:
+This is a pre-release. These limits are known today:
 
 - pdd does not run or check the tests. The agents run them. Read the test output in the PR body before you merge.
 - pdd does not remove old worktrees or branches. See [Clean up after a run](#clean-up-after-a-run).

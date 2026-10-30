@@ -176,6 +176,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
-    default: line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
+    default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   }
 }

@@ -1,10 +1,10 @@
-# Working on PDD Alpha
+# Working on PDD
 
 Before you write or change a Story or a prompt, read the full [Prompting guide](docs/prompting-guide.md) in this conversation. Follow its method for module ownership, public behavior, what must not change, required dependencies and the edge cases that matter. A link or a Story template is not enough. If you lose the context, read the guide again before you write.
 
 Read [skills/pdd-prompting/SKILL.md](skills/pdd-prompting/SKILL.md) for the core rules. Prompts are the source: change the prompt that owns the behavior before you change the code. Keep expected cases apart from what the code returns. Review changes to the contract with the person. Never invent their decision. `skills/pdd-prompting/guide.md` must stay the same as `docs/prompting-guide.md`, byte for byte. A test checks this, so change both together.
 
-What this alpha contains:
+What this package contains:
 
 - Six skills in `skills/`: `pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature` and `pdd-product`. People install them with `npx skills add promptdriven/pdd` (`-g` for all projects). The order is: install the skills, then the `pdd-setup` skill once for each repo, then the pdd command only for runs with PRs and for `pdd check`, `pdd try` and `pdd approve`. The pdd command does not copy skills on each command: `pdd setup` copies them to the user skills folders (`~/.agents/skills`; `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set) only when they are missing, and replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. pdd never copies them into the person's repo. Each `SKILL.md` has `pdd-skills: VERSION` under `metadata:` in its frontmatter: change it with the package version. Keep each workflow skill small and its step files short. Do not repeat a rule that `SKILL.md` already states. Write each `description` so that an agent picks the skill by itself.
 - People open Codex or Claude Code as usual and call `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). `pdd setup` and the `pdd-setup` skill add one short block (at most 10 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) to `CLAUDE.md`, else `AGENTS.md`. They never paste the guide.
