@@ -334,9 +334,38 @@ function annotationRules(schema, add) {
   if (Object.hasOwn(schema, 'examples') && !Array.isArray(schema.examples)) add('graph-schema-invalid', '"examples" must be a list.');
 }
 
+// Preserve numeric JSON spelling only for parsed prompt interfaces; ordinary callers supply JSON values.
+const numberSources = new WeakMap();
+function limitProblems(iface) {
+  const out = [], keys = ['max_steps', 'max_model_calls'];
+  const add = (code, pointer, rule, hint) => out.push({code,pointer,rule,hint});
+  const shapeHint = 'Fix limits: use exactly "max_steps" and "max_model_calls", each an integer of at least 1.';
+  if (!isObject(iface) || !Object.hasOwn(iface, 'limits')) {
+    add('invalid-interface', '/limits', 'has no limits object.', shapeHint);
+    return out;
+  }
+  const limits = iface.limits;
+  if (!isObject(limits)) {
+    add('invalid-limits', '/limits', 'must be an object with exactly max_steps and max_model_calls.', shapeHint);
+    return out;
+  }
+  for (const key of Object.keys(limits)) if (!keys.includes(key)) {
+    add('invalid-limits', `/limits/${pointerOf([key]).slice(1)}`, 'is not an allowed limit field.', shapeHint);
+  }
+  for (const key of keys) {
+    const token = numberSources.get(limits)?.get(key);
+    const integer = typeof limits[key] === 'number' && (token === undefined ? Number.isInteger(limits[key]) && limits[key] >= 1
+      : /^-?(?:0|[1-9]\d*)$/.test(token) && BigInt(token) >= 1n);
+    if (!Object.hasOwn(limits, key) || !integer) {
+      add('invalid-limits', `/limits/${key}`, 'must be an integer JSON literal of at least 1.', `Fix limits.${key}: set an integer of at least 1 (for example 1), without a decimal point or exponent.`);
+    }
+  }
+  return out;
+}
+
 // Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
 export function interfaceSchemaProblems(iface) {
-  const out = [];
+  const out = limitProblems(iface);
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
@@ -362,7 +391,15 @@ export function readPrompt(root, visible, path) {
   if (!blocks.length) return { path, text, blocks, error: 'interface-missing' };
   if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
   let value;
-  try { value = JSON.parse(blocks[0][1]); } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
+  try {
+    value = JSON.parse(blocks[0][1], function(key, value, context) {
+      if (typeof value === 'number' && context?.source !== undefined) {
+        if (!numberSources.has(this)) numberSources.set(this, new Map());
+        numberSources.get(this).set(key, context.source);
+      }
+      return value;
+    });
+  } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
   if (!isObject(value)) return { path, text, blocks, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
   return { path, text, blocks, interface: value, prose: proseSha256(text) };
 }
@@ -505,7 +542,7 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   if (!prompt?.interface || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
   prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
-    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`));
+    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, problem.hint ? {hint:problem.hint,path:prompt.path} : {}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   return [...prompt.schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target));
