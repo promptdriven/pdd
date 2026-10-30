@@ -51,7 +51,7 @@ Order:
 | Answer to a POST | Row | Next step |
 |---|---|---|
 | 200/202 JSON, same `requestId` and `id`, right `command` | accepted | read it |
-| 429 `server-full` with `dispatch: "not_started"` | waiting | a NEW request ID after `Retry-After` (else 5 s) within the caller deadline under confirmed capacity recovery below. Keep the old ID |
+| 429 `server-full` with `dispatch: "not_started"` | waiting | a NEW request ID after the command-specific confirmed capacity wait below, within the caller deadline. Keep the old ID |
 | 503 `check-queue-full` or `lint-queue-full`, with authoritative not-started admission | waiting | wait under the capacity rules below |
 | 503 `maintenance`, confirmed not started | waiting | wait/recheck maintenance below |
 | 429 without `dispatch: "not_started"` | not run | no new attempt |
@@ -79,11 +79,38 @@ Order:
 
 A terminal same-ID `check` refusal is busy, not a test problem, when it is a queue/capacity/server-full refusal and proves no execution: `usage.calls` is exactly0, no check was evaluated, accounting is not incomplete, and the report says `dispatch:"not_started"` (the known check-queue-timeout contract also guarantees that signal). An explicitly unknown job or lost/wrong-ID response never qualifies. Read raw `result.report.refusal` as well as `result.refusals`; keep every ID and raw answer, including direct admission receipts and the absolute retry-after deadline. Direct check-queue-full/server-full backpressure also needs authoritative not-started admission. Do not retry invalid-source refusals or any request with executed checks, positive/unknown calls, or incomplete accounting.
 
-For confirmed unstarted capacity, wait before a fresh ID using Retry-After, else positive details.retry_after (bound1..300seconds, default5). There is no attempt-count ceiling for confirmed admission backpressure; keep the existing command/agent deadline; honor interruption before waiting, allocating an ID or POSTing. Print a busy progress line and keep reading other submitted jobs. Never duplicate a queued/running/lost job. For an accepted queued job, keep its ID and GET it; when supplied, display queue.ahead, queue.slots_in_use and queue.slots on stderr: `Queued on the runtime: 5 ahead, 8 of 8 slots busy. Your test is fine.` Never resubmit an accepted queued/running job. Missing aggregate fields do not authorize guessed counts or change admission.
+For each confirmed unstarted Check capacity refusal, use the existing parsed delay: Retry-After first, else positive details.retry_after (bound 1..300 seconds, default 5). Retain the refusal observation time and an absolute minimum retry time equal to that time plus max(the parsed delay, 10 seconds). There is no attempt-count ceiling within the existing caller deadline. This Check wait also applies to explicit batch retry; lint and Try retain their own existing admission waits. Print busy progress and keep reading other submitted jobs.
+
+<details>
+<summary>Check retry wait — when another source upload may start</summary>
+
+```mermaid
+flowchart TD
+    W{Minimum retry time reached?} -->|No| B[Wait within caller budget]
+    B --> W
+    W -->|Yes| C{Usable Check occupancy?}
+    C -->|No| A[Ordinary guarded admission]
+    C -->|Yes| F{Free Check slot or 60 s since refusal?}
+    F -->|Yes| A
+    F -->|No| G[Wait and observe capacity]
+    G --> W
+```
+
+Use the [shared capacity observations](#shared-local-admission-and-maintenance), including owner/origin cache scope and authenticated GET safeguards. Usable supported Check running/limit counts show a free slot only when `running < limit`; zero available or limit 0 is full. With usable full occupancy, hold the next Check upload until a free slot is observed or 60 seconds have elapsed since the confirmed busy answer, and always honor the minimum retry time. Unsupported 404 or absent/unusable occupancy follows existing warning/fail-open compatibility after the minimum wait; never invent a free count or a new refusal.
+
+Deadline, interruption, maintenance, authentication/access, source identity and recovery guards apply throughout and before every ID or POST. The 60-second capacity bound waives only the full-occupancy hold: it cannot shorten a longer Retry-After (75 seconds still means at least 75 seconds), maintenance or another guard. Capacity waits use bounded, non-hot GET observation under the shared cache rules, outside every local claim lock. While only waiting, create no new Check attempt/request ID or dispatch claim and upload no archive; ordinary local exclusion remains required before dispatch.
+
+Save both absolute retry time and the refusal's 60-second capacity bound with its evidence. Reads and later explicit retries preserve them rather than starting a new wait or attempt; read-only recovery stays read-only. A new confirmed unstarted refusal establishes its own wait. Missing or unverifiable execution evidence never authorizes capacity retry.
+
+For an older record with authoritative confirmed-unstarted busy proof but without these new timestamps, the first batch read or retry under this rule establishes and saves one conservative anchor at the current observation time: minimum retry no earlier than max(any valid saved retry time, now plus 10 seconds), and capacity bound now plus 60 seconds. Do not infer the busy-answer time from a POST start time. Subsequent operations reuse the saved anchors; a longer saved server delay still wins. This timing repair grants no dispatch eligibility, changes no ID or accounting, and does not apply to a never-posted held row with no busy proof. UUID-only reads keep their existing raw-receipt-only behavior.
+
+</details>
+
+For an accepted queued job, keep its ID and GET it; when supplied, display queue.ahead, queue.slots_in_use and queue.slots on stderr: `Queued on the runtime: 5 ahead, 8 of 8 slots busy. Your test is fine.` Never resubmit an accepted queued/running/lost job. Missing aggregate fields do not authorize guessed counts or change admission.
 
 When time runs out, show busy/not-run with zero calls and plain advice that no checks ran; do not display the server's source-repair Fix text. Preserve verified passed and running results under the recovery lifecycle below. Hold tests with no check POST as zero-call not-run, never a failed assertion. `--read` only reads the old IDs; a terminal capacity receipt becomes busy/not-run without posting. JSON distinguishes `busy` and `can_retry`, and text offers `pdd check --retry BATCH` for eligible rows.
 
-`pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved retry-after deadline across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs), with no admission-attempt ceiling. `--read` remains GET-only except saved-lint continuation and confirmed restart recovery below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
+`pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved absolute Check retry time and capacity-hold bound across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs), with no admission-attempt ceiling. `--read` remains GET-only except saved-lint continuation and confirmed restart recovery below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
 
 ## Concurrent saved-batch operations
 

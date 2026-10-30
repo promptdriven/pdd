@@ -78,3 +78,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Runtime interruption and recovery
 
 - [Keep a truthful interruption message during recovery](runtime-interruption-recovery.md) — [native cases](../test/runtime-admission/runtime-interruption-recovery.json). Runtime check: NOT REPLAYED (#2548); native claim, interruption, ownership and retry effects require code-step checks.
+
+## Busy Check upload waits
+
+- [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
