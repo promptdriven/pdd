@@ -317,7 +317,7 @@ export async function readWorkflowPrStatus(input, ports = {}) {
   try {
     const { cwd, url } = structuredClone(input ?? {});
     if (!text(url) || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/[1-9][0-9]*$/.test(url)) fail('workflow_github_pr_url_invalid');
-    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,statusCheckRollup']));
+    const row = parseJson(await dependencies(ports).command(cwd, 'gh', ['pr', 'view', url, '--json', 'state,mergedAt,isDraft,statusCheckRollup']));
     const state = { OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' }[row?.state];
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
@@ -325,6 +325,6 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const ci = !checks.length ? 'none'
       : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci };
+    return { state, ci, draft: Boolean(row.isDraft) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e495e9f86cd4e2a190d41231fc96f6159f7d8ed187cfc231793d9a1fc9c39a72).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -630,7 +630,7 @@ async function finishPr(run, area, step, p, lines) {
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
-    run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
+    run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { id: `${area.name}:ask-code`, area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
     return done([...lines, ...await askCodeLines(run, area, p)].join('\n'));
   }
   run.state = 'waiting'; run.gate = null; writeRun(run, p);
@@ -705,7 +705,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
   if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
     const contents = await worktreeContents(run, p);
-    run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
+    run.gate = { id: `${area.name}:approve-pr`, area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
         ? 'Gate: show the person the Runtime check line of each Story (one per Story, ✓ or ✗) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
@@ -716,7 +716,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     return done(lines.join('\n'));
   }
   if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
-  run.gate = { area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
+  run.gate = { id: `${area.name}:approve`, area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
     `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
@@ -890,7 +890,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     const at = p.now(), url = prOf(run, area.name).url;
     run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at, ...(record.text !== undefined ? { text: record.text } : {}) });
     run.approvalRecord = { kind: record.via, area: area.name, at, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
-    run.state = 'waiting'; run.gate = askCode ? { area: area.name, at, kind: 'ask-code' } : null; run.question = null; writeRun(run, p);
+    run.state = 'waiting'; run.gate = askCode ? { id: `${area.name}:ask-code`, area: area.name, at, kind: 'ask-code' } : null; run.question = null; writeRun(run, p);
     const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
@@ -1072,7 +1072,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = 
 // The machine-wide JSON view is a public contract separate from the saved C3
 // record. Keep the conversion here so refresh/filter/order behavior stays the
 // same as plain status while callers receive stable domain fields.
-function publicStatus(run, item, chatStateValue) {
+export function publicStatus(run, item, chatStateValue) {
   const area = run.areas[run.area], step = area?.steps.find(name => !run.done?.[name]) ?? null;
   const chatRecord = currentChat(run);
   const question = openQuestion(run);
@@ -1083,7 +1083,7 @@ function publicStatus(run, item, chatStateValue) {
   else if (chatStateValue === 'stopped') waitsFor = 'chat_stopped';
   else if (failure || ['unconfirmed', 'unavailable'].includes(chatStateValue)) waitsFor = 'startup_failed';
   const stoppedReason = waitsFor === 'chat_stopped'
-    ? (chatRecord?.stopReason === 'usage_limit' ? 'usage_limit' : chatRecord?.stopReason === 'exited' ? 'exited' : 'unknown')
+    ? (run.stopReason === 'usage_limit' || chatRecord?.stopReason === 'usage_limit' ? 'usage_limit' : run.stopReason === 'exited' || chatRecord?.stopReason === 'exited' ? 'exited' : 'unknown')
     : null;
   const stories = item.stories && Number.isInteger(item.stories.total)
     ? { passed: item.stories.pass, total: item.stories.total } : null;
@@ -1094,13 +1094,13 @@ function publicStatus(run, item, chatStateValue) {
       issue: { number: run.issue?.number ?? run.number, title: run.issue?.title ?? '', url: run.issue?.url ?? null },
       folder: run.root ?? null },
     workflow: run.workflow ?? null, agent: run.agent ?? null, area: area?.name ?? null, step,
-    waits_for: waitsFor, gate_id: waitsFor === 'gate' ? `${run.gate.area}:${run.gate.kind ?? 'approve'}` : null,
-    question: waitsFor === 'question' ? question.text : null, stopped_reason: stoppedReason,
+    waits_for: waitsFor, gate_id: waitsFor === 'gate' ? (run.gate.id ?? `${run.gate.area}:${run.gate.kind ?? 'approve'}`) : null,
+    question: waitsFor === 'question' ? redactTry(question.text) : null, stopped_reason: stoppedReason,
     pull_requests: pullRequests, stories,
-    chat: { session: chatRecord?.session?.id ?? null, tab: chatRecord?.label ?? null, pane: chatRecord?.paneId ?? null },
+    chat: { session: 'pdd', tab: chatRecord?.label ?? null, pane: chatRecord?.paneId ?? null },
     last_change: Number.isFinite(run.updatedAt) ? run.updatedAt : null,
     // Retain the established summary fields for existing machine clients.
-    ref: item.ref, number: item.number, group: item.group, words: item.words, prs: item.prs,
+    ref: item.ref, number: item.number, group: item.group, words: redactTry(item.words), prs: item.prs,
     updatedAt: item.updatedAt, root: item.root, runDir: item.runDir, viewCommand: item.viewCommand
   };
 }
