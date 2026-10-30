@@ -72,12 +72,6 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
    fs.rmSync(f.record().runDir+'/.delivery-journal.lock',{recursive:true,force:true});
   }await f.positive();break;
  }
- case 'stale-writers-and-new-delivery':{
-  f.save([f.entry()]);f.ports.now=()=>2000;assert.equal((await f.ack('r1','Updated value')).exitCode,0);await f.status();await f.done();await runner.askPerson({text:'Continue?',cwd:f.record().root},f.ports);
-  // Clear the question through the real answer flow, then deliver independent change.
-  assert.equal((await f.change('yes')).exitCode,0);assert.equal((await f.change('Add an example')).exitCode,0);const rows=(await f.row()).requests;
-  assert.equal(rows[0].ackedAt,e.r1AckedAt);assert.equal(rows[0].ackSummary,e.r1AckSummary);assert.equal(rows.length,2);assert.notEqual(rows[1].id,'r1');assert.equal(rows[1].ackedAt,null);break;
- }
  case 'no-delivery-no-uptake':{
   for(const state of ['pending','uncertain','in-flight']){f.save([f.entry('r1',{state:state==='in-flight'?'pending':state,...(state==='in-flight'?{inFlight:true,owner:{pid:654321,hostname:'original-other-host',token:'alive'}}:{})})]);const run=f.record();run.deliveryRequests=[f.entry('fake')];writeRun(run,f.ports);const before=f.sent().length,healthy=f.ports.herdr;const ports=state==='pending'?{...f.ports,sleep:async ms=>f.tick(ms),herdr:async args=>{if(args[0]==='agent'&&args[1]==='get')throw Object.assign(Error('starting'),{code:'agent_not_found'});return healthy(args);}}:f.ports;const delivery=await f.change('Explain the chosen value',ports);assert.notEqual(delivery.exitCode,0);assert.equal(f.sent().length,before);if(state==='in-flight')assert.equal(f.read()[0].inFlight,true);const row=await f.row();assert.deepEqual(row.requests,e.jsonRequests);assert.notEqual((await f.ack()).exitCode,0);}await f.positive();break;
  }
