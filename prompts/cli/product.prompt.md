@@ -44,8 +44,15 @@ shared evidence owner decides whether a saved local result matches its files.
 All three commands use the same trusted issue selection below.
 
 Combine workflow evidence with `savedStoryEvidence` from the runtime client,
-including standalone checks made before any workflow step completes. Saved
-checks are progress only: they never complete a run, approve a prompt or satisfy
+including standalone checks made before any workflow step completes. For the
+default saved-evidence binding, create one runtime-client
+`createSavedStoryEvidenceReader` per status, next or start invocation and share
+it across that invocation's saved-evidence reads. A later invocation creates a
+fresh reader so edited files are observed. Existing injected
+`savedStoryEvidence` callbacks and the `savedChecks.evidence` Runtime binding
+remain unchanged; source-capture keys and hash comparisons belong to the
+runtime client.
+Saved checks are progress only: they never complete a run, approve a prompt or satisfy
 Needs. Read saved checks rooted in product cwd for planned Stories even when no
 workflow record exists. A verified local workflow additionally authorizes its
 saved run.root, with the same comparison root as workflow evidence, including
@@ -400,7 +407,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "f3157242f70a6164ca7d7342206dfae98e657cd6c6d6e02481b73ffb33818c16",
+  "status": "draft", "prose_sha256": "2e89d678afeadaaa910ab83e3b8aa70daf3292231391aaca4358451e6a72de5e",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},

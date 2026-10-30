@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 17a5059eeb8500e8c22743e3345950da5f41d740c9eb9baaeda295a6c080c8ff).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c8de35f2ce7e0092f0580782a6fe1a3c7ad95995a207a7c5a8e68f87baa5b45c).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -182,7 +182,16 @@ export function readContractHistory({root,env = process.env}) {
 }
 
 // Read receipts without StateStore.folder: status must never allocate or mutate runtime state.
-export async function savedStoryEvidence({ root, comparisonRoot = root }, ports = {}) {
+export async function savedStoryEvidence(input, ports = {}) {
+  return createSavedStoryEvidenceReader(ports)(input);
+}
+
+export function createSavedStoryEvidenceReader(ports = {}) {
+  const captures = new Map();
+  return input => readSavedStoryEvidence(input, ports, captures);
+}
+
+async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, captures) {
   const env = ports.env ?? process.env;
   const read = ports.readFile ?? (path => readFileSync(path, 'utf8'));
   const list = ports.readDir ?? (path => readdirSync(path));
@@ -190,6 +199,7 @@ export async function savedStoryEvidence({ root, comparisonRoot = root }, ports 
   const capture = ports.captureSource ?? captureSource;
   const stories = [], warnings = [];
   const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
+  const legacyHint = () => warnings.push('Older checks are not counted; run pdd check again.');
   const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
   const wanted = await real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
@@ -205,7 +215,12 @@ export async function savedStoryEvidence({ root, comparisonRoot = root }, ports 
       batch = JSON.parse(await read(path));
       if (!isObject(batch) || batch.version !== 1 || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) throw Error('invalid batch');
     } catch (error) { warning(path, error); continue; }
-    if (batch.intent !== 'check' || await real(batch.root) !== wanted) continue;
+    if (await real(batch.root) !== wanted) continue;
+    const legacy = !Object.hasOwn(batch, 'intent');
+    if (batch.intent !== 'check') {
+      if (!legacy) continue;
+      if (!batch.rows.every(row => isObject(row) && validSavedCheck(row))) { legacyHint(); continue; }
+    }
     const valid = batch.rows.every(row => isObject(row) && relativeFile(row.test) && relativeFile(row.story) && Array.isArray(row.request_ids));
     if (!valid) { warning(path, Error('invalid Story identity')); continue; }
     // Older batches saved the display basename; only a unique captured path can recover its identity.
@@ -219,7 +234,12 @@ export async function savedStoryEvidence({ root, comparisonRoot = root }, ports 
     let current = false;
     if (comparisonRoot !== null && /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '')) {
       try {
-        const source = await capture(comparisonRoot, { tests: [...new Set(batch.rows.map(row => row.test))], appMap: null });
+        const folder = await real(comparisonRoot), tests = [...new Set(batch.rows.map(row => row.test))].sort();
+        const key = JSON.stringify([folder, tests]);
+        if (!captures.has(key)) captures.set(key, Promise.resolve().then(() => capture(folder, { tests, appMap: null }))
+          .then(source => ({ sha256: source.sha256 })).catch(error => ({ error })));
+        const source = await captures.get(key);
+        if (source.error) throw source.error;
         current = source.sha256 === batch.source_sha256;
       } catch (error) { warning(path, error); }
     }
@@ -233,8 +253,15 @@ export async function savedStoryEvidence({ root, comparisonRoot = root }, ports 
           const answer = JSON.parse(await read(receiptPath));
           if (answer?.requestId === id && answer.id === id && answer.command === 'check') {
             const view = projectAnswer(answer, { origin: batch.origin, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
-            const authored = Object.keys(row.criterion_texts ?? {});
+            let authored = Object.keys(row.criterion_texts ?? {});
+            if (legacy) {
+              const fromChecks = [...new Set(row.steps.flatMap(step => step.checks.map(check => check.criterion_id)))];
+              if (authored.length !== row.criteria_total || !fromChecks.every(id => authored.includes(id))) authored = fromChecks;
+            }
             const criteria = answer.result?.report?.criterion_results;
+            if (legacy && !(Array.isArray(criteria) && criteria.length === row.criteria_total
+              && new Set(criteria.map(item => item?.criterion_id)).size === row.criteria_total
+              && criteria.every(item => authored.includes(item?.criterion_id)))) legacyHint();
             pass = view.state === 'passed' && Number.isInteger(row.criteria_total) && row.criteria_total > 0
               && authored.length === row.criteria_total && view.criteria?.total === row.criteria_total
               && view.criteria.passed === row.criteria_total && view.checks?.total > 0 && view.checks.passed === view.checks.total

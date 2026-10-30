@@ -267,14 +267,25 @@ cannot authorize dispatch. Clear stale unknown/pending wording on confirmed term
 report global and reached prompt refusals with their paths. Never rejudge posted check rows
 or local preflight refusals. Terminal busy lint stays busy without resubmission.
 
+### Saved Check row validity
+
+Use one shared row predicate for legacy Check identification and saved-lint
+continuation. A valid row has integer `max_calls` in 1..1000, positive integer
+`criteria_total`, and a nonempty `steps` array. Each step is an object with
+nonblank string `step_id`, `entry_path` and `operation`; step IDs are unique.
+Each step has a nonempty `checks` array of objects with nonblank string
+`criterion_id`. The number of distinct criterion IDs across those checks equals
+`criteria_total`. This predicate identifies authored Check rows; it does not
+establish a receipt's success or authorize dispatch by itself.
+
 ### Continue the original saved Check
 
 Only `--read BATCH` (including latest-batch reads) and `--retry BATCH` may continue a normal
 Check held solely by pending lint. This lint-continuation exception never applies to UUID call reads, hidden
 --request, standalone lint, Try, posted-job reads or capacity receipts; confirmed restart recovery is separately scoped below. New batches save
 explicit normal-Check versus lint-only intent. For supported version 1 legacy records produced
-by 0.1.9/0.1.10, recover normal-Check intent only when every held row has its valid original
-max_calls (1..1000), positive integer criteria_total and consistent authored steps. Require
+by 0.1.9/0.1.10, recover normal-Check intent only when every held row meets
+[saved Check row validity](#saved-check-row-validity). Require
 producer evidence of an unsent lint-held row: pending-lint evidence, prior unknown-lint
 `not_run` evidence, or the known already-read state with phase `lint`, state `not_run`,
 no check request IDs and note.code `lint-finished`. The latter is written by the
@@ -590,8 +601,36 @@ path, and `captureSource(root,{tests,appMap})` returning the existing capture.
 Defaults use their native local owners; they supply file observations and
 captured hashes, never Story verdicts.
 
+Export module function `createSavedStoryEvidenceReader(ports={})`, returning an
+async reader with the same input and result as `savedStoryEvidence`. The reader
+owns a source-capture memo for its lifetime; `savedStoryEvidence` uses a fresh
+reader for each standalone call. Share captures by canonical compared folder
+and sorted unique original selected test paths, regardless of saved-record root
+or test order. Store the captured source SHA, never a batch's currentness: each
+batch compares its own saved SHA separately. Capture each such key at most once
+per reader, including overlapping reads. Remember failed captures only for that
+reader; affected evidence stays unverified. A fresh reader retries the capture.
+
 Only check batches belonging to root supply evidence; lint and Try results do
-not. Preserve the recorded Story/test identity. A saved pass label alone is
+not. Explicit `intent: "check"` retains the normal identification rules. An
+absent intent is eligible only when every saved row meets
+[saved Check row validity](#saved-check-row-validity); use the same row predicate,
+without a second legacy policy. Any explicit other intent, including null,
+lint-only or Try, is ineligible. For an otherwise readable batch belonging to
+root with absent intent and any invalid row, count none of its rows and emit
+one deduplicated hint explaining that older checks are not counted and advising
+the person to run `pdd check` again.
+This advice adds no gate or dispatch. Eligible legacy batches use the same
+source identity, Story identity and receipt rules as explicit Check batches.
+For eligible legacy rows whose `criterion_texts` cannot supply the complete
+authored criterion IDs, recover those IDs from the stored step checks validated
+by the shared predicate. Require the receipt's criterion results to cover
+exactly that complete ID set, every criterion passed and every selected check
+passed. Text metadata is not required to prove these IDs. Incomplete authored
+or receipt criterion coverage supplies no pass and adds the same single hint;
+a complete failed result remains a failure. Explicit Check intent retains its
+existing receipt rules.
+Preserve the recorded Story/test identity. A saved pass label alone is
 insufficient: use the latest attempt's matching-ID check receipt and existing
 receipt projection rules. Unknown, failed, refused, missing or unverifiable
 receipts do not pass, even when an older attempt passed. A Story with several
