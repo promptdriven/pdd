@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: edc3f0b72ec49170419418dac446ab9c6a5f22421957f3c854bd3a486a80c77f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5046ecaf4b465b17f76f09c1edbb456d170d98d5d8050667eedcb26feff24469).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -37,7 +37,7 @@ function requestedCalls(raw) {
   if (raw === undefined) return null;
   if (!(typeof raw === 'number' || typeof raw === 'string' && /^[1-9][0-9]{0,3}$/.test(raw))
     || !Number.isSafeInteger(Number(raw)) || Number(raw) < 1 || Number(raw) > 1000)
-    throw new Stop(2, '--max-calls must be a whole number from 1 to 1000, the runtime maximum.');
+    throw new Stop(2, '--max-calls must be a whole number from 1 to 1000, the interpreter maximum.');
   return Number(raw);
 }
 const line = (stream, text) => stream.write(`${text}\n`);
@@ -318,10 +318,10 @@ const UNREACHABLE = { ENOTFOUND: 'the address was not found', EAI_AGAIN: 'the ad
 function lostReply(error, origin) {
   const code = String(error?.cause?.code ?? error?.code ?? ''), cert = /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ERR_TLS/.test(code);
   const reason = UNREACHABLE[code] ?? (cert ? 'its TLS certificate was not accepted' : null);
-  if (reason) return { lost: true, unreachable: `pdd could not reach the PDD runtime at ${origin}: ${reason} (${code}). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` };
+  if (reason) return { lost: true, unreachable: `pdd could not reach the PDD interpreter at ${origin}: ${reason} (${code}). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` };
   return { lost: true, why: code ? `connection failed: ${code}` : error?.name === 'AbortError' ? 'no answer in time' : null };
 }
-const AUTH_TEXT = 'The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
+const AUTH_TEXT = 'The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.';
 
 // HTTP to the runtime. The token stays in this object and in request headers only.
 class Runtime {
@@ -355,7 +355,7 @@ class Runtime {
 // account that PDD Cloud did not approve (403 no-cloud-access) or could not check (503 cloud-unavailable), and an
 // old pdd that the server no longer serves (code update-required, any status, 0.1.6).
 const UPDATE_TEXT = 'Please update pdd: npm install -g github:promptdriven/pdd';
-const NO_CLOUD_TEXT = 'Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.';
+const NO_CLOUD_TEXT = 'Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.';
 const CLOUD_DOWN_TEXT = 'PDD Cloud could not confirm your access. Try again in a minute.';
 function blockingAnswer(reply) {
   // error.code first: for pdd 0.1.9 a server sends a top-level update-required over error.code no-cloud-access.
@@ -368,7 +368,7 @@ function blockingAnswer(reply) {
   if (reply.status !== 403 || code !== 'not-invited') return null;
   const named = json.login ?? error?.details?.login;
   const login = typeof named === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(named) ? named : null;
-  return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD runtime invite list yet. Ask the PDD team to add you.`;
+  return `Your GitHub login ${login ?? ''}${login ? ' ' : ''}is not on the PDD interpreter invite list yet. Ask the PDD team to add you.`;
 }
 
 const sameJob = (json, id, command) => isObject(json) && json.requestId === id && json.id === id && json.command === command && JOB_STATES.has(json.state);
@@ -412,7 +412,7 @@ function stoppedPause(context, target, kind) {
   const recovery = context.batch ? ` Read saved results with: pdd check --read ${context.batch}`
     : calls === 'unknown' ? ' Read the saved request before sending anything again.' : '';
   return `Stopped. Submitted ${kind} ${ids.length === 1 ? 'request' : 'requests'}: ${ids.join(', ')}. `
-    + 'The runtime confirmed that the last attempt did not start; no work ran for this attempt. '
+    + 'The interpreter confirmed that the last attempt did not start; no work ran for this attempt. '
     + (calls === 'unknown' ? 'Total usage is unknown; earlier submissions may have run.' : `Recorded usage: ${calls} AI calls.`) + recovery;
 }
 function markBusy(context, row, wait, observedAt = context.ports.now(), legacy = context.reading) {
@@ -429,7 +429,7 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
   }
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
     checks: null, criteria: null, all_checks: [], failed_checks: [], why: null, next_step: null,
-    note: { code: 'check-busy', message: 'The runtime is busy. No checks ran for this attempt. Retry this batch later.' } });
+    note: { code: 'check-busy', message: 'The interpreter is busy. No checks ran for this attempt. Retry this batch later.' } });
   if (row.restart_used) row.calls = accumulatedCalls(context, row);
   if (!context.reading) context.checkWindow = 1;
 }
@@ -468,7 +468,7 @@ async function finishReservation(context, target, answer) {
 function queueProgress(context, answer) {
   const q = answer?.queue;
   if (answer?.state === 'queued' && [q?.ahead, q?.slots_in_use, q?.slots].every(value => Number.isSafeInteger(value) && value >= 0)) {
-    const message = `Queued on the runtime: ${q.ahead} ahead, ${q.slots_in_use} of ${q.slots} slots busy. Your test is fine.`;
+    const message = `Queued on the interpreter: ${q.ahead} ahead, ${q.slots_in_use} of ${q.slots} slots busy. Your test is fine.`;
     context.queueLines ??= new Map();
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
@@ -481,7 +481,7 @@ function showMaintenance(context, details) {
   const key = JSON.stringify([details?.until ?? null, reason]);
   if (context.maintenanceLine !== key) {
     context.maintenanceLine = key;
-    line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${localMaintenanceEnd(until)}` : ''} (${reason}). pdd waits, then continues.`);
+    line(context.ports.stderr, `The interpreter is in maintenance${Number.isFinite(until) ? ` until ${localMaintenanceEnd(until)}` : ''} (${reason}). pdd waits, then continues.`);
   }
 }
 function maintenanceNotice(context, verdict, reply) {
@@ -553,7 +553,7 @@ async function capacityReady(context, deadline, busyRow = null) {
     const understood = reply.status === 404 || reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance');
     if (!understood && !context.capacityWarning) {
       context.capacityWarning = true;
-      line(context.ports.stderr, 'Warning: runtime capacity could not be read; continuing with ordinary runtime admission.');
+      line(context.ports.stderr, 'Warning: interpreter capacity could not be read; continuing with ordinary interpreter admission.');
     }
     const maintenance = reply.status === 200 ? reply.json?.maintenance : null, until = Date.parse(maintenance?.until);
     const pending = context.admissionMaintenance;
@@ -617,11 +617,11 @@ function judgePost(reply, id, command, secrets) {
   }
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
-    return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
+    return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The interpreter answered with another request ID or command.' };
   }
   if (reply.status === 429) {
     return error?.code === 'server-full' && reply.json?.dispatch === 'not_started' && safeAdmission(reply) ? { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json }
-      : { kind: 'not_run', note: note('The runtime is busy. Try again later.') };
+      : { kind: 'not_run', note: note('The interpreter is busy. Try again later.') };
   }
   if (gateText(reply)) return { kind: 'stop', note: { code: null, message: 'The runtime opens soon.' } };
   if (reply.status === 401) return { kind: 'stop', note: { code: cleanText(error?.code, secrets) || 'auth-required', message: AUTH_TEXT } };
@@ -633,15 +633,15 @@ function judgePost(reply, id, command, secrets) {
         hint: cleanText(error.hint, secrets) || null, cause: cleanText(error.cause, secrets) || null } : { hint: null }) } };
   }
   const said = cleanText(error?.message, secrets);
-  return { kind: 'unknown', why: `The runtime answered HTTP ${reply.status}${said ? `: ${said.replace(/\.$/, '')}` : ''}.` };
+  return { kind: 'unknown', why: `The interpreter answered HTTP ${reply.status}${said ? `: ${said.replace(/\.$/, '')}` : ''}.` };
 }
 
 // One answer to a GET of a known request ID.
 function judgeGet(reply, id, command) {
-  if (reply.lost) return { kind: 'again', why: reply.unreachable ? 'cannot reach the runtime' : reply.why, unreachable: reply.unreachable };
+  if (reply.lost) return { kind: 'again', why: reply.unreachable ? 'cannot reach the interpreter' : reply.why, unreachable: reply.unreachable };
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'blocked', message: stopLine };
-  if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
+  if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The interpreter answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
   if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
   if (reply.status === 401) return { kind: 'auth' };
@@ -893,7 +893,7 @@ async function sendCheckAttempt(context, row) {
     }
     try { writeSync(claim, JSON.stringify({ used: true })); } finally { closeSync(claim); }
     row.restart_used = true; row.restart_pending = false;
-    line(context.ports.stderr, 'The runtime restarted during this check. pdd sends it again (1 of 1).');
+    line(context.ports.stderr, 'The interpreter restarted during this check. pdd sends it again (1 of 1).');
   }
   // Acquire by original row and attempt, before allocating the UUID. Never remove a claim:
   // an interruption between claim and POST leaves dispatch uncertain, never replayable.
@@ -987,7 +987,7 @@ async function runLint(context, complete = false) {
   const agent = context.agentLimit ?? !context.ports.interactive;
   const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
-  line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
+  line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD interpreter (lint, 0 AI calls)…`);
   let paused = false;
   const stopped = () => ({ kind: 'not_run', note: { code: null, message: paused ? stoppedPause(context, context.lint, 'lint')
     : `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
@@ -1125,7 +1125,7 @@ async function runScheduledChecks(context, rows, toSend) {
     if (['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0, busy: true, can_retry: true,
       phase: row.request_ids.length ? 'server' : 'local', note: { code: 'check-busy', message: context.interrupted && row.busy && row.request_ids.length
         ? stoppedPause(context, row, 'check') : row.request_ids.length
-          ? 'The runtime stayed busy. No checks ran for this attempt. Retry this batch later.' : 'Held locally; this check was not sent. Retry this batch later.' } });
+          ? 'The interpreter stayed busy. No checks ran for this attempt. Retry this batch later.' : 'Held locally; this check was not sent. Retry this batch later.' } });
     if (row.state === 'unknown' && row.lost) row.why ??= stoppedEarly ? 'pdd stopped before it could read this run.'
       : Number.isFinite(context.deadline) ? 'pdd could not read this run before the timeout.' : 'pdd could not read this run for 5 min after its answer was lost.';
   }
@@ -1145,7 +1145,7 @@ function printResult(context, rows, extra = {}) {
   rows = rows.map(row => heldForLint(row) && !row.dispatchIncomplete ? { ...row, calls: 0 } : row);
   const { ports } = context, exitCode = exitCodeFor(rows, { interrupted: context.interrupted, lintUnknown: context.lintUnknown || context.lintPending });
   const engines = [...new Set(rows.map(row => row.engine_sha).filter(sha => sha && !sameEngine(sha)))].filter(sha => firstToday(context, sha));
-  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the runtime engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
+  const warnings = [...(context.warnings ?? []), ...engines.map(sha => `Warning: the interpreter engine is ${cleanText(sha).slice(0, 12)}, but pdd's local checks copy engine ${ENGINE_SHA.slice(0, 12)}. The engine stays the judge.`)];
   const summary = renderJson({ batch: context.batch ?? null, repo: context.root, sourceSha256: context.capture?.sha256 ?? null, coverage: context.coverage, rows, exitCode, summaryLine: summaryLine(rows),
     warnings: [...warnings, ...rows.flatMap(row => (row.warnings ?? []).map(text => `${row.test}: ${text}`))] });
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), summary);
@@ -1303,7 +1303,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   }
   const out = [];
   if (problems.length) {
-    out.push('Lint problems (from the PDD runtime):');
+    out.push('Lint problems (from the PDD interpreter):');
     for (const item of problems) out.push(`  ${[item.code, item.path, item.section, item.message].filter(Boolean).join('  ')}`, ...(item.hint ? [`    ${item.hint}`] : []));
   }
   for (const row of rows) out.push(`  ${row.test}  ${row.state === 'passed' ? 'passes lint' : `refused: ${row.refusals.map(item => item.code).join(', ')}`}`);
@@ -1511,7 +1511,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
-    if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD runtime…');
+    if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD interpreter…');
     await readRow(context, row, context.deadline);
     if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
@@ -1848,7 +1848,7 @@ async function stopTry(context, record) {
   const verdict = judgePost(reply, id, 'stop', context.secrets);
   if (verdict.kind === 'stop') throw new Stop(5, verdict.note.message);
   if (verdict.kind === 'not_run') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
-  if (verdict.kind === 'refused') throw new Stop(4, `The runtime refused to stop this Try: ${verdict.refusal.message} (${verdict.refusal.code})`);
+  if (verdict.kind === 'refused') throw new Stop(4, `The interpreter refused to stop this Try: ${verdict.refusal.message} (${verdict.refusal.code})`);
   if (verdict.kind !== 'accepted') throw new Stop(3, 'The stop result is unknown. Run pdd try --stop again later; it sends a new stop request.');
   const done = verdict.answer.state === 'passed' ? { answer: verdict.answer } : await readUntil(context, id, 'stop', answer => ENDED.has(answer.state), TRY_MS, 'Still stopping the Try');
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
@@ -1922,7 +1922,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     if (record) {
       const needsOwner = context.doorMode || requestedBudget !== null || context.agentConnection;
       if (needsOwner && record.login && record.login !== identity.login) throw new Stop(context.doorMode ? 125 : 5, `This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-      if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another runtime address. Use its original PDD_RUNTIME_URL, or stop it first.');
+      if (needsOwner && record.origin !== origin) throw new Stop(2, 'This Try belongs to another interpreter address. Use its original PDD_RUNTIME_URL, or stop it first.');
       const read = judgeGet(await context.runtime.get(record.id), record.id, 'try');
       if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
       if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -1932,8 +1932,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (answer) await finishReservation(context, record, answer);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
-      if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The runtime did not confirm this Try’s current budget. No budget change or reopen was sent.');
-      if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This runtime does not support raising this Try’s budget yet. The same Try and saved data are kept.');
+      if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The interpreter did not confirm this Try’s current budget. No budget change or reopen was sent.');
+      if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This interpreter does not support raising this Try’s budget yet. The same Try and saved data are kept.');
       // 404 (unknown to the server) and 410 (expired) count as ended: the record goes and a new Try is made.
       // A Try the server lost (state unknown, for example after a restart) counts as ended too: a new Try costs no AI calls.
       const ended = read.kind === 'missing' || read.status === 410 || ['failed', 'refused', 'unknown'].includes(answer?.state)
@@ -1972,7 +1972,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     let request, verdict, reply, done;
     const setup = { request_ids: [], reservation: null };
     for (;;) {
-      if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The runtime stayed busy until the Try setup wait ended. No new Try was sent.');
+      if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
         tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
       setup.request_ids.push(request.requestId);
@@ -1991,10 +1991,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (verdict.admission) store.write(join(context.folder, `${request.requestId}.admission.json`), verdict.admission);
       if (verdict.kind === 'busy') {
         await finishReservation(context, setup, { state: 'not_run' });
-        if (!verdict.maintenance) line(ports.stderr, 'The runtime is busy. Waiting to start your Try…');
+        if (!verdict.maintenance) line(ports.stderr, 'The interpreter is busy. Waiting to start your Try…');
         if (await waitBudget(context, verdict.wait)) continue;
         delete repoState.tries[test.path]; store.saveRepo(root, repoState);
-        throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? stoppedPause(context, setup, 'Try setup') : 'The runtime stayed busy until the Try setup wait ended.');
+        throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? stoppedPause(context, setup, 'Try setup') : 'The interpreter stayed busy until the Try setup wait ended.');
       }
       if (verdict.kind !== 'accepted') {
         if (verdict.kind !== 'unknown') { await finishReservation(context, setup, { state: 'not_run' }); delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
@@ -2012,8 +2012,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     const link = tryLink(done.answer, origin);
     if (link) {
       const cap = done.answer?.result?.session?.max_calls;
-      if (Number.isSafeInteger(cap) && cap !== request.max_calls) throw new Stop(5, `The runtime confirmed a budget of ${cap} calls instead of the requested ${request.max_calls}. This Try is kept; its saved data was not reset.`);
-      if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The runtime did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
+      if (Number.isSafeInteger(cap) && cap !== request.max_calls) throw new Stop(5, `The interpreter confirmed a budget of ${cap} calls instead of the requested ${request.max_calls}. This Try is kept; its saved data was not reset.`);
+      if (requestedBudget !== null && !Number.isSafeInteger(cap)) throw new Stop(3, 'The interpreter did not confirm the requested Try budget. The same Try is kept; read it again without changing its budget.');
       return await showTry(context, test, link, options, request.requestId, false, done.answer?.result?.session);
     }
     if (stepTimeLimit(done.answer, { steps: row.steps, secrets: context.secrets })) { applyAnswer(row, done.answer, context); return printTryProblem(context, row); }
@@ -2075,7 +2075,7 @@ async function checkLint(context, rows) {
   if (lint.kind === 'refused') { Object.assign(rows[0], { state: 'refused', phase: 'lint', refusals: [lint.refusal] }); return; }
   if (context.doorMode && lint.kind === 'answer' && lint.answer?.state === 'refused' && !isObject(lint.answer.result?.report?.program)) {
     const refusal = lint.answer.result?.refusals?.[0] ?? lint.answer.result?.report?.refusal;
-    throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The runtime refused lint.');
+    throw new Stop(125, refusal?.reason || refusal?.message || refusal?.code || 'The interpreter refused lint.');
   }
   if (!verdicts) throw new Stop(3, 'The lint result is unknown, so pdd made no Try link. Run pdd try again later.');
   for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
@@ -2086,7 +2086,7 @@ const APP_MAP_RULES = { 'ambiguous-handler': 'on one screen, all taps of one kin
   'template-reference-schema': 'a field that gets a value from the screen ($ref) must be a plain {"type": "string"}' };
 const GENERIC_REFUSAL = /^The runtime refused this job\b/;
 function trySetupRefused(context, test, appMap, refusals, reportUrl) {
-  if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The runtime refused this Try.');
+  if (context.doorMode) throw new Stop(125, refusals.map(item => item.reason || item.engine_message || item.message || item.code).filter(Boolean).join('; ') || 'The interpreter refused this Try.');
   const text = value => typeof value === 'string' ? cleanText(value, context.secrets) : '';
   const items = (refusals.length ? refusals : [{ code: 'refused' }]).map(item => ({ code: text(item.code) || 'refused', section: text(item.section),
     reason: [text(item.reason), APP_MAP_RULES[text(item.code)], text(item.engine_message), GENERIC_REFUSAL.test(text(item.message)) ? '' : text(item.message)].find(Boolean),
@@ -2111,7 +2111,7 @@ async function showTry(context, test, link, options, tryId, reused = false, sess
   const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
-    : 'The runtime did not report this Try’s budget.';
+    : 'The interpreter did not report this Try’s budget.';
   line(options['--cli'] || options['--serve'] ? context.ports.stderr : context.ports.stdout, budget);
   if (options['--cli'] || options['--serve']) {
     const doors = await import('./try-doors.mjs');
@@ -2203,7 +2203,7 @@ function addSavedCase(root, saved, seedTest) {
 function addSavedCaseSafely(root, saved, seedTest) {
   const test = saved?.test, story = typeof saved?.story_path === 'string' ? saved.story_path : test?.story_path;
   const label = cleanText(saved?.name || saved?.id || 'a saved case');
-  if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the runtime can run.`;
+  if (!isObject(test) || !Array.isArray(test.steps) || !test.steps.length || typeof story !== 'string') return `not added: "${label}" is not a test the interpreter can run.`;
   const found = findTests({ root });
   if (!story.endsWith('.md') || story.split('/').some(part => !part || part === '.' || part === '..') || !found.visible.has(story) || !inRepo(root, story)) {
     return `not added: its story "${cleanText(story)}" is not a story file in this repository.`;
@@ -2312,7 +2312,7 @@ async function watchSavedTests(context, tryId, wait, story) {
   try {
     for (;;) {
       if (tests !== 'missing') tests = await collectSavedTests(context, tryId);
-      if (tests === 'missing' && wait && !told) line(ports.stdout, 'The runtime does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
+      if (tests === 'missing' && wait && !told) line(ports.stdout, 'The interpreter does not keep saved tests yet. Copy a saved test from the Try page into tests/ by hand.');
       if (approvals !== 'missing') approvals = await collectApprovals(context, tryId, story, answers);
       if (tests === 'ended' || approvals === 'ended' || !wait || context.interrupted) return;
       if (tests === 'missing' && approvals === 'missing') return;
@@ -2362,7 +2362,7 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const ports = withDefaults(givenPorts), { root, origin, sessionId, login, prompt, operation } = descriptor;
   const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
   if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
-  if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved runtime address is invalid.');
+  if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved interpreter address is invalid.');
   const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
   const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
   if (saved) {
@@ -2382,13 +2382,13 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) }, ports.postMs);
     if (reply.status && ![200, 202].includes(reply.status)) {
       knownOutcome = reply.status >= 400 && reply.status < 500 && reply.status != 408;
-      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The runtime refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
+      throw new Stop(125, cleanText(reply.json?.error?.message || reply.json?.error?.code || `The interpreter refused the command (HTTP ${reply.status}).`, [identity.token]) + recovery);
     }
     const end = ports.now() + 900_000;
     let answer = null;
     for (;;) {
       if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped; this command result is unknown. Do not repeat it automatically.' + recovery);
-      if (answer && (!sameJob(answer, id, 'call') || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The runtime returned a different command.' + recovery);
+      if (answer && (!sameJob(answer, id, 'call') || (answer.session_id && answer.session_id !== sessionId))) throw new Stop(125, 'The interpreter returned a different command.' + recovery);
       if (answer && ENDED.has(answer.state)) {
         store.write(join(store.folder('tries'), `${id}.json`), answer);
         if (answer.state !== 'passed' || !isObject(answer.result?.program_result)) {
@@ -2440,7 +2440,7 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   if (!record) throw new Error('No confirmed Try is recorded. Run pdd try STORY.');
   const identity = signIn(ports.gh, store);
   if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
-  if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved runtime address is invalid.');
+  if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved interpreter address is invalid.');
   const promptProblem=tryPromptProblem(root,found,test,record);
   if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || promptProblem)
     throw new Error(`${promptProblem ?? 'The Story changed.'} Run pdd try STORY --new.`);

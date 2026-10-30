@@ -1414,7 +1414,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
       'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
       '', 'Part of #17']);
     assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
-    assert.doesNotMatch(f.prs[0].body, /^Runtime report links expire after 7 days\.$/m, 'the top line says it already');
+    assert.doesNotMatch(f.prs[0].body, /^\S+ report links expire after 7 days\.$/m, 'the top line says it already');
   });
 }
 
