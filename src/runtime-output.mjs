@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: bbf773236edf205c9455cd5d828e88192edb32e197ab08119afe83e4d9b9553f).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 3c91225bfa729ba59d0b3f9a07b869edfbe13de0928d92f0c5ae36fbfd307252).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -88,12 +88,24 @@ export function stepTimeLimit(answer, { steps = [], secrets = [] } = {}) {
 export function projectAnswer(answer, { origin, secrets = [], steps: authoredSteps = [], criterionTexts = {} } = {}) {
   const result = answer?.result ?? null, report = result?.report ?? null, time_limit = stepTimeLimit(answer, { steps: authoredSteps, secrets });
   const steps = Array.isArray(report?.samples) && Array.isArray(report.samples[0]?.steps) ? report.samples[0].steps : [];
+  const nonNegativeInt = value => Number.isInteger(value) && value >= 0 ? value : undefined;
+  const rerunStep = item => ({
+    step_id: cleanField(item.step_id, secrets) || null,
+    ...(nonNegativeInt(item.runs) !== undefined ? { runs: nonNegativeInt(item.runs) } : {}),
+    ...(nonNegativeInt(item.failed) !== undefined ? { failed: nonNegativeInt(item.failed) } : {}),
+    ...(item.stable === true ? { stable: true } : {}),
+    ...(Array.isArray(item.changed_paths) ? { changed_paths: item.changed_paths.map(path => cleanField(path, secrets)) } : {}) });
+  const rerun = isObjectLike(report?.rerun) ? {
+    ...(nonNegativeInt(report.rerun.calls) !== undefined ? { calls: nonNegativeInt(report.rerun.calls) } : {}),
+    ...(typeof report.rerun.skipped === 'string' ? { skipped: cleanField(report.rerun.skipped, secrets) } : {}),
+    ...(Array.isArray(report.rerun.steps) ? { steps: report.rerun.steps.filter(isObjectLike).map(rerunStep) } : {}) } : null;
   const all = steps.flatMap((step, index) => Array.isArray(step?.checks) ? step.checks.map(check => ({ step, check, index })) : []).map(({ step, check, index }) => {
     const criterion_id = cleanField(check?.criterion_id, secrets), diagnosis = isObjectLike(check?.diagnosis) ? {
       kind: cleanText(check.diagnosis.kind, secrets) || null, who: cleanText(check.diagnosis.who, secrets) || null,
       why: cleanText(check.diagnosis.why, secrets) || null, next_step: cleanText(check.diagnosis.next_step, secrets) || null,
       evidence: Array.isArray(check.diagnosis.evidence) ? check.diagnosis.evidence.map(item => cleanText(item, secrets)).filter(Boolean) : undefined,
-      likely: check.diagnosis.likely === true ? true : undefined } : null;
+      likely: check.diagnosis.likely === true ? true : undefined,
+      ...(isObjectLike(check.diagnosis.rerun) ? { rerun: rerunStep(check.diagnosis.rerun) } : {}) } : null;
     return { criterion_id, step_id: cleanField(step?.step_id, secrets) || cleanField(authoredSteps[index]?.step_id, secrets) || null,
       criterion_text: typeof criterionTexts[criterion_id] === 'string' && criterionTexts[criterion_id].length <= 160 ? cleanField(criterionTexts[criterion_id], secrets) : null,
       target: cleanField(check?.target, secrets), path: cleanField(check?.path, secrets), expected: scrub(check?.expected, secrets),
@@ -122,6 +134,7 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     who: result?.who ? cleanText(result.who, secrets) : null, next_step: result?.next_step ? cleanText(result.next_step, secrets) : null,
+    rerun,
     engine_sha: typeof answer?.engine_sha === 'string' ? answer.engine_sha : null, provider: time_limit ? null : provider,
     // The server's list of draft prompts (prompt-runtime #365) wins over pdd's local guess; null when the server has none.
     draft: Array.isArray(answer?.draft_prompts) ? answer.draft_prompts.length > 0 : null };
@@ -141,6 +154,7 @@ export function jsonRow(row) {
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
+    rerun: row.rerun ?? null,
     reason: ['passed', 'failed'].includes(row.state) ? null : row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
@@ -165,6 +179,7 @@ export function summaryLine(rows, story = null) {
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
   const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
   const calls = known.reduce((sum, row) => sum + row.calls, 0), unknownCalls = sent.length - known.length;
+  const rerunCalls = rows.reduce((sum, row) => sum + (Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0 ? row.rerun.calls : 0), 0);
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
@@ -172,8 +187,10 @@ export function summaryLine(rows, story = null) {
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
     : rows.length && rows.every(row => row.busy && row.state === 'not_run') ? 'busy ·' : 'no verdict ·';
+  const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
+  const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
-    `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
+    `${checks.passed}/${checks.total} checks`, ...others, `${usage}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
 
 function table(rows) {
@@ -226,6 +243,29 @@ const serverAdvice = (row, secrets = []) => [
   ...(row.why ? [`  Why: ${cleanText(row.why, secrets)}`] : []),
   ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])];
 
+const validRerun = item => Number.isInteger(item?.runs) && item.runs >= 2
+  && Number.isInteger(item?.failed) && item.failed >= 0 && item.failed <= item.runs;
+const rerunVerdict = item => item.failed === 0
+  ? `passed ${item.runs} of ${item.runs} reruns.`
+  : item.stable === true && item.runs >= 2 && item.failed === item.runs
+    ? `failed ${item.failed} of ${item.runs} (stable). A recheck of the same files will not help.`
+    : `failed ${item.failed} of ${item.runs} (unstable). Make the rule in the prompt firmer.`;
+function rerunEntries(row, failed) {
+  const entries = [], seen = new Set();
+  for (const check of failed) {
+    const key = check.step_id ?? '';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sameStep = failed.filter(item => (item.step_id ?? '') === key);
+    const diagnosis = sameStep.map(item => item.diagnosis?.rerun).find(validRerun);
+    const reportStep = row.rerun?.steps?.find(item => item.step_id && item.step_id === check.step_id);
+    const item = diagnosis ?? (validRerun(reportStep) ? reportStep : null);
+    if (item) entries.push({ key, line: `  Rerun: ${rerunVerdict(item)}` });
+  }
+  if (!entries.length && row.rerun?.skipped) entries.push({ key: null, line: `  Rerun: skipped (${row.rerun.skipped}).` });
+  return entries;
+}
+
 function localRefusals(rows, secrets) {
   const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
@@ -261,12 +301,15 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     }
   }
   for (const row of rows.filter(row => row.state === 'failed')) {
-    const failed = row.failed_checks ?? [], lines = [`FAILED  ${row.title} (${row.test})`];
+    const failed = row.failed_checks ?? [], reruns = rerunEntries(row, failed), rerunByStep = new Map(reruns.filter(item => item.key !== null).map(item => [item.key, item.line])), lines = [`FAILED  ${row.title} (${row.test})`];
     for (const check of failed) {
       lines.push(...checkLines(check, secrets).map(text => `  ${text}`));
       if (check.diagnosis?.why) lines.push(`  Why: ${check.diagnosis.why}`);
       if (check.diagnosis?.next_step) lines.push(`  Next: ${check.diagnosis.next_step}`);
+      const key = check.step_id ?? '', line = rerunByStep.get(key);
+      if (line) { lines.push(line); rerunByStep.delete(key); }
     }
+    if (reruns.some(item => item.key === null)) lines.push(reruns.find(item => item.key === null).line);
     lines.push(...(row.warnings ?? []).map(text => `  ${text}`));
     const diagnosed = failed.some(check => check.diagnosis?.why || check.diagnosis?.next_step);
     if (!diagnosed && row.next_step && row.why) lines.push(`  Why: ${row.why}`);
