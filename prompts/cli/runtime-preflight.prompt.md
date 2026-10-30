@@ -6,7 +6,7 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped.
 - A test is a Git-visible `*.json` file of at most 1 MiB with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1.
-- A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning.
+- A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning. Discovery follows the [bounded-read rules](#source-capture).
 - No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible `*.json` under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Exit 2.
 - Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. An unknown word is a command error that lists the stories with tests.
 
@@ -84,16 +84,18 @@ Module function `sourceFilePort(root, visible = new Set(gitFiles(root)))` return
 the synchronous `{stat({path}), read({path})}` adapter for local consumers.
 It applies this module's path, Git visibility, privacy and regular-file rules;
 stat returns `{exists,is_symlink,size}` and read returns UTF-8 `{content}`.
-Before each actual native read, reject an individual file above 10,485,760
-bytes using its stat size. Enforce existing selected-source totals and the
-10,000 selected-file budget before reading selected contents. This applies
-to this port, capture selection/metadata/reference reads and preparation-hook
-`readFile`, including a raw file that will be replaced. A single oversized
-file refuses before allocation/open/read, even when sparse or above the native
-Buffer limit. Preserve exit 4 and the finite too-big diagnostic with total and
-largest files; a RangeError is never the public result. Reference/preparation-only
-raw reads do not become upload members or accumulate again in selected totals;
-unrelated files do not count. Effective expanded/replacement bytes and tar retain their
+Before reading an actual upload candidate, check its stat size against
+10,485,760 bytes, including a raw file replaced for upload. Enforce selected-source
+totals and the 10,000 selected-file budget before selected reads. An oversized
+selected file refuses before allocation/open/read, even when sparse or above the
+native Buffer limit; preserve exit 4 and the finite too-big diagnostic with total
+and largest files, never a RangeError. Reference/preparation inputs required by selected effective source retain
+their bounded stat-before-read protection; those raw inputs do not
+become upload members or accumulate again in selected totals. Discovery-only or
+unselected footprint documents cannot refuse the selected work merely for their
+size: skip or warn before allocating their contents and record affected footprints
+as unavailable. Never replace an ignored-file refusal with an unbounded read.
+Unrelated files do not count. Effective expanded/replacement bytes and tar retain their
 separate selected-payload limits; equal byte/file boundaries are permitted before
 applying the independent tar limit.
 Missing stat reports absence; missing read refuses exit 4. Reuse the capture
@@ -107,11 +109,27 @@ shared file must not affect a selected Story's source or freshness. Expose expan
 and a per-Story effective-file footprint for local Check history. For a selected
 Story, include every discovered scenario belonging to it and each scenario's own
 dependency closure, plus common explicit includes and supplied app-map context.
-The footprint for unchanged effective source must be identical whether capture
-selects one of that Story's tests, all its tests, or tests from other Stories as
-well. Footprint accounting does not add otherwise unselected tests or other
-Stories' files to the upload. A whole multi-Story batch hash cannot substitute
-for that footprint. Reference-only changes affect only actual users.
+For a complete closure, the footprint for unchanged effective source is identical
+whether capture selects one test, all that Story's tests or a multi-Story batch.
+Footprint accounting does not select extra upload files. A batch hash cannot
+substitute for a Story footprint; reference-only changes affect actual users.
+
+```mermaid
+flowchart TD
+    R{Source closure available?} -->|Yes| F[Include canonical sibling footprint]
+    R -->|No| S{Required by selected work?}
+    S -->|Yes| X[Refuse selected work]
+    S -->|No| U[Record footprint unavailable and continue]
+```
+
+A missing entry prompt, missing seed, unsafe path or other unresolved source in
+an unselected sibling makes that sibling's footprint unavailable with its cause;
+it does not refuse a selected good test. Keep complete valid sibling closures
+selection-independent. An unavailable sibling leaves the affected Story footprint
+incomplete: do not substitute a partial hash or claim current freshness, successful
+sibling evaluation or a complete baseline from it. Selected closures and common
+required inputs retain every existing refusal and privacy check, even when also
+used by an unselected sibling. Capture instability still uses whole-attempt retries.
 
 - Module function `captureSource(root, {tests, appMap, attempts, prepareSource})` captures a sorted, deduplicated selection with original repository-relative names. The optional preparation hook is defined below. `tests` is a list of test paths in the effective source; absent means every discovered test in that source. Include each selected test, its `story_path`, step `entry_path`s, declared `entry_paths`, test context `prompt_path`s and `paths`, and recursively every reached prompt's interface `calls[].target`. Missing declared files refuse with exit 4, naming the referring file and missing path; never silently send an incomplete program.
 - Required Markdown context is declared in `## Dependencies`: local inline or reference-style Markdown links, and a backticked file path that leads a dependency list item (optionally followed by a colon and description). A bare declaration must name a directory-qualified file with an extension, or a filename with a common text, data or source-code extension (otherwise use a Markdown link); schema/version labels, dotted API identifiers, regular expressions, commands, absolute/home/environment paths and inline-code mentions inside descriptions or rules are not file declarations. Link destinations remain authoritative even when missing; classification must not depend on whether a descriptive token happens to match a Git file. Resolve links and context paths relative to the declaring file, with repository-root paths accepted when they name Git files. Include linked fragments' whole files, and recurse through dependencies in Markdown context files. Include local image links anywhere in reached Markdown, including SVG mockups. Ignore remote URLs and same-file anchors; do not load ordinary navigation links outside Dependencies. Cycles terminate and files appear once. Invalid or escaping paths refuse. Unusual names can use the include list.

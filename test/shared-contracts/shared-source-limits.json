@@ -70,6 +70,33 @@
       ],
       "given": "9999,10000,10001 unique selected small paths within byte budget, plus repeated selection of a previous path",
       "required_observation": "first two fit selected-file count, 10001 refuses before selected read; repeated selected paths do not consume another count; no expanded or generated output bypasses selected limits"
+    },
+    {
+      "id": "oversized-unselected-discovery",
+      "criteria": [
+        "AC1",
+        "AC4"
+      ],
+      "given": "valid small selected program plus unrelated 12582912-byte transcript under user_stories; repeat with a sparse 2147483649-byte ignored Markdown document and a catalog-only oversized document; exercise Check/Try capture and local contract list/sync preview with read/auth/transport spies.",
+      "required_observation": "oversized non-upload discovery/catalog content skipped or warned before open/read/allocation; selected good work remains eligible and no ignored file is uploaded/counted; unavailable catalog/footprint evidence is explicit rather than fabricated; local contracts makes no auth/network/model call"
+    },
+    {
+      "id": "oversized-unselected-sibling-document",
+      "criteria": [
+        "AC1",
+        "AC4"
+      ],
+      "given": "selected good Story A test and unselected A sibling whose dependency document is 12582912 bytes; then select that same dependency through the good test.",
+      "required_observation": "unselected sibling footprint unavailable without blocking good selected capture or reading huge content; when required by selected work, stat-before-read exit-4 too-big refusal remains and no upload/auth/model call occurs"
+    },
+    {
+      "id": "deep-fitting-reference",
+      "criteria": [
+        "AC3",
+        "AC4"
+      ],
+      "given": "depth-400 fitting object schema with one small contract reference near the beginning and ordinary schema nodes after it; repeat a cached target with differing local annotations; preserve written key order and exact number 9007199254740993.",
+      "required_observation": "exact expansion/provenance succeeds; account expanded size once per reference result rather than full-subtree size walks per ordinary enclosing node; annotations remain independent, bytes/numbers/order unchanged; existing early fanout/overflow refusals still apply; no wall-clock pass threshold"
     }
   ]
 }

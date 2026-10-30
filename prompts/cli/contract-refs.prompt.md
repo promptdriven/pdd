@@ -51,6 +51,14 @@ with the limit is allowed here. Stop with `contract-invalid`, never a partial
 result, a native allocation failure or an unbounded expansion. Preflight still
 owns the aggregate selected-file and tar limits.
 
+Account for size once per expanded reference result, including its local
+annotations or seed overrides, while retaining early bounded expansion before
+oversized intermediates. Ordinary schema nodes after a reference do not trigger
+repeated full-subtree size walks. A deeply nested fitting schema remains eligible;
+its depth alone must not multiply full-size accounting. Cached targets, exact
+numbers, key order and errors retain their existing meaning; this adds no timing
+threshold or input restriction.
+
 <details>
 <summary>Record selection, pointers and cycles</summary>
 
@@ -214,7 +222,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "55e1e084a72fd80fc4a15c153b9c35e569fa37d3b46542c1a550b11eee9a1544",
+  "status": "draft", "prose_sha256": "4ccf86b2b020563b8aedf6322cd1a53564b5c54c88e76e4ffbc8cd61659ff5d0",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
