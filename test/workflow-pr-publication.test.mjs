@@ -166,7 +166,8 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   assert.equal(out.exitCode, 1, 'No chat exists to approve; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
   assert.match(body, /^Not fixed yet: diagnosis only\nNot checked: external/); assert.match(body, /Review: refreshed/);
-  assert.match(body, /Preserved reviewer prose/); assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Part of #17|Closes #17|Old-code proof:/);
+  assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
+  assert.ok(body.includes('Preserved reviewer prose.\nPart of #17\n'), 'Keep the ordinary issue-reference example and its context byte for byte.');
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
   assert.equal(saved.gate.at, 4); assert.equal(saved.area, 0); assert.deepEqual(saved.decisions, []);
 });
@@ -207,6 +208,29 @@ test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary 
   assert.doesNotMatch(body, /Old-code proof:/);
   assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+for (const [kind, ordinary] of [
+  ['REFERENCE', 'Reviewer prose: the following is an example.\nPart of #17\nEnd of example.\n'],
+  ['WHITESPACE', '    Indented reviewer prose.  \nSecond line with intentional trailing spaces.   \n']
+]) test(`PR1-REFRESH-CONTEXT-${kind}: real approval synchronization preserves ordinary reviewer context byte for byte`, t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`;
+  const prs = f.data().prs;
+  prs[0].body = `Review: old\n\nPart of #17\n\n${ordinary}\n${marker}\n`; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
+  const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
+  const body = f.data().prs[0].body;
+  assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
+  assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
+  assert.match(body, /^Not fixed yet: diagnosis only\nNot checked: external\nDefect: broken value\nReview: refreshed\n\nRefs #17\n\n/);
+  assert.doesNotMatch(body, /Review: old|Closes #17|Old-code proof:/);
+  assert.equal(body.split(marker).length - 1, 1);
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+  assert.ok([...body].length <= 60000);
+  const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
+  assert.equal(saved.gate.at, 4); assert.equal(saved.area, 0); assert.deepEqual(saved.decisions, []);
 });
 
 test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and report references and keeps issue safety', t => {

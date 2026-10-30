@@ -866,16 +866,7 @@ async function draftDescription(run, pr1, drafts, p) {
     while (at < rows.length && !rows[at].trim()) at++;
     if (reference.test(rows[at] ?? '')) at++;
     while (at < rows.length && !rows[at].trim()) at++;
-    let fence = null;
-    const remainder = rows.slice(at).map(line => {
-      const mark = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-      if (mark) {
-        if (!fence) fence = mark[1];
-        else if (mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim()) fence = null;
-        return line;
-      }
-      return !fence && reference.test(line) ? evidence.issueReference : line;
-    }).join('\n').trim();
+    const remainder = rows.slice(at).join('\n');
     const safeRemainder = hideLocalPaths(redactTry(remainder), run);
     const footer = `\n\n${marker}\n`;
     const room = BODY_BUDGET - characters(footer) - characters(evidence.issueReference) - 4;
