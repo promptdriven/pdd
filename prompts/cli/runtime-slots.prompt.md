@@ -20,9 +20,11 @@ Module function `listRuntimeJobs({stateDir,origin}, ports={})` calls `ports.file
 
 Module function `runJobs({env}, {stdout,stderr,files}={})` resolves the same default state directory and uses the existing public runtimeOrigin(env) export of src/runtime-client.mjs for the runtime origin (no sign-in or network effect) and calls listRuntimeJobs. It requires no repository or authentication. Print active/waiting rows with kind, PID, age and request IDs, or a plain empty message; return 0. Read errors print a finite cause on stderr and return 5; do not present a successful empty snapshot. Output lines end with a newline. No additional command options are introduced.
 
+The [lock pattern](workflow-herdr-layout.prompt.md) is a navigation-only native implementation example for exclusive creation and process liveness. This module owns the reservation and reclamation rules above.
+
 ## Dependencies
 
-- [Lock pattern](workflow-herdr-layout.prompt.md): required generation/verification context only for native exclusive-create/process-liveness conventions; its Herdr location/policy is not this module's policy.
+The listing Runtime needs only the supplied files port declared below; no other prompt context is required.
 
 Only listRuntimeJobs is bound below. The files.listRecords resource uses write access solely so port.write can record the supplied read arguments as a spy; the real dependency only reads slot records and does not mutate them. Its native function receives the ordinary ports argument; the Runtime transport serializes the options and binds files.listRecords. Acquisition, atomic exclusion, crash consistency, process death and native runJobs formatting require ordinary Node/child-process tests. A prompt replay of a supplied snapshot proves ordering/forwarding only.
 
@@ -31,7 +33,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "f987a1bc66095525362c0f260b2ebc07137b885916ea59490bd89d54cf102520",
+  "prose_sha256": "e9ebc0063bd16e29b85510c9c1c22658d0fd7a749d92c6ced21fcaf02627138e",
   "entries": [
     {
       "operation": "listRuntimeJobs",
