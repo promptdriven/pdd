@@ -13,7 +13,7 @@ Allocate the issue branch from that selected origin ref and save the selection i
 ## Adopt an existing approved corpus
 
 `startRun` accepts optional `adoptCorpus`, the declaration path supplied by
-`pdd workflow start NAME ISSUE --adopt-corpus FILE`. Preserve existing startup and
+`pdd workflow run NAME ISSUE --adopt-corpus FILE`. Preserve existing startup and
 changed-scenario discovery when absent. Require a fresh run whose selected areas
 explicitly opt in to replay evidence; adoption never enables a custom workflow's policy.
 Before releasing a cancelled-run claim, allocating a worktree, saving a run or starting

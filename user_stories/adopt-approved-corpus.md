@@ -12,7 +12,7 @@ I can start a fresh workflow using the exact complete declared regression corpus
 
 ## Rules to check
 
-Draft command: `pdd workflow start feature 2640 --adopt-corpus approved-corpus.json`.
+Draft command: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`.
 The declaration identifies one immutable same-repository approved commit and entry
 prompts and a nonempty unique list of at most 200 canonical scenario paths, and
 explicitly asserts human authorization covering that complete declared inventory
