@@ -105,7 +105,7 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
     }
     if (file !== 'gh') return exec(file, args, { ...opts, encoding: 'utf8' });
     if (args[0] === 'repo' && args[1] === 'view') return { stdout: JSON.stringify({ nameWithOwner: 'example/project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/example/project' }) };
-    if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: 'Value must be two.' }) };
+    if (args[0] === 'api' && args[1] === 'repos/example/project/issues/17') return { stdout: JSON.stringify({ number: 17, html_url: issueUrl, title: 'Use value two', body: f.issueBody ?? 'Value must be two.' }) };
     if (args[0] === 'pr' && args[1] === 'create' && f.createError) { const stderr = f.createError; f.createError = null; return { stdout: '', stderr, code: 1 }; }
     if (args[0] === 'pr' && args[1] === 'create') {
       const value = flag => args[args.indexOf(flag) + 1];
@@ -419,8 +419,9 @@ const featureAreas = { version: 2, areas: [
   { name: 'story', steps: ['understand', 'visual', 'prompt-story'], optional: ['visual'], gate: 'approve' },
   { name: 'prompt-pr', steps: ['check', 'try'], optional: ['try'], gate: 'pr', then: 'ask-code' },
   { name: 'code', steps: ['build', 'verify'], optional: [], gate: 'pr' }] };
-async function featureToPr1(t, promptText = 'Return two.\n', base) {
+async function featureToPr1(t, promptText = 'Return two.\n', base, issueBody) {
   const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  f.issueBody = issueBody;
   if (base) { topicBase(f, base); f.run = () => startRun({ name: 'feature', issue: '17', agent: 'codex', base, cwd: f.source, packageRoot }, f.ports); }
   const skill = join(f.source, '.agents', 'skills', 'pdd-feature');
   mkdirSync(skill, { recursive: true }); writeFileSync(join(skill, 'workflow.json'), JSON.stringify(featureAreas));
@@ -2234,4 +2235,29 @@ test('2553: merged prompt branch retains its published anchor on final code entr
   const result=await approveRun({ref:'17',cwd:f.source},f.ports);
   assert.equal(result.exitCode,0,result.message);assert.equal(f.record().areas[f.record().area].name,'code');
   assert.deepEqual(f.record().replayBaseline,saved);
+});
+
+
+test('product association: start saves one issue marker and both producer PRs preserve it independently of branch identity', async t => {
+  const marker = '<!-- pdd-product: run=phone-1 -->';
+  const { f, run, done } = await featureToPr1(t, undefined, undefined, `Planned handoff.\n${marker}\n${marker}`);
+  assert.equal(f.record().productMarker, marker);
+  f.tick(); assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(join(run.root,'value.mjs'),'export const value = 2;\n'); f.git(run.root,'commit','-qam','code');
+  await done('build','value is two'); await done('verify','tests pass');
+  assert.equal(f.prs.length,2);
+  for (const pr of f.prs) {
+    assert.equal(pr.body.split('\n').filter(line=>line===marker).length,1);
+    assert.equal((pr.body.match(/<!-- pdd-workflow:/g)??[]).length,1);
+    assert.ok(pr.body.includes(`<!-- pdd-workflow:${run.runId}:`));
+  }
+});
+
+test('product association: conflicting markers warn and ordinary issues keep the legacy record shape', async t => {
+  for (const body of ['Ordinary issue.', 'Inline <!-- pdd-product: run=one --> and <!-- pdd-product: run=two -->']) {
+    const f = await fixture(t,{name:'feature',agent:'codex'}); f.issueBody=body;
+    const result=await f.run(); assert.equal(result.exitCode,0,result.message);
+    assert.equal(Object.hasOwn(f.record(),'productMarker'),false);
+    if(body.includes('pdd-product')) assert.match(f.record().warnings.join(' '),/multiple.*marker/i);
+  }
 });

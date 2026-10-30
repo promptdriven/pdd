@@ -18,7 +18,7 @@ function fixture() {
     startRun: async input => { state.starts.push(input); return { exitCode: 0, message: 'Started.' }; },
     execFile: async (file, args) => {
       assert.equal(file, 'gh');
-      if (args[0] === 'api') return { stdout: JSON.stringify(args.at(-1).includes('/timeline?') ? [] : state.split ? [state.issues.slice(0, 1), state.issues.slice(1)] : [state.issues]) };
+      if (args[0] === 'api') return {stdout:JSON.stringify(args[1].includes('/timeline?') ? [] : {items:state.issues.map(item=>({author_association:'MEMBER',user:{login:'member'},created_at:'2026-10-01T00:00:00Z',...item})),total_count:state.issues.length,incomplete_results:false})};
       assert.equal(args[0], 'issue'); assert.equal(args[1], 'create');
       state.created++;
       state.issues.push({ number: 100, state: 'OPEN', body: args[args.indexOf('--body') + 1] });
