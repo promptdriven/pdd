@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: cd17c3e864edc5e69bedb97f737d196f92679707d9e02f6e8c0c255728e04389).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4daa1dfe14bff136009373bfdbc4dd055a2b20147f358451c2bc0d49ac21af73).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -160,7 +160,7 @@ function holderRefusal(run, name, p) {
     ...(run.gate ? [`Continue: pdd workflow approve ${run.number}`] : []), `Replace: ${switchCommand(run, name)}`, recommendation(run)].filter(Boolean).join('\n'));
 }
 
-async function cancelHoldingRun(run, p, replacement) {
+async function cancelHoldingRun(run, p, replacement, retry = `pdd workflow cancel ${run.runId}`) {
   if (run.state === 'cancelled') return done(`The run for ${issueRef(run)} is already cancelled.`);
   const question = replacement ? `Replace run ${run.runId} (${run.workflow}, ${issueRef(run)}) with ${replacement}? (y/N)`
     : `Cancel run ${run.runId} (${run.workflow}, ${issueRef(run)})? (y/N)`;
@@ -168,15 +168,16 @@ async function cancelHoldingRun(run, p, replacement) {
   if (await confirm(p, question) !== true) return { ...done(`Kept run ${run.runId}; cancellation was declined.`), declined: true };
   let stopped;
   try { stopped = await p.stopChats(run, p); }
-  catch (error) { return fail(`Could not confirm the run stopped (${error.code ?? error.message}). The issue claim stays.`); }
-  if (stopped.stopped !== true) return fail([...(stopped.warnings ?? []), 'The agent stop is unconfirmed. The run and issue claim stay; no replacement was started.'].join('\n'));
+  catch (error) { return fail(`Could not confirm the run stopped (${error.code ?? error.message}). The issue claim stays. Retry outside the worktree after restoring inspection.\nRetry: ${retry}`); }
+  if (stopped.stopped !== true) return fail([...(stopped.warnings ?? []), 'The agent stop is unconfirmed. The run and issue claim stay; no replacement was started. Resolve the blockers or inspection failure and retry outside the worktree.', `Retry: ${retry}`].join('\n'));
+  const stoppedMessage = message => [...(stopped.warnings ?? []), message].join('\n');
   run.state = 'cancelled'; run.cancelled = { state: 'cancelled', at: p.now() }; run.gate = null;
   try { await p.writeRun(run, p); }
-  catch (error) { return fail(`Could not save cancelled run ${run.runId} (${error.message}). Its issue claim stays; inspect this run before retrying.`); }
+  catch (error) { return fail(stoppedMessage(`Could not save cancelled run ${run.runId} (${error.message}). Its issue claim stays; inspect this run before retrying.`)); }
   let released;
   try { released = await p.releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts); }
   catch (error) { released = { state: 'recovery_required', message: error.message }; }
-  if (released.state !== 'released') return fail(`Run ${run.runId} is cancelled, but its issue claim could not be released: ${released.message}. Preserve the cancelled record and inspect custody before retrying.`);
+  if (released.state !== 'released') return fail(stoppedMessage(`Run ${run.runId} is cancelled, but its issue claim could not be released: ${released.message}. Preserve the cancelled record and inspect custody before retrying.`));
   return done([...(stopped.warnings ?? []), `Cancelled the run for ${issueRef(run)}.`, `The worktree stays at ${run.root} (branch ${run.branch}). All work, artifacts and PRs stay.`].join('\n'));
 }
 // The real reason of a failed gh, git or Herdr call, in plain words.
@@ -370,6 +371,7 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
 }
 
 export async function startRun({ name, issue, agent = 'codex', base, replace, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+  const requestedAgent = arguments[0].agent;
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   let workflow;
   try { workflow = p.readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
@@ -415,8 +417,11 @@ export async function startRun({ name, issue, agent = 'codex', base, replace, cw
     }
   }
   if (replace !== undefined) {
-    const cancelled = await cancelHoldingRun(existing, p, name);
+    const retryIssue = /^[A-Za-z0-9_./:#-]+$/.test(String(issue)) ? String(issue) : shell(String(issue));
+    const retry = `pdd workflow run ${shell(name)} ${retryIssue} --replace ${shell(existing.runId)}${base !== undefined ? ` --base ${shell(base)}` : ''}${requestedAgent !== undefined ? ` --agent ${shell(agent)}` : ''}`;
+    const cancelled = await cancelHoldingRun(existing, p, name, retry);
     if (cancelled.exitCode || cancelled.declined) return { exitCode: cancelled.exitCode, message: cancelled.message };
+    warnings.push(cancelled.message);
   }
   if (existing) {
     const released = replace !== undefined ? { state: 'released' } : await p.releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
@@ -432,12 +437,12 @@ export async function startRun({ name, issue, agent = 'codex', base, replace, cw
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await p.allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
-  if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
+  if (allocated.state !== 'ready' || !allocated.assignment) return fail([...warnings, `pdd could not make the worktree for #${number}: ${allocated.message}`].join('\n'));
   const a = allocated.assignment;
   // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
   if (existing) {
     try { await p.archiveRun(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`, p); }
-    catch (error) { return fail(`The cancelled history could not be archived (${error.message}). The new assignment stays claimed for recovery; no chat was started.`); }
+    catch (error) { return fail([...warnings, `The cancelled history could not be archived (${error.message}). The new assignment stays claimed for recovery; no chat was started.`].join('\n')); }
   }
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
