@@ -41,14 +41,20 @@ test('PROGRESS2: check --lint --json keeps one JSON object on stdout while progr
 });
 
 // Wrong: a wrong address or no network looked like a lost answer, and pdd read for minutes before "unknown".
-test('PROGRESS3: a runtime that cannot be reached stops at once with the cause and sends nothing else', async t => {
+test('PROGRESS3: unreachable advisory capacity fails open, then unsent lint stops at once with the cause', async t => {
   const setup = harbor(t);
-  let calls = 0;
-  const fetch = async () => { calls += 1; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }); };
+  const requests = [];
+  const fetch = async (url, init = {}) => {
+    requests.push({ method: init.method ?? 'GET', path: new URL(url).pathname });
+    throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+  };
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: 'https://runtime.invalid', PDD_STATE_DIR: setup.state }, { fetch });
   const started = clock.now;
   assert.equal(await runTry({ words: ['place-order'], options: { '--no-open': true }, cwd: setup.repo }, ports), 5);
-  assert.equal(calls, 1);
+  assert.deepEqual(requests, [
+    { method: 'GET', path: '/v1/capacity' },
+    { method: 'POST', path: '/v1/lint' }
+  ]);
   assert.ok(clock.now - started < 5000, 'no wait loop');
   assert.match(ports.stderr.text, /ENOTFOUND/);
   assert.match(ports.stderr.text, /runtime\.invalid/);
