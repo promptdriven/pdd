@@ -318,7 +318,20 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     } else if(record.phase==='createRequested') {
       if(!record.recovery?.allocationLabel || !Array.isArray(record.recovery.tabIdsBefore)) throw uncertain();
       const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
-      if(!added.length) {await save('createRequested');await allocate();}
+      // Only a saved, completely verified other-area chat explains an added peer.
+      // An unmatched tab alone may be this attempt's allocation after relabelling.
+      const unexplained=added.filter(tab=>{
+        if(tab.label===record.recovery.allocationLabel) return true;
+        const chats=run.chats??[];
+        const peers=chats.filter(target=>typeof target.area==='string' && target.area && target.area!==record.area && target.tabId===tab.tab_id &&
+          chats.filter(saved=>saved.area===target.area).at(-1)===target);
+        if(peers.length!==1) return true;
+        const peer=peers[0],rows=panes.filter(row=>row.tab_id===tab.tab_id);
+        return peer.workspaceId!==original.workspaceId || tab.workspace_id!==peer.workspaceId || rows.length!==1 ||
+          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId || rows[0].cwd!==run.root ||
+          peer.terminalId && rows[0].terminal_id!==peer.terminalId;
+      });
+      if(!unexplained.length) {await save('createRequested');await allocate();}
       else {
         const matching=added.filter(row=>row.label===record.recovery.allocationLabel);
         if(matching.length!==1) throw uncertain();

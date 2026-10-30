@@ -333,7 +333,7 @@ for (const lostResume of [false, true]) {
 }
 
 // Interrupted before allocation: later public progress may create an unrelated area tab.
-for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-pane', 'wrong-terminal', 'wrong-cwd']) {
+for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-pane', 'wrong-terminal', 'wrong-cwd', 'malformed-peer', 'stale-peer']) {
   test(`2627 preallocation recovery with ${variant} preserves allocation custody`, async t => {
     const f = await started(t);
     await assert.rejects(() => restart(f, { checkpoint: async record => {
@@ -356,6 +356,8 @@ for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-
     if (variant === 'wrong-pane') peer.paneId = 'unverified-pane';
     if (variant === 'wrong-terminal') peer.terminalId = 'unverified-terminal';
     if (variant === 'wrong-cwd') f.herdr.paneOf(peer).cwd = f.source;
+    if (variant === 'malformed-peer') delete peer.area;
+    if (variant === 'stale-peer') saved.chats.push({ ...peer, tabId: 'newer-peer-tab', paneId: 'newer-peer-pane' });
     writeFileSync(join(saved.runDir, 'status.json'), JSON.stringify(saved));
     f.herdr.calls.length = 0;
     const result = await open(f);
