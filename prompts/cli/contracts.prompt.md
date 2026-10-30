@@ -19,7 +19,11 @@ this command owns orchestration and presentation, not another resolver.
 its current prompt/test users, and their Stories. Supply current used targets to
 the catalog, including seeds and leaf schemas. Include transitive uses; ignore
 literal business/expected values. Show unused records with no users. Report
-catalog warnings without inventing a record or a user.
+catalog warnings without inventing a record or a user. Skip or warn for an
+oversized catalog/discovery-only document before reading its contents; it cannot
+abort independent listing, preview or selected good work. Report any affected
+record/use or footprint evidence as unavailable rather than complete. Required
+selected source retains preflight's bounded safe-read refusals.
 
 Use `readContractHistory` from the runtime client for the most recent actual
 Check baseline for each Story. Compare canonical target snapshots, including
@@ -32,8 +36,11 @@ source freshness behavior. Each Story's current effective footprint is independe
 of which other tests were selected: checking one file, all tests for that Story,
 or a multi-Story batch must produce the same footprint for unchanged Story
 inputs. Account for all discovered tests belonging to that Story and their own
-closures, without adding another Story's files. A baseline records a check, not
-necessarily a pass;
+closures, without adding another Story's files. Preflight's
+[unavailable-footprint rule](runtime-preflight.prompt.md#source-capture) applies:
+report an incomplete current footprint as unavailable with its cause, never as
+current or as a selected-source refusal merely because an unselected sibling is
+broken. A baseline records a check, not necessarily a pass;
 never display a failed result as passing.
 
 With no actual Check baseline or a legacy baseline lacking reference provenance,

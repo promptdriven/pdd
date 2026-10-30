@@ -13,6 +13,10 @@
 
 ## Rules to check
 
-Compare each Story with its latest evaluated Check and its own effective source footprint. Refused/pending/unknown work supplies no new baseline. Failed checks stay failed; source freshness is not a pass. Transitive references count as uses. A Story footprint includes all discovered tests for that Story and their closures regardless of selection; other Stories stay outside it. Within one catalog operation parse a JSON contract file once, reuse immutable parsed data and clone before differing annotations or overrides. No timing threshold is a gate.
+Compare each Story with its latest evaluated Check and its own effective source footprint. Refused/pending/unknown work supplies no new baseline. Failed checks stay failed; source freshness is not a pass. Transitive references count as uses. A Story footprint includes all discovered tests for that Story and their closures regardless of selection; other Stories stay outside it.
+
+A missing entry prompt, missing seed or other unresolved source in an unselected sibling records that sibling's footprint as unavailable and lets the selected good test continue, with or without contracts. The affected Story cannot claim a complete footprint or current freshness from a partial closure. Selecting the same broken source still refuses before upload/authentication; valid siblings keep their complete selection-independent footprint.
+
+Within one catalog operation parse a JSON contract file once, reuse immutable parsed data and clone before differing annotations or overrides. No timing threshold is a gate.
 
 Runtime check: native effects unbound: file/history/write cases specified separately; expansion cases do not establish these effects.

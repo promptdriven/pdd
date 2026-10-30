@@ -99,6 +99,46 @@
       ],
       "given": "one synthetic JSON contract file containing 256 independent object-schema records plus used leaf pointers and repeated nested targets; repeat catalog with 512 records; use parser/read instrumentation on the existing public codec if present, no extra parser",
       "required_observation": "each file read/parsed once per catalog operation; independent records and annotations do not mutate cached values; no complete-file parse per record; output catalog identities and values exact; no timing gate"
+    },
+    {
+      "id": "unselected-missing-prompt",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "Story A has selected good.json and unselected wip.json; wip names a nonexistent entry prompt. Capture/check/try good.json first without any contracts, then with a valid selected contract reference; fake auth/transport and temporary Git/source state.",
+      "required_observation": "selected good work continues through its ordinary gates with exactly its selected upload; wip footprint unavailable with missing-prompt cause; Story A completeness/current freshness unavailable, no synthetic successful sibling or partial complete baseline; no wip upload"
+    },
+    {
+      "id": "unselected-missing-seed",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "Story A has selected good.json and unselected wip.json whose initial_world seed file is missing; good selected source is valid.",
+      "required_observation": "good capture/check/try can proceed; unavailable sibling footprint identifies the missing seed; no missing seed contents invented and no false current/complete Story footprint"
+    },
+    {
+      "id": "unselected-unresolved-source",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "Story A good test plus unselected sibling with missing local Markdown dependency, cyclic contract target or unsafe secret/symlink dependency in separate variants; Story B valid selected test in same batch.",
+      "required_observation": "good selected A/B source remains eligible; unsafe sibling target is never read/uploaded; A footprint unavailable with cause, B complete footprint unchanged; selected common inputs still obey all refusal/privacy rules"
+    },
+    {
+      "id": "selected-broken-control",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "select the missing-entry or missing-seed sibling itself; separately require its missing/unsafe dependency from the good selected test as well.",
+      "required_observation": "selected work refuses before upload/authentication with existing missing/unsafe diagnostics; sibling-only tolerance does not weaken selected-source checks"
+    },
+    {
+      "id": "repair-sibling-footprint",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "save a complete actual Check baseline for Story A with two valid tests and distinct closures; break unselected second-test prompt/seed, capture first test and list; restore exact original bytes; compare captures selecting first, both and A+B; finally change valid second-test dependency.",
+      "required_observation": "broken period reports footprint unavailable without fabricating current or replacing a complete baseline with a partial closure; restored complete A footprint equals its original across selections and is current; later valid sibling dependency change makes A stale; B files never enter A footprint"
     }
   ]
 }
