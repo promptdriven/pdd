@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: bc53737cd846eee054ff419192eba55a50e3b96d81a63d30bc40db5677cf4d6e).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: ff858416894b26fc807092694d9b56affa993d3daa5e9ab13fa70c18b2c5b5c8).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { lookupRepositoryParent } from './workflow-worktree.mjs';
 
 export const PDD_HERDR_SESSION = 'pdd';
@@ -87,6 +87,13 @@ async function ownedRepository(rows,repo,command) {
   return row;
 }
 
+function namespace(registry, key, commonDir) {
+  const matches=registry.repositories.filter(r=>String(r.key).toLowerCase()===key && r.commonDir===commonDir);
+  if(matches.length>1)throw problem('invalid_layout_registry');
+  if(matches[0] && matches[0].repository?.toLowerCase()!==key)throw problem('invalid_layout_registry');
+  return matches[0];
+}
+
 export async function openHerdrRunLayout(input, ports) {
   const {command,checkpoint}=ports,directory=directoryFor(ports);
   if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(input.repository??'')||!Number.isSafeInteger(input.issueNumber)||input.issueNumber<1
@@ -97,7 +104,7 @@ export async function openHerdrRunLayout(input, ports) {
   const parent=await lookupRepositoryParent({cwd:invokingSource,repository:input.repository,commonDir},ports);
   if(parent.state!=='ready')throw problem('repository_parent_unverified');
   const sourceRoot=parent.root,key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
-  let repo=registry.repositories.find(r=>r.key===key);
+  let repo=namespace(registry,key,commonDir);
   const pending=registry.runs.find(r=>r.runId===input.runId);
   const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
   if(pending && (pending.commonDir!==commonDir || pending.cwd!==cwd ||
@@ -105,6 +112,10 @@ export async function openHerdrRunLayout(input, ports) {
   const refused=pending && !pending.workspaceId && !pending.rootPaneId && !pending.rootTabId && !pending.rootTerminalId &&
     (pending.phase==='refused'&&pending.refusal==='linked_worktree_source' ||
      pending.phase==='intent'&&!pending.retriedRefusal&&input.preAgentRefusal==='linked_worktree_source');
+  // A newly selected namespace cannot move a saved run to a different parent.
+  // The confirmed linked-source recovery below starts from this same saved binding.
+  if(pending && (!repo || pending.repoWorkspaceId!==repo.workspaceId))throw problem('herdr_run_binding_changed');
+  if(pending && pending.phase!=='ready' && !refused)throw problem('layout_allocation_uncertain');
   if(refused){
     if(pending.cwd!==cwd || rows.some(w=>w.worktree?.checkout_path===cwd))throw problem('layout_allocation_uncertain');
     pending.phase='refused';pending.refusal='linked_worktree_source';
@@ -131,10 +142,16 @@ export async function openHerdrRunLayout(input, ports) {
     if(repo.commonDir!==commonDir)throw problem('repository_checkout_changed');
     await ownedRepository(rows,repo,command);
   } else {
-    const clashes=registry.repositories.filter(r=>r.repository.split('/')[1].toLowerCase()===name.toLowerCase());
-    const label=clashes.length||rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
+    const peers=registry.repositories.filter(r=>String(r.key).toLowerCase()===key);
+    const clashes=registry.repositories.filter(r=>String(r.key).toLowerCase()!==key && r.repository.split('/')[1].toLowerCase()===name.toLowerCase());
+    const label=peers.length ? `${key}@${createHash('sha256').update(commonDir,'utf8').digest('hex').slice(0,12)}` :
+      clashes.length||rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
     if(rows.some(w=>w.label===label))throw problem('repository_label_unavailable');
-    for(const other of clashes) {
+    for(const other of peers.length ? [] : clashes) {
+      // Only a short label needs cross-repository qualification. Saved qualified
+      // checkout labels belong to their namespace and must remain unchanged.
+      const candidate=rows.find(w=>w.workspace_id===other.workspaceId);
+      if(candidate?.label?.toLowerCase()!==name.toLowerCase())continue;
       if(other.phase!=='ready')throw problem('layout_allocation_uncertain');
       const existing=await ownedRepository(rows,other,command);
       if(existing.label!==other.repository) {
@@ -205,7 +222,7 @@ export async function closeHerdrRunLayout({runId,cwd,layout}, ports) {
 // Returns true when it closed or was already gone; a workspace still in use (more tabs or panes, or open runs) stays.
 export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) {
   const directory=directoryFor(ports),registry=await readRegistry(directory),{command,checkpoint}=ports;
-  const repo=registry.repositories.find(r=>r.key===String(repository).toLowerCase());
+  const repo=namespace(registry,String(repository).toLowerCase(),commonDir);
   if(!repo||repo.phase!=='ready'||repo.commonDir!==commonDir)return false;
   if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
   const rows=await inventory(command);
