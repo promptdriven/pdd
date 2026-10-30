@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 6571256d92a0045661b0e172b60de705a1c464c69f68a33166745b87b0e72d72).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 2524e125afc7ad604082e06eb8b91273817b4880cdbbaffd9192f440dbcc2c91).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
@@ -77,6 +77,7 @@ function validateMap(map, part) {
   if (typeof map.synthetic !== 'boolean') invalid('synthetic');
   for (const field of ['initial_state', 'state_schema']) if (!plain(map[field])) invalid(field);
   for (const field of ['screens', 'routes', 'handlers', 'stylesheets']) if (!Array.isArray(map[field])) invalid(field);
+  for (const screen of map.screens) required(screen, ['id', 'prompt_path', 'operation', 'source', 'format', 'input', 'result_pointer'], 'screen');
   if (map.router !== null) required(map.router, ['handler', 'input', 'result_pointer'], 'router');
   for (const route of map.routes) required(route, ['name', 'screen', 'input'], 'route');
   for (const handler of map.handlers) {
@@ -88,10 +89,10 @@ function validateMap(map, part) {
   }
 }
 
-function joinMaps(product, parts, maps, chain, encode) {
+function joinMaps(product, parts, maps, chain, encode, selectedParts) {
   maps.forEach((map, index) => validateMap(map, parts[index]));
   let scratch = 'product_after';
-  while (parts.includes(scratch)) scratch += '_';
+  while (selectedParts.includes(scratch)) scratch += '_';
   const slots = Object.fromEntries(chain.map((operation, index) => [String(index), checkInput(null, operation.resultSchema, 0).refusals.length
     ? { oneOf: [{ type: 'null' }, operation.resultSchema] } : operation.resultSchema]));
   const initial = Object.fromEntries(parts.map((part, index) => [part, maps[index].initial_state]));
@@ -184,7 +185,8 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
     if (cached.has(path)) return cached.get(path);
     const stat = ports.statFile(join(root, path));
     if (stat?.is_symlink) throw new PreflightError(4, `${path}: symbolic links are not allowed.`);
-    if (!stat?.exists) { if (optional) return null; badMap(`${path}: required source file is missing.`); }
+    if (!stat || typeof stat.exists !== 'boolean') throw new PreflightError(4, `${path}: source file could not be inspected.`);
+    if (!stat.exists) { if (optional) return null; badMap(`${path}: required source file is missing.`); }
     const value = ports.readFile(join(root, path));
     const text = typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString('utf8') : null;
     if (text === null) badMap(`${path}: the file reader did not return UTF-8 bytes.`);
@@ -261,8 +263,12 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
       if (!entry || !plain(entry.result_schema)) badMap(`${handler.prompt_path}: missing operation/result schema ${handler.operation}.`);
       chain.push({ handler, resultSchema: entry.result_schema });
     }
-    const maps = selected.map(part => parseJsonValue(read(`app/maps/${part}.json`)));
-    const joined = joinMaps(product, selected, maps, chain, stringifyJsonValue);
+    const mapped = selected.flatMap(part => {
+      const text = read(`app/maps/${part}.json`, true);
+      return text === null ? [] : [{ part, map: parseJsonValue(text) }];
+    });
+    if (!mapped.length) badMap('No screen is available: the selected product parts have no app map; Runtime v1 requires an initial screen.');
+    const joined = joinMaps(product, mapped.map(item => item.part), mapped.map(item => item.map), chain, stringifyJsonValue, selected);
     return { appMapPath, seedPath, files: [{ path: appMapPath, content: stringifyJsonValue(joined.map) }, { path: seedPath, content: stringifyJsonValue(world) }],
       parts: selected, journey: journey ?? null, tapOperations: joined.tapOperations, labels: joined.labels };
   } catch (error) {

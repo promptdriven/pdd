@@ -33,7 +33,7 @@ test('three selected parts with two maps retain server seed and chain; initial s
   assert.deepEqual(result.parts, ['server', 'phone', 'barista']);
   assert.equal(map.initial_screen, 'phone/home');
   assert.deepEqual(map.screens.map(row => row.id), ['phone/home', 'barista/home']);
-  assert.deepEqual(Object.keys(map.initial_state), ['phone', 'barista', 'product_after']);
+  assert.deepEqual(Object.keys(map.initial_state).sort(), ['barista', 'phone', 'product_after']);
   assert.deepEqual(map.initial_state.phone, { selected: 'phone' });
   assert.deepEqual(map.initial_state.barista, { selected: 'barista' });
   for (const handler of map.handlers) {
@@ -81,6 +81,6 @@ test('scratch namespace reserves screenless selected part names too', () => {
   f.files.set('/project/prompts/product_after/seed.json', f.files.get('/project/prompts/server/seed.json'));
   f.files.set('/project/prompts/product_after/product_after.prompt.md', f.files.get('/project/prompts/server/server.prompt.md'));
   const map = mapOf(f.compose());
-  assert.deepEqual(Object.keys(map.initial_state), ['phone', 'barista', 'product_after_']);
+  assert.deepEqual(Object.keys(map.initial_state).sort(), ['barista', 'phone', 'product_after_']);
   assert.equal(map.handlers[0].after[0].bind, '/product_after_/0');
 });

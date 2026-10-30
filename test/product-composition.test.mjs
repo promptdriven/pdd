@@ -109,8 +109,13 @@ test('journey progress uses actual selected source identity across its parts', a
   const source = { kind: 'runtime-capture-v1', tests: ['test/J1.json'], sha256: captureSource(root, { tests: ['test/J1.json'], appMap: null }).sha256 };
   const run = { number: 81, root, state: 'running', pr: [], runtimeHistory: [{ at: 1, source,
     summary: 'Runtime check (J1-coffee-pickup): ✓ 2 of 2 criteria\nRuntime check (J10-unrelated): ✓ 1 of 1 criteria' }] };
+  const issue = { number: 81, body: '<!-- pdd-product: run=journeys -->', user: { login: 'project-member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z', repository_url: 'https://api.github.com/repos/example/coffee' };
+  let savedState = null;
   const ports = { listRuns: async () => [run], resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }), planOnBase: async () => true,
-    issuePage: async ({ marker, page }) => ({ items: page === 1 && marker === '<!-- pdd-product: run=journeys -->' ? [{ number: 81, body: marker, user: { login: 'project-member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z' }] : [], total_count: marker === '<!-- pdd-product: run=journeys -->' ? 1 : 0, incomplete_results: false }),
+    readProductState: async () => ({ json: savedState }), writeProductState: async ({ json }) => { savedState = json; return {}; },
+    lockProductState: async () => ({ handle: 'owned-test-lock' }), unlockProductState: async () => ({}), now: async () => ({ milliseconds: 100000 }),
+    issueByNumber: async () => issue,
+    issuePage: async ({ page }) => ({ items: page === 1 ? [issue] : [], total_count: 1, incomplete_results: false }),
     timelinePage: async () => [] };
   const journey = async () => (await productStatus({ cwd: root }, ports)).parts.find(row => row.part === 'journeys');
   assert.deepEqual(await journey(), { part: 'journeys', total: 1, pass: 1, stale: 0, notRun: 0 });

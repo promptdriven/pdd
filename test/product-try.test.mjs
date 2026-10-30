@@ -11,7 +11,7 @@ function coffee(t) {
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), repo, { recursive: true }); mkdirSync(home);
   for (const part of ['phone', 'server', 'barista']) {
     const path = join(repo, `app/maps/${part}.json`);
-    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('examples/coffee-pickup/', ''));
+    if (existsSync(path)) writeFileSync(path, readFileSync(path, 'utf8').replaceAll('examples/coffee-pickup/', ''));
     const prompt = join(repo, `prompts/${part}/${part === 'barista' ? 'board' : part}.prompt.md`);
     writeFileSync(prompt, readFileSync(prompt, 'utf8').replaceAll('examples/coffee-pickup/', ''));
   }
@@ -63,7 +63,7 @@ test('product Try uploads one map and merged world through the ordinary scenario
   assert.deepEqual(scenario.steps, setup.scenario.steps);
   assert.deepEqual(scenario.criteria, setup.scenario.criteria);
   const map = JSON.parse(extract(post.tar, request.app_map));
-  assert.deepEqual(map.screens.map(screen => screen.id), ['phone/menu', 'server/status', 'barista/board']);
+  assert.deepEqual(map.screens.map(screen => screen.id), ['phone/menu', 'barista/board']);
   assert.equal(map.handlers[0].after.length, 2);
   assert.equal(map.handlers.find(rule => rule.screen === 'phone/menu').next.screen, 'barista/board');
   assert.equal(map.handlers.find(rule => rule.screen === 'barista/board').next.screen, 'phone/menu');
@@ -162,7 +162,7 @@ test('product Try uses an absent upload pair without replacing authored JSON', a
   assert.equal(JSON.parse(extract(post.tar, 'contracts/product-seed_2.json')).journeyOnly, true);
   assert.equal(JSON.parse(extract(post.tar, post.request.seed)).initial_world.journeyOnly, true);
   assert.deepEqual(JSON.parse(extract(post.tar, post.request.seed)).steps, setup.scenario.steps);
-  assert.equal(JSON.parse(extract(post.tar, post.request.app_map)).screens.length, 3);
+  assert.equal(JSON.parse(extract(post.tar, post.request.app_map)).screens.length, 2);
   const names = spawnSync('tar', ['-tf', '-'], { input: post.tar });
   assert.equal(names.status, 0);
   for (const [path, text] of Object.entries(authored)) {

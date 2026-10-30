@@ -6,7 +6,7 @@ import { productStatus } from '../src/product.mjs';
 
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce((item, token) => item?.[token.replace(/~1/g, '/').replace(/~0/g, '~')], value);
 
-for (const name of ['product-compose-try', 'product-journey-seed']) test(`${name}: unchanged prompt-space cases execute actual public module functions`, async () => {
+for (const name of ['product-compose-try', 'product-journey-seed', 'product-server-without-screen', 'product-map-field-diagnostics']) test(`${name}: unchanged prompt-space cases execute actual public module functions`, async () => {
   const scenario = JSON.parse(readFileSync(new URL(`./runtime/${name}.json`, import.meta.url)));
   const world = structuredClone(scenario.initial_world);
   const invoke = (resource, args) => {
@@ -21,7 +21,12 @@ for (const name of ['product-compose-try', 'product-journey-seed']) test(`${name
     return file.content;
   };
   const ports = {
-    ...Object.fromEntries(['issuePage','timelinePage','pullRequest','currentActor'].filter(name => scenario.simulation['github.' + name]).map(name => [name, async args => { const value = invoke('github.' + name, args); return value.json ? JSON.parse(value.json) : value; }])),
+    readProductState: async args => invoke('productState.read', args),
+    writeProductState: async args => invoke('productState.write', args),
+    lockProductState: async args => invoke('productState.lock', args),
+    unlockProductState: async args => invoke('productState.unlock', args),
+    now: async () => invoke('clock.now', {}),
+    ...Object.fromEntries(['issuePage','issueByNumber','timelinePage','pullRequest','currentActor'].filter(name => scenario.simulation['github.' + name]).map(name => [name, async args => { const value = invoke('github.' + name, args); return value.json ? JSON.parse(value.json) : value; }])),
     readFile, statFile(path) { const file = world.files[path]; return { exists: !!file, is_symlink: file?.is_symlink ?? false, size: file ? Buffer.byteLength(file.content) : 0 }; },
     listRuns: args => JSON.parse(invoke('runs.list', args).json),
     storyEvidence: run => JSON.parse(invoke('runs.evidence', { run_json: JSON.stringify(run) }).json),
