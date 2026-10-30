@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d4f71fa91ffef6ab3819b5b1eca7d1ec37a12f868ef9924706f3a9a001867dfb).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 752a2e169063849489e7a9f4b327d751fcc901e469acaa0163dd572774c49500).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -175,10 +175,13 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingId) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
+    // This acquisition still owns its original ticket even if wall time jumps
+    // before the next heartbeat. Other owners retain ordinary expiry rules.
+    if (row.state === 'waiting' && row.id === waitingId) continue;
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
@@ -225,7 +228,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   try {
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
-      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; });
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, id);
       if (ended()) break;
       // Dead waiters are safe to remove by immutable ticket path without a claim.
       for (const item of snapshots.filter(item => item.row.state === 'waiting')) {

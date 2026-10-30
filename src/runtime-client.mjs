@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 3b34bd5d40da916ac615bc5bd41514688950067270471878d08e60ac391321c9).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b67f1883c66ee648ed3a2f6de69b66f379c035fa0506a10f02d35c729f958c69).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -347,37 +347,54 @@ async function waitBudget(context, wait, deadline = context.deadline) {
   }
   return !context.interrupted && context.ports.now() < deadline;
 }
-const capacityCache = new Map();
+const capacityCache = new Map(), interruptedAdmissions = new WeakSet();
 async function readCapacity(context, deadline, refresh) {
   const key = JSON.stringify([context.origin, context.identity.login, context.identity.userId]), now = context.ports.now();
   let entry = capacityCache.get(key);
   if (!entry || !entry.pending && (refresh || now < entry.at || now - entry.at >= 10_000)) {
-    entry = { at: now, pending: true };
-    entry.promise = context.runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - now))).then(reply => {
+    entry = { at: now, pending: true, observers: 0, controller: new AbortController() };
+    // Capacity is shared across commands. Its finite transport budget remains
+    // bounded by the initiating phase, but no one observer owns its cancellation.
+    const runtime = new Runtime({ origin: context.origin, token: context.identity.token, ports: context.ports, signal: entry.controller.signal });
+    entry.promise = runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - now))).then(reply => {
       entry.pending = false; entry.at = context.ports.now();
-      // Failed advisory reads must never hide later maintenance announcements.
-      if (!(reply.status === 404 || reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) && capacityCache.get(key) === entry)
-        capacityCache.delete(key);
+      // Keep unclear replies distinct and reusable until this completion TTL.
+      // Recognized access gates retain their ordinary stop/recheck behavior.
+      if ((blockingAnswer(reply) || reply.status === 401 || gateText(reply)) && capacityCache.get(key) === entry) capacityCache.delete(key);
       return reply;
     });
     capacityCache.set(key, entry);
   }
-  // A coalesced read can belong to a longer-lived caller. Bound this observer by
-  // its own remaining phase budget without cancelling another caller's request.
-  const remaining = deadline - context.ports.now();
-  if (!Number.isFinite(remaining)) return entry.promise;
+  entry.observers++;
+  const timers = context.ports.timers ?? { setInterval, clearInterval };
   let timer, stop;
   try {
     return await Promise.race([entry.promise, new Promise(done => {
-      stop = () => done({ lost: true });
-      timer = setTimeout(stop, Math.max(0, remaining)); context.signal?.addEventListener('abort', stop, { once: true });
+      stop = () => done(null);
+      const observeDeadline = () => {
+        if (timer !== undefined) { timers.clearInterval(timer); timer = undefined; }
+        if (context.interrupted || context.signal?.aborted || context.ports.now() >= deadline) { stop(); return; }
+        if (Number.isFinite(deadline)) timer = timers.setInterval(observeDeadline, Math.max(1, Math.min(60_000, deadline - context.ports.now())));
+      };
+      context.signal?.addEventListener('abort', stop, { once: true });
+      observeDeadline();
     })]);
-  } finally { clearTimeout(timer); context.signal?.removeEventListener('abort', stop); }
+  } finally {
+    if (timer !== undefined) timers.clearInterval(timer);
+    context.signal?.removeEventListener('abort', stop);
+    if (--entry.observers === 0 && entry.pending) {
+      // No command still needs this read. Cancel ordinary transport work and
+      // never cache observer cancellation as a completed unclear response.
+      if (capacityCache.get(key) === entry) capacityCache.delete(key);
+      entry.controller.abort();
+    }
+  }
 }
 async function capacityReady(context, deadline) {
   let refresh = !!context.admissionMaintenance;
   while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
     const reply = await readCapacity(context, deadline, refresh);
+    if (reply === null || context.interrupted || context.signal?.aborted || context.ports.now() >= deadline) return false;
     const blocked = blockingAnswer(reply);
     const stop = blocked || (reply.status === 401 ? AUTH_TEXT : gateText(reply) ? 'The runtime opens soon.' : null);
     if (stop) { context.stopped = { code: 'blocked', message: stop }; throw new Stop(5, stop); }
@@ -404,10 +421,14 @@ async function admission(context, kind, target, deadline = context.deadline) {
     deadline: Number.isFinite(deadline) ? deadline : null }, slotPorts(context, deadline));
   if (!reservation) return false;
   target.reservation = reservation;
+  context.waitCause = 'server capacity';
   context.reservations ??= new Set(); context.reservations.add(reservation);
   let ready = false;
   try { ready = await capacityReady(context, deadline); return ready && !context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline; }
-  finally { if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context, deadline)); target.reservation = null; } }
+  finally {
+    if (context.interrupted) interruptedAdmissions.add(target);
+    if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context, deadline)); target.reservation = null; }
+  }
 }
 
 // One answer to a POST, as the row table of the spec.
@@ -664,10 +685,15 @@ async function sendCheck(context, row) {
 async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
   const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
-  if (!await admission(context, 'check', row)) return;
+  if (!await admission(context, 'check', row)) {
+    if (context.interrupted && interruptedAdmissions.has(row)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+    return;
+  }
   adoptClaims(context, row);
   if (row.request_ids.length !== attempt || !['ready', 'waiting'].includes(row.state) || context.interrupted || context.ports.now() >= context.deadline) {
-    await finishReservation(context, row, { state: 'not_run' }); return;
+    await finishReservation(context, row, { state: 'not_run' });
+    if (context.interrupted && row.request_ids.length === attempt && ['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+    return;
   }
   if (row.restart_pending) {
     const restartPath = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
@@ -701,6 +727,7 @@ async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline) {
     await finishReservation(context, row, { state: 'not_run' });
     adoptClaims(context, row);
+    if (context.interrupted) row.note = { code: null, message: 'Stopped before sending.' };
     return;
   }
   row.attempts = (row.attempts ?? 0) + 1;
@@ -767,7 +794,9 @@ async function runLint(context, complete = false) {
   const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
-  const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
+  const stopped = () => ({ kind: 'not_run', note: { code: null, message: `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
+  const busy = () => context.interrupted && interruptedAdmissions.has(context.lint) ? stopped()
+    : ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
   const pause = async (wait, maintenance = false) => {
     context.waitCause = maintenance ? 'maintenance' : 'server capacity';
     if (context.interrupted || context.ports.now() >= lintEnd) return false;
@@ -775,14 +804,14 @@ async function runLint(context, complete = false) {
     return waitBudget(context, wait, lintEnd);
   };
   for (;;) {
-    if (context.interrupted) return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
+    if (context.interrupted) return stopped();
     if (context.ports.now() >= lintEnd) return busy();
     if (!await admission(context, 'lint', context.lint, lintEnd)) return busy();
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
     if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
-    if (verdict.kind === 'not_sent') return busy();
+    if (verdict.kind === 'not_sent') return context.interrupted ? stopped() : busy();
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;
     // Unknown dispatch still reads only this ID; only a confirmed terminal capacity refusal permits another attempt.
@@ -972,7 +1001,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
     for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); throw new Stop(3, pendingLintMessage(context, lint.answer)); }
-  if (lint.kind === 'not_run' && lint.note?.code === 'lint-busy' && context.json) {
+  if (lint.kind === 'not_run' && context.json) {
     for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, note: lint.note });
     saveBatch(context); line(ports.stderr, lint.note.message);
     line(ports.stdout, JSON.stringify({ batch, repo: root, exit_code: 5, lint_state: 'not_run', summary_line: `Lint did not run. 0 AI calls. No checks were sent.`, coverage: context.coverage, problems: [],
@@ -1634,13 +1663,13 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     let request, verdict, reply, done;
     const setup = { request_ids: [], reservation: null };
     for (;;) {
-      if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, 'The runtime stayed busy until the Try setup wait ended. No new Try was sent.');
+      if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The runtime stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
         tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
-      if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
-      if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
+      if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
+      if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
       store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
