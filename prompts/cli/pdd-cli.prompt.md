@@ -16,6 +16,7 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 ## Dependencies
 
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for stable route identity and public command spelling.
 - [Contract commands](contracts.prompt.md): required generation and verification
   context for local list/sync dispatch; the syntax-only Runtime entry does not
   bind these native effects.
@@ -32,6 +33,8 @@ Native authoring/generation uses existing imported project APIs and their owner 
 ## Workflow dispatch
 
 The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+
+For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Runtime resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
@@ -103,7 +106,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "55615eb86737fa59761a14bedd62a5417de6fd00179339a128aac06c12f04d38",
+  "prose_sha256": "9a5e05f073494799a25359806f6995018c5d0f8944880ad4da5baa844254ec1b",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
@@ -128,6 +131,14 @@ finite local cause and returns 5. Catalog owns all syntax.
       "ref": {"type": "string"}, "test": {"type": "string"},
       "expect": {"type": "string"}, "cwd": {"type": "string"}},
       "required": ["ref", "test", "expect", "cwd"], "additionalProperties": false},
+    "result_schema": {"type": "object", "properties": {
+      "exitCode": {"type": "integer"}, "message": {"type": "string"}},
+      "required": ["exitCode", "message"], "additionalProperties": false}
+  }, {
+    "name": "requestUptake", "access": "write",
+    "arguments_schema": {"type": "object", "properties": {
+      "requestId": {"type": "string"}, "summary": {"type": "string"}, "cwd": {"type": "string"}},
+      "required": ["requestId", "summary", "cwd"], "additionalProperties": false},
     "result_schema": {"type": "object", "properties": {
       "exitCode": {"type": "integer"}, "message": {"type": "string"}},
       "required": ["exitCode", "message"], "additionalProperties": false}
