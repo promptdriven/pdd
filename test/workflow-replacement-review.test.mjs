@@ -61,6 +61,7 @@ test('stopped exact replacement session resumes without fresh identity',async t=
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('lost'),{code:'lost'});return healthy(args);};
  await open(f,{newSession:true});const pending=attempt(f);
+ f.tick(30_000); // Approved startup grace expires before exact-session recovery.
  f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}]; f.ports.herdr=healthy;
  const out=await open(f,{newSession:true});assert.equal(out.exitCode,0,out.message);
  const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chats.at(-1).session.id,pending.replacement.session.id);
@@ -117,6 +118,7 @@ test('lost exact-session resume cannot dispatch twice before observation',async 
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('lost'),{code:'lost'});return healthy(args);};
  await open(f,{newSession:true});const pending=attempt(f);let resumes=0;
+ f.tick(30_000); // Approved startup grace expires before exact-session recovery.
  f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}];
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){resumes++;throw Object.assign(Error('lost'),{code:'lost'});}return healthy(args);};
  assert.equal((await open(f,{newSession:true})).exitCode,1);
@@ -131,7 +133,7 @@ for(const recovery of [{closeAcknowledged:'true'},{resumeRequested:1},{allocatio
  assert.equal((await open(f,{newSession:true})).exitCode,1);assert.equal(readFileSync(path,'utf8'),before);assert.equal(f.herdr.calls.length,count);
 });
 
-test('lost allocation recovers its unique attempt after public progress creates a peer tab',async t=>{
+test('lost allocation recovers its unique attempt without launch after public progress creates a peer tab',async t=>{
  const f=await fixture(t);assert.equal((await f.run()).exitCode,0);
  const run=f.record(),original=run.chats.at(-1),healthy=f.ports.herdr;
  assert.equal((await runner.stepDone({step:'scope',summary:'Plan prepared',cwd:run.root},f.agentPorts())).exitCode,0);
@@ -143,11 +145,11 @@ test('lost allocation recovers its unique attempt after public progress creates 
  const before=f.record(),current=before.chats.find(chat=>chat.area==='build');assert.ok(current);
  const creates=f.herdr.calls.filter(args=>args[0]==='tab'&&args[1]==='create').length;
  const recovered=await open(f,{newSession:true});assert.equal(recovered.exitCode,0,recovered.message);
- const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chatReplacement.phase,'launched');
+ const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chatReplacement.phase,'ended');
  assert.equal(after.area,before.area);assert.deepEqual(after.gate,before.gate);assert.deepEqual(after.done,before.done);assert.deepEqual(after.approvals,before.approvals);
  assert.deepEqual(after.chats.find(chat=>chat.area==='build'),current);
  assert.equal(after.abandonedChats.length,1);assert.equal(after.abandonedChats[0].paneId,original.paneId);
  assert.equal(after.chats.filter(chat=>chat.area===original.area).length,1);
  assert.equal(f.herdr.calls.filter(args=>args[0]==='tab'&&args[1]==='create').length,creates);
- assert.equal(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run'&&args[2]===after.chatReplacement.replacement.paneId).length,1);
+ assert.equal(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run'&&args[2]!==current.paneId&&args[2]!==original.paneId).length,0);
 });

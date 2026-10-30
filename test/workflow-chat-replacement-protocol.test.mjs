@@ -12,7 +12,7 @@ import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacement.json', import.meta.url), 'utf8'));
 const inputs = kind => vectors.cases.filter(c => c.input.kind === kind).map(c => c.input);
-const phases = ['intent', 'closeRequested', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched'];
+const phases = ['intent', 'closeRequested', 'closeRequested', 'closed', 'createRequested', 'createRequested', 'prepared', 'launchRequested', 'launched'];
 const lost = () => Object.assign(Error('Synthetic reply lost'), { code: 'server_unavailable' });
 const copy = value => JSON.parse(JSON.stringify(value));
 const effect = args => args[0] === 'pane' && args[1] === 'run' || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]);
@@ -365,11 +365,11 @@ for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-
       assert.equal(result.exitCode, 0, result.message);
       const after = f.record();
       assert.equal(after.chatReplacement.id, pending.id);
-      assert.equal(after.chatReplacement.phase, 'launched');
+      assert.equal(after.chatReplacement.phase, 'ended');
       assert.equal(after.area, saved.area);
       assert.deepEqual(after.chats.find(chat => chat.area === peer.area), peer);
-      assert.equal(calls(f, 'tab', 'create').length, 1);
-      assert.equal(calls(f, 'pane', 'run').length, 1);
+      assert.equal(calls(f, 'tab', 'create').length, 0);
+      assert.equal(calls(f, 'pane', 'run').length, 0);
     } else {
       assert.notEqual(result.exitCode, 0, 'Unexplained inventory must remain uncertain');
       assert.notEqual((await open(f)).exitCode, 0);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: faf93ea7b1dbca448bd7bd1e5d1adbef41f9ebea9bf8fa6e14627c06c00d7f53).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 691c2643eb5ce3ad46e089be085028d77243c75abb0c8d53b5117ca55898d4fb).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, fsyncSync, unlinkSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -74,7 +74,7 @@ function deps(ports = {}) {
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
 // This run lock is independent of the shared Herdr layout lock. Never wait on a live owner.
-const lockProblem = () => Object.assign(Error('This run is busy or its chat-replacement lock cannot be verified. Inspect chat-replacement.lock and retry.'), { code: 'run_busy' });
+const lockProblem = () => Object.assign(Error('Another open operation holds this run, or its ownership cannot be verified. Wait for it to finish and retry.'), { code: 'run_busy' });
 function readLock(path) {
   if (!lstatSync(path).isFile() || lstatSync(path).size > 4096) throw lockProblem();
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -109,7 +109,6 @@ function acquireRunLock(runDir) {
   return () => { try { if (sameOwner(owner, readLock(path))) unlinkSync(path); } catch { /* Never remove another or unreadable owner. */ } };
 }
 async function lockedMutation(args, ports, action) {
-  if (args.area === undefined && !args.newSession) return action(args, ports);
   const p = deps(ports), found = await resolveRun(args.ref, { cwd: args.cwd }, p);
   if (!found.run) return action(args, ports);
   let release;
@@ -288,7 +287,7 @@ const chatFailureWords = run => {
   const failure = activeChatFailure(run);
   return `the ${failure.area} chat ${failure.phase === 'start' ? 'startup' : 'open'} was not confirmed (${failure.code}: ${failure.message}). Run pdd workflow open ${run.number} after Herdr is available.`;
 };
-const chatStatusWords = (run, chat) => activeChatFailure(run) ? chatFailureWords(run)
+const chatStatusWords = (run, chat) => run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase) ? `chat replacement pending at ${run.chatReplacement.phase}; run pdd workflow open ${run.number} --new` : activeChatFailure(run) ? chatFailureWords(run)
   : chat === 'unavailable' ? `Herdr status unavailable (server_unavailable); chat activity is unknown. Run pdd workflow open ${run.number} after Herdr is available.`
   : `chat startup is not confirmed. Run pdd workflow open ${run.number} after Herdr is available.`;
 function recordChatFailure(run, error, phase, p) {
@@ -1361,7 +1360,7 @@ async function refreshPr(run, p) {
 const STOPPED = new Set(['agent_not_found', 'server_not_running']);
 const START_GRACE_MS = 30_000;
 async function chatState(run, p) {
-  if (run.chatReplacement && !['launched','rolledBack'].includes(run.chatReplacement.phase)) return 'unconfirmed';
+  if (run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase)) return 'unconfirmed';
   if (ended(run)) return null;
   const area = run.areas[run.area], failure = activeChatFailure(run), chat = currentChat(run);
   if (!chat) return failure || !run.gate && !prOf(run, area?.name) ? 'unconfirmed' : null;
@@ -1388,7 +1387,7 @@ function detail(run, chat = null, facts = {}) {
   const area = run.areas[run.area], tab = currentChat(run) ?? run.chats?.at(-1);
   const ci = pr => ({ passing: 'CI passing', failing: 'CI failing', pending: 'CI running', none: 'no CI checks' }[pr.ci] ?? 'CI unknown');
   const steps = (area?.steps ?? []).map(step => `${step} ${run.done[step] ? 'done' : 'to do'}${run.done[step]?.summary ? ` ("${clip(oneLine(run.done[step].summary), 120)}")` : ''}`);
-  const pending = run.chatReplacement && !['launched','rolledBack'].includes(run.chatReplacement.phase);
+  const pending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const next = pending ? `pdd workflow open ${run.number} --new` : activeChatFailure(run) || ['unconfirmed', 'unavailable'].includes(chat) ? `pdd workflow open ${run.number}`
     : run.gate?.kind === 'ask-code' && drafts.length ? `cd ${shell(run.root)} && ${drafts.map(path => `pdd approve ${shell(path)}`).join(' && ')}, then pdd workflow approve ${run.number} (make the code PR)`
     : run.gate?.kind === 'ask-code' ? `pdd workflow approve ${run.number}  (make the code PR)   or stop here and merge PR 1`
@@ -1411,7 +1410,7 @@ function detail(run, chat = null, facts = {}) {
 const GROUPS = ['waiting', 'working', 'pr-open', 'done', 'cancelled'];
 function summary(run, timeZone, chat = null, { drafts = [], nothing = false } = {}) {
   const area = run.areas[run.area], ask = askArea(run), running = run.state === 'running';
-  const replacementPending = run.chatReplacement && !['launched','rolledBack'].includes(run.chatReplacement.phase);
+  const replacementPending = run.chatReplacement && !['launched','rolledBack','ended'].includes(run.chatReplacement.phase);
   const problem = replacementPending || activeChatFailure(run) || ['unconfirmed', 'unavailable'].includes(chat);
   const question = openQuestion(run), writing = !problem && Boolean(run.gate) && !question && chat === 'working';
   const group = run.state === 'cancelled' ? 'cancelled' : run.state === 'completed' ? 'done' : problem ? 'waiting' : writing ? 'working'
@@ -1468,7 +1467,7 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   return done(detail(run, chat, facts));
 }
 
-const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack'];
+const replacementPhases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched', 'rolledBack', 'ended'];
 function validReplacement(record, run) {
   if (!record || typeof record !== 'object' || Array.isArray(record) || Object.keys(record).some(key => !['id', 'area', 'phase', 'at', 'original', 'replacement', 'recovery'].includes(key)) || !validSessionId(record.id) || !Number.isSafeInteger(record.at) || record.at < 0 || !replacementPhases.includes(record.phase) || !run.areas.slice(0, run.area + 1).some(area => area.name === record.area)) return false;
   const recovery = record.recovery;
@@ -1479,7 +1478,7 @@ function validReplacement(record, run) {
     || recovery.tabIdsBefore !== undefined && (!Array.isArray(recovery.tabIdsBefore) || recovery.tabIdsBefore.some(id => typeof id !== 'string' || !id) || new Set(recovery.tabIdsBefore).size !== recovery.tabIdsBefore.length))) return false;
   const chat = value => value && value.area === record.area && value.agent === run.agent && ['tabId', 'paneId', 'workspaceId', 'messageFile'].every(key => typeof value[key] === 'string' && value[key]) && (value.session == null || value.session.agent === value.agent && validSessionId(value.session.id));
   if (!chat(record.original) || typeof record.original.originalMessageFile !== 'string' || !record.original.originalMessageFile || record.original.messageFile !== join(run.runDir, 'abandoned-chats', `${record.id}-start.md`)) return false;
-  if (record.phase === 'rolledBack') return true;
+  if (['rolledBack','ended'].includes(record.phase)) return true;
   const prepared = replacementPhases.indexOf(record.phase) >= 4;
   if (!prepared) return record.replacement === undefined;
   const replacement = record.replacement;
@@ -1508,22 +1507,22 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   const selected = area === undefined ? run.area : run.areas.findIndex(item => item.name === area);
   let chat = [...(run.chats ?? [])].reverse().find(item => item.area === run.areas[selected]?.name), started = false;
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
-  if (selected < 0 || selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
+  if (selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
   const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
-  if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
+  if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack','ended'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
   const pending = run.chatReplacement;
   if (pending !== undefined) {
     if (!validReplacement(pending, run)) return fail('The saved chat replacement record is malformed or unknown. Inspect it before opening a chat.');
-    if (!['launched', 'rolledBack'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
+    if (!['launched', 'rolledBack', 'ended'].includes(pending.phase) && !newSession) return fail(`Chat replacement is pending at ${pending.phase}. Retry: pdd workflow open ${run.number} --new`);
   }
 
   try {
     if (newSession) {
-      const recovering = pending && !['launched','rolledBack'].includes(pending.phase);
+      const recovering = pending && !['launched','rolledBack','ended'].includes(pending.phase);
       if (recovering) chat = pending.original;
       const replacementArea = recovering ? run.areas.findIndex(item => item.name === pending.area) : run.area;
       const currentArea = run.areas[replacementArea];
@@ -1543,7 +1542,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         const prior = fresh.chatReplacement;
         const sameAttempt = prior && prior.id === record.id && prior.at === record.at && JSON.stringify(prior.original) === JSON.stringify(record.original);
         if (record.phase === 'intent' && !sameAttempt) {
-          if (prior && !['launched','rolledBack'].includes(prior.phase)) throw Error('Replacement already pending');
+          if (prior && !['launched','rolledBack','ended'].includes(prior.phase)) throw Error('Replacement already pending');
           if (prior?.id === record.id) throw Error('Invalid replacement transition');
           (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
         } else if (!sameAttempt || record.phase === 'intent' && prior.phase !== 'intent') throw Error('Invalid replacement transition');
@@ -1552,11 +1551,12 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
           fresh.chats = fresh.chats.filter(item => item.area !== record.area);
           fresh.chats.push(record.phase === 'rolledBack' ? {...record.original, messageFile: record.original.originalMessageFile} : {...record.replacement});
         }
-        if (['launched','rolledBack'].includes(record.phase) && record.area === fresh.areas[fresh.area]?.name) clearChatFailure(fresh);
+        if (['launched','rolledBack','ended'].includes(record.phase) && record.area === fresh.areas[fresh.area]?.name) clearChatFailure(fresh);
         writeRun(fresh,p);
         Object.assign(run,fresh);
       };
-      chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
+      chat = await restartChat({ run, chat, message, pending: pending && !['launched','rolledBack','ended'].includes(pending.phase) ? pending : undefined }, { ...p, checkpoint });
+      if (run.chatReplacement?.phase === 'ended') return done(`Ended the historical ${chat.area} replacement attempt without launching or resuming it. The current chat and progress are kept.`);
       if (run.chatReplacement?.phase === 'rolledBack') return done(`Restored the usable ${chat.area} chat. The same replacement attempt was rolled back.`);
       return done(`Started one fresh ${chat.area} chat in Herdr session pdd. The run, completed work, gates and approvals are kept.`);
     }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2cbcf26ab268b985aa07835e1adff708ce41dd07f1064745062ba30cf2ff29e6).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2f04c9b212784d71ba0356992c0c6434b435f3a54e17c61e8526326496045c88).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -244,8 +244,9 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
   if (session === PDD_HERDR_SESSION && [chat.paneId,pending?.original?.paneId,pending?.replacement?.paneId].includes(env.HERDR_PANE_ID)) throw problem('own_chat', 'Use another terminal to replace this chat.');
   let record = pending ? JSON.parse(JSON.stringify(pending)) : undefined;
   const save = async phase => { record.phase = phase; await ports.checkpoint(JSON.parse(JSON.stringify(record))); };
-  return withHerdrLayoutLock(async () => {
-    const original = record?.original ?? chat;
+  try {
+  return await withHerdrLayoutLock(async () => {
+    let original = record?.original ?? chat;
     const workspace = (await inventory('workspace')).find(row => row.workspace_id === original.workspaceId);
     if (!workspace || workspace.worktree?.checkout_path !== run.root || workspace.worktree?.repo_key !== run.commonDir || workspace.worktree?.is_linked_worktree !== true) throw invalid();
     let tabs = await inventory('tab',original.workspaceId), panes = await inventory('pane',original.workspaceId);
@@ -258,12 +259,75 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     const observe = async target => {
       let native;
       try { native=(await herdr(['agent','get',target.paneId])).result?.agent; }
-      catch(error) { if(error.code==='agent_not_found') return null; throw error; }
+      catch(error) { if(error.code==='agent_not_found' || error.code==='pane_not_found' && !panes.some(row=>row.pane_id===target.paneId)) return null; throw error; }
       const descriptor=native?.agent_session;
       if (!native || native.pane_id!==target.paneId || native.agent!==(target.agent??run.agent) || !['unknown','working','idle','blocked','done'].includes(native.agent_status) || descriptor!=null && (descriptor.kind!=='id' || !validSessionId(descriptor.value) || descriptor.agent!==undefined && descriptor.agent!==native.agent)) throw invalid();
       if(descriptor?.value && validSessionId(target.session?.id) && descriptor.value!==target.session.id) throw invalid();
       return native;
     };
+    const unexplainedAllocation = () => {
+      const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
+      // Only a saved, completely verified other-area chat explains an added peer.
+      // An unmatched tab alone may be this attempt's allocation after relabelling.
+      return added.filter(tab=>{
+        if(tab.label===record.recovery.allocationLabel) return true;
+        const chats=run.chats??[];
+        const peers=chats.filter(target=>typeof target.area==='string' && target.area && target.area!==record.area && target.tabId===tab.tab_id &&
+          chats.filter(saved=>saved.area===target.area).at(-1)===target);
+        if(peers.length!==1) return true;
+        const peer=peers[0],rows=panes.filter(row=>row.tab_id===tab.tab_id);
+        return peer.workspaceId!==original.workspaceId || tab.workspace_id!==peer.workspaceId || rows.length!==1 ||
+          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId || rows[0].cwd!==run.root ||
+          peer.terminalId && rows[0].terminal_id!==peer.terminalId;
+      });
+    };
+    const historical = () => record && record.area !== run.areas[run.area]?.name;
+    const reconcileHistorical = async (freshDispatchNotSent = false) => {
+      if (!historical()) return;
+      tabs=await inventory('tab',original.workspaceId);panes=await inventory('pane',original.workspaceId);
+      const present=owned(original), native=await observe(original);
+      if (present && native && ['intent','closeRequested'].includes(record.phase)) {
+        await save('rolledBack');throw {historicalChat:{...original,messageFile:original.originalMessageFile}};
+      }
+      if (native) throw uncertain();
+      if (!present && ['intent','closeRequested'].includes(record.phase) && !record.recovery?.closeAcknowledged) {
+        if (!validSessionId(original.session?.id)) throw uncertain();
+        const sessions=await (ports.findNativeSessions??findNativeSessions)({agent:original.agent??run.agent,root:run.root,startedAt:original.startedAt??0,endedAt:now()},
+          {env,...(original.agent==='claude'?{claudeConfigDir:expandHome(original.configDir,env)}:{codexHome:expandHome(original.configDir,env)})});
+        if (!sessions.some(item=>item.id===original.session.id)) throw uncertain();
+      }
+      if(record.phase==='createRequested') {
+        if(!record.recovery?.allocationLabel || !Array.isArray(record.recovery.tabIdsBefore))throw uncertain();
+        const unexplained=unexplainedAllocation();
+        if(unexplained.length) {
+          if(unexplained.length!==1 || unexplained[0].label!==record.recovery.allocationLabel)throw uncertain();
+          const rows=panes.filter(row=>row.tab_id===unexplained[0].tab_id);
+          if(rows.length!==1 || rows[0].cwd!==run.root || rows[0].workspace_id!==original.workspaceId)throw invalid();
+          const native=await observe({...original,tabId:unexplained[0].tab_id,paneId:rows[0].pane_id,session:null});
+          if(native)throw uncertain();
+        }
+      }
+      if(record.replacement) {
+        owned(record.replacement);
+        const live=await observe(record.replacement);
+        if(live) {
+          if(record.phase!=='launchRequested') throw invalid();
+          if(live.agent_session?.value)record.replacement.session={agent:record.replacement.agent,id:live.agent_session.value};
+          delete record.replacement.startUnconfirmed;await save('launched');throw {historicalChat:record.replacement};
+        }
+        if(record.phase==='launchRequested' && !freshDispatchNotSent) {
+          const target=record.replacement;
+          const times=[target.startedAt,target.resumedAt].filter(Number.isFinite);
+          if(times.length && now()-Math.max(...times)<30_000)throw uncertain();
+          if(!validSessionId(target.session?.id))throw uncertain();
+          const sessions=await (ports.findNativeSessions??findNativeSessions)({agent:target.agent,root:run.root,startedAt:target.startedAt,endedAt:now()},
+            {env,...(target.agent==='claude'?{claudeConfigDir:expandHome(target.configDir,env)}:{codexHome:expandHome(target.configDir,env)})});
+          if(!sessions.some(item=>item.id===target.session.id))throw uncertain();
+        }
+      }
+      await save('ended');throw {historicalChat:original};
+    };
+    await reconcileHistorical();
     if (!record) {
       if(!owned(chat)) throw invalid();
       const native=await observe(chat);
@@ -276,7 +340,8 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       const messageFile=join(run.runDir,`${chat.area}-restart-${id}-start.md`);
       fs.writeFileSync(messageFile,message,{flag:'wx',mode:0o600});
       record={id,area:chat.area,phase:'intent',at,original:{...chat,...(native?.agent_session?.value?{session:{agent:chat.agent??run.agent,id:native.agent_session.value}}:{}),originalMessageFile:chat.messageFile,messageFile:archive}};
-      await save('intent'); await save('closeRequested');
+      original=record.original;
+      await save('intent');await reconcileHistorical(); await save('closeRequested');await reconcileHistorical();
       const closed=await herdr(['tab','close',chat.tabId]);
       if(closed?.result?.type!=='ok') throw problem('chat_close_unconfirmed','The tab close reply was not confirmed.');
       record.recovery={closeAcknowledged:true}; await save('closeRequested');
@@ -290,7 +355,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
           if(record.recovery?.resumeRequested) throw uncertain();
           if(!validSessionId(original.session?.id)) throw uncertain();
           record.recovery={...record.recovery,resumeRequested:true};
-          await save(record.phase);
+          await save(record.phase);await reconcileHistorical();
           await herdr(['pane','run',original.paneId,chatCommand({agent:original.agent??run.agent,cwd:run.root,resumeId:original.session.id,configDir:expandHome(original.configDir,env)})]);
         }
         await save('rolledBack');return {...original,messageFile:original.originalMessageFile};
@@ -308,29 +373,18 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     }
     const configDir=expandHome(run.configDir!==undefined?run.configDir:original.configDir,env),agent=original.agent??run.agent;
     const allocate=async()=>{
+      await reconcileHistorical();
       const layout=await openHerdrRunLayout({repository:run.repo,issueNumber:run.number,runId:run.runId,workflowName:run.workflow,stageId:record.recovery.allocationLabel,sourceRoot:run.sourceRoot,cwd:run.root,commonDir:run.commonDir},
-        {command:herdr,checkpoint:async()=>{},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
+        {command:herdr,checkpoint:async()=>{await save(record.phase);await reconcileHistorical();},directory:ports.layoutDirectory,...(ports.execFile?{execFile:ports.execFile}:{})});
       record.replacement={...record.replacement,area:record.area,agent,tabId:layout.tabId,paneId:layout.paneId,terminalId:layout.terminalId,workspaceId:layout.workspaceId,repoWorkspaceId:layout.repoWorkspaceId,label:original.label,startedAt:record.replacement?.startedAt??now(),session:record.replacement?.session??(agent==='claude'?{agent,id:uuid()}:null),configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`)};
     };
     if(record.phase==='closed') {
-      record.recovery={...record.recovery,allocationLabel:`${record.area}-${record.id}`,tabIdsBefore:(await inventory('tab',original.workspaceId)).map(row=>row.tab_id)};
+      record.recovery={...record.recovery,allocationLabel:record.area,tabIdsBefore:(await inventory('tab',original.workspaceId)).map(row=>row.tab_id)};
       await save('createRequested');await allocate();await save('prepared');
     } else if(record.phase==='createRequested') {
       if(!record.recovery?.allocationLabel || !Array.isArray(record.recovery.tabIdsBefore)) throw uncertain();
       const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
-      // Only a saved, completely verified other-area chat explains an added peer.
-      // An unmatched tab alone may be this attempt's allocation after relabelling.
-      const unexplained=added.filter(tab=>{
-        if(tab.label===record.recovery.allocationLabel) return true;
-        const chats=run.chats??[];
-        const peers=chats.filter(target=>typeof target.area==='string' && target.area && target.area!==record.area && target.tabId===tab.tab_id &&
-          chats.filter(saved=>saved.area===target.area).at(-1)===target);
-        if(peers.length!==1) return true;
-        const peer=peers[0],rows=panes.filter(row=>row.tab_id===tab.tab_id);
-        return peer.workspaceId!==original.workspaceId || tab.workspace_id!==peer.workspaceId || rows.length!==1 ||
-          rows[0].workspace_id!==peer.workspaceId || rows[0].pane_id!==peer.paneId || rows[0].cwd!==run.root ||
-          peer.terminalId && rows[0].terminal_id!==peer.terminalId;
-      });
+      const unexplained=unexplainedAllocation();
       if(!unexplained.length) {await save('createRequested');await allocate();}
       else {
         const matching=added.filter(row=>row.label===record.recovery.allocationLabel);
@@ -341,19 +395,23 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       }
       await save('prepared');
     }
+    await reconcileHistorical();
     if(record.phase==='launchRequested') {
       const containerPresent=owned(record.replacement);
       const native=await observe(record.replacement);
       if(!native) {
         if(record.recovery?.resumeRequested) throw uncertain();
         const target=record.replacement;
+        const times=[target.startedAt,target.resumedAt].filter(Number.isFinite);
+        if(times.length && now()-Math.max(...times)<30_000) throw uncertain();
         if(!validSessionId(target.session?.id)) throw uncertain();
         const sessions=await (ports.findNativeSessions??findNativeSessions)({agent,root:run.root,startedAt:target.startedAt,endedAt:now()},
           {env,...(agent==='claude'?{claudeConfigDir:configDir}:{codexHome:configDir})});
         if(!sessions.some(item=>item.id===target.session.id)) throw uncertain();
         if(!containerPresent) {await save('launchRequested');await allocate();}
         record.recovery={...record.recovery,resumeRequested:true};
-        await save('launchRequested');
+        record.replacement.resumedAt=now();
+        await save('launchRequested');await reconcileHistorical();
         try { await herdr(['pane','run',record.replacement.paneId,chatCommand({agent,cwd:run.root,resumeId:target.session.id,configDir})]); }
         catch(error) {error.chat={...record.replacement};throw error;}
       }
@@ -364,9 +422,11 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     tabs=await inventory('tab',original.workspaceId);panes=await inventory('pane',original.workspaceId);
     if(!owned(record.replacement)) {await save('prepared');await allocate();await save('prepared');}
     if(await observe(record.replacement)) throw invalid();
-    record.replacement.startUnconfirmed=true;await save('launchRequested');
+    // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
+    record.replacement.startUnconfirmed=true;await save('launchRequested');await reconcileHistorical(true);
     try {await herdr(['pane','run',record.replacement.paneId,chatCommand({agent,cwd:run.root,messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir})]);}
     catch(error){error.chat={...record.replacement};throw error;}
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
   },{directory:ports.layoutDirectory});
+  } catch(error) {if(error.historicalChat)return error.historicalChat;throw error;}
 }
