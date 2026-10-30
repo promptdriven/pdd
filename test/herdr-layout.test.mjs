@@ -196,3 +196,64 @@ test('2531: missing parent Git metadata never permits changed root identities',a
   await assert.rejects(f.open({stageId:'change'}),/herdr_layout_identity_changed|run_has_open_tabs/,kind);
  }
 });
+
+// A shared Herdr session can already contain a workflow from another clone of
+// this exact origin. IDs and Git common directories must stay checkout-scoped.
+test('2615: independent clones start, reopen and cancel without rebinding peer workspaces', async t => {
+ const f=await fixture(t),first=await f.open(),original=structuredClone(f.workspaces);
+ const secondSource=join(f.root,'second-clone'),secondCwd=join(f.root,'second-run');
+ await mkdir(secondSource);await mkdir(secondCwd);await f.init(secondSource,'alice/coffee');
+ const second={runId:randomUUID(),sourceRoot:secondSource,commonDir:join(secondSource,'.git'),cwd:secondCwd};
+ let layout;
+ await assert.doesNotReject(async()=>{layout=await f.open(second);},'another clone must not be mistaken for changed ownership');
+ assert.notEqual(layout.repoWorkspaceId,first.repoWorkspaceId);
+ assert.deepEqual(f.workspaces.slice(0,original.length),original,'peer labels and Git identities stay unchanged');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.repoWorkspaceId).label,'alice/coffee');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===layout.workspaceId).worktree.repo_key,second.commonDir);
+ const reopened=await f.open({...second,stageId:'change'});
+ assert.equal(reopened.workspaceId,layout.workspaceId);assert.notEqual(reopened.tabId,layout.tabId);
+ const thirdSource=join(f.root,'third-clone'),thirdCwd=join(f.root,'third-run');
+ await mkdir(thirdSource);await mkdir(thirdCwd);await f.init(thirdSource,'alice/coffee');
+ const third={runId:randomUUID(),sourceRoot:thirdSource,commonDir:join(thirdSource,'.git'),cwd:thirdCwd};
+ const thirdLayout=await f.open(third);
+ const {createHash}=await import('node:crypto');
+ assert.equal(f.workspaces.find(w=>w.workspace_id===thirdLayout.repoWorkspaceId).label,
+  `alice/coffee@${createHash('sha256').update(third.commonDir).digest('hex').slice(0,12)}`);
+ await f.module.withHerdrLayoutLock(()=>f.module.closeHerdrRunLayout({...f.input,...second,layout},f.ports),f.ports);
+ assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:second.commonDir},f.ports),true);
+ assert(!f.workspaces.some(w=>w.workspace_id===layout.repoWorkspaceId));
+ assert.deepEqual(f.workspaces.slice(0,original.length),original);
+ assert(f.workspaces.some(w=>w.workspace_id===thirdLayout.repoWorkspaceId));
+ const restart={...second,runId:randomUUID()},restarted=await f.open(restart);
+ assert.notEqual(restarted.workspaceId,layout.workspaceId);
+ assert.equal((await f.open({...restart,stageId:'change'})).workspaceId,restarted.workspaceId);
+ const peer=f.workspaces.find(w=>w.workspace_id===first.workspaceId);peer.worktree.checkout_path='/changed';
+ await assert.rejects(f.open(),/herdr_layout_identity_changed/,'multiple checkouts must not weaken identity checks');
+ assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
+});
+
+test('2615: a later matching legacy repository entry wins over the first same-origin clone', async t => {
+ const f=await fixture(t),first=await f.open();
+ const sourceRoot=join(f.root,'legacy-clone'),cwd=join(f.root,'legacy-run');
+ await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
+ const commonDir=join(sourceRoot,'.git');
+ const made=await f.ports.command(['workspace','create','--cwd',sourceRoot,'--label','alice/coffee','--no-focus']);
+ const {readFile,writeFile}=await import('node:fs/promises'),file=join(f.ports.directory,'registry.json');
+ const registry=JSON.parse(await readFile(file,'utf8'));
+ registry.repositories.push({key:'alice/coffee',repository:'alice/coffee',sourceRoot,commonDir,phase:'ready',
+  workspaceId:made.result.workspace.workspace_id,rootTabId:made.result.tab.tab_id,
+  rootPaneId:made.result.root_pane.pane_id,rootTerminalId:made.result.root_pane.terminal_id});
+ await writeFile(file,JSON.stringify(registry));
+ const input={runId:randomUUID(),sourceRoot,commonDir,cwd};let layout;
+ await assert.doesNotReject(async()=>{layout=await f.open(input);},'find the matching clone even when its repository key repeats');
+ assert.equal(layout.repoWorkspaceId,made.result.workspace.workspace_id);
+ assert.notEqual(layout.repoWorkspaceId,first.repoWorkspaceId);
+ assert.equal(f.calls.filter(args=>args[0]==='workspace'&&args[1]==='create').length,2,'reuse the matching parent');
+ const updated=JSON.parse(await readFile(file,'utf8'));
+ updated.repositories.push({...updated.repositories.at(-1),workspaceId:'ambiguous-parent'});
+ await writeFile(file,JSON.stringify(updated));
+ const mutations=f.calls.filter(args=>['create','open','rename','close'].includes(args[1])).length;
+ await assert.rejects(f.open({...input,stageId:'change'}),/layout_allocation_uncertain/);
+ await assert.rejects(f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir},f.ports),/layout_allocation_uncertain/);
+ assert.equal(f.calls.filter(args=>['create','open','rename','close'].includes(args[1])).length,mutations);
+});
