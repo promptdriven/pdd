@@ -89,25 +89,25 @@ One batch has one writer across processes, including separate terminals. A new C
 explicit lint owns its batch before the first saved record. Batch `--read` and `--retry`
 acquire that same ownership before loading the saved record, and retain it through all
 reads, retry decisions, request-ID persistence, POSTs and final batch/summary saves.
-After waiting, load the current record anew: a competing retry observes the first retry's
-submitted/completed ID and never sends that check again. Different batches remain independent.
-UUID reads retain the raw-receipt-only rule below and do not wait for batch ownership.
+A later retry loads the current record anew and never resends a submitted/completed check.
+Different batches remain independent. UUID reads retain the raw-receipt-only rule below
+and do not acquire batch ownership.
 
-Use the native `acquireRuntimeBatchLock(folder, {signal, timeoutMs})` boundary, replaceable
-by `ports.acquireBatchLock` for runtime-faked execution. It resolves to an idempotent release
-function. Wait at most 30 seconds, shortened by the retry's remaining command budget, and
-stop an interrupted wait without admission. An already interrupted command may acquire
-an immediately free batch to project its saved evidence, with no new network work; keep
-the existing unknown-usage result when terminal evidence is missing. Ownership is never stolen because of age: a slow or
-unresponsive process may still POST. Only a provably dead local process (PID check gives
-ESRCH) permits abandoned owner recovery, serialized against other claimants. A malformed
-owner, uncertain PID status or abandoned acquisition guard fails closed. Release ownership
-on every normal return, interruption and exception. Native state stays private (0700 folder,
-0600 files); never remove another owner's lock. A timeout or interruption exits 3, explains
-that another command is using this batch (or that waiting stopped), and names the same
-`pdd check --read BATCH` recovery command without sending or modifying batch/summary data.
-If an acquisition guard is abandoned, explain that the person must verify no command is
-using this batch before removing its named guard file; do not automatically erase it.
+The native `acquireRuntimeBatchLock(folder, {onWarning})` boundary, replaceable by
+`ports.acquireBatchLock` for runtime-faked execution, resolves to an idempotent release
+function. Atomically create a private lock beside the batch record with exclusive creation;
+record the owner's PID, host and start time. The second command sends nothing and immediately
+exits 2 (the existing saved-batch file error), with one plain line naming the owner and
+`pdd check --read BATCH` after it finishes. Leave batch/summary data unchanged on failure
+to acquire ownership. Do not add a time-based expiry or another check refusal.
+
+Release ownership on every normal return, interruption and exception. Only a provably dead
+process on the same host (PID check gives ESRCH) permits abandoned owner recovery; serialize
+recovery against other claimants, and print one warning line through `onWarning`. A live,
+foreign-host, malformed or unverifiable owner is never displaced. Native folders stay 0700
+and files 0600; never remove another owner's lock. An interrupted command that acquires a
+free batch retains the existing saved-evidence projection, including unknown usage when a
+saved success lacks terminal evidence, without new network work.
 
 ## Preserve recovered check receipts
 

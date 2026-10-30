@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import * as client from '../src/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor, temp } from './runtime-fake.mjs';
 
@@ -42,7 +43,9 @@ test('2675: two same-process retries send one check and keep its receipt and acc
   const r = await fixture(t), before = checks(r.fake).length;
   const results = await Promise.all([r.run({ '--retry': r.batch }), r.run({ '--retry': r.batch })]);
   assert.equal(checks(r.fake).length - before, 1, 'only one held check may be sent');
-  results.forEach(passed);
+  assert.equal(results.filter(r => r.code === 0).length, 1);
+  passed(results.find(r => r.code === 0));
+  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 2); assert.match(busy.err, /pdd check --read/);
   const ids = read(r.file).rows[0].request_ids;
   assert.deepEqual(ids, [checks(r.fake).at(-1).request.requestId]);
   assert.equal(read(join(r.folder, `${ids[0]}.json`)).usage.calls, 4);
@@ -63,16 +66,17 @@ function worker(r, options, words = []) {
   return { child, started: started.promise, done };
 }
 
-test('2675: separate processes serialize retry admission and the waiting process reloads', async t => {
+test('2675: separate processes admit one retry and refuse the live competitor', async t => {
   const r = await fixture(t), before = checks(r.fake).length;
   const a = worker(r, { '--retry': r.batch }), b = worker(r, { '--retry': r.batch });
   t.after(() => { a.child.kill(); b.child.kill(); });
   await Promise.all([a.started, b.started]);
   const results = await Promise.all([a.done, b.done]);
   assert.equal(checks(r.fake).length - before, 1, 'an in-memory lock is insufficient');
-  results.forEach(passed);
-  assert.equal(results[0].json.rows[0].request_id, results[1].json.rows[0].request_id);
-  assert.deepEqual(read(r.file).rows[0].request_ids, [results[0].json.rows[0].request_id]);
+  assert.equal(results.filter(r => r.code === 0).length, 1);
+  passed(results.find(r => r.code === 0));
+  const busy = results.find(r => r.code !== 0); assert.equal(busy.code, 2); assert.match(busy.err, /pdd check --read/);
+  assert.deepEqual(read(r.file).rows[0].request_ids, [results.find(r => r.code === 0).json.rows[0].request_id]);
 });
 
 test('2675: a batch read holds ownership across its refresh and cannot overwrite a retry', async t => {
@@ -96,6 +100,8 @@ test('2675: a batch read holds ownership across its refresh and cannot overwrite
   const postsWhileReadOwns = checks(fake).length - before;
   resume.resolve(); await Promise.all([reading, retrying]);
   assert.equal(postsWhileReadOwns, 0, 'retry cannot decide against a snapshot being refreshed');
+  assert.equal(checks(fake).length - before, 0, 'competing retry is refused while batch read owns it');
+  const result = await run({ '--retry': first.batch }); assert.equal(result.code, 0);
   assert.equal(checks(fake).length - before, 1);
   assert.deepEqual(read(file).rows[1].request_ids, [checks(fake).at(-1).request.requestId]);
 });
@@ -112,53 +118,42 @@ test('2675: acquisition is a runtime-faked boundary and releases after source re
   assert.equal(acquired, 2); assert.equal(released, 2);
 });
 
-test('2675: an interrupted ownership wait leaves batch and summary untouched and sends nothing', async t => {
-  const r = await fixture(t), batch = readFileSync(r.file), summaryPath = join(r.folder, 'summary.json'), summary = readFileSync(summaryPath);
-  let stop, calls = 0; const before = r.fake.posts.length;
-  const result = await r.run({ '--retry': r.batch }, [], {
-    onInterrupt: handler => { stop = handler; return () => {}; },
-    acquireBatchLock: async (folder, { signal, timeoutMs }) => { calls++; assert.equal(folder, r.folder); assert.ok(timeoutMs <= 30000); stop(); assert.equal(signal.aborted, true); throw Object.assign(new Error('interrupted'), { code: 'BATCH_LOCK_INTERRUPTED' }); }
-  });
-  assert.equal(calls, 1); assert.equal(result.code, 3); assert.match(result.err, /wait|stop|interrupt/i);
-  assert.equal(r.fake.posts.length, before); assert.deepEqual(readFileSync(r.file), batch); assert.deepEqual(readFileSync(summaryPath), summary);
-});
-
 for (const kind of ['live', 'dead', 'malformed', 'guard']) test(`2675: native lock handles ${kind} owners without unsafe age expiry`, async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function', 'native lock boundary must exist');
   const folder = temp(t), lock = join(folder, 'batch.lock'), guard = join(folder, 'batch.lock.claim');
   let deadPid;
   if (kind === 'dead') { const child = spawn(process.execPath, ['-e', '']); deadPid = child.pid; await new Promise(done => child.on('close', done)); }
-  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : String(kind === 'dead' ? deadPid : process.pid));
+  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : JSON.stringify({ pid: kind === 'dead' ? deadPid : process.pid, host: hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
   if (kind === 'dead') {
-    const release = await client.acquireRuntimeBatchLock(folder, { timeoutMs: 10 });
-    assert.equal(readFileSync(lock, 'utf8'), String(process.pid)); assert.equal(statSync(lock).mode & 0o777, 0o600);
+    const warnings = []; const release = await client.acquireRuntimeBatchLock(folder, { onWarning: line => warnings.push(line) });
+    assert.equal(warnings.length, 1); assert.match(warnings[0], /recover|dead|abandon/i);
+    assert.equal(read(lock).pid, process.pid); assert.equal(read(lock).host, hostname()); assert.ok(Date.parse(read(lock).started_at)); assert.equal(statSync(lock).mode & 0o777, 0o600);
     release(); release(); assert.equal(existsSync(lock), false);
   } else {
     const bytes = readFileSync(kind === 'guard' ? guard : lock);
-    await assert.rejects(client.acquireRuntimeBatchLock(folder, { timeoutMs: 5 }), error => error.code === 'BATCH_LOCK_BUSY');
+    await assert.rejects(client.acquireRuntimeBatchLock(folder, {}), error => error.code === 'BATCH_LOCK_BUSY');
     assert.deepEqual(readFileSync(kind === 'guard' ? guard : lock), bytes);
   }
 });
 
-test('2675: native lock permits independent batches and interrupted wait cannot release the owner', async t => {
+test('2675: native lock permits independent batches and a refusal cannot release the owner', async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
   const folder = temp(t), other = join(folder, 'other'); mkdirSync(other);
   const release = await client.acquireRuntimeBatchLock(folder), releaseOther = await client.acquireRuntimeBatchLock(other);
-  const controller = new AbortController(); const waiting = client.acquireRuntimeBatchLock(folder, { signal: controller.signal }); controller.abort();
-  await assert.rejects(waiting, error => error.code === 'BATCH_LOCK_INTERRUPTED');
-  assert.equal(readFileSync(join(folder, 'batch.lock'), 'utf8'), String(process.pid));
+  await assert.rejects(client.acquireRuntimeBatchLock(folder), error => error.code === 'BATCH_LOCK_BUSY');
+  assert.equal(read(join(folder, 'batch.lock')).pid, process.pid);
   releaseOther(); release();
   const again = await client.acquireRuntimeBatchLock(folder); again();
 });
 
 
-test('2675: ownership refusal uses the retry budget, sends nothing and preserves saved data', async t => {
+test('2675: ownership refusal, sends nothing and preserves saved data', async t => {
   const r = await fixture(t), batch = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json'));
   const before = r.fake.posts.length; let attempts = 0;
   const result = await r.run({ '--retry': r.batch, '--timeout': '0.0001' }, [], {
-    acquireBatchLock: async (folder, { timeoutMs }) => { attempts++; assert.equal(folder, r.folder); assert.equal(timeoutMs, 6); throw Object.assign(new Error('busy'), { code: 'BATCH_LOCK_BUSY' }); }
+    acquireBatchLock: async folder => { attempts++; assert.equal(folder, r.folder); throw Object.assign(new Error('busy'), { code: 'BATCH_LOCK_BUSY' }); }
   });
-  assert.equal(attempts, 1); assert.equal(result.code, 3); assert.match(result.err, /another command|using batch/i); assert.match(result.err, new RegExp(`pdd check --read ${r.batch}`));
+  assert.equal(attempts, 1); assert.equal(result.code, 2); assert.match(result.err, /another command|using batch/i); assert.match(result.err, new RegExp(`pdd check --read ${r.batch}`));
   assert.equal(r.fake.posts.length, before); assert.deepEqual(readFileSync(r.file), batch); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary);
 });
 
@@ -197,13 +192,13 @@ test('2675: a process killed after dispatch leaves its ID recoverable without an
   assert.equal(existsSync(join(folder, 'batch.lock')), false);
 });
 
-test('2675: native busy timeout leaves persisted data and the live owner intact', async t => {
+test('2675: native live-owner refusal leaves persisted data and the live owner intact', async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
   const r = await fixture(t), bytes = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json')), before = r.fake.posts.length;
   const release = await client.acquireRuntimeBatchLock(r.folder); t.after(release);
   const result = await r.run({ '--retry': r.batch, '--timeout': '0.0001' });
-  assert.equal(result.code, 3); assert.match(result.err, /pdd check --read/);
-  assert.equal(readFileSync(join(r.folder, 'batch.lock'), 'utf8'), String(process.pid));
+  assert.equal(result.code, 2); assert.match(result.err, /pdd check --read/);
+  assert.equal(read(join(r.folder, 'batch.lock')).pid, process.pid);
   assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary); assert.equal(r.fake.posts.length, before);
   release();
 });
