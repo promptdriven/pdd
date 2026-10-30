@@ -45,6 +45,19 @@ function literal(source) {
   }
   return null;
 }
+// Callback-looking words inside a quoted option value remain part of that value.
+function declarationOptions(source) {
+  for (let at = 0; at < source.length; at++) {
+    if (["'", '"', '`'].includes(source[at])) {
+      const quote = source[at];
+      for (at++; at < source.length; at++) {
+        if (source[at] === '\\') at++;
+        else if (source[at] === quote) break;
+      }
+    } else if (source.startsWith('=>', at) || /^function\b/.test(source.slice(at, at + 9))) return source.slice(0, at);
+  }
+  return source;
+}
 function stringSkip(options) {
   for (const match of options.matchAll(/\bskip\s*:\s*/g)) {
     const source = options.slice(match.index + match[0].length), value = literal(source);
@@ -82,7 +95,7 @@ function cases(source, lang) {
     const identity = JSON.stringify([suite,name]);
     const occurrence = (occurrences.get(identity) ?? 0) + 1; occurrences.set(identity,occurrence);
     const body = lang === 'js' ? tail.match(/(?:=>|function\b[^{}]*\{)(.*)/)?.[1] ?? '' : line;
-    const entry = { name, occurrence, suite, at, end, body, options: tail.split(/=>|function\b/)[0], assertions: [], markers: [] };
+    const entry = { name, occurrence, suite, at, end, body, options: declarationOptions(tail), assertions: [], markers: [] };
     if (lang === 'py') for (let i = at - 1; i >= 0 && /^\s*@/.test(lines[i]); i--) {
       if (/^\s*@pytest\.mark\.(?:skip|skipif|xfail)\b/.test(lines[i])) entry.markers.unshift(lines[i]);
     }
@@ -96,7 +109,7 @@ function cases(source, lang) {
     if (!owner) continue;
     const content = lang === 'js' && at === owner.at ? owner.body : line;
     if (/\b(?:assert|expect)\b/.test(content)) owner.assertions.push(line);
-    if (lang === 'js' && ((at === owner.at && (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit)\s*\(/.test(line) || /\b(?:skip|todo)\s*:\s*true\b/.test(owner.options) || stringSkip(owner.options))) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
+    if (lang === 'js' && ((at === owner.at && (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit)\s*\(/.test(line) || /\b(?:skip|todo)\s*:\s*true\s*[,}]/.test(owner.options) || stringSkip(owner.options))) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
     if (lang === 'py' && /\bpytest\.skip\s*\(/.test(content)) owner.markers.push(line);
   }
   return found;

@@ -118,7 +118,10 @@ test('revision skip forms retain suite occurrence identity independently of test
   assert.equal((report.text.match(/^New skips:/gm)||[]).length,5);
   assert.ok(!report.text.includes('Changed assertions in kept tests: "test/skips.js" suite'));
   const unchanged=analyzeTestChanges({files:[pair('test/skips.js',after,after)]});assert.ok(unchanged.text.includes('New skips: none.'));
-  const negatives=analyzeTestChanges({files:[pair('test/skips.js','',`test('empty', {skip: ''}, () => {});\ntest('dynamic', {skip: reason}, () => {});\ntest('concat', {skip: 'reason' + dynamic}, () => {});\ntest('template-concat', {skip: \`reason\` + expression}, () => {});\ntest('expression', {skip: \`why \${reason}\`}, () => {});\n`)]});assert.ok(negatives.text.includes('New skips: none.'));
+  const quotedReasons=analyzeTestChanges({files:[pair('test/skips.js','',`test('ordinary', {skip: 'flaky'}, () => {});\ntest('function-reason', {skip: 'function failed'}, () => {});\ntest('arrow-reason', {skip: 'later => now'}, () => {});\n`)]});
+  for(const name of ['ordinary','function-reason','arrow-reason'])assert.ok(quotedReasons.text.includes(`New skips: "test/skips.js" "${name}"`),quotedReasons.text);
+  assert.equal((quotedReasons.text.match(/^New skips:/gm)||[]).length,3);
+  const negatives=analyzeTestChanges({files:[pair('test/skips.js','',`test('empty', {skip: ''}, () => {});\ntest('dynamic', {skip: reason}, () => {});\ntest('concat', {skip: 'reason' + dynamic}, () => {});\ntest('template-concat', {skip: \`reason\` + expression}, () => {});\ntest('expression', {skip: \`why \${reason}\`}, () => {});\ntest('true-and', {skip: true && condition}, () => {});\ntest('true-or', {skip: true || condition}, () => {});\ntest('true-ternary', {skip: true ? x : y}, () => {});\ntest('todo-and', {todo: true && condition}, () => {});\ntest('body-option', () => { consume({skip: true}); });\n`)]});assert.ok(negatives.text.includes('New skips: none.'),negatives.text);
 });
 
 test('revision Python body skips are reported and source mentions, issue links and decorators are escaped',async()=>{
