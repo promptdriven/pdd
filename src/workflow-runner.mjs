@@ -1502,8 +1502,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
   const area = original?.area ?? observed?.area ?? run.areas[run.area].name;
   const selected = [...(fresh.chats ?? [])].reverse().find(chat => chat.area === area);
   if (JSON.stringify(selected) !== JSON.stringify(original)) return;
-  // A late allocation or missing-start reset cannot claim a now-historical area.
-  if ((!original || reset) && fresh.area !== run.area) return;
+  // A late reset cannot retire historical custody; a dispatched start retains it.
+  if (reset && fresh.area !== run.area) return;
   if (reset) {
     fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
     fresh.chats = fresh.chats.filter(chat => chat !== selected);
