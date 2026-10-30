@@ -18,6 +18,8 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 ## Dependencies
 
+- [Command catalog](command-catalog.prompt.md#public-routes): required authoring/generation/runtime/verification/testing context for the catalog-owned workflow.open help form and description.
+
 - [Contract commands](contracts.prompt.md): required generation and verification
   context for local list/sync dispatch; the syntax-only Runtime entry does not
   bind these native effects.
@@ -160,7 +162,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "d69b8f470e2db4ce2ed8ac828d44a9c76916bead0a74301b9de6a1ac1b0e3c40",
+  "prose_sha256": "b548e83020bbf85c57018704d6daf83a8bd19fc79e2fb507be0b973f5c52e128",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
