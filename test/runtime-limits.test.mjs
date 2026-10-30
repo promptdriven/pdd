@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {interfaceSchemaProblems,readPrompt,findTests,preflight,proseSha256} from '../src/runtime-preflight.mjs';
+import {interfaceSchemaProblems,readPrompt,findTests,preflight,proseSha256,captureSource} from '../src/runtime-preflight.mjs';
 import {runCheck} from '../src/runtime-client.mjs';
 import {harbor,PLACE,portsFor,fakeRuntime} from './runtime-fake.mjs';
 const empty={type:'object',properties:{},required:[],additionalProperties:false};
@@ -120,4 +120,85 @@ for(const otherProblem of ['stale-hash','bad-criteria'])test(`2676 lint limits a
  const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'http://127.0.0.1:9'},{gh:()=>assert.fail('limits admission precedes unrelated server diagnosis'),fetch:()=>assert.fail('no upload')});
  assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),4);
  assert.ok(JSON.parse(ports.stdout.text).problems.some(p=>p.code==='invalid-limits'));
+});
+
+// Review expectations: admission follows only selected call graphs; it preserves
+// rows independently and precedes source capture as well as authentication.
+test('2676 lint refuses a called prompt with invalid limits',async t=>{
+ const setup=harbor(t),child='prompts/child.prompt.md';
+ prompt(setup.repo,child,'{"max_steps":1,"max_model_calls":0}');
+ const file=join(setup.repo,PLACE);
+ writeFileSync(file,readFileSync(file,'utf8').replace('"calls": []','"calls": '+JSON.stringify([{operation:'child',target:child,target_operation:'value',max_calls:1}])));
+ const {ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),4);
+ const result=JSON.parse(ports.stdout.text);
+ assert.ok(result.problems.some(p=>p.path===child&&p.code==='invalid-limits'&&p.section==='/limits/max_model_calls'));
+ assert.equal(clock.gh.length,0);
+});
+test('2676 lint ignores unrelated invalid limits and posts selected test once',async t=>{
+ const setup=harbor(t);prompt(setup.repo,'prompts/unrelated.prompt.md','{"max_steps":1,"max_model_calls":0}');
+ const fake=await fakeRuntime(t,(entry,f)=>({status:200,json:f.lint(entry.request.requestId)}));
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin});
+ assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),0,ports.stdout.text+ports.stderr.text);
+ assert.equal(fake.posts.length,1);
+});
+test('2676 lint missing limits object gives invalid-interface',async t=>{
+ const setup=harbor(t),file=join(setup.repo,PLACE);
+ writeFileSync(file,readFileSync(file,'utf8').replace(/,\s*"limits": \{[^}]+\}/,''));
+ const {ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),4);
+ assert.ok(JSON.parse(ports.stdout.text).problems.some(p=>p.code==='invalid-interface'&&p.path===PLACE&&p.section==='/limits'));
+ assert.equal(clock.gh.length,0);
+});
+for(const json of [true,false])test(`2676 lint shared invalid prompt deduplicates problems and preserves both refused rows (json=${json})`,async t=>{
+ const setup=harbor(t);harborLimit(setup,'{"max_steps":0,"max_model_calls":0}');
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('no auth'),fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true,...(json?{'--json':true}:{})}},ports),4);
+ if(json){
+  const result=JSON.parse(ports.stdout.text);
+  assert.equal(result.problems.length,2);
+  assert.deepEqual(new Set(result.problems.map(p=>p.section)),new Set(['/limits/max_steps','/limits/max_model_calls']));
+  assert.deepEqual(result.rows.map(r=>[r.test,r.state]).sort(),[['tests/place-order.json','refused'],['tests/unknown-item.json','refused']]);
+ }else{
+  for(const field of ['max_steps','max_model_calls']){
+   const lines=ports.stderr.text.split('\n').filter(line=>line.includes('invalid-limits')&&line.includes('/limits/'+field));
+   assert.equal(lines.length,1,ports.stderr.text);
+  }
+  for(const path of ['tests/place-order.json','tests/unknown-item.json'])assert.ok(ports.stdout.text.split('\n').some(line=>line.includes(path)&&/refused:.*invalid-limits/.test(line)),ports.stdout.text);
+ }
+});
+test('2676 lint invalid limits precede source capture and gh',async t=>{
+ const setup=harbor(t);harborLimit(setup,'{"max_steps":4,"max_model_calls":0}');
+ // captureSource would reject this explicit include before authentication.
+ writeFileSync(join(setup.repo,'pdd-source.json'),JSON.stringify({include:['.env']}));
+ writeFileSync(join(setup.repo,'.env'),'SYNTHETIC_CAPTURE_SENTINEL=1\n');
+ assert.throws(()=>captureSource(setup.repo,{tests:['tests/place-order.json']}),/secret/i);
+ const {ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),4);
+ const result=JSON.parse(ports.stdout.text);
+ assert.ok(result.problems.some(p=>p.code==='invalid-limits'&&p.section==='/limits/max_model_calls'));
+ assert.ok(!result.problems.some(p=>p.code==='source-capture'||p.path==='.env'));
+ assert.equal(clock.gh.length,0);
+});
+for(const [limits,pointer,action] of [
+ [{max_model_calls:1},'/limits/max_steps',/missing/i],
+ [undefined,'/limits',/add/i],
+ [{max_steps:1,max_model_calls:1,extra:1},'/limits/extra',/remove/i]
+])test(`2676 limits hint explains ${pointer} correction ${action}`,()=>{
+ const value=iface(limits);if(limits===undefined)delete value.limits;
+ const problem=interfaceSchemaProblems(value).find(p=>p.pointer===pointer);
+ assert.ok(problem);assert.match(problem.rule+' '+problem.hint,action);
+ if(limits===undefined){assert.match(problem.hint,/limits/);assert.match(problem.hint,/max_steps/);assert.match(problem.hint,/max_model_calls/);assert.match(problem.hint,/1/);}
+ else assert.match(problem.hint,new RegExp(pointer.split('/').at(-1)));
+});
+test('2676 mixed lint text preserves refused and not run selected rows',async t=>{
+ const setup=harbor(t),child='prompts/child.prompt.md';
+ prompt(setup.repo,child,'{"max_steps":1,"max_model_calls":0}');
+ const file=join(setup.repo,'tests/unknown-item.json'),doc=JSON.parse(readFileSync(file,'utf8'));
+ doc.steps[0].entry_path=child;doc.steps[0].operation='value';writeFileSync(file,JSON.stringify(doc));
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('no auth'),fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true}},ports),4);
+ const lines=ports.stdout.text.split('\n');
+ assert.ok(lines.some(line=>line.includes('tests/place-order.json')&&/not run/.test(line)),ports.stdout.text);
+ assert.ok(lines.some(line=>line.includes('tests/unknown-item.json')&&/refused:.*invalid-limits/.test(line)),ports.stdout.text);
 });
