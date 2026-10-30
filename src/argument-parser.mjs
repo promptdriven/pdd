@@ -10,19 +10,17 @@ const routes = [...PUBLIC_COMMAND_ROUTES].sort((a, b) => b.prefix.length - a.pre
 const matches = (route, words) => route.prefix.every((token, index) => words[index] === token);
 const findRoute = words => routes.find(route => matches(route, words));
 const help = prefix => Object.freeze({ commandId: 'help', local: 'help', helpPrefix: Object.freeze([...prefix]) });
-// Former words (`formerly`) parse with the route whose former words have no flag; `check --lint` names the lint route.
-const isFlag = word => word.startsWith('-');
-const FORMER = routes.filter(route => route.formerly).map(route => ({ route,
-  words: route.formerly.filter(word => !isFlag(word)), flags: route.formerly.filter(isFlag) }));
-const formerAt = words => FORMER.find(entry => !entry.flags.length && entry.words.every((word, index) => words[index] === word));
 // A plan whose options hold every flag that another route of the same local always has works like that route (`test --lint` = `lint`).
 const routeLike = (route, options) => routes.find(other => other !== route && other.local === route.local && other.implies
   ?.every(flag => options[flag] === true)) ?? route;
-function withNotice(plan, base) {
-  const route = plan.local === 'help' ? routes.find(item => item.prefix.join(' ') === plan.helpPrefix.join(' '))
-    : routeLike(base.route, plan.options);
-  const entry = FORMER.find(item => item.route === route && item.flags.length) ?? base;
-  return Object.freeze({ ...plan, notice: `pdd ${entry.route.formerly.join(' ')} is now pdd ${entry.route.prefix.join(' ')}.` });
+// A removed word (`check`, `try`) runs nothing: one line names the new command. A removed entry with a flag
+// (`check --lint`) wins when that flag is one of the words after the command word.
+const REMOVED = routes.filter(route => route.removed).map(route => ({ route,
+  word: route.removed[0], flags: route.removed.slice(1) })).sort((a, b) => b.flags.length - a.flags.length);
+function refuseRemoved(input) {
+  const at = input[0] === 'help' ? 1 : 0, rest = input.slice(at + 1);
+  const entry = REMOVED.find(item => item.word === input[at] && item.flags.every(flag => rest.includes(flag)));
+  if (entry) throw new CommandInputError(`pdd ${entry.route.removed.join(' ')} was removed. Use pdd ${entry.route.prefix.join(' ')}.`);
 }
 function helpFor(words) {
   if (!words.length) return help([]);
@@ -35,7 +33,7 @@ const optionValue = (option, value) => option.kind === 'integer'
   ? /^[1-9][0-9]{0,5}$/.test(value ?? '') && Number(value) >= option.min && Number(value) <= option.max
   : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
   : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
-function parseRoute(route, words, allowHelp = false, typed = route.prefix) {
+function parseRoute(route, words, allowHelp = false) {
   const options = Object.create(null), operands = []; let literal = false, helpRequested = false;
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
@@ -60,7 +58,7 @@ function parseRoute(route, words, allowHelp = false, typed = route.prefix) {
     } else operands.push(word);
   }
   if (route.id === 'workflow.run' && /^[1-9][0-9]*$/.test(operands[0] ?? '')) {
-    throw new CommandInputError(`Name the workflow: pdd ${typed.join(' ')} small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
+    throw new CommandInputError(`Name the workflow: pdd ${route.prefix.join(' ')} small-change ${operands[0]} (or bug, feature). See pdd workflow list.`);
   }
   const minimum = route.operands.filter(item => !item.optional).length;
   if (operands.length < minimum || !route.operands.at(-1)?.repeat && operands.length > route.operands.length) fail();
@@ -78,27 +76,25 @@ function parseRoute(route, words, allowHelp = false, typed = route.prefix) {
   return Object.freeze({ commandId: route.id, local: route.local,
     operands: Object.freeze(operands), options: Object.freeze({ ...implied, ...options }) });
 }
-// A short form (`sim`) is the route's own words in fewer letters: rewrite it to the prefix, with no notice.
-const SHORT = routes.filter(route => route.short);
-const expandShort = (argv, at) => {
-  const route = SHORT.find(item => item.short.every((word, index) => argv[at + index] === word));
-  return route ? [...argv.slice(0, at), ...route.prefix, ...argv.slice(at + route.short.length)] : argv;
+// A quiet word (`sim`, `workflow start`) is rewritten to the prefix of its route, with nothing added.
+const QUIET = routes.filter(route => route.quiet);
+const expandQuiet = (argv, at) => {
+  const route = QUIET.find(item => item.quiet.every((word, index) => argv[at + index] === word));
+  return route ? [...argv.slice(0, at), ...route.prefix, ...argv.slice(at + route.quiet.length)] : argv;
 };
 export function parseArgv(input) {
-  if (!Array.isArray(input) || input.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
-  const at = input[0] === 'help' ? 1 : 0, argv = expandShort(input, at), base = formerAt(argv.slice(at));
-  if (!base) return parseWords(argv);
-  // Rewrite the former words to the new words, then parse as usual; a refusal throws before any notice.
-  const words = [...argv.slice(0, at), ...base.route.prefix, ...argv.slice(at + base.words.length)];
-  return withNotice(parseWords(words, base.words), base);
+  if (!Array.isArray(input)) fail();
+  refuseRemoved(input);
+  if (input.some(word => typeof word !== 'string' || word.includes('\0'))) fail();
+  return parseWords(expandQuiet(input, input[0] === 'help' ? 1 : 0));
 }
-function parseWords(argv, typed) {
+function parseWords(argv) {
   if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return helpFor(argv.slice(1));
   if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
-    return parseRoute(route, argv.slice(route.prefix.length), true, typed);
+    return parseRoute(route, argv.slice(route.prefix.length), true);
   }
   const route = findRoute(argv);
   if (!route && !argv[0].startsWith('-') && !routes.some(candidate => candidate.prefix[0] === argv[0])) {
@@ -106,5 +102,5 @@ function parseWords(argv, typed) {
     throw new CommandInputError(`Unknown command "${word}". Run pdd --help to see the commands.`);
   }
   if (!route) fail();
-  return parseRoute(route, argv.slice(route.prefix.length), false, typed);
+  return parseRoute(route, argv.slice(route.prefix.length), false);
 }
