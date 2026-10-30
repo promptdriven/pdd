@@ -1061,7 +1061,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
   context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
-  if (!context.json) for (const warning of [...svgWarnings,...drift]) line(ports.stderr, warning);
+  if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,

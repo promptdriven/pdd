@@ -27,7 +27,8 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
       return [{path,text:files.read({path}).content}];
     };
     const sources=[...visible].sort().filter(path=>path.startsWith('contracts/') && /\.(?:md|json)$/.test(path)).flatMap(readDiscovered);
-    const prompts=[...visible].sort().filter(path=>path.endsWith('.prompt.md')).flatMap(readDiscovered);
+    const promptPaths=[...visible].sort().filter(path=>path.endsWith('.prompt.md'));
+    const prompts=promptPaths.flatMap(readDiscovered);
     const found=findTests({root,files:[...visible]});
     warnings.push(...found.warnings.map(warning=>warning.replace(/^Warning: /,'')));
     const prepared=[];
@@ -107,11 +108,13 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     }
     const history=readContractHistory({root,env});
     for (const warning of history.warnings) line(stderr,`Warning: ${warning}`);
+    const unknownStories=capture.stories.some(story=>story.unavailable?.length);
+    const unknownUses=prepared.length<promptPaths.length || unknownStories;
     for (const record of catalog.records) {
       const users=[...new Set(references.filter(ref=>ref.target===record.target).map(ref=>ref.consumer))].sort();
       const stories=capture.stories.filter(story=>story.references?.some(ref=>ref.target===record.target)).map(story=>story.story_path).sort();
-      const unknownUses=prepared.length<prompts.length, unknownStories=capture.stories.some(story=>story.unavailable?.length);
-      line(stdout,`${record.target}  owner: ${record.path}  users: ${users.join(', ')||(unknownUses?'unavailable':'none')}  Stories: ${stories.join(', ')||(unknownStories?'unavailable':'none')}`);
+      const userEvidence=users.length ? `${users.join(', ')}${unknownUses?' (incomplete)':''}` : unknownUses?'unavailable':'none';
+      line(stdout,`${record.target}  owner: ${record.path}  users: ${userEvidence}  Stories: ${stories.join(', ')||(unknownStories?'unavailable':'none')}`);
     }
     for (const story of capture.stories) {
       if (story.unavailable?.length) { line(stdout,`${story.story_path}: footprint unavailable (${story.unavailable.map(item=>item.cause).join('; ')})`); continue; }
