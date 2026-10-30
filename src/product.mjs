@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md.
+// Generated from prompts/cli/product.prompt.md (sha256: c5b83ac4f78832c60aba9321f3becd054de96b9b757d9cc71f15ee64bb45afa8).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -10,6 +10,7 @@ import { listRuns } from './workflow-runs.mjs';
 import { runtimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
+import { savedStoryEvidence } from './runtime-client.mjs';
 
 const ordinary = promisify(execute);
 const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
@@ -48,7 +49,7 @@ const duplicate = (items, key, file) => { const seen = new Set(); for (const ite
 const portsFor = given => {
   const execFile = given.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
-    storyEvidence, startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
+    storyEvidence, savedStoryEvidence, startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
     ...given, execFile };
   p.issuePage ??= async ({ cwd, repository, marker, page, perPage }) => {
     const quoted = marker.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -470,28 +471,40 @@ async function progress(input, given, target) {
   const targetBound = target ? await lookup.bound(target, true) : null;
   const plannedRuns = targetBound ? product.runs.filter(run => run.run === target) : product.runs;
   for (const run of plannedRuns) await lookup.bound(run.run);
-  const details = [];
+  const details = [], savedReads = new Map();
+  const savedFor = async (root, comparisonRoot) => {
+    const key = JSON.stringify([root, comparisonRoot]);
+    if (!savedReads.has(key)) savedReads.set(key, (async () => {
+      try {
+        const reply = await p.savedStoryEvidence({ root, comparisonRoot });
+        if (!reply || !Array.isArray(reply.stories) || !Array.isArray(reply.warnings)) throw Error('Invalid saved Story evidence.');
+        warning.push(...reply.warnings); return reply.stories;
+      } catch (error) { warning.push(`Could not read saved checks: ${causeText(error.message)}`); return []; }
+    })());
+    return savedReads.get(key);
+  };
   try {
     for (const run of plannedRuns) {
       const selected = await lookup.find(run.run, run.run === target), { issue = null, local = null, unverified = false } = selected ?? {};
-      if (unverified) { details.push({ run, issue, local: null, prs: [], evidence: [], fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
+      if (unverified) { const evidence = (await savedFor(cwd, cwd)).filter(row => run.stories.some(id => storyMatches(row.story, id))); details.push({ run, issue, local: null, prs: [], evidence, fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
       const prs = issue ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning) : [];
       const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
       const latest = [...prs].filter(pr => runtimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
-      let evidence;
-      if (local) {
-        if (done) {
-          const baseBranch = local.baseBranch ?? repo.defaultBranch;
-          if (!views.has(baseBranch)) {
-            const view = await p.openBaseSource({ cwd, baseBranch });
-            if (!view || !(view.root === null || typeof view.root === 'string') || !(view.handle === null || typeof view.handle === 'string')) throw Error('Invalid base-source view.');
-            views.set(baseBranch, view);
-          }
-          const view = views.get(baseBranch);
-          if (view.root === null) warning.push(`Warning: ${run.run}'s base source is unavailable; saved results are unverified.`);
-          evidence = await p.storyEvidence(local, { comparisonRoot: view.root });
-        } else evidence = await p.storyEvidence(local);
-      } else evidence = latest ? runtimeLines(latest.body).filter(row => row.story).map(row => ({ ...row, current: false, remote: true, at: Date.parse(latest.updatedAt) || 0 })) : [];
+      let evidence, comparisonRoot = local?.root ?? cwd;
+      if (done) {
+        const baseBranch = local?.baseBranch ?? repo.defaultBranch;
+        if (!views.has(baseBranch)) {
+          const view = await p.openBaseSource({ cwd, baseBranch });
+          if (!view || !(view.root === null || typeof view.root === 'string') || !(view.handle === null || typeof view.handle === 'string')) throw Error('Invalid base-source view.');
+          views.set(baseBranch, view);
+        }
+        comparisonRoot = views.get(baseBranch).root;
+        if (comparisonRoot === null) warning.push(`Warning: ${run.run}'s base source is unavailable; saved results are unverified.`);
+      }
+      if (local) evidence = await p.storyEvidence(local, ...(done ? [{ comparisonRoot }] : []));
+      else evidence = latest ? runtimeLines(latest.body).filter(row => row.story).map(row => ({ ...row, current: false, remote: true, at: Date.parse(latest.updatedAt) || 0 })) : [];
+      const saved = [...await savedFor(cwd, done ? comparisonRoot : cwd), ...(local?.root && local.root !== cwd ? await savedFor(local.root, comparisonRoot) : [])];
+      evidence = [...evidence, ...saved.filter(row => run.stories.some(id => storyMatches(row.story, id)))];
       details.push({ run, issue, local, prs, evidence, fromPr: !local && latest ? latest.number : null, done });
     }
   } finally {
