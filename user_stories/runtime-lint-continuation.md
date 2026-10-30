@@ -31,7 +31,7 @@ Each row is one command/action with deterministic fake clock and transport repli
 | Read continuation | saved pending normal Check from agent case; same capture; latest lint passes | one first held check ID and POST; original batch/test/cap6 retained; zero redundant lint uploads/new lint; required check multipart retained; exit0 when passed |
 | Retry continuation | separate identical pending batch; --retry BATCH | same continuation guarantees as read |
 | Repeat | read completed continuation batch | no new UUID/POST; same result and IDs |
-| Concurrent | two recoveries share same eligible saved batch | one exclusive claim and one paid POST total; both retain same check ID |
+| Concurrent | two recoveries overlap on the same eligible saved batch | one exclusive claim and one paid POST total; the owner keeps the one check ID; an overlapping command exits 3 and sends nothing |
 | Lost dispatch | first continuation POST loses response | keep claim/ID; subsequent read GETs that ID, zero replacement POSTs; unknown usage remains unknown |
 | Interrupted | interrupt before validation/claim, separately after claim | before: zero new ID/POST; after: never replay claimed ID |
 | Identity guards | separately change login, repo or selected file bytes | refusal before ID/POST; all previous saved results retained |

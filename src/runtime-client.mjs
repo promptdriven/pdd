@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4d8028e106d1fbae03e90f4ee27d467309f454b00b132ebea63c4fb4731871e2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4476903115a68b1a7fbddb360eef4a6b7ca318edf2a9d4fecfe319021494f0ed).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
@@ -61,7 +61,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -146,6 +146,92 @@ class StateStore {
   repoKey(root) { return createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 16); }
   repo(root) { return this.read(join(this.folder('repos'), `${this.repoKey(root)}.json`)) ?? { root: realpathSync(root), last_batch: null, tries: {} }; }
   saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
+}
+
+// Native boundary: one owner from the fresh batch load through the final saves.
+export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } = {}) {
+  const lock = join(folder, 'batch.lock');
+  const owner = { pid: process.pid, host: hostname(), started_at: new Date().toISOString() };
+  const problem = (code, path, record) => Object.assign(new Error(code), { code, lock: path, owner: record });
+  const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+  const warnRelease = (path, error) => {
+    try { onWarning(`Warning: could not release batch lock ${cleanText(path, [], { paths: false })} (${cleanText(error.code ?? 'state error')}).`); } catch { /* cleanup cannot replace the command outcome */ }
+  };
+  let abandoned;
+  function snapshot(path) {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isFile()) throw problem('BATCH_LOCK_INVALID', path, null);
+    try { return { stat, record: JSON.parse(readFileSync(path, 'utf8')) }; }
+    catch (error) { if (error.code === 'ENOENT') throw error; throw problem('BATCH_LOCK_INVALID', path, null); }
+  }
+  function publish(path) {
+    // A hard link publishes the complete fsynced inode with exclusive EEXIST semantics.
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    let fd;
+    try {
+      fd = openSync(temporary, 'wx', 0o600); chmodSync(temporary, 0o600);
+      writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd);
+      const owned = fstatSync(fd, { bigint: true }); closeSync(fd); fd = undefined;
+      linkSync(temporary, path);
+      return owned;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+  function claim(path) {
+    let owned;
+    try { owned = publish(path); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let before, previous;
+      try { ({ stat: before, record: previous } = snapshot(path)); }
+      catch (readError) { if (readError.code === 'ENOENT') return claim(path); throw readError; }
+      if (previous?.host !== owner.host || !Number.isSafeInteger(previous.pid) || previous.pid < 1
+        || typeof previous.started_at !== 'string' || !Number.isFinite(Date.parse(previous.started_at))) throw problem('BATCH_LOCK_INVALID', path, previous);
+      let dead = false;
+      try { process.kill(previous.pid, 0); }
+      catch (pidError) {
+        if (pidError.code === 'ESRCH') dead = true;
+        else if (pidError.code !== 'EPERM') throw problem('BATCH_LOCK_INVALID', path, previous);
+      }
+      if (!dead) throw problem('BATCH_LOCK_BUSY', path, previous);
+      const releaseGuard = claim(`${path}.recover.${previous.pid}`);
+      try {
+        let current;
+        try { current = snapshot(path); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        if (current && sameFile(before, current.stat) && isDeepStrictEqual(previous, current.record)) {
+          unlinkSync(path); if (path === lock) abandoned = previous;
+        }
+        return claim(path);
+      } finally { releaseGuard(); }
+    }
+    let released = false;
+    return () => {
+      if (released) return; released = true;
+      try {
+        const current = snapshot(path);
+        if (sameFile(owned, current.stat) && isDeepStrictEqual(owner, current.record)) unlinkSync(path);
+      } catch (error) { if (error.code !== 'ENOENT') warnRelease(path, error); }
+    };
+  }
+  const release = claim(lock);
+  try { if (abandoned) onWarning(`Warning: recovered an abandoned batch lock from dead pid ${abandoned.pid} on ${abandoned.host}.`); }
+  catch (error) { release(); throw error; }
+  return release;
+}
+
+async function ownBatch(context, name) {
+  if (context.releaseBatch) return;
+  try {
+    context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { onWarning: text => line(context.ports.stderr, text) });
+    context.lockedBatch = name;
+  } catch (error) {
+    const owner = error.owner, label = value => cleanText(value ?? 'unverified').slice(0, 120);
+    if (error.code === 'BATCH_LOCK_BUSY') throw new Stop(3, `Another pdd check command is using batch ${name} (pid ${label(owner?.pid)}, host ${label(owner?.host)}, since ${label(owner?.started_at)}); run pdd check --read ${name} after it ends.`);
+    if (error.code === 'BATCH_LOCK_INVALID') throw new Stop(2, `Lock file ${cleanText(error.lock ?? join(context.folder, 'batch.lock'), [], { paths: false })} has an unverifiable owner (host ${label(owner?.host)}). Delete it only if no pdd command is running on that host, then run the command again.`);
+    throw new Stop(2, `Could not lock batch ${name} (${cleanText(error.code ?? 'state error')}). Nothing was sent.`);
+  }
 }
 
 function signIn(gh, store) {
@@ -748,7 +834,7 @@ function runFiles(cwd, words, options, ports) {
 }
 
 // pdd check --lint: only the server's lint (0 AI calls) on the captured files.
-// Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
+// Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root);
@@ -756,6 +842,43 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
+  const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
+  const prompts = new Map();
+  const limitsFor = (path, seen) => {
+    if (typeof path !== 'string' || seen.has(path)) return [];
+    seen.add(path);
+    if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
+    const prompt = prompts.get(path);
+    if (!prompt.interface) return [];
+    const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
+      ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
+      .map(problem => ({code:problem.code,section:problem.pointer,path,message:`${path} ${problem.pointer} ${problem.rule}`,hint:problem.hint}));
+    return [...own,...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).flatMap(call => limitsFor(call?.target,seen))];
+  };
+  const limitRows = rows.map(row => {
+    const seen = new Set();
+    return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+  });
+  if (limitRows.some(row => row.refusals.length)) {
+    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+    const problems = [];
+    for (const problem of refusedRows.flatMap(row => row.refusals)) {
+      if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
+    }
+    const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
+    if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
+      coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
+    else {
+      for (const problem of problems) {
+        line(ports.stderr, `${problem.code}  ${problem.message}`);
+        if (problem.hint) line(ports.stderr, problem.hint);
+      }
+      for (const row of refusedRows) line(ports.stdout, `  ${row.test}  ${row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}` : 'not run'}`);
+      line(ports.stdout,summary);
+      line(ports.stdout,coverageText(context.coverage));
+    }
+    return 4;
+  }
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   context.warnings = [...svgWarnings, ...found.warnings];
@@ -765,8 +888,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin });
   context.folder = context.store.folder('batches', batch);
-  saveBatch(context);
   setRelease(interruptible(context));
+  await ownBatch(context, batch);
+  saveBatch(context);
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context, true);
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
@@ -967,6 +1091,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const name = batchWord ?? store.repo(root).last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd check first.');
   context.folder = join(store.dir, 'batches', name);
+  if (!statOrNull(join(context.folder, 'batch.json'))) throw new Stop(2, `No saved batch ${name}.`);
+  await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
@@ -1183,7 +1309,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
       return error.exitCode;
     }
     throw error;
-  } finally { release(); }
+  } finally {
+    try { context.releaseBatch?.(); }
+    catch (error) {
+      try { line(ports.stderr, `Warning: could not release batch ${context.lockedBatch ?? context.batch ?? 'ownership'} (${cleanText(error.code ?? 'state error')}).`); } catch { /* preserve the command outcome */ }
+    } finally { release(); }
+  }
 }
 
 async function runBatch(context, cwd, words, options, setRelease) {
@@ -1214,10 +1345,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     intent: 'check', head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
+  setRelease(interruptible(context));
+  await ownBatch(context, batch);
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, rows);
   saveBatch(context);
