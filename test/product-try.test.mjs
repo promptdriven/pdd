@@ -12,12 +12,14 @@ function coffee(t) {
   for (const part of ['phone', 'server', 'barista']) {
     const path = join(repo, `app/maps/${part}.json`);
     writeFileSync(path, readFileSync(path, 'utf8').replaceAll('examples/coffee-pickup/', ''));
+    const prompt = join(repo, `prompts/${part}/${part === 'barista' ? 'board' : part}.prompt.md`);
+    writeFileSync(prompt, readFileSync(prompt, 'utf8').replaceAll('examples/coffee-pickup/', ''));
   }
   const plan = join(repo, 'product/plan.md'); writeFileSync(plan, readFileSync(plan, 'utf8').replaceAll('examples/coffee-pickup/', ''));
   mkdirSync(join(repo, 'tests')); mkdirSync(join(repo, 'user_stories/journeys'), { recursive: true });
   const scenario = JSON.parse(readFileSync(new URL('./runtime/J1-coffee-pickup.json', import.meta.url), 'utf8').replaceAll('examples/coffee-pickup/', ''));
-  scenario.initial_world.journeyOnly = true;
-  scenario.initial_world.menu[0].priceCents = 999;
+  scenario.initial_world.set['/journeyOnly'] = true;
+  scenario.initial_world.set['/menu/0/priceCents'] = 999;
   writeFileSync(join(repo, 'tests/J1.json'), JSON.stringify(scenario));
   cpSync(new URL('../user_stories/journeys/J1-coffee-pickup.md', import.meta.url), join(repo, scenario.story_path));
   writeFileSync(join(repo, 'prompts/phone/seed.json'), '{"enabled":false}');
