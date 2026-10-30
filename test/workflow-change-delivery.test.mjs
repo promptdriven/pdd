@@ -153,4 +153,28 @@ test('2677 injected acknowledgement save failure retains in-flight uncertainty',
   const second = await changeRun({ ref: '17', text: 'Possibly delivered', cwd: f.source }, f.ports);
   assert.notEqual(second.exitCode, 0); assert.equal(submits, 1, 'persisted submission intent must prevent duplicate transport');
   assert.match(second.message, /uncertain|check/i);
+  const g = await started(t), transport = g.ports.herdr; let attempts = 0, denied = false, restoreFails = false, acknowledged = 0;
+  g.ports.sleep = async ms => g.tick(ms);
+  g.ports.deliveryFiles = { ...fs, writeFileSync: (path, data, ...args) => {
+    if (restoreFails && String(path).includes('delivery-journal.json') && JSON.parse(data).requests?.[0]?.inFlight !== true) {
+      restoreFails = false; denied = true; throw Object.assign(Error('pending restoration denied'), { code:'EACCES' });
+    }
+    return fs.writeFileSync(path, data, ...args);
+  } };
+  g.ports.herdr = async args => {
+    if (args[1] === 'prompt') {
+      if (++attempts === 1) { restoreFails = true; return missing(); }
+      acknowledged++;
+    }
+    return transport(args);
+  };
+  const rejected = await changeRun({ ref:'17', text:'Keep the rejected request', cwd:g.source }, g.ports);
+  assert.ok(denied, 'the pending-restoration save was denied after a confirmed rejection');
+  assert.equal(attempts, 1, 'failed custody restoration must veto a second transport attempt');
+  assert.equal(acknowledged, 0); assert.notEqual(rejected.exitCode, 0); assert.match(rejected.message, /not sent/i);
+  assert.equal((await changeRun({ ref:'17', text:'Different request after rejected save', cwd:g.source }, g.ports)).exitCode, 0);
+  assert.equal(acknowledged, 1); assert.equal(g.journal()[0].state, 'uncertain');
+  const beforeRepeat = attempts;
+  assert.notEqual((await changeRun({ ref:'17', text:'Keep the rejected request', cwd:g.source }, g.ports)).exitCode, 0);
+  assert.equal(attempts, beforeRepeat, 'the retained unresolved request is never automatically resent');
 });

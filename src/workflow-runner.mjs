@@ -1310,6 +1310,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
       const sent = await sendToChat(deliveryChat, message, { ...p, herdr: guardedHerdr,
         ...(entry.unboundAt === undefined ? {} : { now: () => Math.max(p.now(), entry.unboundAt + 30_000 - intentRemaining()) }),
         beforeSubmit: () => {
+          if (custodyFailed) return false;
           if (entry.unboundAt !== undefined && intentRemaining() <= 0) { intentExpired = true; return false; }
           try { return deliveryJournal(run, p, journal => {
             if (!targetCurrent(latest())) return false;
