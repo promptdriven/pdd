@@ -42,13 +42,13 @@ are authored shared shapes, not a proof of how a running part writes data.
 
 Before the plan PR, run `pdd contracts --check`. It checks supported schemas,
 references, eligible inline-copy drift, declared writers and seed values locally,
-with no authentication, runtime slot, server or model call. Exit 0 means no definite problem or unavailable required validation was found;
+with no authentication, interpreter slot, PDD interpreter or model call. Exit 0 means no definite problem or unavailable required validation was found;
 review advisory unchecked-values and disagreement warnings; 4 identifies a definite problem; 5 means I/O or validation
 is unavailable. Diagnostics name the file, record/key and field. Nonportable
 patterns and numeric predicates outside the local exact range can be unavailable;
-a local result does not prove runtime behavior. Fix or review reported gaps.
-The plan makes no server lint/check or Try call. Each part's first server
-lint/check happens in its feature run once its prompt, Stories and tests exist.
+a local result does not prove interpreter behavior. Fix or review reported gaps.
+The plan makes no PDD interpreter lint, test or simulation call. Each part's first interpreter
+lint/test happens in its feature run once its prompt, Stories and tests exist.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
 needs wait for the implementation PR to merge. Explicit starts show unmet needs
