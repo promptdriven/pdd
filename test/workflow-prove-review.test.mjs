@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync,spawn} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,realpathSync,existsSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname,resolve} from 'node:path';
 const modulePath=resolve('src/workflow-prove.mjs');
@@ -62,14 +62,16 @@ test('REVIEW-SAFE-VALUES: dynamic proof fields use adaptive code fences and reve
 });
 test('REVIEW-PROVE-RECOVERY: next proof recovers only inactive owned snapshots and preserves unrelated registrations', {timeout:20000},async t=>{
  const f=fixture(t),{proveRun}=await api();f.put('test/regression.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'recovery.pid');
+ const realTemp=join(f.parent,'proof-temp'),aliasTemp=join(f.parent,'proof-temp-alias');mkdirSync(realTemp);symlinkSync(realTemp,aliasTemp,'dir');
+ const stopOrphan=async()=>{if(!Number.isInteger(pid)||pid<=0||pid===process.pid)return;try{process.kill(pid,'SIGKILL')}catch{}for(let n=0;n<100;n++){let stat='';try{stat=execFileSync('ps',['-p',String(pid),'-o','stat='],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim()}catch{}if(!stat||stat.startsWith('Z'))return;await wait(20);}assert.fail('recovery orphan must stop');};
  const command=`node -e 'require("fs").writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)'`;
- const child=spawn(process.execPath,['--input-type=module','-e',`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`],{stdio:'ignore'});const ended=new Promise(r=>child.on('close',r));let pid;
+ const child=spawn(process.execPath,['--input-type=module','-e',`import {proveRun} from ${JSON.stringify(modulePath)};await proveRun(${JSON.stringify({ref:'2594',cwd:f.root,test:command,expect:'defect-x'})});`],{stdio:'ignore',env:{...process.env,TMPDIR:aliasTemp}});const ended=new Promise(r=>child.on('close',r));let pid;
  const unrelated=join(f.parent,'pdd-proof-base-unrelated'),missing=join(f.parent,'personal-unmounted');f.git('worktree','add','--detach',unrelated,'HEAD');f.git('worktree','add','--detach',missing,'HEAD');rmSync(missing,{recursive:true,force:true});
  try {for(let n=0;n<200&&!existsSync(pidFile);n++)await wait(20);assert.ok(existsSync(pidFile));pid=Number(readFileSync(pidFile));process.kill(child.pid,'SIGKILL');await ended;
   const stale=f.git('worktree','list','--porcelain').split('\n').filter(x=>x.startsWith('worktree ')).map(x=>x.slice(9)).filter(x=>![f.root,unrelated,missing].includes(x));assert.equal(stale.length,2);
-  try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ');process.kill(-Number(stat[2]),'SIGKILL')}catch{}
+  await stopOrphan();
   await proveRun({ref:'2594',cwd:f.root,test:'true',expect:'defect-x'});const registrations=f.git('worktree','list','--porcelain');for(const path of stale){assert.equal(registrations.includes(path),false,'stale ownership recovered');assert.equal(existsSync(path),false)}assert.ok(registrations.includes(unrelated));assert.ok(registrations.includes(missing),'no global prune');assert.ok(existsSync(unrelated));
- } finally {try{process.kill(child.pid,'SIGKILL')}catch{}if(pid){try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ');process.kill(-Number(stat[2]),'SIGKILL')}catch{}}for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
+ } finally {try{process.kill(child.pid,'SIGKILL')}catch{}await stopOrphan();for(const row of f.git('worktree','list','--porcelain').split('\n'))if(row.startsWith('worktree ')&&row.slice(9)!==f.root){try{f.git('worktree','remove','--force',row.slice(9))}catch{}rmSync(row.slice(9),{recursive:true,force:true})}await ended;}
 });
 test('REVIEW-PROVE-EARLY: parent SIGINT during real snapshot allocation records no invented process and restores listeners',async t=>{
  const f=fixture(t);f.put('test/regression.test.mjs',regression);f.commit();
@@ -85,4 +87,36 @@ test('REVIEW-LARGE-SAFE: arbitrary large backtick payloads format without stack 
  const run={runId:'large',root:'/unused',runDir:'/unused',baseSha:'a'.repeat(40),baseBranch:'main',number:17,workflow:'feature',steps:[{step:'build',summary:'Not fixed yet: '+value}]};let evidence;
  await assert.doesNotReject(async()=>{evidence=await preparePrEvidence({run,isCode:false},{readStepNotes:async()=>({notes:[]})})});
  assert.equal(evidence.lines[0],'Not fixed yet: `` '+value+' ``');assert.equal(evidence.issueReference,'Refs #17');
+});
+test('REVIEW-PROVE-COMMAND-DISPLAY: native shell command retains quotes and backslashes with visible controls',async t=>{
+ const f=fixture(t),{proveRun,formatProof}=await api();f.put('src/value.mjs','export default true;');f.put('test/regression.test.mjs',regression);f.commit();
+ const command='node -e "if(!require(\'fs\').readFileSync(\'src/value.mjs\',\'utf8\').includes(\'true\')){console.log(\'defect-x\\n\');process.exit(1)}"\n# pdd-workflow:fake `quoted`\t';
+ const r=await proveRun({ref:'2594',cwd:f.root,test:command,expect:'defect-x'});
+ assert.equal(r.exitCode,0,r.message);assert.equal(f.proof().test,command,'saved command remains exact');
+ const span='``node -e "if(!require(\'fs\').readFileSync(\'src/value.mjs\',\'utf8\').includes(\'true\')){console.log(\'defect-x\\n\');process.exit(1)}"\\n# pdd-workflow\\u003afake `quoted`\\t``';
+ assert.equal(r.message,'Old-code proof: ✓ '+span+': old-code exit `1`; output contains `defect-x`; new-code exit `0`.','command display must preserve literal quotes and backslashes');
+ const line=formatProof({test:'"\\\0\b\t\n\f\r\x1f\x7f\x80\u2028\u2029',expect:'"\\',outcome:'wrong-reason',base:{exitCode:1,observedError:'"\\'},head:{exitCode:0}});
+ assert.equal(line,'Old-code proof: ✗ wrong-reason; command `"\\\\u0000\\b\\t\\n\\f\\r\\u001f\\u007f\\u0080\\u2028\\u2029`; old-code exit `1`; new-code exit `0`; expected `\\"\\\\`; cause `\\"\\\\`.');
+});
+test('REVIEW-PROVE-TAP-TAIL: native TAP failure retains recent diagnostics instead of summary footer',async t=>{
+ const f=fixture(t),{proveRun}=await api();
+ f.put('test/regression.test.mjs',"console.log('TAP version 13\\nnot ok 1 - tap-tail-defect\\n  error: actual native diagnostic\\n  code: ERR_ASSERTION\\n  ...\\n1..1\\n# tests 1\\n# suites 0\\n# pass 0\\n# fail 1\\n# cancelled 0\\n# skipped 0\\n# todo 0\\n# duration_ms 1.25');process.exit(1);");f.commit();
+ const r=await proveRun({ref:'2594',cwd:f.root,test:'node test/regression.test.mjs',expect:'tap-tail-defect'});
+ assert.equal(r.exitCode,1);assert.equal(f.proof().outcome,'head-fails');assert.match(r.message,/cause `.*ERR_ASSERTION/);
+ assert.ok(r.message.endsWith("; tail `  error: actual native diagnostic\\n  code: ERR_ASSERTION\\n  ...`."),'native TAP tail must retain failure diagnostic');
+ assert.doesNotMatch(r.message,/; tail `[^`]*# (?:skipped|todo|duration_ms)/,'native TAP summary must not hide diagnostic');
+ assert.ok(f.proof().head.stdoutTail.some(line=>line.startsWith('# duration_ms ')),'saved stream keeps original summary');
+});
+test('REVIEW-PROVE-TAP-BOUNDARIES: exact footer grammar, stderr priority, fallback and Unicode tail bound',async()=>{
+ const {formatProof}=await api();
+ const format=(stdoutTail,stderrTail=[],outcome='head-fails')=>formatProof({test:'run',expect:'defect',outcome,base:{exitCode:1,observedError:'old'},head:{exitCode:1,observedError:'diagnostic',stdoutTail,stderrTail}});
+ const suffix=String.raw`; tail `;
+ const message=format(['first','  diagnostic a  ','diagnostic b','diagnostic c','','  0..1  ','# tests 01','# suites 0','# pass 0','# fail 1','# cancelled 0','# skipped 0','# todo 0','# duration_ms 1.25','']);
+ assert.ok(message.endsWith(suffix+'`  diagnostic a  \\ndiagnostic b\\ndiagnostic c`.'));
+ assert.ok(format(['# tests 1','','# todo 0','# duration_ms 1']).endsWith(suffix+'`# tests 1\\n# todo 0\\n# duration_ms 1`.'));
+ for(const line of ['# tests -1','# tests 1 extra','# duration_ms .5','# duration_ms 1.','# duration_ms -1','1..2 extra','# unknown 1'])assert.ok(format(['diagnostic',line,'# todo 0']).endsWith(suffix+'`diagnostic\\n'+line+'`.'));
+ assert.ok(format(['diagnostic','# todo 0','ordinary final']).endsWith(suffix+'`diagnostic\\n# todo 0\\nordinary final`.'));
+ assert.ok(format(['stdout diagnostic','# todo 0'],['stderr diagnostic','# todo 0']).endsWith(suffix+'`stderr diagnostic`.'));
+ assert.ok(format(['diagnostic','# todo 0'],['','  ']).endsWith(suffix+'`diagnostic`.'));
+ assert.ok(format(['😀'.repeat(241),'# todo 0']).endsWith(suffix+'`'+'😀'.repeat(240)+'`.'));
 });
