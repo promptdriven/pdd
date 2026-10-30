@@ -4,7 +4,7 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {interfaceSchemaProblems,readPrompt,findTests,preflight,proseSha256} from '../src/runtime-preflight.mjs';
 import {runCheck} from '../src/runtime-client.mjs';
-import {harbor,PLACE,portsFor} from './runtime-fake.mjs';
+import {harbor,PLACE,portsFor,fakeRuntime} from './runtime-fake.mjs';
 const empty={type:'object',properties:{},required:[],additionalProperties:false};
 const iface=limits=>({status:'draft',prose_sha256:'',entries:[{operation:'value',input_schema:empty,result_schema:empty,errors:[]}],calls:[],resources:[],limits});
 const cases=JSON.parse(readFileSync(new URL('./fixtures/runtime-limit-cases.json',import.meta.url),'utf8')).cases;
@@ -75,4 +75,37 @@ for(const literal of ['"max_steps":1,"max_steps":"1"','"max_steps":1,"max_steps"
  const parsed=readPrompt(setup.repo,new Set([PLACE]),PLACE);
  const problems=interfaceSchemaProblems(parsed.interface);
  assert.equal(problems.some(p=>p.code==='invalid-limits'),!literal.endsWith('"max_steps":1'));
+});
+
+for(const json of [false,true])test(`2676 explicit lint stops invalid limits before auth/upload (json=${json})`,async t=>{
+ const setup=harbor(t);const before=harborLimit(setup,'{"max_steps":4,"max_model_calls":0}');
+ const {ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'http://127.0.0.1:9'},{gh:()=>assert.fail('no auth for invalid lint'),fetch:()=>assert.fail('no upload for invalid lint')});
+ const code=await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,...(json?{'--json':true}:{})}},ports);
+ assert.equal(code,4);assert.equal(clock.uuids,0);
+ const text=ports.stdout.text+ports.stderr.text;assert.match(text,/invalid-limits/);assert.match(text,/max_model_calls/);assert.match(text,/Fix/);assert.match(text,/1/);
+ if(json){const result=JSON.parse(ports.stdout.text);assert.equal(result.lint_state,'refused');assert.equal(result.batch,null);assert.equal(result.problems[0].path,PLACE);assert.equal(result.problems[0].code,'invalid-limits');}
+ assert.equal(readFileSync(join(setup.repo,PLACE),'utf8'),before);
+});
+test('2676 mixed lint selection reports other rows not run, never passed or uploaded',async t=>{
+ const setup=harbor(t);const child='prompts/child.prompt.md';prompt(setup.repo,child,'{"max_steps":1,"max_model_calls":0}');
+ const file=join(setup.repo,'tests/unknown-item.json'),doc=JSON.parse(readFileSync(file,'utf8'));doc.steps[0].entry_path=child;doc.steps[0].operation='value';writeFileSync(file,JSON.stringify(doc));
+ const {ports,clock}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'http://127.0.0.1:9'},{gh:()=>assert.fail('no auth for mixed invalid lint'),fetch:()=>assert.fail('no upload')});
+ const code=await runCheck({cwd:setup.repo,options:{'--lint':true,'--json':true}},ports);
+ assert.equal(code,4);assert.equal(clock.uuids,0);
+ const result=JSON.parse(ports.stdout.text);assert.equal(result.rows.length,2);
+ assert.equal(result.rows.find(row=>row.test==='tests/place-order.json').state,'not_run');assert.equal(result.rows.find(row=>row.test==='tests/unknown-item.json').state,'refused');
+});
+test('2676 valid limits keep explicit lint server-owned for unrelated schema errors',async t=>{
+ const setup=harbor(t);harborLimit(setup,'{"max_steps":1,"max_model_calls":1}');
+ const file=join(setup.repo,PLACE);writeFileSync(file,readFileSync(file,'utf8').replace('"type": "object"','"type": ["object", "null"]'));
+ const fake=await fakeRuntime(t,(entry,f)=>{
+  assert.equal(entry.command,'lint');const answer=f.lint(entry.request.requestId);
+  answer.result.tests=[{path:'tests/place-order.json',verdict:'refused'}];
+  answer.result.report.problems=[{code:'graph-schema-type-list',file:PLACE,pointer:'/entries/0/input_schema/type',message:'server-only fixture diagnosis',fix:'Use oneOf.'}];
+  return {status:200,json:answer};
+ });
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin});
+ const code=await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports);
+ assert.equal(code,4,ports.stdout.text+ports.stderr.text);assert.equal(fake.posts.length,1);assert.equal(fake.posts[0].request.complete,true);
+ const result=JSON.parse(ports.stdout.text);assert.ok(result.problems.some(p=>p.message==='server-only fixture diagnosis'));
 });
