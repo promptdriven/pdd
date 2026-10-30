@@ -57,7 +57,7 @@ test('INSTALL2: pdd setup installs missing skills into each agent user folder, s
   const first = run(['setup']);
   assert.equal(first.status, 0, first.stderr);
   for (const skillRoot of ROOTS) {
-    assert.ok(first.stdout.includes(`Installed 5 PDD skills to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
+    assert.ok(first.stdout.includes(`Installed 6 PDD skills to ${join(home, skillRoot)}: ${PDD_SKILL_NAMES.join(', ')}\n`), first.stdout);
     assert.deepEqual(readdirSync(join(home, skillRoot)).sort(), [...PDD_SKILL_NAMES].sort());
     for (const name of PDD_SKILL_NAMES) {
       const installed = join(home, skillRoot, name), source = join(pkg, 'skills', name);
@@ -129,7 +129,7 @@ test('INSTALL5: with CLAUDE_CONFIG_DIR set, setup installs Claude skills in <dir
   const config = join(sandbox, 'claude config');
   const result = run(['setup'], { CLAUDE_CONFIG_DIR: config });
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout.includes(`Installed 5 PDD skills to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);
+  assert.ok(result.stdout.includes(`Installed 6 PDD skills to ${join(config, 'skills')}: ${PDD_SKILL_NAMES.join(', ')}\n`), result.stdout);
   assert.deepEqual(readdirSync(join(config, 'skills')).sort(), [...PDD_SKILL_NAMES].sort());
   assert.deepEqual(readdirSync(home), ['.agents']);
 });

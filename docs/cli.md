@@ -20,6 +20,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 | Command | What it does |
 |---|---|
+| `pdd workflow prove ISSUE --test COMMAND --expect TEXT` | Fetch the selected base branch and run the supplied command on its merge-base with committed changed test files overlaid, then on committed head, in disposable snapshots. Both quoted text options are required; each phase has a fixed 120-second limit, 2-second termination grace and 1 MiB output cap. Save `old-code-proof.json` in the run folder. A successful comparison exits 0; failed or unavailable evidence exits 1 and never blocks publication. |
 | `pdd workflow run NAME ISSUE [--agent codex\|claude] [--base BRANCH] [--adopt-corpus FILE]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. `--adopt-corpus FILE` adopts an unchanged externally approved declared corpus; see [corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus). PRs target the saved base, with PR 2 stacked on an open PR 1. Every chat of the run uses the `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR` (Claude Code) of this terminal. A leading `~` in it means your home folder. If that folder does not exist, `run` stops before it starts anything |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
 | `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" when no agent runs in the chat: run `pdd workflow open ISSUE` to start it again. Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
@@ -30,7 +31,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
 
-- NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
+- NAME is `small-change`, `bug`, `feature`, `product` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
 - ISSUE is the issue number in the current repo, worktrees included. If several repos match, use `owner/repo#N`. An issue can have only one active run. `run` refuses a second one.
 - `--base` takes a branch name such as `feature/checkout`. The branch must already be on `origin`. PDD fetches it and starts from that remote commit, preserves the repository default, and pushes only its new issue branches. A failed explicit fetch stops startup.
 - `status` prints `pdd workflow view ISSUE` for passive review. The view links to the full issue, Stories and acceptance criteria, plan, prompts, test cases and Markdown gate notes. It identifies the current commit and uncommitted edits; recorded gate approvals do not certify later edits or approve prompts. Missing links/files are stated plainly.
@@ -48,11 +49,11 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | Command | What it does |
 |---|---|
 | `pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check Stories on the PDD runtime with your gh login. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Runtime check` line for each Story and, with two or more Stories, the overall line |
-| `pdd check --read [BATCH|CALL_ID] [--json]` | Show saved check results again. Sends no check |
+| `pdd check --read [BATCH|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd check --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews a Try map |
-| `pdd check --lint [STORY...] [--json]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
+| `pdd check --lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
 | `pdd check --lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no runtime tests |
 | `pdd check --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI/runtime call; missing/hidden parts, order or region differences fail |
 | `pdd approve PROMPT` | Show the prompt's runtime interface in plain words and its text changes since the last approved version, then ask y/n. On `y`, set it to `approved` and fill its hash. For a person at a terminal only |
@@ -61,7 +62,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 - A new Try defaults to 400 calls. Both `pdd check --max-calls N` and `pdd try --max-calls N` accept 1 through 1000. Checks default to 12 calls per step, at least 18 and at most 1000. Choose at least three times your worst-case estimate.
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
-- Checks keep at most five submitted, unfinished jobs in flight. Confirmed zero-execution queue refusals mean busy, not a test failure: pdd honors the retry delay, reduces its window and tries at most three times per test within the command wait. `--read` sends no work; `--retry BATCH` recovers only unstarted work with identical source and confirmed lint.
+- Local pdd processes share a runtime job limit (`PDD_MAX_JOBS`, default 4) across repositories and worktrees. Checks, remote lint and Try setup wait their turn. When the runtime is busy and confirms that your job did not start, pdd waits and tries again until your wait ends. It shows how many jobs are ahead of you. After a saved lint passes, `--read` can start the original checks that were waiting for it, using the same files, owner and call limits. `--retry BATCH` retries checks confirmed never started, using the same files after lint passes. See [waiting for capacity](lint-capacity.md) for recovery and restart handling.
 - Offline-only work uses `pdd check --lint --local`, local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Runtime boundaries](runtime-boundaries.md).
 - Running `pdd try STORY` for a paused Try explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
@@ -101,6 +102,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
 | `pdd --version` | Print the version, `0.1.10`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
+| `pdd jobs` | List active slots and waiting runtime jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or runtime call |
 
 ## Run from a source checkout
 
@@ -114,7 +116,7 @@ npm test
 
 You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-When lint capacity is busy, Check, lint and Try use [bounded lint-slot retries](lint-capacity.md).
+Check, remote lint and Try setup share [local slots and capacity waiting](lint-capacity.md). Local waiting, maintenance and runtime queue time all use the existing caller wait. Try keeps its five-minute setup allowance and 90-second agent lint wait; it adds no timeout flag.
 
 `pdd try [STORY] --cli [--shell] [--max-calls N] [--new]`
 
@@ -135,3 +137,55 @@ An explicit `pdd check --lint` that is still queued/running exits 3 and prints i
 Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI command appends its usage line to stderr, keeping program stdout and exit status intact. It distinguishes calls for this command, total used and remaining in this Try, and the session cap. Unknown counters stay unknown. Named HTTP routes carry `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap`, and `x-pdd-usage-source` headers; response bodies and program statuses stay intact. `runtime` identifies a confirmed call receipt; `last-known` identifies cached session allowance on a local zero-call response such as an unmatched route. Session allowance is separate from an account or tester allowance. Usage reads spend no model calls and never repeat commands.
 
 `pdd check --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted Try CLI commands print this exact recovery command. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.
+
+`workflow prove` leaves the saved run base unchanged. Fresh worktrees have no installed dependencies; include required installation in `--test`. The command inherits your environment and network access, and shares the repository’s Git refs and config, just like tests run by hand. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both snapshots before exit 130, 143 or 129. Only positively owned stale proof worktrees with inactive owners are recovered; unrelated worktrees are left alone.
+
+Remote lint shares the Check caller wait, including `--timeout`, with no separate lint limit. Recovery of a saved lint-held Check has a fresh finite wait (`--timeout`, otherwise 90 seconds), retains the saved runtime origin and dispatches each original check at most once. Standalone lint reads never send checks.
+
+Before sending work, pdd asks whether the runtime has room. During announced maintenance, it shows the end time and reason, then waits within the same deadline. If the runtime does not offer this information, pdd uses the reply to the submission instead. A queued job keeps its ID while pdd shows its place. If the runtime confirms that a check ended because the service restarted, pdd tries that check once more and saves both attempts and their usage. If a reply is lost or the outcome is uncertain for another reason, pdd reads the original job without sending it again.
+
+## Shared records
+
+| Command | What it does |
+|---|---|
+| `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no runtime calls |
+| `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+
+Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
+The Markdown section has a `### order_in` heading and one JSON code block;
+headings with spaces also accept their normal heading fragment. JSON records use
+`{"$contract":"contracts/records.json#/defs/order"}`. Local `title` and
+`description` may accompany a reference; other constraint siblings are refused.
+Use `"initial_world":{"$seed":"contracts/seed-world.json","set":{"/orders":[]}}`
+for a shared starting world. Paths are relative to the repository root. Set
+pointers apply in written order to a fresh world and may add an object's final
+key; their parents must exist. Expected values and literal inputs stay literal.
+
+Check, lint and Try use expanded schemas/worlds, including uploaded bytes. A
+missing target stops before upload. Real schema `$ref` remains refused. Explicit
+`pdd check --lint` skips inline schemas with fewer than three fields. It advises
+about a differing copy only when the shared record has at least four fields and
+the copy has the same fields or one extra/missing field. Equal three-field copies
+can still move to references. Required-field lists and enum alternatives compare
+without order; arrays inside literal values keep their order. Advice does not
+fail a check. Expanded uploads keep the original JSON layout and key order.
+Sync changes only selected schema values and an approved-to-draft status, using
+an atomic file replacement that refuses concurrent edits and unsafe paths. Listing uses actual Check
+history, never lint as a check; no baseline is shown as not checked/unavailable.
+Only Stories using a changed record become stale because of that record. A
+Story stays current when you check one of its tests or include it in a larger
+batch without changing its files.
+
+`pdd approve` still approves prompt prose; it does not cover shared contract
+contents. Editing a contract never approves a prompt. Sync writes that edit an
+approved interface set it to draft; review the preview and approve it as usual.
+
+## Product plans
+
+| Command | What it does |
+|---|---|
+| `pdd product status [--json]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs. Makes no runtime calls |
+| `pdd product next` | Show ready planned runs and their start commands; parallel starts are optional |
+| `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
+
+See [Build a whole product](build-a-whole-product.md).

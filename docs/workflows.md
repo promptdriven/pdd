@@ -78,8 +78,8 @@ you     review and merge on GitHub
 
 1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
-3. The main chat coordinates and talks with you. It does not write code itself.
-4. The main chat gives each step to a fresh subagent and never reuses it. The subagent gets its full brief at once, with file paths, not the chat history. Then the chat waits for it.
+3. The main chat coordinates and talks with you. It writes no code and performs no checks.
+4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
 5. Hold review completion while must-fixes remain and fewer than two repair rounds have run: start a fresh build with the must-fix list. Only after the final review (clear or two repairs used), run `pdd workflow done review`; it opens PR 2. For other steps, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
@@ -105,7 +105,7 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 The check comes first, then the Try. At the story gate, the chat can offer a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when visual made an app map.
 
-After the check and try steps, the chat shows one `Runtime check` line for each Story (✓ or ✗) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
+After the check and try steps, the chat shows one `Runtime check` line for each Story (✓, ✗ or no verdict) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body is short:
 
