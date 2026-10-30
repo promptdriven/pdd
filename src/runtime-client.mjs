@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: e89df12192ebec518e58311a389e4ac5af8492fa55357c01a657bdf4c72c107a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: b0b71cd35db690b6d4f22d26a16ea012dd66714be59f015bf6225cc48c7b2b7f).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -385,10 +385,10 @@ function addHints(row, root, visible) {
   }
 }
 
-// Server explanations are evidence only for an inconclusive result; state owns the verdict.
+// State owns the verdict; discard only the exact generic failure explanation.
 function noVerdictAdvice(answer, view) {
   const why = view.why;
-  return { why: why && why !== 'Checks failed.' && (/^No verdict\b/i.test(why) || answer?.result?.outcome === 'Inconclusive') ? why : null,
+  return { why: why && why !== 'Checks failed.' ? why : null,
     next_step: checkCapacity(answer) === null ? view.next_step : null };
 }
 

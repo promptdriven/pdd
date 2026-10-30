@@ -40,8 +40,8 @@ test('REVIEW NOT RUN advice keeps sent busy explanation and has no dangling colo
   const lint = renderText({ rows: [row('not_run', { note: { message: 'The saved lint finished. No checks were sent. Run a fresh pdd check command to start checks.' }, next_step: 'Tell the person.' })], exitCode: 5 });
   assert.match(lint, /The saved lint finished\. No checks were sent\./); assert.doesNotMatch(lint, /Run a fresh pdd check/);
 });
-test('REVIEW server why accepts only no-verdict advice and drops legacy generic even with inconsistent outcome', async t => {
-  for (const [why, outcome, expected] of [['Checks failed.', 'Fail', null], ['Checks failed.', 'Inconclusive', null], ['Old failure', 'Fail', null], ['nO VeRdIcT: service unavailable', 'Fail', 'nO VeRdIcT: service unavailable'], ['No verdictish failure', 'Fail', null], ['Service unavailable', 'Inconclusive', 'Service unavailable']]) {
+test('REVIEW server why preserves specific advice and drops legacy generic even with inconsistent outcome', async t => {
+  for (const [why, outcome, expected] of [['Checks failed.', 'Fail', null], ['Checks failed.', 'Inconclusive', null], ['Old failure', 'Fail', 'Old failure'], ['nO VeRdIcT: service unavailable', 'Fail', 'nO VeRdIcT: service unavailable'], ['No verdictish failure', 'Fail', 'No verdictish failure'], ['Service unavailable', 'Inconclusive', 'Service unavailable']]) {
     const setup = harbor(t);
     const fake = await fakeRuntime(t, (e, f) => {
       if (e.command !== 'check') return f.normal(e);
