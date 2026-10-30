@@ -165,3 +165,75 @@ test('revision Python body skips are reported and source mentions, issue links a
   assert.ok(!report.text.includes('@'));assert.ok(!/#\d/.test(report.text.replace(/&#\d+;/g,'')));
   assert.equal((report.text.match(/^New skips:/gm)||[]).length,2);
 });
+
+test('manual revision native callback boundary excludes quoted and nested option data',async t=>{
+  const {collectTestInventory}=await inventoryModule(),f=repository(t);
+  // The first two entries are the reviewer's exact witnesses. Expectations
+  // follow body ownership: each actual callback is empty, regardless of options.
+  const tails=[
+    `{reason: '=> t.skip("no")'}, () => {}`,
+    `{reason: '=> assert.ok(no)'}, () => {}`,
+    ...['t.skip("no")','t.todo("no")','assert.ok(no)','expect(no)'].flatMap(content=>[
+      `{reason: 'function () { ${content} }'}, async () => {}`,
+      `{nested: {reason: '=> ${content}'}}, function (t) {}`,
+      `{nested: [() => { ${content}; }]}, async function named(t) {}`,
+      `{nested: function () { ${content}; }}, t => {}`,
+    ]),
+  ];
+  const before=tails.map((_,i)=>`test('${i<2?'x':`empty-${i}`}', () => {});`).join('\n')+'\n';
+  const after=tails.map((tail,i)=>`test('${i<2?'x':`empty-${i}`}', ${tail});`).join('\n')+'\n';
+  f.write('test/options.js',before);const baseSha=f.commit();
+  f.write('test/options.js',after);const headSha=f.commit();
+  const remote=join(f.root,'.git','options-remote.git');
+  f.git('init','--bare','-q',remote);f.git('remote','add','origin',remote);
+  f.git('push','-q','origin',`${headSha}:refs/heads/main`);
+  assert.equal(f.git('ls-remote','origin','refs/heads/main').split(/\s/)[0],headSha);
+  // Ambient content cannot replace the committed snapshot.
+  f.write('test/options.js',`test('ambient', t => t.skip('dirty'));\n`);
+  const report=await collectTestInventory({cwd:f.root,baseSha,headSha});
+  const expected=`Tests vs base: "test/options.js" ${tails.length} → ${tails.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n`;
+  assert.equal(report.available,true);assert.equal(report.details,expected);
+});
+
+test('manual revision native callback ownership preserves inline and nested multiline evidence',async t=>{
+  const {collectTestInventory}=await inventoryModule(),f=repository(t);
+  f.write('readme.md','empty');const emptySha=f.commit();
+  const render=value=>[
+    `test('arrow', {reason: 'function () { fake }'}, t => { assert.ok(${value}); t.skip('real'); });`,
+    `test('async', {nested: () => { fake(); }}, async t => expect(${value}));`,
+    `test('function', {reason: '=> fake'}, function named(t) { assert.ok(${value}); t.todo('real'); });`,
+    `test('outer', {reason: '=> {'}, async function (t) {`,
+    `  test('child', {reason: 'function () {'}, () => {});`,
+    `  test('no-body', {reason: '=> {'});`,
+    `  assert.ok(${value});`,
+    `  t.skip('outer marker');`,
+    `  test('inner', {nested: function () { fake(); }}, async t => {`,
+    `    expect(${value});`,
+    `    t.todo('inner marker');`,
+    `  });`,
+    `});`,
+    `test('standalone-no-body', {reason: 'function () {'});`,
+    `assert.ok(outside${value});`,
+    `t.todo('outside');`,
+    '',
+  ].join('\n');
+  f.write('test/owners.js',render('old'));const baseSha=f.commit();
+  f.write('test/owners.js',render('new'));const headSha=f.commit();
+  const report=await collectTestInventory({cwd:f.root,baseSha,headSha});
+  assert.equal(report.available,true);assert.ok(report.details.includes('8 → 8 tests. Removed: none.'));
+  const changes=report.details.split('\n').filter(line=>line.startsWith('Changed assertions in kept tests:'));
+  assert.equal(changes.length,5);
+  for(const name of ['arrow','async','function','outer','inner'])assert.equal(changes.filter(line=>line.startsWith(`Changed assertions in kept tests: "test/owners.js" "${name}" `)).length,1,report.details);
+  // Inline marker lines changed with their assertions; the exact-line marker
+  // rule reports those two lines as new, while multiline markers are unchanged.
+  const introduced=report.details.split('\n').filter(line=>line.startsWith('New skips:'));
+  assert.equal(introduced.length,2);
+  for(const name of ['arrow','function'])assert.equal(introduced.filter(line=>line.startsWith(`New skips: "test/owners.js" "${name}" `)).length,1,report.details);
+  assert.ok(!report.details.includes('outsideold')&&!report.details.includes('outsidenew'));
+  // Adding this source introduces all four genuine body markers, with their
+  // innermost owners, while neither no-body declaration gains one.
+  const added=await collectTestInventory({cwd:f.root,baseSha:emptySha,headSha});
+  const skips=added.details.split('\n').filter(line=>line.startsWith('New skips:'));
+  assert.equal(skips.length,4,added.details);
+  for(const name of ['arrow','function','outer','inner'])assert.equal(skips.filter(line=>line.startsWith(`New skips: "test/owners.js" "${name}" `)).length,1,added.details);
+});

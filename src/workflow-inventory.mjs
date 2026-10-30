@@ -86,12 +86,63 @@ function declarationSkip(source) {
   }
   return false;
 }
+// Locate a callback argument, rather than an arrow/function anywhere in options.
+// Mask quoted data and comments without changing offsets, then balance the
+// conventional single-line argument list. This deliberately is not a JS parser.
+function declarationBody(source) {
+  const masked = source.split('');
+  for (let at = 0; at < source.length; at++) {
+    const c = source[at];
+    if (["'", '"', '`'].includes(c)) {
+      masked[at] = 'q';
+      for (at++; at < source.length; at++) {
+        masked[at] = ' ';
+        if (source[at] === '\\') { if (++at < source.length) masked[at] = ' '; }
+        else if (source[at] === c) break;
+      }
+    } else if (source.startsWith('//', at)) {
+      masked.fill(' ', at); break;
+    } else if (source.startsWith('/*', at)) {
+      const end = source.indexOf('*/', at + 2);
+      masked.fill(' ', at, end < 0 ? source.length : end + 2);
+      at = end < 0 ? source.length : end + 1;
+    }
+  }
+  const code = masked.join(''), nesting = [];
+  const bodyAt = start => {
+    while (/\s/.test(code[start] ?? '') && start < code.length) start++;
+    const block = code[start] === '{', bodyStart = start + (block ? 1 : 0), stack = [];
+    for (let at = start; at < code.length; at++) {
+      const c = code[at];
+      if ('([{'.includes(c)) stack.push(c);
+      else if (')]}'.includes(c)) {
+        if (!stack.length) return { body: source.slice(bodyStart, at), multiline: false };
+        if (stack.pop() !== {')':'(',']':'[','}':'{'}[c]) return { body: '', multiline: false };
+        if (block && !stack.length) return { body: source.slice(bodyStart, at), multiline: false };
+      } else if (c === ',' && !stack.length) return { body: source.slice(bodyStart, at), multiline: false };
+    }
+    return { body: source.slice(bodyStart), multiline: block };
+  };
+  let argumentStart = 0;
+  for (let at = 0; at < code.length; at++) {
+    const c = code[at];
+    if (!nesting.length) {
+      if (c === ',') { argumentStart = at + 1; continue; }
+      if (c === ')') break;
+      if (code.startsWith('=>', at) && /^(?:async\s*)?(?:[\w$]+|\([\s\S]*\))$/.test(code.slice(argumentStart, at).trim())) return bodyAt(at + 2);
+      if (c === '{' && /^(?:async\s+)?function(?:\s*\*)?(?:\s+[\w$]+)?\s*\([\s\S]*\)$/.test(code.slice(argumentStart, at).trim())) return bodyAt(at);
+    }
+    if ('([{'.includes(c)) nesting.push(c);
+    else if (')]}'.includes(c) && nesting.pop() !== {')':'(',']':'[','}':'{'}[c]) break;
+  }
+  return { body: '', multiline: false };
+}
 function cases(source, lang) {
   if (!lang) return [];
   const lines = source.split('\n'), found = [], occurrences = new Map();
   for (let at = 0; at < lines.length; at++) {
     const line = lines[at]; if (comment(line,lang)) continue;
-    const indent = /^\s*/.exec(line)[0]; let name, end = at, tail = '', declaration;
+    const indent = /^\s*/.exec(line)[0]; let name, end = at, tail = '', declaration, callback;
     if (lang === 'js') {
       declaration = /^(\s*)(?:(?:test|it)(?:\.(?:only|skip|todo))?|xit|describe(?:\.skip)?)\s*\(\s*/.exec(line);
       if (!declaration) continue;
@@ -99,8 +150,9 @@ function cases(source, lang) {
       tail = line.slice(declaration[0].length + parsed.end);
       if (!/^\s*[,)]/.test(tail)) continue;
       name = parsed.name;
+      callback = declarationBody(tail);
       // A conventional multiline callback ends at its declaration indentation.
-      if (/(?:=>\s*\{|function\b[^{}]*\{)/.test(tail) && !/}\s*\)\s*;?\s*(?:\/\/.*)?$/.test(tail)) {
+      if (callback.multiline) {
         end = lines.length - 1;
         for (let i = at + 1; i < lines.length; i++) if (lines[i].startsWith(indent) && /^}\);\s*(?:\/\/.*)?$/.test(lines[i].slice(indent.length))) { end = i; break; }
       }
@@ -115,7 +167,7 @@ function cases(source, lang) {
     const suite = lang === 'js' && /^\s*describe\b/.test(line);
     const identity = JSON.stringify([suite,name]);
     const occurrence = (occurrences.get(identity) ?? 0) + 1; occurrences.set(identity,occurrence);
-    const body = lang === 'js' ? tail.match(/(?:=>|function\b[^{}]*\{)(.*)/)?.[1] ?? '' : line;
+    const body = lang === 'js' ? callback.body : line;
     const entry = { name, occurrence, suite, at, end, body, optionSkip: declarationSkip(tail), assertions: [], markers: [] };
     if (lang === 'py') for (let i = at - 1; i >= 0 && /^\s*@/.test(lines[i]); i--) {
       if (/^\s*@pytest\.mark\.(?:skip|skipif|xfail)\b/.test(lines[i])) entry.markers.unshift(lines[i]);

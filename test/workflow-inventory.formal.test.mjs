@@ -380,3 +380,48 @@ test('formal revised availability and strict assertion cap preserve healthy evid
   }
   t.diagnostic(`formal revised partial-file subsets/order=${partial}; assertion-product grid=${caps}; candidate-limit grid=${candidateLimits}; aggregate-byte boundary=${aggregateLimits}`);
 });
+
+test('manual revision formal callback ownership separates option data from real bodies',async t=>{
+  const {analyzeTestChanges}=await inventoryModule();
+  const callbacks=['() => {}','t => {}','async () => {}','async t => {}','function (t) {}','async function named(t) {}'];
+  const contents=['t.skip("no")','t.todo("no")','assert.ok(no)','expect(no)'];
+  const failures=[];let comparisons=0;
+  const check=(before,after,oldCases,newCases)=>{
+    const report=analyzeTestChanges({files:[{oldPath:'test/manual.js',newPath:'test/manual.js',before,after}]});
+    const expected=expectedReport('test/manual.js',oldCases,newCases);
+    if(!report.available||report.details!==expected)failures.push({before,after,expected,actual:report.details});
+    comparisons++;
+  };
+  // This finite grammar is rendered from explicit owner models. It does not
+  // parse the source under test. All actual callbacks in this grid are empty.
+  for(const call of ['test','it'])for(const delimiter of ["'",'"','`'])for(const content of contents)for(const fake of [`=> ${content}`,`function () { ${content} }`]){
+    const quotedData=delimiter+fake.replaceAll('"',delimiter==='"'?'\\"':'"')+delimiter;
+    for(const options of [`{reason: ${quotedData}}`,`{nested: {reason: ${quotedData}}}`,`{nested: [${quotedData}]}`,`{nested: consume(${quotedData})}`])for(const callback of callbacks){
+      const before=`${call}("kept", () => {});\n`,after=`${call}("kept", ${options}, ${callback});\n`;
+      check(before,after,[{name:'kept'}],[{name:'kept'}]);
+    }
+  }
+  const quotedComparisons=comparisons;
+  for(const call of ['test','it'])for(const content of contents)for(const option of [`{nested: () => { ${content}; }}`,`{nested: function () { ${content}; }}`])for(const callback of callbacks){
+    check(`${call}("kept", () => {});\n`,`${call}("kept", ${option}, ${callback});\n`,[{name:'kept'}],[{name:'kept'}]);
+  }
+  const nestedComparisons=comparisons-quotedComparisons;
+  // Positive inline bodies use the same callback forms, with/without misleading
+  // option data. The full declaration is the promised complete source line.
+  for(const callback of callbacks)for(const options of ['',`{reason: '=> t.todo("fake") assert.ok(fake)'}, `])for(const content of contents){
+    const before=`test("kept", ${options}${callback});`;
+    const after=`test("kept", ${options}${callback.replace('{}',`{ ${content}; }`)});`;
+    const marker=content.startsWith('t.'),afterModel={name:'kept',assertions:marker?[]:[after],skips:marker?[after]:[]};
+    check(before+'\n',after+'\n',[{name:'kept'}],[afterModel]);
+  }
+  const inlineComparisons=comparisons-quotedComparisons-nestedComparisons;
+  for(const callback of callbacks)for(const options of [`{reason: '=> {'}`,`{reason: 'function () {'}`]){
+    const declaration=`test("outer", ${options}, ${callback.replace('{}','{')}`;
+    const child=`  test("child", ${options});`;
+    const before=declaration+'\n'+child+'\n  assert.ok(old);\n});\n';
+    const after=declaration+'\n'+child+'\n  assert.ok(new);\n  t.todo("real");\n});\n';
+    check(before,after,[{name:'outer',assertions:['  assert.ok(old);']},{name:'child'}],[{name:'outer',assertions:['  assert.ok(new);'],skips:['  t.todo("real");']},{name:'child'}]);
+  }
+  t.diagnostic(`manual callback comparisons=${comparisons}; quoted=${quotedComparisons}; nested=${nestedComparisons}; inline positives=${inlineComparisons}; multiline positives=${comparisons-quotedComparisons-nestedComparisons-inlineComparisons}; mismatches=${failures.length}`);
+  assert.deepEqual(failures,[],'option data is outside actual callback bodies; genuine body evidence retains its owner');
+});
