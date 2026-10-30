@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "A source file above 10,485,760 bytes is refused before its contents are read, including a raw file replaced for upload."
+      "text": "A required raw source read above 10,485,760 bytes is refused before the file is opened or read, including a preparation read before replacement."
     },
     {
       "id": "AC2",
@@ -36,7 +36,7 @@
       "criteria": [
         "AC1"
       ],
-      "given": "synthetic selected dependency with sparse size 2147483649 bytes; separately 10485761-byte target through sourceFilePort, readPrompt and capture; separately oversized raw path replaced by prepareSource output",
+      "given": "synthetic selected dependency with sparse size 2147483649 bytes; separately 10485761-byte target through sourceFilePort, readPrompt and capture; separately oversized raw path requested by prepareSource readFile before replacement",
       "required_observation": "finite exit-4 too-big report before any native open/read of oversized path; no RangeError; resolver direct fake stat above limit gives contract-invalid before files.read; no upload/auth/model calls"
     },
     {
