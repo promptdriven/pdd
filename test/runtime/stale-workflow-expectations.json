@@ -1,0 +1,53 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/stale-workflow-expectations.md",
+  "criteria": [
+    {"id": "AC1", "text": "`pdd workflow approve`, `changes`, `cancel`, and `open` accept the documented `--expect-gate ID` or `--expect-step STEP` option; calls without either option retain their existing command forms and behavior, and supplying both options is refused."},
+    {"id": "AC2", "text": "Gate expectations use the stable `area:kind` ID saved in `run.gate.id`; a matching gate or step expectation lets each command proceed with its existing behavior and effects."},
+    {"id": "AC3", "text": "A well-formed expectation that does not match the current run state refuses with exit code 2 and reason `stale_expectation`."},
+    {"id": "AC4", "text": "A malformed or unknown expectation, or both expectation options together, refuses with exit code 2 and reason `invalid_expectation`."},
+    {"id": "AC5", "text": "Every refusal writes exactly `pdd workflow: refused reason=<reason> current_gate=<gate-id-or-none> current_step=<step-or-none>\\n` to stderr, writes nothing to stdout, and performs no run, approval, question, chat, file, branch, or publication change."},
+    {"id": "AC6", "text": "The guard reads saved state once immediately before command effects, so an expectation cannot act against a later state after the run advances."}
+  ],
+  "initial_world": {"kv": {"run": {"gate": {"id": "stories:approve"}, "step": "prompt-story", "effects": 0}}},
+  "simulation": {
+    "store.load": {"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"},
+    "store.save": {"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"}
+  },
+  "context": [],
+  "steps": [
+    {"step_id": "matching-gate", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "approve", "2572", "--expect-gate", "stories:approve"]}, "checks": [
+      {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+      {"criterion_id": "AC2", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 1},
+      {"criterion_id": "AC2", "target": "world", "path": "/kv/run/gate/id", "op": "equals", "value": "stories:approve"}
+    ]},
+    {"step_id": "matching-step", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "cancel", "2572", "--expect-step", "prompt-story"]}, "checks": [
+      {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+      {"criterion_id": "AC2", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 2}
+    ]},
+    {"step_id": "stale-gate-no-mutation", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "open", "2572", "--expect-gate", "pr:approve"]}, "checks": [
+      {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
+      {"criterion_id": "AC3", "target": "result", "path": "/stderr", "op": "equals", "value": "pdd workflow: refused reason=stale_expectation current_gate=stories:approve current_step=prompt-story\n"},
+      {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+      {"criterion_id": "AC5", "target": "calls", "path": "/resources/workflow-runner-store-save", "op": "equals", "value": 0},
+      {"criterion_id": "AC5", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 2},
+      {"criterion_id": "AC6", "target": "world", "path": "/kv/run/gate/id", "op": "equals", "value": "stories:approve"}
+    ]},
+    {"step_id": "malformed-gate-no-mutation", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "changes", "2572", "request", "--expect-gate", "bad"]}, "checks": [
+      {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
+      {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "equals", "value": "pdd workflow: refused reason=invalid_expectation current_gate=stories:approve current_step=prompt-story\n"},
+      {"criterion_id": "AC5", "target": "calls", "path": "/resources/workflow-runner-store-save", "op": "equals", "value": 0},
+      {"criterion_id": "AC5", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 2}
+    ]},
+    {"step_id": "both-options-no-mutation", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "open", "2572", "--expect-gate", "stories:approve", "--expect-step", "prompt-story"]}, "checks": [
+      {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
+      {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "equals", "value": "pdd workflow: refused reason=invalid_expectation current_gate=stories:approve current_step=prompt-story\n"},
+      {"criterion_id": "AC5", "target": "calls", "path": "/resources/workflow-runner-store-save", "op": "equals", "value": 0},
+      {"criterion_id": "AC5", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 2}
+    ]},
+    {"step_id": "no-option-preserved", "entry_path": "prompts/cli/workflow-runner.prompt.md", "operation": "main", "input": {"argv": ["workflow", "approve", "2572"]}, "checks": [
+      {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+      {"criterion_id": "AC1", "target": "world", "path": "/kv/run/effects", "op": "equals", "value": 3}
+    ]}
+  ]
+}

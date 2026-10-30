@@ -40,6 +40,14 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 
 `ref` is an issue number, `owner/repo#N` or an issue URL ([selection](workflow-runs.prompt.md)). Without ref, use the run of the current worktree, or the only run of this repository that waits for a person.
 
+### Caller expectations for mutating commands
+
+`approveRun`, `changeRun`, `cancelRun`, and `openRun` accept optional caller expectations `expectGate` (from `--expect-gate ID`) and `expectStep` (from `--expect-step STEP`). Before any command-specific approval, question, chat, filesystem, branch, GitHub or other effect, read the saved run state once and compare every supplied expectation with the current state. A matching expectation continues through the command's existing behavior and effects. A refused expectation identifies the current gate or step and leaves the run record, approvals, questions, chats, files, branches and publication effects unchanged. Calls that supply no expectation preserve today's unconditional behavior.
+
+Gate IDs are stable `area:kind` strings (for example `stories:approve`), saved in `run.gate.id` and used unchanged in status, expectations and refusal reports. `--expect-gate` and `--expect-step` are mutually exclusive; supplying both is invalid. A gate value is valid only when it is a known `area:kind` ID, and a step value only when it is a known workflow step. Missing both preserves unconditional behavior.
+
+Before any command-specific approval, question, chat, filesystem, branch, GitHub or other effect, read the saved run state once. A malformed or unknown expectation, or both options together, refuses with reason `invalid_expectation`; a well-formed expectation that differs from the saved current gate or step refuses with reason `stale_expectation`. Both refusal classes exit 2, write no stdout, and write exactly this one stderr line (including its final newline): `pdd workflow: refused reason=<reason> current_gate=<gate-id-or-none> current_step=<step-or-none>`. They leave the run record, approvals, questions, chats, files, branches and publication effects unchanged. A matching expectation continues through the existing behavior and effects.
+
 ## Rules
 
 - No timeouts, no polling loop, no foreground controller and no test runs. Source fingerprints below bind evidence; they do not create execution snapshots.
@@ -113,3 +121,15 @@ Preserve the single canonical workflow ownership marker on both descriptions, re
 Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
+
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{"status":"approved","prose_sha256":"a32a80b08d088bdffe71a5a96f4c5b29e0f2dd1bd3be52fa8208d8e612e57137","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"store","kind":"key-value","access":"write","operations":[{"name":"load","access":"read","arguments_schema":{"type":"object","properties":{"key":{"type":"string","enum":["run"]}},"required":["key"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"null"},{"type":"object","properties":{"gate":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false},"step":{"type":"string"},"effects":{"type":"integer"}},"required":["gate","step","effects"],"additionalProperties":false}]}},"required":["value"],"additionalProperties":false}},{"name":"save","access":"write","arguments_schema":{"type":"object","properties":{"key":{"type":"string","enum":["run"]},"value":{"type":"object","properties":{"gate":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false},"step":{"type":"string"},"effects":{"type":"integer"}},"required":["gate","step","effects"],"additionalProperties":false}},"required":["key","value"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"object","properties":{"gate":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false},"step":{"type":"string"},"effects":{"type":"integer"}},"required":["gate","step","effects"],"additionalProperties":false}},"required":["value"],"additionalProperties":false}}]}],"limits":{"max_steps":8,"max_model_calls":24},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]}
+```
+
+</details>
+
+The `main` operation models the four mutating workflow commands. It reads `run` once before checking expectations. A successful command increments `effects` and saves the run. A refusal does not save. Every stdout or stderr line ends with one newline.

@@ -12,9 +12,10 @@ Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.run `workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
-- workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
-- workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
-- workflow.cancel `workflow cancel ISSUE`, workflow.open `workflow open ISSUE`.
+- workflow.approve `workflow approve [ISSUE] [--expect-gate ID|--expect-step STEP]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
+- workflow.changes `workflow changes ISSUE TEXT… [--expect-gate ID|--expect-step STEP]`: the text words join into one request; `--` ends options.
+- workflow.cancel `workflow cancel ISSUE [--expect-gate ID|--expect-step STEP]`, workflow.open `workflow open ISSUE [--expect-gate ID|--expect-step STEP]`.
+  These expectation options are caller-supplied saved-state guards. They are mutually exclusive; the shared matching, stale refusal, invalid-value refusal, exact exit code and no-effect rules belong to the runner. Gate IDs are stable `area:kind` values stored in `run.gate.id` and reported consistently. The exact refusal line is `pdd workflow: refused reason=<reason> current_gate=<gate-id-or-none> current_step=<step-or-none>\n`; stale and invalid refusals exit 2.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Try links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
