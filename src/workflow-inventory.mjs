@@ -87,10 +87,11 @@ function declarationSkip(source) {
   return false;
 }
 // Locate a callback argument, rather than an arrow/function anywhere in options.
-// Mask quoted data and comments without changing offsets, then balance the
-// conventional single-line argument list. This deliberately is not a JS parser.
+// Mask quoted data, common regex literals and comments without changing offsets,
+// then balance the conventional argument list. This is not a full JS parser.
 function declarationBody(source) {
   const masked = source.split('');
+  let previous = '';
   for (let at = 0; at < source.length; at++) {
     const c = source[at];
     if (["'", '"', '`'].includes(c)) {
@@ -100,12 +101,30 @@ function declarationBody(source) {
         if (source[at] === '\\') { if (++at < source.length) masked[at] = ' '; }
         else if (source[at] === c) break;
       }
+      previous = 'q';
     } else if (source.startsWith('//', at)) {
       masked.fill(' ', at); break;
     } else if (source.startsWith('/*', at)) {
       const end = source.indexOf('*/', at + 2);
       masked.fill(' ', at, end < 0 ? source.length : end + 2);
       at = end < 0 ? source.length : end + 1;
+    } else if (c === '/' && (!previous || /^[([{:;,=!?&|+*%~^<>-]$/.test(previous))) {
+      // Literal regexes in call arguments, assignments and arrow expressions
+      // can contain brackets and comment-looking slashes. Only an unescaped
+      // slash outside a character class closes the literal. Division after an
+      // operand stays visible. An unterminated literal is outside this grammar.
+      let end = at + 1, characterClass = false;
+      for (; end < source.length; end++) {
+        if (source[end] === '\\') end++;
+        else if (source[end] === '[') characterClass = true;
+        else if (source[end] === ']') characterClass = false;
+        else if (source[end] === '/' && !characterClass) break;
+      }
+      if (end < source.length) {
+        masked.fill(' ', at, end + 1);masked[at] = 'q';at = end;previous = 'q';
+      } else previous = c;
+    } else if (!/\s/.test(c)) {
+      previous = c;
     }
   }
   const code = masked.join(''), nesting = [];

@@ -425,3 +425,40 @@ test('manual revision formal callback ownership separates option data from real 
   t.diagnostic(`manual callback comparisons=${comparisons}; quoted=${quotedComparisons}; nested=${nestedComparisons}; inline positives=${inlineComparisons}; multiline positives=${comparisons-quotedComparisons-nestedComparisons-inlineComparisons}; mismatches=${failures.length}`);
   assert.deepEqual(failures,[],'option data is outside actual callback bodies; genuine body evidence retains its owner');
 });
+
+test('manual regex formal literal grammar preserves complete callback assertion lines',async t=>{
+  const {analyzeTestChanges}=await inventoryModule();
+  const patterns=[String.raw`/[)]/`,String.raw`/[}]/`,String.raw`/[(]/`,String.raw`/[{]/`,String.raw`/[\])}]/`,String.raw`/\)/`,String.raw`/\//`,String.raw`/[\/) ]/`,String.raw`/[/*)]/`,String.raw`/[)\]\/}]/g`];
+  const assertions=[(v,re)=>`assert.match(${v}, ${re})`,(v,re)=>`expect(${v}).toMatch(${re})`,(v,re)=>`expect(${re}.test(${v})).toBe(true)`,(v,re)=>`assert.ok(${re}.test(${v}))`];
+  const callbacks=[content=>`() => ${content}`,content=>`async () => ${content}`,content=>`() => { ${content}; }`,content=>`async t => { ${content}; }`,content=>`function (t) { ${content}; }`,content=>`async function named(t) { ${content}; }`];
+  let comparisons=0,mismatches=0;const witnesses=[];
+  const check=(before,after,oldCases,newCases)=>{
+    const report=analyzeTestChanges({files:[{oldPath:'test/regex.js',newPath:'test/regex.js',before,after}]});
+    const expected=expectedReport('test/regex.js',oldCases,newCases);comparisons++;
+    if(!report.available||report.details!==expected){mismatches++;if(witnesses.length<3)witnesses.push({before,after,expected,actual:report.details});}
+  };
+  // The oracle is the owner model: one kept case, with the exact rendered old
+  // and new declaration as its assertion. No source parsing derives the answer.
+  for(const call of ['test','it'])for(const pattern of patterns)for(const assertion of assertions)for(const callback of callbacks)for(const options of ['',`{pattern: ${pattern}}, `]){
+    const render=value=>`${call}("kept", ${options}${callback(assertion(value,pattern))});`;
+    const before=render('value'),after=render('changed');
+    check(before+'\n',after+'\n',[{name:'kept',assertions:[before]}],[{name:'kept',assertions:[after]}]);
+  }
+  const inline=comparisons;
+  // A regex on the opening line must not sever multiline body ownership.
+  for(const call of ['test','it'])for(const pattern of patterns)for(const callback of callbacks.slice(2)){
+    const opening=`${call}("outer", {pattern: ${pattern}}, ${callback('').split('{')[0]}{`;
+    const render=value=>`${opening}\n  test("child", () => {});\n  assert.match(${value}, ${pattern});\n  t.skip("real");\n});\n`;
+    check(render('value'),render('changed'),[{name:'outer',assertions:[`  assert.match(value, ${pattern});`],skips:['  t.skip("real");']},{name:'child'}],[{name:'outer',assertions:[`  assert.match(changed, ${pattern});`],skips:['  t.skip("real");']},{name:'child'}]);
+  }
+  const multiline=comparisons-inline;
+  // Division remains an expression; masking a slash must not hide the callback
+  // or its assertion after a division expression.
+  for(const call of ['test','it'])for(const divisor of ['2','(2)','values[0]'])for(const callback of callbacks){
+    const render=value=>`${call}("kept", ${callback(`expect(${value} / ${divisor}).toBe(1)`)});`;
+    const before=render('value'),after=render('changed');
+    check(before+'\n',after+'\n',[{name:'kept',assertions:[before]}],[{name:'kept',assertions:[after]}]);
+  }
+  t.diagnostic(`manual regex comparisons=${comparisons}; inline=${inline}; multiline=${multiline}; division=${comparisons-inline-multiline}; mismatches=${mismatches}`);
+  assert.deepEqual({mismatches,witnesses},{mismatches:0,witnesses:[]},'bounded regex literals preserve actual callback assertion lines and multiline owners');
+});

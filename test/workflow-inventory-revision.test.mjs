@@ -237,3 +237,31 @@ test('manual revision native callback ownership preserves inline and nested mult
   assert.equal(skips.length,4,added.details);
   for(const name of ['arrow','function','outer','inner'])assert.equal(skips.filter(line=>line.startsWith(`New skips: "test/owners.js" "${name}" `)).length,1,added.details);
 });
+
+// Complete assertion lines belong to real callback bodies even when a regular
+// expression contains JS-looking delimiters. These are bounded literal forms,
+// not a claim to parse arbitrary JavaScript.
+for(const kind of ['expression arrow','block arrow','function'])test(`manual regex native ${kind} retains exact changed assertion lines`,async t=>{
+  const {collectTestInventory}=await inventoryModule(),f=repository(t);
+  const patterns=[String.raw`/[)]/`,String.raw`/[}]/`,String.raw`/[(]/`,String.raw`/[{]/`,String.raw`/[\])}]/`,String.raw`/\)/`,String.raw`/\//`,String.raw`/[\/) ]/`,String.raw`/[/*)]/`,String.raw`/[)\]\/}]/g`];
+  const assertions=[(v,re)=>`assert.match(${v}, ${re})`,(v,re)=>`expect(${v}).toMatch(${re})`,(v,re)=>`expect(${re}.test(${v})).toBe(true)`,(v,re)=>`assert.ok(${re}.test(${v}))`];
+  const callback=content=>kind==='expression arrow'?`() => ${content}`:kind==='block arrow'?`() => { ${content}; }`:`function () { ${content}; }`;
+  const rows=[];
+  for(const pattern of patterns)for(const assertion of assertions)for(const options of ['',`{pattern: ${pattern}}, `]){
+    const name=`regex-${rows.length}`;
+    const render=value=>`test(${JSON.stringify(name)}, ${options}${callback(assertion(value,pattern))});`;
+    rows.push({name,before:render('value'),after:render('changed')});
+  }
+  // Keep the reviewer's simplest regression explicit as an exact-line witness.
+  if(kind==='expression arrow')assert.equal(rows[0].before,'test("regex-0", () => assert.match(value, /[)]/));');
+  f.write('test/regex.mjs',rows.map(row=>row.before).join('\n')+'\n');const baseSha=f.commit();
+  f.write('test/regex.mjs',rows.map(row=>row.after).join('\n')+'\n');const headSha=f.commit();
+  execFileSync(process.execPath,['--check',join(f.root,'test/regex.mjs')]);
+  f.write('test/regex.mjs','// dirty worktree is not the committed comparison\n');
+  const report=await collectTestInventory({cwd:f.root,baseSha,headSha});
+  const quote=line=>JSON.stringify(line).replace(/[&<>`|:@#]/g,c=>`&#${c.charCodeAt(0)};`);
+  const expected=[`Tests vs base: "test/regex.mjs" ${rows.length} → ${rows.length} tests. Removed: none.`,
+    ...rows.map(row=>`Changed assertions in kept tests: "test/regex.mjs" ${quote(row.name)} ${quote(row.before)} → ${quote(row.after)}.`),
+    'New skips: none.','Static inventory only; tests were not run.',''].join('\n');
+  assert.equal(report.available,true);assert.equal(report.details,expected);
+});
