@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: bd47761b50951a79fc8503ea5a0f5516af545227edbca8fb8f8f6afa8ae2f691).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 92e0ee4aba9889a91af99bae5714b0b5bd35ec22587157a8f7b1d9d617a92710).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -134,11 +134,10 @@ export async function openHerdrRunLayout(input, ports) {
   }
   if(repo) {
     if(repo.phase!=='ready')throw problem('layout_allocation_uncertain');
-    if(repo.commonDir!==commonDir)throw problem('repository_checkout_changed');
     await ownedRepository(rows,repo,command);
   } else {
     const clashes=registry.repositories.filter(r=>r.repository.split('/')[1].toLowerCase()===name.toLowerCase());
-    let label=clashes.length||rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
+    let label=rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
     if(rows.some(w=>w.label===label)&&registry.repositories.some(r=>r.key===key&&r.commonDir!==commonDir))
       label=checkoutLabel({repository:input.repository,commonDir});
     if(rows.some(w=>w.label===label))throw problem('repository_label_unavailable');
@@ -217,7 +216,7 @@ export async function closeHerdrRunLayout({runId,cwd,layout}, ports) {
 export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) {
   const directory=directoryFor(ports),registry=await readRegistry(directory),{command,checkpoint}=ports;
   const repo=repositoryEntry(registry,String(repository).toLowerCase(),commonDir);
-  if(!repo||repo.phase!=='ready'||repo.commonDir!==commonDir)return false;
+  if(!repo||repo.phase!=='ready')return false;
   if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
   const rows=await inventory(command);
   if(rows.some(w=>w.workspace_id===repo.workspaceId)) {
