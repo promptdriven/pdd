@@ -25,10 +25,13 @@ async function heldBatch(t) {
     if (entry.command === 'lint') return { status: 202, json: f.job(id, 'lint', 'running') };
     const lint = f.posts.find(post => post.command === 'lint')?.request.requestId;
     if (id === lint) {
-      if (state.hold) { state.hold = false; entered.resolve(); await bounded(resume.promise, 'release lint refresh'); }
+      if (state.hold && !state.gateClaim) { state.hold = false; entered.resolve(); await bounded(resume.promise, 'release lint refresh'); }
       return { status: 200, json: state.passed ? f.lint(id) : f.job(id, 'lint', 'running') };
     }
-    if (id === CLAIMED) return { status: 404, json: {} };
+    if (id === CLAIMED) {
+      if (state.hold && state.gateClaim) { state.hold = false; entered.resolve(); await bounded(resume.promise, 'release claimed receipt'); }
+      return { status: 404, json: {} };
+    }
     const answer = f.check(id); answer.usage.calls = 4;
     return { status: 200, json: answer };
   });
@@ -101,10 +104,14 @@ test('RELAY-I c: the lock owner adopts a claim, clears busy retry advice and ref
   writeFileSync(r.file, JSON.stringify(saved));
   const key = createHash('sha256').update(row.test).digest('hex');
   writeFileSync(join(r.folder, `${key}.0.dispatch.json`), JSON.stringify({ id: CLAIMED }));
+  r.state.gateClaim = true;
   const owner = worker(t, r, true); let result;
   try {
-    await bounded(r.entered.promise, 'owner claim recovery');
-    assert.equal(read(join(r.folder, 'batch.lock')).pid, owner.child.pid);
+    const observed = await bounded(Promise.race([r.entered.promise.then(() => 'receipt'), owner.done.then(() => 'finished')]), 'owner claim recovery');
+    assert.equal(observed, 'receipt', 'the owner must refresh the adopted claim ID');
+    const lock = join(r.folder, 'batch.lock');
+    assert.ok(existsSync(lock), 'claim adoption must run inside native batch ownership');
+    assert.equal(read(lock).pid, owner.child.pid);
     await refuseCompetitor(t, r, false);
   } finally { r.resume.resolve(); result = await bounded(owner.done, 'owner claim result'); }
   assert.equal(result.code, 3, result.err);
