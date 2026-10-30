@@ -39,6 +39,8 @@ for(const [agent,result,state] of [
  ['codex',{code:0,stdout:'Logged in',stderr:'Not logged in'},'unavailable'],
  ['codex',{code:0,stdout:apiText,stderr:'Sign-in required'},'unavailable'],
  ['codex',{code:1,stdout:'',stderr:'Not signed in'},'signed_out'],
+ ['codex',{code:0,stdout:'',stderr:'Not logged in'},'signed_out'],
+ ['codex',{code:1,stdout:'',stderr:'Not logged in'},'signed_out'],
  ['codex',{code:2,stdout:'',stderr:'Not logged in'},'unavailable'],
  ['codex',{code:1,stdout:apiText,stderr:''},'unavailable'],
  ['claude',{code:0,stdout:'{"loggedIn":false}',stderr:''},'signed_out'],
