@@ -1,0 +1,263 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/product-journey-seed.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A journey uses its explicit initial world over base and part seed values, including null."
+    },
+    {
+      "id": "AC2",
+      "text": "Two distinct parts declaring orders writable refuse before any upload."
+    },
+    {
+      "id": "AC3",
+      "text": "Current J1 evidence gives the journey row one pass out of one; J10 is not another J1."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/project/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/project/product/plan.md": {
+        "content": "# Plan\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/project/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/project/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true,\"__proto__\":{\"kept\":true},\"large\":9007199254740993}",
+        "is_symlink": false
+      },
+      "/project/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {}, \"state_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"menu\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": \"latte\", \"size\": \"M\"}, \"next\": {\"kind\": \"same\", \"screen\": null, \"route_pointer\": null}, \"state\": null, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/project/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {}, \"state_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"menu\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": \"latte\", \"size\": \"M\"}, \"next\": {\"kind\": \"same\", \"screen\": null, \"route_pointer\": null}, \"state\": null, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/project/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/project/prompts/phone/seed.json": {
+        "content": "{\"enabled\":false}",
+        "is_symlink": false
+      },
+      "/project/user_stories/journeys/J1-order.md": {
+        "content": "# Order\n## Acceptance criteria\n1. Ready.\n",
+        "is_symlink": false
+      },
+      "/project/test/J1.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.program-scenario.v1\", \"story_path\": \"user_stories/journeys/J1-order.md\", \"initial_world\": {\"orders\": [{\"id\": \"chosen\"}], \"enabled\": null}}",
+        "is_symlink": false
+      },
+      "/conflict/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/conflict/product/plan.md": {
+        "content": "# Plan\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/conflict/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n| orders | Orders | barista | phone | Replace |\n",
+        "is_symlink": false
+      },
+      "/conflict/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/conflict/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {}, \"state_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"menu\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": \"latte\", \"size\": \"M\"}, \"next\": {\"kind\": \"same\", \"screen\": null, \"route_pointer\": null}, \"state\": null, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/conflict/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {}, \"state_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"menu\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": \"latte\", \"size\": \"M\"}, \"next\": {\"kind\": \"same\", \"screen\": null, \"route_pointer\": null}, \"state\": null, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/conflict/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/conflict/prompts/phone/seed.json": {
+        "content": "{\"enabled\":false}",
+        "is_symlink": false
+      },
+      "/conflict/user_stories/journeys/J1-order.md": {
+        "content": "# Order\n## Acceptance criteria\n1. Ready.\n",
+        "is_symlink": false
+      },
+      "/conflict/test/J1.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.program-scenario.v1\", \"story_path\": \"user_stories/journeys/J1-order.md\", \"initial_world\": {\"orders\": [{\"id\": \"chosen\"}], \"enabled\": null}}",
+        "is_symlink": false
+      },
+      "/status/product/map.md": {
+        "content": "# Coffee pickup: map\nSentence: \"A phone app to order coffee, a shop server, and a barista screen.\"\nSize: medium (12 CORE Stories, 3 parts)\n\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | The app that a customer uses. |\n| server | prompts/server | The shop server between the phone and the barista. |\n| barista | prompts/barista | The screen behind the counter. |\n\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | I see the menu with prices. | CORE |\n| P02 | phone | I order a latte and see \"Ordered\". | CORE |\n| P03 | phone | I see \"Ready\" when my order is done. | CORE |\n| P04 | phone | I see a reason when my order is refused. | CORE |\n| S01 | server | My valid order becomes a ticket. | CORE |\n| S02 | server | My order for an unknown drink is refused with a reason. | CORE |\n| S03 | server | My completed ticket makes the order ready. | CORE |\n| S04 | server | I can read the current status of my order. | CORE |\n| B01 | barista | I see waiting tickets. | CORE |\n| B02 | barista | I mark a ticket done. | CORE |\n| B03 | barista | I see the drink and size on each ticket. | CORE |\n| B04 | barista | I see when there are no waiting tickets. | CORE |\n| P09 | phone | I can save a favourite drink. | LATER |\n\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | I order a latte. The barista sees it and marks it done. My phone shows \"Ready\". | P02, S01, S03, B01, B02, P03 |\n\n## Questions\n| Id | Question | Recommendation | Example | Answer |\n|---|---|---|---|---|\n| Q1 | Can a customer cancel an order? | No, not in the first version. | \"Cancel\" is LATER. | No. |\n",
+        "is_symlink": false
+      },
+      "/status/product/plan.md": {
+        "content": "# Coffee pickup: plan\n\n## Boundaries\n| From | To | What crosses | Contract |\n|---|---|---|---|\n| phone | server | order_in, order_view | contracts/phone-server.md |\n| server | barista | ticket, ticket_done | contracts/server-barista.md |\nNever crosses: the phone never talks to the barista screen.\n\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| server-1 | server | 1 | S01, S02, S03, S04 | plan PR |\n| phone-1 | phone | 1 | P01, P02, P03, P04 | plan PR |\n| barista-1 | barista | 1 | B01, B02, B03, B04 | plan PR |\n| journeys | all | 1 | J1 | server-1, phone-1, barista-1 |\n",
+        "is_symlink": false
+      }
+    },
+    "requests": [],
+    "starts": [],
+    "basePresent": true
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "repository.planOnBase": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "present": true
+      }
+    },
+    "runs.list": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "[{\"number\": 81, \"issue\": {\"number\": 81}, \"root\": \"/status\", \"state\": \"running\", \"done\": {}, \"runtimeHistory\": []}]"
+      }
+    },
+    "runs.evidence": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "[{\"story\": \"user_stories/journeys/J1-coffee-pickup.md\", \"pass\": true, \"current\": true, \"result\": \"\\u2713\"}, {\"story\": \"user_stories/journeys/J10-other.md\", \"pass\": true, \"current\": true, \"result\": \"\\u2713\"}]"
+      }
+    },
+    "github.run": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "stdout": "[{\"number\": 81, \"body\": \"<!-- pdd-product: run=phone-1 -->\", \"state\": \"OPEN\"}]"
+      }
+    },
+    "workflow.start": {
+      "action": "port.write",
+      "world_pointer": "/starts",
+      "result_template": {
+        "exitCode": 0,
+        "message": "Started feature #81."
+      }
+    },
+    "github.repository": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "repository": "example/coffee",
+        "defaultBranch": "alpha"
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "journey",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/project",
+        "journey": "J1",
+        "testPath": "test/J1.json"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/journey",
+          "op": "equals",
+          "value": "J1"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/1/content",
+          "op": "contains",
+          "value": "\"enabled\":null"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/1/content",
+          "op": "contains",
+          "value": "\"orders\":[{\"id\":\"chosen\"}]"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/1/content",
+          "op": "contains",
+          "value": "\"__proto__\":{\"kept\":true}"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/1/content",
+          "op": "contains",
+          "value": "9007199254740993"
+        }
+      ]
+    },
+    {
+      "step_id": "writer-conflict",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/conflict"
+      },
+      "model": "gpt-6.1-sol",
+      "expected_error": "world-writer-conflict",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "world-writer-conflict"
+        }
+      ]
+    },
+    {
+      "step_id": "current-journey-status",
+      "entry_path": "prompts/cli/product.prompt.md",
+      "operation": "productStatus",
+      "input": {
+        "cwd": "/status"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/parts/3",
+          "op": "equals",
+          "value": {
+            "part": "journeys",
+            "total": 1,
+            "pass": 1,
+            "stale": 0,
+            "notRun": 0
+          }
+        }
+      ]
+    }
+  ]
+}

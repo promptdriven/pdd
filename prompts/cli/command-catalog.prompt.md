@@ -54,3 +54,7 @@ text operand RUN, flags `--no-run` and value `--agent` with codex|claude). Forms
 Stories by part and slice, next shows ready runs, and start creates or reuses one
 issue then starts a normal feature run unless `--no-run`. All three make zero
 runtime calls. [Product](product.prompt.md) owns their behavior.
+
+## Product Try and journey checks
+
+Add `pdd try --product [--parts PARTS] [--journey JOURNEY]` and `pdd check --journeys [JOURNEY]` to the existing try/check routes, help and completion. --parts is a comma-separated part list and requires --product; --journey requires --product. Keep ordinary test/Story operand forms. [Composition](product-composition.prompt.md) owns product selection and assembly.

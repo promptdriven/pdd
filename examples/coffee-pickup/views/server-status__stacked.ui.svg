@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 330" role="img" aria-labelledby="view-title view-desc">
+  <title id="view-title">server · Orders</title>
+  <desc id="view-desc">Relational illustration of the shop server status with an empty world. Actual counts are derived from shared orders and tickets.</desc>
+  <rect width="390" height="330" rx="16" fill="#fffaf3"/>
+  <g font-family="system-ui, sans-serif" fill="#3b2a20">
+    <text id="part-heading" x="24" y="45" font-size="24" font-weight="700">server · Orders</text>
+    <g id="server-counts">
+      <rect x="24" y="70" width="342" height="146" rx="12" fill="#ffffff" stroke="#dbcbb9"/>
+      <text id="orders-count" x="40" y="113" font-size="20">Orders: 0</text>
+      <text id="tickets-count" x="40" y="152" font-size="20">Tickets: 0</text>
+      <text id="requests-count" x="40" y="191" font-size="20">Phone requests: 0</text>
+    </g>
+  </g>
+</svg>

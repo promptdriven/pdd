@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 330" role="img" aria-labelledby="view-title view-desc">
+  <title id="view-title">phone · Menu</title>
+  <desc id="view-desc">Relational illustration of a refused order. Unknown drink is a synthetic refusal reason; the actual reason is supplied by the shared order record.</desc>
+  <rect width="390" height="330" rx="16" fill="#fffaf3"/>
+  <g font-family="system-ui, sans-serif" fill="#3b2a20">
+    <text id="part-heading" x="24" y="45" font-size="24" font-weight="700">phone · Menu</text>
+    <g id="menu-latte-m">
+      <rect x="24" y="70" width="342" height="130" rx="12" fill="#ffffff" stroke="#dbcbb9"/>
+      <text id="drink-name" x="40" y="103" font-size="21" font-weight="600">Latte</text>
+      <text id="drink-size-price" x="40" y="130" font-size="16">Medium · $4.50</text>
+      <g id="order-latte">
+        <rect x="40" y="145" width="310" height="39" rx="8" fill="#694327"/>
+        <text x="195" y="171" text-anchor="middle" font-size="16" fill="#ffffff">Order latte</text>
+      </g>
+    </g>
+    <g id="order-status">
+      <rect x="24" y="218" width="342" height="75" rx="12" fill="#fff0eb" stroke="#b44b34"/>
+      <text id="order-state" x="40" y="249" font-size="16" font-weight="700" fill="#92351f">Refused</text>
+      <text id="order-reason" x="40" y="275" font-size="16">Unknown drink.</text>
+    </g>
+  </g>
+</svg>

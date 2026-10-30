@@ -145,3 +145,7 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 | `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
 
 See [Build a whole product](build-a-whole-product.md).
+
+`pdd try --product [--parts PARTS] [--journey JOURNEY]` opens selected product parts together. PARTS is a comma-separated list; omitted means every part. The plan's After every tap chain follows each executable tap. Output distinguishes operation count from the forty-call Runtime ceiling.
+
+`pdd check --journeys [JOURNEY]` checks root journey Stories. J1 matches J1-order, never J10-order. Ambiguous journey scenarios require an explicit test choice for Try. Seeds merge base, selected part seeds, then the journey’s explicit set (or literal initial_world); conflicting world writers refuse before upload.
