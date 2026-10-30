@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: f75a525acf557257061221da4a36e662fe2d3f4d46318a26562d47e5de9097a8).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: a13959dae5f89dabca06790385d467f01f1560a3eebc206d46e89e6d947e0f9b).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { runtimeOrigin } from './runtime-client.mjs';
 
 const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS = 15_000;
-const unavailable = error => Object.assign(new Error(`Local runtime state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
+const unavailable = error => Object.assign(new Error(`Local interpreter state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
 const order = (a, b) => a.started_at - b.started_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
@@ -378,7 +378,7 @@ export async function runJobs({ env = process.env } = {}, { stdout = process.std
   try {
     const stateDir = resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
     const { jobs } = await listRuntimeJobs({ stateDir, origin: runtimeOrigin(env) }, { files });
-    if (!jobs.length) stdout.write('No local runtime jobs.\n');
+    if (!jobs.length) stdout.write('No local interpreter jobs.\n');
     for (const row of jobs) stdout.write(`${row.state} ${row.kind} · PID ${row.pid} · ${Math.max(0, Math.floor((now() - row.started_at) / 1000))} s · ${row.id} · ${row.request_ids.join(', ') || 'no request yet'}\n`);
     return 0;
   } catch (error) { stderr.write(`${String(error.message).split('\n')[0]}\n`); return 5; }
