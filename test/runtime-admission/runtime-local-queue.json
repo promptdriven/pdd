@@ -13,6 +13,14 @@
     {
       "id": "AC3",
       "text": "Interruption or the caller deadline removes my waiting ticket without submitting its job."
+    },
+    {
+      "id": "AC4",
+      "text": "A waiting ticket or claim abandoned for 60 seconds cannot block my turn when its process ID has been reused."
+    },
+    {
+      "id": "AC5",
+      "text": "Only the first waiting ticket competes for a free slot; twelve contenders with three slots make progress without a contention stall."
     }
   ],
   "cases": [
@@ -40,6 +48,21 @@
       "id": "stop",
       "given": "deadline/interrupt before claim and before POST",
       "required_observation": "ticket removed, zero new sends"
+    },
+    {
+      "id": "reused-pid-waiter-and-claim",
+      "given": "oldest ticket, separately abandoned claim, has file refresh age 59999 then 60000 ms and a PID now belonging to an unrelated long-lived process",
+      "required_observation": "fresh case still owns its place/claim; at 60000 ms stale ownership is removed safely and next live waiter can acquire; no successor claim is deleted"
+    },
+    {
+      "id": "head-only-jitter",
+      "given": "three ordered tickets, occupied limit, claim contention and injected random values 0 and just below 1",
+      "required_observation": "only current head attempts acquisition claim; followers wait longer; repeated failures retain original ticket/time; retry delays are positive, bounded, varied by jitter and clipped to deadline"
+    },
+    {
+      "id": "twelve-contenders",
+      "given": "12 separate native processes launched together, shared limit 3, each holds its slot for 20 ms, existing native fixture limit 15 seconds",
+      "required_observation": "all 12 finish comfortably before the 15-second fixture timeout, measured peak active <=3, no busy failures or duplicated tickets; performance bound belongs to this controlled fixture, not a production hardware SLA"
     }
   ]
 }

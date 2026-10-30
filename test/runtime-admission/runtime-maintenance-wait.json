@@ -4,11 +4,11 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its end and reason before rechecking."
+      "text": "Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its local end time with the zone and its reason before rechecking."
     },
     {
       "id": "AC2",
-      "text": "When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait."
+      "text": "When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait and notice."
     },
     {
       "id": "AC3",
@@ -21,18 +21,46 @@
     {
       "id": "AC5",
       "text": "Authentication, access and unrelated service errors retain their existing handling."
+    },
+    {
+      "id": "AC6",
+      "text": "Even when maintenance ends more than 24.8 days away, pdd waits at most 60 seconds at a time and stays responsive without rapid polling or repeated unchanged notices."
+    },
+    {
+      "id": "AC7",
+      "text": "An unrecognized capacity response or read failure prints one warning and continues with ordinary admission rules; only clear future maintenance creates a maintenance wait."
     }
   ],
   "cases": [
     {
       "id": "window",
       "given": "capacity announces deploy until fixed future time, then clear",
-      "required_observation": "no POST during window; one POST after recheck; print reason/end"
+      "required_observation": "no POST during window; one POST after recheck; print reason and local end time with its zone"
     },
     {
       "id": "direct-admission",
-      "given": "capacity 404, POST 503 maintenance/not_started, Retry-After",
-      "required_observation": "wait, recheck 404, retry safely"
+      "given": "capacity 404, POST 503 maintenance/not_started with a future until and reason, Retry-After",
+      "required_observation": "show reason and local end time with its zone; wait, recheck 404, retry safely"
+    },
+    {
+      "id": "summer-local-end",
+      "given": "local zone America/Los_Angeles; synthetic future maintenance until 2026-07-02T02:25:00.000Z, separately from capacity and confirmed not-started 503",
+      "required_observation": "human notice shows local hour/minute 19:25 and PDT with the supplied reason; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission saved from a confirmed not-started 503 retains original until 2026-07-02T02:25:00.000Z; no complete sentence wording is fixed"
+    },
+    {
+      "id": "winter-local-end",
+      "given": "local zone America/Los_Angeles; synthetic future maintenance until 2026-12-01T03:25:00.000Z",
+      "required_observation": "human notice shows local hour/minute 19:25 and PST; it does not reuse the summer zone"
+    },
+    {
+      "id": "end-instant-zone",
+      "given": "local zone America/Los_Angeles; synthetic current time 2026-11-01T08:59:50.000Z, maintenance until 2026-11-01T09:00:10.000Z across the daylight-saving boundary",
+      "required_observation": "human notice shows end hour/minute 01:00 with PST, the zone at the end instant; waiting still follows the supplied UTC instant"
+    },
+    {
+      "id": "configured-local-zone",
+      "given": "local zone Asia/Tokyo; synthetic future maintenance until 2026-07-02T02:25:00.000Z",
+      "required_observation": "human notice shows local hour/minute 11:25 and its zone; no Pacific zone or UTC end-time string is substituted; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission data retains the original UTC until where already captured"
     },
     {
       "id": "old-runtime",
@@ -48,6 +76,41 @@
       "id": "other-failure",
       "given": "401/not-invited/cloud-unavailable/legacy opens-soon separately",
       "required_observation": "existing immediate gate, no maintenance loop"
+    },
+    {
+      "id": "far-until-capacity",
+      "given": "synthetic clock 0, capacity maintenance until 2592000000 ms (30 days), terminal wait; first sleep reaches 60000 then recheck; interrupt after second chunk",
+      "required_observation": "each sleep >0 and <=60000; capacity rechecked after each chunk, no overflow to 1 ms/hot loop, one unchanged-window notice; no POST during window or after interruption"
+    },
+    {
+      "id": "far-until-admission",
+      "given": "capacity 404; confirmed not-started 503 maintenance until 2592000000 ms with Retry-After, then bounded waits; interrupt or finite deadline separately",
+      "required_observation": "same <=60000 ms positive chunks and rechecks apply to admission maintenance; no unsafe retry, no repeated unchanged notice, no overflow; original raw UTC until, usage and request IDs retained"
+    },
+    {
+      "id": "unrecognized-capacity-fail-open",
+      "given": "capacity HTML 200, 405, unrecognized 500, timeout and unreachable read separately; ordinary submission accepts",
+      "required_observation": "one finite stderr warning per command, continue to existing admission within remaining deadline, no indefinite capacity wait; zero-call lint then ordinary check/Try path; valid unchanged JSON output"
+    },
+    {
+      "id": "fail-open-keeps-admission-gates",
+      "given": "unrecognized capacity read followed by submission 401, not-invited, no-cloud-access, update-required, cloud-unavailable, legacy opens-soon or uncertain POST separately",
+      "required_observation": "ordinary gate handling remains authoritative; no silent wait, new paid retry or fabricated success; uncertain POST is read only by its saved ID"
+    },
+    {
+      "id": "capacity-gates-before-fail-open",
+      "given": "capacity itself returns recognized 401, not-invited, no-cloud-access, update-required, cloud-unavailable and legacy opens-soon separately",
+      "required_observation": "existing stop behavior takes precedence; zero new submission POSTs and no maintenance loop"
+    },
+    {
+      "id": "unclear-and-past-until",
+      "given": "capacity contains maintenance null, malformed until or past until separately",
+      "required_observation": "no maintenance wait; preserve ordinary submission/admission and do not invent a future end time"
+    },
+    {
+      "id": "fail-open-then-maintenance",
+      "given": "first submission sees unrecognized capacity and warns; a later refreshed read in same command announces valid future maintenance",
+      "required_observation": "warning is not repeated; failed read is not cached as clear and cannot hide the later maintenance window; pause before new POST with local end time and reason"
     }
   ]
 }
