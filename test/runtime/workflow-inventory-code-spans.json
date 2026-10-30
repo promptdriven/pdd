@@ -1,0 +1,140 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-inventory-code-spans.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Removed names containing \"@octocat\", \"#17\", \"Closes #17\", spaces and backticks appear as quoted JSON literals in Markdown code spans, with their raw identity and source order preserved."
+    },
+    {
+      "id": "AC2",
+      "text": "Kept test names and complete changed assertion lines containing Markdown, HTML, mentions, issue references and backticks use code spans longer than every interior backtick run, without HTML entity substitution."
+    },
+    {
+      "id": "AC3",
+      "text": "New suite and test skip entries use the same code-span format, preserve leading and trailing spaces, and show carriage returns, controls and bidirectional formatting characters as JSON escapes."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "removed-mention-and-fence-names",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/safe.test.mjs",
+            "newPath": "test/safe.test.mjs",
+            "before": "test('@octocat', () => {});\ntest('#17', () => {});\ntest('Closes #17', () => {});\ntest(' `edge`` ', () => {});\n",
+            "after": ""
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 4 → 0 tests. Removed: 4 (`\"@octocat\"`, `\"#17\"`, `\"Closes #17\"`, ```\" `edge`` \"```).\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 4 → 0 tests. Removed: 4 (`\"@octocat\"`, `\"#17\"`, `\"Closes #17\"`, ```\" `edge`` \"```).\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "assertion-json-code-spans",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/safe.test.mjs",
+            "newPath": "test/safe.test.mjs",
+            "before": "test(' `kept`` ', () => {\n  assert.equal(value, \"@octocat #17 Closes #17 &<>|: ` ``\");  \r\n});\n",
+            "after": "test(' `kept`` ', () => {\n  assert.equal(value, \"Closes #17 @octocat #17 &<>|: ``` `\");  \r\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/safe.test.mjs\" ```\" `kept`` \"``` ```\"  assert.equal(value, \\\"@octocat #17 Closes #17 &<>|: ` ``\\\");  \\r\"``` → ````\"  assert.equal(value, \\\"Closes #17 @octocat #17 &<>|: ``` `\\\");  \\r\"````.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: \"test/safe.test.mjs\" ```\" `kept`` \"``` ```\"  assert.equal(value, \\\"@octocat #17 Closes #17 &<>|: ` ``\\\");  \\r\"``` → ````\"  assert.equal(value, \\\"Closes #17 @octocat #17 &<>|: ``` `\\\");  \\r\"````.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "suite-skip-controls-and-cr",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/safe.test.mjs",
+            "newPath": "test/safe.test.mjs",
+            "before": "describe(' `@octocat #17`` ', () => {\ntest(' Closes #17 ', () => {});\n});\n",
+            "after": "describe.skip(' `@octocat #17`` ', () => {\ntest.skip(' Closes #17 ', () => {}); // \t\u0001\u202e &<>|: ```  \r\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/safe.test.mjs\" suite ```\" `@octocat #17`` \"``` ```\"describe.skip(' `@octocat #17`` ', () => {\"```.\nNew skips: \"test/safe.test.mjs\" `\" Closes #17 \"` ````\"test.skip(' Closes #17 ', () => {}); // \\t\\u0001\\u202e &<>|: ```  \\r\"````.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/safe.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/safe.test.mjs\" suite ```\" `@octocat #17`` \"``` ```\"describe.skip(' `@octocat #17`` ', () => {\"```.\nNew skips: \"test/safe.test.mjs\" `\" Closes #17 \"` ````\"test.skip(' Closes #17 ', () => {}); // \\t\\u0001\\u202e &<>|: ```  \\r\"````.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

@@ -58,14 +58,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" \"kept\" \"test.skip('kept', () =&#62; {});\".\nNew skips: \"test/a.test.mjs\" \"later\" \"test.todo('later');\".\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" `\"kept\"` `\"test.skip('kept', () => {});\"`.\nNew skips: \"test/a.test.mjs\" `\"later\"` `\"test.todo('later');\"`.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC1",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" \"kept\" \"test.skip('kept', () =&#62; {});\".\nNew skips: \"test/a.test.mjs\" \"later\" \"test.todo('later');\".\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" `\"kept\"` `\"test.skip('kept', () => {});\"`.\nNew skips: \"test/a.test.mjs\" `\"later\"` `\"test.todo('later');\"`.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -103,14 +103,14 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" \"test_kept\" \"&#64;pytest.mark.xfail\".\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" `\"test_kept\"` `\"@pytest.mark.xfail\"`.\nStatic inventory only; tests were not run.\n"
         },
         {
           "criterion_id": "AC2",
           "target": "result",
           "path": "/details",
           "op": "equals",
-          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" \"test_kept\" \"&#64;pytest.mark.xfail\".\nStatic inventory only; tests were not run.\n"
+          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" `\"test_kept\"` `\"@pytest.mark.xfail\"`.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"

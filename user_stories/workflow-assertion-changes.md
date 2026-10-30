@@ -14,4 +14,6 @@ A changed test count cannot stand in for comparing assertion lines. Associate as
 
 ## Review status
 
-The reviewed contract is approved following the fresh scoped check: all four original synthetic cases passed all 11 checks (receipt in PLAN.md). Their inputs and expected checks remain unchanged. New cap boundary, unchanged tie ordering and a 2,000-line case finishing in under two seconds require native proof in the code area. A model's prompt-runtime duration proves no native timing bound. Real Git enumeration and publication remain separate native obligations.
+The person approved the current contract and exact formatting expectations. Runtime prompt checks were NOT RUN: both attempts passed lint but sent no Story requests because of #2579. These three criteria and eleven checks remain unjudged, with no AI calls. Original inputs, criteria, check positions and operators are unchanged. Assertion lines and kept names follow the inventory owner's JSON-literal code-span format, including a carriage return shown as a JSON escape. Approval is not a Runtime pass.
+
+Cap boundary, unchanged tie ordering and a 2,000-line case finishing in under two seconds require native proof in the code area. A model's prompt-runtime duration proves no native timing bound. Real Git enumeration and publication remain separate native obligations.
