@@ -80,6 +80,14 @@ raw contract files to the upload: their selected record/world is already inline.
 An explicit ordinary dependency still selects its full file. Missing or unsafe
 references stop before upload/sign-in with consumer and target, exit 4.
 
+Module function `sourceFilePort(root, visible = new Set(gitFiles(root)))` returns
+the synchronous `{stat({path}), read({path})}` adapter for local consumers.
+It applies this module's path, Git visibility, privacy and regular-file rules;
+stat returns `{exists,is_symlink,size}` and read returns UTF-8 `{content}`.
+Missing stat reports absence; missing read refuses exit 4. Reuse the capture
+reader's safe snapshots without selecting payload, creating an archive or writing
+files. Capture additionally checks its attempt's observations and retries.
+
 Retain original authored paths. Effective upload bytes determine byte limits,
 tar contents and source SHA; no-reference captures keep exactly the prior bytes
 and tar. For reference-only reads, unused contracts and unused records in a
