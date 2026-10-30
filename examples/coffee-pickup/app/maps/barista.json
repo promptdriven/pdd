@@ -1,0 +1,53 @@
+{
+  "schema_version": "prompt-runtime.app-map.v1",
+  "name": "barista · Board",
+  "initial_screen": "board",
+  "initial_route": null,
+  "initial_state": {},
+  "state_schema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "synthetic": true,
+  "screens": [
+    {
+      "id": "board",
+      "prompt_path": "examples/coffee-pickup/prompts/barista/board.prompt.md",
+      "operation": "render",
+      "source": "operation",
+      "format": "html",
+      "input": {},
+      "result_pointer": "/html"
+    }
+  ],
+  "router": null,
+  "routes": [],
+  "handlers": [
+    {
+      "screen": "board",
+      "kind": "button",
+      "match": {
+        "name": "done"
+      },
+      "handler": {
+        "prompt_path": "examples/coffee-pickup/prompts/barista/board.prompt.md",
+        "operation": "mark_done"
+      },
+      "input": {
+        "id": {
+          "$ref": "/event/target"
+        }
+      },
+      "next": {
+        "kind": "screen",
+        "screen": "phone/menu",
+        "route_pointer": null
+      },
+      "state": null,
+      "after": []
+    }
+  ],
+  "stylesheets": []
+}

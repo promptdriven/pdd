@@ -1,0 +1,52 @@
+{
+  "schema_version": "prompt-runtime.app-map.v1",
+  "name": "phone · Menu",
+  "initial_screen": "menu",
+  "initial_route": null,
+  "initial_state": {},
+  "state_schema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "synthetic": true,
+  "screens": [
+    {
+      "id": "menu",
+      "prompt_path": "examples/coffee-pickup/prompts/phone/phone.prompt.md",
+      "operation": "render",
+      "source": "operation",
+      "format": "html",
+      "input": {},
+      "result_pointer": "/html"
+    }
+  ],
+  "router": null,
+  "routes": [],
+  "handlers": [
+    {
+      "screen": "menu",
+      "kind": "button",
+      "match": {
+        "value": "order-latte"
+      },
+      "handler": {
+        "prompt_path": "examples/coffee-pickup/prompts/phone/phone.prompt.md",
+        "operation": "order"
+      },
+      "input": {
+        "drink": "latte",
+        "size": "M"
+      },
+      "next": {
+        "kind": "screen",
+        "screen": "barista/board",
+        "route_pointer": null
+      },
+      "state": null,
+      "after": []
+    }
+  ],
+  "stylesheets": []
+}

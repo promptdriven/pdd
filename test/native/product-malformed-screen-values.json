@@ -1,0 +1,315 @@
+{
+  "description": "Synthetic native composition cases for the accepted v1 screen-value contract; apply screen_set to the first operation screen of a valid one-part product. These are composition field checks, not Runtime operation/schema admission.",
+  "invalid": [
+    {
+      "id": "prompt_path-null",
+      "screen_set": {
+        "prompt_path": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "prompt_path"
+      }
+    },
+    {
+      "id": "prompt_path-number",
+      "screen_set": {
+        "prompt_path": 7
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "prompt_path"
+      }
+    },
+    {
+      "id": "prompt_path-empty",
+      "screen_set": {
+        "prompt_path": ""
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "prompt_path"
+      }
+    },
+    {
+      "id": "operation-null",
+      "screen_set": {
+        "operation": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "operation"
+      }
+    },
+    {
+      "id": "operation-number",
+      "screen_set": {
+        "operation": 7
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "operation"
+      }
+    },
+    {
+      "id": "operation-empty",
+      "screen_set": {
+        "operation": ""
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "operation"
+      }
+    },
+    {
+      "id": "source-null",
+      "screen_set": {
+        "source": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "source"
+      }
+    },
+    {
+      "id": "source-unknown",
+      "screen_set": {
+        "source": "unknown"
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "source"
+      }
+    },
+    {
+      "id": "format-null",
+      "screen_set": {
+        "format": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "format"
+      }
+    },
+    {
+      "id": "format-unknown",
+      "screen_set": {
+        "format": "unknown"
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "format"
+      }
+    },
+    {
+      "id": "operation-svg",
+      "screen_set": {
+        "format": "svg"
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "format"
+      }
+    },
+    {
+      "id": "result-pointer-null",
+      "screen_set": {
+        "result_pointer": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "result_pointer"
+      }
+    },
+    {
+      "id": "result-pointer-number",
+      "screen_set": {
+        "result_pointer": 7
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "result_pointer"
+      }
+    },
+    {
+      "id": "result-pointer-not-pointer",
+      "screen_set": {
+        "result_pointer": "html"
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "result_pointer"
+      }
+    },
+    {
+      "id": "result-pointer-bad-escape",
+      "screen_set": {
+        "result_pointer": "/bad~2"
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "result_pointer"
+      }
+    },
+    {
+      "id": "mockup-operation",
+      "screen_set": {
+        "operation": "render",
+        "source": "mockup",
+        "format": "svg",
+        "result_pointer": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "operation"
+      }
+    },
+    {
+      "id": "mockup-result-pointer",
+      "screen_set": {
+        "result_pointer": "/html",
+        "source": "mockup",
+        "format": "svg",
+        "operation": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "result_pointer"
+      }
+    },
+    {
+      "id": "mockup-html",
+      "screen_set": {
+        "format": "html",
+        "source": "mockup",
+        "operation": null,
+        "result_pointer": null
+      },
+      "expected_error": {
+        "code": "invalid-product-map",
+        "field": "format"
+      }
+    }
+  ],
+  "valid": [
+    {
+      "id": "operation-html",
+      "screen_set": {
+        "format": "html"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "format"
+      ]
+    },
+    {
+      "id": "operation-text",
+      "screen_set": {
+        "format": "text"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "format"
+      ]
+    },
+    {
+      "id": "operation-grid",
+      "screen_set": {
+        "format": "grid"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "format"
+      ]
+    },
+    {
+      "id": "root-result",
+      "screen_set": {
+        "result_pointer": ""
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "result_pointer"
+      ]
+    },
+    {
+      "id": "escaped-result",
+      "screen_set": {
+        "result_pointer": "/a~0b~1c"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "result_pointer"
+      ]
+    },
+    {
+      "id": "mockup-null-bindings",
+      "screen_set": {
+        "source": "mockup",
+        "operation": null,
+        "result_pointer": null,
+        "format": "svg"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "source",
+        "operation",
+        "result_pointer",
+        "format"
+      ]
+    },
+    {
+      "id": "input-null",
+      "screen_set": {
+        "input": null
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "input"
+      ]
+    },
+    {
+      "id": "input-string",
+      "screen_set": {
+        "input": "literal"
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "input"
+      ]
+    },
+    {
+      "id": "input-array",
+      "screen_set": {
+        "input": [
+          1,
+          null
+        ]
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "input"
+      ]
+    },
+    {
+      "id": "input-number",
+      "screen_set": {
+        "input": 7
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "input"
+      ]
+    },
+    {
+      "id": "input-boolean",
+      "screen_set": {
+        "input": false
+      },
+      "expected": "compose",
+      "preserve_fields": [
+        "input"
+      ]
+    }
+  ]
+}

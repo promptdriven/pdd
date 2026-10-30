@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 330" role="img" aria-labelledby="view-title view-desc">
+  <title id="view-title">barista · Board</title>
+  <desc id="view-desc">Relational illustration of one waiting ticket. The synthetic sample ticket o1 is a medium latte; actual tickets come from the shared world.</desc>
+  <rect width="390" height="330" rx="16" fill="#fffaf3"/>
+  <g font-family="system-ui, sans-serif" fill="#3b2a20">
+    <text id="part-heading" x="24" y="45" font-size="24" font-weight="700">barista · Board</text>
+    <g id="ticket-o1">
+      <rect x="24" y="70" width="342" height="170" rx="12" fill="#ffffff" stroke="#dbcbb9"/>
+      <text id="ticket-number" x="40" y="104" font-size="15" fill="#756456">Order o1</text>
+      <text id="ticket-drink" x="40" y="138" font-size="22" font-weight="600">Latte · M</text>
+      <text id="ticket-state" x="40" y="166" font-size="16">Waiting</text>
+      <g id="mark-ticket-done">
+        <rect id="o1" x="40" y="184" width="310" height="39" rx="8" fill="#694327"/>
+        <text x="195" y="210" text-anchor="middle" font-size="16" fill="#ffffff">Done</text>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,199 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/journeys/J1-coffee-pickup.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Ordering a medium latte gives the barista one waiting ticket."
+    },
+    {
+      "id": "AC2",
+      "text": "After the barista marks my ticket done, my phone shows Ready."
+    }
+  ],
+  "initial_world": {
+    "$seed": "examples/coffee-pickup/contracts/seed-world.json",
+    "set": {
+      "/orders": [],
+      "/tickets": [],
+      "/order_requests": []
+    }
+  },
+  "simulation": {
+    "menu.load": {
+      "action": "key-value.get",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "menu.save": {
+      "action": "key-value.put",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/value",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "orders.load": {
+      "action": "key-value.get",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "orders.save": {
+      "action": "key-value.put",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/value",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "tickets.load": {
+      "action": "key-value.get",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "tickets.save": {
+      "action": "key-value.put",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/value",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "order_requests.load": {
+      "action": "key-value.get",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    },
+    "order_requests.save": {
+      "action": "key-value.put",
+      "world_pointer": "",
+      "key_argument_pointer": "/key",
+      "value_argument_pointer": "/value",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {
+        "value": []
+      },
+      "result_value_pointer": "/value"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "1",
+      "entry_path": "examples/coffee-pickup/prompts/phone/phone.prompt.md",
+      "operation": "order",
+      "input": {
+        "drink": "latte",
+        "size": "M"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": []
+    },
+    {
+      "step_id": "2",
+      "entry_path": "examples/coffee-pickup/prompts/server/server.prompt.md",
+      "operation": "forward_tickets",
+      "input": {},
+      "model": "gpt-6.1-sol",
+      "checks": []
+    },
+    {
+      "step_id": "3",
+      "entry_path": "examples/coffee-pickup/prompts/barista/board.prompt.md",
+      "operation": "refresh",
+      "input": {},
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/tickets",
+          "op": "equals",
+          "value": [
+            {
+              "id": "order-1",
+              "drink": "latte",
+              "size": "M",
+              "done": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "step_id": "4",
+      "entry_path": "examples/coffee-pickup/prompts/barista/board.prompt.md",
+      "operation": "mark_done",
+      "input": {
+        "id": "order-1"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": []
+    },
+    {
+      "step_id": "5",
+      "entry_path": "examples/coffee-pickup/prompts/server/server.prompt.md",
+      "operation": "forward_tickets",
+      "input": {},
+      "model": "gpt-6.1-sol",
+      "checks": []
+    },
+    {
+      "step_id": "6",
+      "entry_path": "examples/coffee-pickup/prompts/phone/phone.prompt.md",
+      "operation": "render",
+      "input": {},
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/status",
+          "op": "equals",
+          "value": "Ready"
+        }
+      ]
+    }
+  ]
+}
