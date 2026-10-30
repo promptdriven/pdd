@@ -61,6 +61,18 @@
         "content": ""
       },
       "result_value_pointer": "/content"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
     }
   },
   "context": [],
