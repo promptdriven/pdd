@@ -69,7 +69,7 @@ with external effects is invoked; no runtime resource is called for that path.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "c5ab30961e7b9032b5c256457504aa1b8a98ac5290810345c7bc91da43c4ece4",
   "entries": [{
     "operation": "runPdd",
