@@ -124,7 +124,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     posts++; if (lastAt !== undefined) assert.ok(r.made.clock.now - lastAt >= 1000, 'Retry-After backoff'); lastAt = r.made.clock.now;
     if (vector.id === 'more-than-three-busy-attempts' && posts === 5) return { status: 200, json: passed(f, e.request.requestId) };
     if (posts === 2 && vector.id === 'busy-then-lost') return { destroy: true };
-    if (posts === 2 && vector.id === 'busy-then-fresh-refusal') return { status: 422, json: { error: { code: 'source-too-large', message: 'Source too large.', reason: `NEW REASON ${TOKEN} /srv/private/reason`, fix: `NEW FIX ${TOKEN} /srv/private/fix`, hint: `NEW HINT ${TOKEN} /srv/private/hint`, cause: 'fresh' } } };
+    if (posts === 2 && vector.id === 'busy-then-fresh-refusal') return { status: 422, json: { error: { code: 'source-too-large', message: 'Source too large.', reason: `NEW REASON ${TOKEN} /srv/private/reason`, fix: `NEW FIX ${TOKEN} /srv/private/fix`, hint: `NEW HINT ${TOKEN} /srv/private/hint`, cause: 'test' } } };
     return { status: 200, headers: { 'retry-after': '1' }, json: capacity(f, e.request.requestId) };
   });
   const start = r.made.clock.now, sleeps = [];
@@ -148,7 +148,7 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     else {
       const refusal = row.refusals[0]; assert.equal(refusal.code, 'source-too-large');
       for (const key of ['reason', 'fix', 'hint']) assert.match(refusal[key], /NEW .*\[secret\] <server path>/);
-      assert.equal(refusal.cause, 'fresh'); assert.doesNotMatch(JSON.stringify(result.json), /gho_TESTTOKEN|\/srv\/private/);
+      assert.equal(refusal.cause, 'test'); assert.doesNotMatch(JSON.stringify(result.json), /gho_TESTTOKEN|\/srv\/private/);
     }
   }
   const count = [r.fake.posts.length, result.clock.uuids], gets = r.fake.gets.length;
