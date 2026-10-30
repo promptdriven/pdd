@@ -1,0 +1,111 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-capacity-wait.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After more than 3 confirmed unstarted capacity refusals, Check, remote lint and Try setup can still finish within their caller wait."
+    },
+    {
+      "id": "AC2",
+      "text": "pdd spaces capacity retries by Retry-After within the caller deadline and interruption rules."
+    },
+    {
+      "id": "AC3",
+      "text": "An accepted queued job is read by its original request ID, with its supplied queue place and busy slots shown as progress."
+    },
+    {
+      "id": "AC4",
+      "text": "pdd never resends a check for capacity when it may have started."
+    },
+    {
+      "id": "AC5",
+      "text": "The lint wait limit also bounds dead-owner reads and saving a request ID before submission, including the 90-second agent lint wait during Try setup."
+    },
+    {
+      "id": "AC6",
+      "text": "When my lint wait ends for a local slot or maintenance, pdd names that wait and does not claim that the server stayed busy after 0 lint attempts."
+    },
+    {
+      "id": "AC7",
+      "text": "Submissions by the same authenticated owner at the same runtime reuse a clear capacity observation for about 10 seconds."
+    }
+  ],
+  "cases": [
+    {
+      "id": "beyond-three",
+      "given": "4 confirmed busy refusals then success, each command kind separately",
+      "required_observation": "5 attempts succeed, same source/options/caps; all IDs retained"
+    },
+    {
+      "id": "delay-deadline",
+      "given": "Retry-After 7 seconds; finite caller budget; interrupt during wait",
+      "required_observation": "no early POST, no POST past deadline/interrupt"
+    },
+    {
+      "id": "queued",
+      "given": "same ID queued with ahead 5/in_use 8/slots 8, then passed",
+      "required_observation": "one POST; progress 5 ahead/8 of 8; GET same ID"
+    },
+    {
+      "id": "no-proof",
+      "given": "lost POST, wrong ID, positive/unknown calls, incomplete accounting separately",
+      "required_observation": "GET-only recovery; zero capacity replacement"
+    },
+    {
+      "id": "defaults",
+      "given": "agent 90 s; terminal Check; Try existing allowance",
+      "required_observation": "agent stops 90 s; terminal Check unlimited; no new Try flag"
+    },
+    {
+      "id": "lint-probe-deadline",
+      "given": "agent Try has five-minute setup budget but lint deadline at 90000 ms; dead-owner GET starts at 89950 ms and does not answer",
+      "required_observation": "GET timeout <=50 ms, effective lint admission ends at 90000, no request-ID registration or lint/Try POST afterward, no 30-second overrun for another dead row; existing potential paid lease is retained"
+    },
+    {
+      "id": "lint-record-deadline",
+      "given": "agent Try lint reservation acquired; local request recording is contended until effective lint deadline 90000 ms, earlier than setup deadline",
+      "required_observation": "recording returns false at lint deadline, no lint .posted evidence or POST is authorized, unsent reservation can release; interruption has same no-send result"
+    },
+    {
+      "id": "wait-end-cause",
+      "given": "Check, explicit lint and Try setup separately wait for local slot or maintenance until lint deadline before first lint POST; also interrupt variants",
+      "required_observation": "plain result names local-slot wait or maintenance as appropriate, no server-busy-after-0-attempts claim; zero check calls, no check/Try POST; retain mode-specific exits: deadline wait5, Check interruption after batch creation3, explicit-lint/Try busy interruption5, door125; JSON stdout remains valid with its existing schema"
+    },
+    {
+      "id": "capacity-cache",
+      "given": "same owner and origin, clear capacity at clock 0; submissions at 0, 9999 and 10000 ms",
+      "required_observation": "first two share one capacity GET; expiry permits refresh at 10000; no extra GET per POST inside TTL; ordinary authenticated admission and saved request evidence remain required"
+    },
+    {
+      "id": "capacity-cache-scope",
+      "given": "concurrent same-owner submissions; separately changed authenticated owner or exact runtime origin/port; refreshed response announces maintenance",
+      "required_observation": "concurrent reads coalesce per cache scope; no reuse across owner/origin/port; later maintenance is respected; no credentials or cache fields leak into files or public JSON"
+    },
+    {
+      "id": "coalesced-probe-observer-deadline",
+      "given": "two public Try setups share a pending dead-paid-job observation at the same origin; the initiating GET takes 500 ms within its longer wait, while the later lint observer has only 50 ms left",
+      "required_observation": "the later observer stops at its own remaining wait without awaiting the initiating caller's longer GET; it records and submits no new request, retains the uncertain paid lease, and does not cancel or corrupt the shared read needed by the longer caller"
+    },
+    {
+      "id": "cleared-maintenance-then-capacity-wait",
+      "given": "a capacity maintenance window clears; the next lint admission is confirmed unstarted lint-queue-full, whose retry wait reaches the caller deadline",
+      "required_observation": "the final finite message identifies the current server-capacity wait rather than the already-cleared maintenance window; preserve mode-specific exits, valid existing JSON, zero new check/Try POSTs and all prior request evidence"
+    },
+    {
+      "id": "long-native-observer-deadline",
+      "given": "public acquireRuntimeSlot receives a valid absolute deadline 2592000000 ms ahead and borrows a pending 150 ms probe; also exercise several bounded timer chunks, a null deadline and interruption separately",
+      "required_observation": "a long native deadline never overflows to a 1 ms timer, warns or expires acquisition early; use positive timer chunks at most 60000 ms and recheck the actual remaining deadline before ending the observer; null means no deadline, interruption still stops that observer without cancelling the shared read, and all timers/subscriptions are cleaned up"
+    },
+    {
+      "id": "interrupt-after-confirmed-admission-pause",
+      "given": "Check, explicit remote lint and new Try setup separately receive an authoritative confirmed unstarted busy refusal after a POST, separately a confirmed not-started maintenance refusal; Ctrl-C occurs during the resulting retry pause, before caller deadline",
+      "required_observation": "text says Stopped. and identifies what was submitted and the confirmed unstarted outcome; it never claims the wait deadline ended or nothing was sent; retain saved IDs, raw receipts and known usage, existing mode-specific interruption exits (including explicit-lint/Try-lint busy5, Check after batch creation3, Try-POST busy3 and door125), valid existing JSON, no further POST and no resend"
+    },
+    {
+      "id": "interrupt-pause-preserves-earlier-evidence",
+      "given": "a command has earlier confirmed completed work and separately an earlier potentially paid dispatch with unknown outcome, while a later confirmed busy or maintenance refusal is paused; Ctrl-C occurs in that pause; compare the existing after-admission-before-current-POST stop boundary",
+      "required_observation": "post-pause text says Stopped. with earlier submitted IDs and confirmed/unknown outcomes, preserves receipts and known/unknown accounting, retains every uncertain paid lease and its read-only recovery advice, and sends nothing further; before-current-POST text stays Stopped before sending. scoped to the unsent request without claiming earlier work was unsent; existing exits and JSON schema stay unchanged"
+    }
+  ]
+}

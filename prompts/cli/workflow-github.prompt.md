@@ -1,6 +1,6 @@
 # Local workflow GitHub effects
 
-Own `src/workflow-github.mjs`, exporting only the four module functions below. Help the local runner associate an actual issue and publish one committed topic branch through the person's normal Git and `gh` login. The runner owns durable intent, locks, stage state and the decision to publish; this helper owns repository/PR identity and finite effect results. Preserve cwd and environment, use executable names with argv arrays and no shell, and never launch an agent, switch accounts, copy credentials, merge, automatically retry or advance a workflow.
+Own `src/workflow-github.mjs`, exporting the module functions below. Help the local runner associate an actual issue and publish one committed topic branch through the person's normal Git and `gh` login. The runner owns durable intent, locks, stage state and the decision to publish; this helper owns repository/PR identity and finite effect results. Preserve cwd and environment, use executable names with argv arrays and no shell, and never launch an agent, switch accounts, copy credentials, merge, automatically retry or advance a workflow.
 
 ## Resolve an actual issue in this checkout
 
@@ -63,7 +63,17 @@ Optional `ports.execFile(file,args,{cwd})` returns or resolves `{stdout,stderr?,
 <summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"6bdd5d072431728a7dc5e04a31a0529e1d16541aae7c3aba4d85df32d3ebe670","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"draft","prose_sha256":"13bae3a4c21b376d33609c3ad4bcdc0a40cad9523e75b2fd5208f6fa023b68d3","entries":[{"operation":"prepareWorkflowPr","input_schema":{"type":"object","properties":{"cwd":{"type":"string","minLength":1},"runId":{"type":"string","minLength":1},"stageId":{"type":"string","minLength":1},"repository":{"type":"string","minLength":1},"baseBranch":{"type":"string","minLength":1},"title":{"type":"string","minLength":1}},"required":["cwd","runId","stageId","repository","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"runId":{"type":"string"},"stageId":{"type":"string"},"headBranch":{"type":"string"},"baseBranch":{"type":"string"},"headSha":{"type":"string"},"marker":{"type":"string"},"title":{"type":"string"}},"required":["repository","runId","stageId","headBranch","baseBranch","headSha","marker","title"],"additionalProperties":false},"errors":["workflow_github_intent_invalid","workflow_github_repository_mismatch","workflow_github_worktree_dirty","workflow_github_topic_required"]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 
 </details>
+
+## Read repository identity without an issue
+
+Export `resolveWorkflowRepository({cwd}, ports)` returning
+`{repository,defaultBranch}` from the same verified checkout/origin/default-branch
+lookup used by resolveWorkflowIssue. Factor that shared lookup rather than copy
+it. It makes read-only git/gh calls with argv arrays, rejects unavailable or
+malformed identity with the same finite error policy, and never selects an issue
+or changes remote/local state. resolveWorkflowIssue retains its public reply,
+issue checks and error behavior.
