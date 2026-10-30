@@ -2,7 +2,7 @@
 
 I can read the defect, detection gap, proof and review at the top of either PR, and a warning-light-only change keeps the issue open.
 
-Person-reviewed source contract and expected cases approved by the root acting as the person under the flow lead's instructions. The prove and PR-evidence Runtime interfaces were approved through the actual CLI; the native-only runner integration received separate source review. Runtime check: not run; this Story's 13 steps and 32 checks remain unjudged (235 revised checks total). Native verification remains pending; the original 157-check baseline is historical evidence only.
+Person-reviewed source contract and expected cases approved by the root acting as the person under the flow lead's instructions. The prove and PR-evidence Runtime interfaces were approved through the actual CLI; the native-only runner integration received separate source review. Runtime check: not run; this Story's 13 steps and 32 checks remain unjudged (247 revised checks total). Native verification remains pending; the original 157-check baseline is historical evidence only.
 
 ## Acceptance criteria
 
