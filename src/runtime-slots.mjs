@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 147c1ce2915c2369030716c75f3de0e288e90a79057d5484023b41a68b640974).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d31bfb098d506637631f3e1ab5b8e9de178abfe1c7326a6da112bdc0f0558ede).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -224,15 +224,16 @@ async function inspect(directory, origin, ports, ended, deadline, stopWaiting, w
   return snapshots;
 }
 
-export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, deadline = null }, given = {}) {
+export async function acquireRuntimeSlot({ stateDir, origin, limit = Infinity, kind, deadline = null }, given = {}) {
   const ports = defaults(given), directory = directoryFor({ stateDir, origin }), id = ports.randomUUID();
-  const ticket = { id, state: 'waiting', pid: ports.pid, kind, started_at: ports.now(), request_ids: [] };
+  const uncapped = limit === Infinity;
+  const ticket = { id, state: uncapped ? 'active' : 'waiting', pid: ports.pid, kind, started_at: ports.now(), request_ids: [] };
   const path = join(directory, `${id}.json`);
   let cancelled = false;
   const ended = () => cancelled || ports.interrupted() || deadline !== null && ports.now() >= deadline;
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
-  let acquired = false, activeTicket = null, last = '', failures = 0;
+  let acquired = false, activeTicket = uncapped ? ticket : null, last = '', failures = 0;
   const owner = { posted: false, pulse: null, snapshot: snapshotKey(ticket), [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
   const interruptOwner = () => {
     cancelled = true;
@@ -247,6 +248,11 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   owner.pulse = heartbeat(path, ports, interruptOwner, true);
   owners.set(path, owner);
   try {
+    if (uncapped) {
+      if (ended()) return null;
+      acquired = true;
+      const reservation = { id, directory }; reservationOwners.set(reservation, owner); return reservation;
+    }
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
       const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: edc3f0b72ec49170419418dac446ab9c6a5f22421957f3c854bd3a486a80c77f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 67f0f7bc670b11e40b49a0e4c68536922ca9248927196f921eb78a689cd3a9e8).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -437,12 +437,13 @@ function markBusy(context, row, wait, observedAt = context.ports.now(), legacy =
 const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
 const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
 function localLimit(context) {
-  if (context.localLimit) return context.localLimit;
+  if (context.localLimit !== undefined) return context.localLimit;
   const raw = context.ports.env.PDD_MAX_JOBS;
-  const value = raw === undefined ? 4 : Number(raw);
-  if (raw !== undefined && (!/^[1-9][0-9]*$/.test(String(raw)) || !Number.isSafeInteger(value)))
-    line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using 4.');
-  return context.localLimit = Number.isSafeInteger(value) && value > 0 && (raw === undefined || /^[1-9][0-9]*$/.test(String(raw))) ? value : 4;
+  if (raw === undefined) return context.localLimit = Infinity;
+  const value = Number(raw);
+  if (/^[1-9][0-9]*$/.test(String(raw)) && Number.isSafeInteger(value)) return context.localLimit = value;
+  line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using no local cap.');
+  return context.localLimit = Infinity;
 }
 function slotPorts(context, deadline = context.deadline) {
   const { ports } = context;

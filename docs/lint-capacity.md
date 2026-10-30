@@ -36,11 +36,14 @@ or 90 seconds by default. Reading standalone lint never starts checks. Pdd also
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 
-Checks, remote lint and new Try setup share local slots across pdd processes,
-repositories and worktrees. `PDD_MAX_JOBS` defaults to 4; invalid values warn and
-use 4. Waiting jobs take turns in the order they arrived. Progress shows how many
-slots are busy and how many jobs are ahead of you. `pdd jobs` lists active and
-waiting local jobs without contacting the runtime or signing in.
+Checks, remote lint and new Try setup have no default local cap. All selected
+jobs can proceed without waiting for a local slot. Set `PDD_MAX_JOBS` to a
+positive safe decimal integer to share that cap across local pdd processes,
+repositories and worktrees. Use digits without a sign, whitespace or leading
+zero. Invalid values warn once per command and use no cap. With a cap, waiting
+jobs take turns in the order they arrived; progress shows how many slots are
+busy and how many jobs are ahead of you. `pdd jobs` lists active and waiting
+local jobs, including uncapped jobs, without contacting the runtime or signing in.
 
 Slot records live under `$PDD_STATE_DIR/slots/<runtime host>/` (the default state
 directory is `~/.pdd/runtime`). The host and optional port are safely encoded in
