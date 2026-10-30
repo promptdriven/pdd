@@ -70,7 +70,7 @@
     {
       "id": "wait-end-cause",
       "given": "Check, explicit lint and Try setup separately wait for local slot or maintenance until lint deadline before first lint POST; also interrupt variants",
-      "required_observation": "plain result names local-slot wait or maintenance as appropriate, no server-busy-after-0-attempts claim; zero check calls, no check/Try POST, existing exit5 or door125 retained; JSON stdout remains valid with its existing schema"
+      "required_observation": "plain result names local-slot wait or maintenance as appropriate, no server-busy-after-0-attempts claim; zero check calls, no check/Try POST; retain mode-specific exits: deadline wait5, Check interruption after batch creation3, explicit-lint/Try busy interruption5, door125; JSON stdout remains valid with its existing schema"
     },
     {
       "id": "capacity-cache",
