@@ -4,9 +4,11 @@
 
 # Code PR test inventory (#2570)
 
-1. [See which test cases disappeared](workflow-test-inventory.md). Test: `test/runtime/workflow-test-inventory.json`. Runtime check (workflow-test-inventory): NOT CHECKED / NOT APPROVED for this formatting draft. Historical scoped result: 3/3 criteria, 10/10 checks.
-2. [See changed expectations in kept tests](workflow-assertion-changes.md). Test: `test/runtime/workflow-assertion-changes.json`. Runtime check (workflow-assertion-changes): NOT CHECKED / NOT APPROVED for this formatting draft. Historical scoped result: 3/3 criteria, 11/11 checks.
-3. [See newly skipped or pending tests](workflow-new-skips.md). Test: `test/runtime/workflow-new-skips.json`. Runtime check (workflow-new-skips): NOT CHECKED / NOT APPROVED for this formatting draft. Historical scoped result: 3/3 criteria, 12/12 checks.
-4. [Read source text safely in the code PR report](workflow-inventory-code-spans.md). Test: `test/runtime/workflow-inventory-code-spans.json`. Runtime check (workflow-inventory-code-spans): NOT CHECKED / NOT APPROVED. Additive: 3 criteria, 3 steps, 9 checks.
+Not checked: Runtime prompt checks (lint wait/continuation limit; #2579). The person approved the contract; all 12 criteria and 42 checks remain unjudged, with 0 AI calls.
 
-The original three Stories retain all nine criteria, 11 inputs/step identities and 33 check positions, targets, paths and operators. Sixteen report strings change only value formatting; the other 17 values remain unchanged. The new Story is separate. Full old/new proposed expectations and historical receipts stay in the external run notes. The original replay anchor remains BLOCKED (issue #2633); no reset or current pass is claimed. The independent SVG plan above is unchanged.
+1. [See which test cases disappeared](workflow-test-inventory.md). Test: `test/runtime/workflow-test-inventory.json`. Runtime check (workflow-test-inventory): NOT RUN; 3 criteria and 10 checks unjudged.
+2. [See changed expectations in kept tests](workflow-assertion-changes.md). Test: `test/runtime/workflow-assertion-changes.json`. Runtime check (workflow-assertion-changes): NOT RUN; 3 criteria and 11 checks unjudged.
+3. [See newly skipped or pending tests](workflow-new-skips.md). Test: `test/runtime/workflow-new-skips.json`. Runtime check (workflow-new-skips): NOT RUN; 3 criteria and 12 checks unjudged.
+4. [Read source text safely in the code PR report](workflow-inventory-code-spans.md). Test: `test/runtime/workflow-inventory-code-spans.json`. Runtime check (workflow-inventory-code-spans): NOT RUN; 3 criteria and 9 checks unjudged.
+
+The person reviewed all 16 formatting-only value changes and nine additive checks; the other 17 values and all original inputs, criteria, steps and check metadata are unchanged. Both attempts passed lint but sent no Story checks; receipts remain in external run notes. Code acceptance requires all 42 native checks, real Git and final GitHub-render proof, fresh verification and review, and the full suite. The frozen original replay remains BLOCKED (#2633); the exhausted repair history is not reset. The independent SVG plan above is unchanged.

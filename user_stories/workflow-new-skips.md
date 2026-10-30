@@ -14,6 +14,6 @@ Skips are differences between the exact resolved comparison commits, including x
 
 ## Review status
 
-Current formatting draft: NOT CHECKED / NOT APPROVED. The earlier scoped result of 3/3 criteria and 12/12 checks is historical and does not validate this draft. The original inputs, criteria, check positions and operators remain unchanged; only report-value formatting changes are proposed for person review. The earlier two person-approved @-entity expectation changes remain historical; this draft replaces that format with the inventory owner's JSON-literal code spans.
+The person approved the current contract and exact formatting expectations. Runtime prompt checks were NOT RUN: both attempts passed lint but sent no Story requests because of #2579. These three criteria and twelve checks remain unjudged, with no AI calls. Original inputs, criteria, check positions and operators are unchanged. Earlier entity-format receipts are historical; the current contract uses the inventory owner's JSON-literal code spans. Approval is not a Runtime pass.
 
 Native regression proof must cover each skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.

@@ -20,6 +20,6 @@ The first inventory line starts "Tests vs base:". Short compared-commit provenan
 
 ## Review status
 
-Current formatting draft: NOT CHECKED / NOT APPROVED. The earlier scoped result of 3/3 criteria and 10/10 checks is historical and does not validate this draft. The original inputs, criteria, check positions and operators remain unchanged; only report-value formatting changes are proposed for person review. Full old/new values and historical receipts are outside the repository in the run notes.
+The person approved the current contract and exact formatting expectations. Runtime prompt checks were NOT RUN: both attempts passed lint but sent no Story requests because of #2579. These three criteria and ten checks remain unjudged, with no AI calls. Original inputs, criteria, check positions and operators are unchanged; full reviewed values and receipts remain in external run notes. Approval is not a Runtime pass.
 
 Native proof must cover fetched-base merges (including retained PR 1 tests), unavailable fetch/merge-base, candidate-only limits and bad-file isolation, code-span rendering, first-line/provenance order, bounded status custody and artifact failures. Publication proof uses real Git and a local bare remote, a gh fake that consumes process input, and a test through the default process path. Canonicalize temporary fixture roots with realpath so a macOS /var symlink cannot fail worktree ownership. These effects are not proved by the supplied snapshots.
