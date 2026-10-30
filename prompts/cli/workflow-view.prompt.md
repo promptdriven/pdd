@@ -14,3 +14,21 @@ Keep the output small and textual. Do not embed entire documents or build a serv
 
 - Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring. [Run records](workflow-runs.prompt.md) owns run selection; [runtime preflight](runtime-preflight.prompt.md) owns interface discovery and prose hashes.
 - Runtime: Node filesystem/path/URL primitives, Git local read commands through optional `ports.execFile`, and `ports.env`/`stateDir` for existing run-index selection. No runner/chat mutation helpers.
+
+## Structured review (`--json`)
+
+`pdd workflow view ISSUE --json` returns one JSON object on stdout and no human-formatted headings. It is the same passive review and uses the same saved run selection and local-only reads as the text form. The object has `version` (the integer `1`), `issue` (the saved issue number, title and URL), `state`, `area`, `gate`, `message`, `links` and `approvals`. `gate` is an object containing the saved gate id, area and kind when a gate is open, and is `null` for completed, cancelled or otherwise ungated runs. `message` is the saved gate/question message, or `null` when none is saved. `links` groups only saved review links for Stories, the plan and pull requests; it never includes Try URLs. `approvals` contains only recorded human decisions, each with its decision, actor and timestamp; it does not create or infer an approval. Missing saved values remain `null`, empty arrays or an explicit unavailable entry according to their group, and malformed local artifacts do not crash the command. The JSON form performs no writes, chat calls, approvals, network calls, Git fetches or refreshes.
+
+The JSON contract is fixed as follows. `gate` is either `null` or an object with exactly `id`, `area` and `kind`. `id` is the saved `run.gate.id` string when that field exists and `null` when the saved gate has no id; the view never derives an id from area, kind or time. `area` and `kind` are the saved strings. `message` is the saved question/gate text string or `null`; an absent or malformed question is `null`.
+
+Each `approvals` item has exactly `decision`, `actor` and `timestamp`. `decision` is the saved decision string. `actor` is an object with exactly `via`, where `via` is the saved `via` string (`"terminal"` or `"chat"`); no person identity is inferred. `timestamp` is the saved `at` number serialized as an ISO-8601 UTC string when finite, otherwise `null`. This preserves the only actor and time fields currently recorded by workflow runs.
+
+`links` has exactly `stories`, `plan` and `pull_requests` arrays. Each item is a saved URL string (or an object reduced to its saved `url`/`href`), and Try/report URLs are excluded. Missing groups are empty arrays. For malformed or unavailable run files, the command still exits 0 with the affected scalar set to `null` and affected arrays empty; the output includes an `unavailable` array of short field names (`"run"`, `"gate_notes"`, or an artifact path) when local inspection cannot validate them. It never fabricates a gate id, actor identity, timestamp, or link.
+
+<details><summary>Runtime interface</summary>
+
+```json
+{"status":"approved","prose_sha256":"1de20325bf94c35b148da3a69637a82784ce9f03f69fc0283ce28b93dfdc831c","entries":[{"operation":"main","input_schema":{"type":"object","properties":{"argv":{"type":"array","items":{"type":"string"}}},"required":["argv"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["exit_code","stdout","stderr"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":12},"conventions":[{"path":"/entries/0/input_schema","convention":"cli"},{"path":"/entries/0/result_schema","convention":"cli"}]}
+```
+
+</details>

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b9f0d17e951326f620f810e4229849838fac7aeca652e34f3acee1c43aed179c).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -28,8 +28,8 @@ const routes = [
     operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
   { id: 'workflow.view', prefix: ['workflow', 'view'], local: 'workflow-view',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Try links; never start or resume a chat.')] },
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--json',kind:'flag'}],
+    forms: [form('pdd workflow view ISSUE [--json]', 'Read-only review of gates, approvals, files, PRs and Try links; --json emits structured review data without Try URLs; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },

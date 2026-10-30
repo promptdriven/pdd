@@ -102,3 +102,19 @@ test('RELEASE5: ancestor aliases show artifacts and notes; redirected notes are 
   assert.match(blocked.stdout, /Gate notes unavailable/);
   assert.doesNotMatch(blocked.stdout, /private.md/);
 });
+
+test('VIEW6: JSON saves gate id/message, redacts Try links, and ignores stale questions', t => {
+  const f = fixture(t);
+  f.run.gate = { id: 'prompt-pr:approve-pr', area: 'prompt-pr', kind: 'approve-pr', at: 2000,
+    message: 'Try it: https://runtime.example.test/s/SECRET/ then approve.' };
+  f.run.question = { text: 'Old question https://runtime.example.test/s/OLD/', at: 1000, area: 'prompt-pr' };
+  f.save();
+  const r = f.cli('workflow', 'view', '2442', '--json'); assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.gate, { id: 'prompt-pr:approve-pr', area: 'prompt-pr', kind: 'approve-pr' });
+  assert.equal(out.message, 'Try it: (Try link removed) then approve.');
+  assert.doesNotMatch(out.message, /SECRET|https?:\/\/.*\/s\//);
+  f.run.gate = null; f.run.question = null; f.run.state = 'completed'; f.save();
+  const ungated = JSON.parse(f.cli('workflow', 'view', '2442', '--json').stdout);
+  assert.equal(ungated.gate, null); assert.equal(ungated.message, null);
+});

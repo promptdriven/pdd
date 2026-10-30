@@ -1,13 +1,14 @@
-// Generated from prompts/cli/workflow-view.prompt.md (sha256: ea3d251036d237b1e2869a0ea4039b931800f4b086f685f178db232f628a10ce).
+// Generated from prompts/cli/workflow-view.prompt.md (sha256: e37d993fa4c3bd971909bd1e8ba37b9cb0af1946500d9a9c83a4e7cccbef57fa).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { resolveRun } from './workflow-runs.mjs';
+import { gitContext, resolveRun, runDirFor } from './workflow-runs.mjs';
 import { interfaceBlocks, isSecretPath, proseSha256 } from './runtime-preflight.mjs';
 
 const execute = promisify(execFile);
+const redactTry = value => String(value ?? '').replace(/https?:\/\/[^\s)<><?="'`]*?\/s\/[^/\s)<><?="'`]+(?:\/[^\s)<><?="'`]*)?/g, '(Try link removed)');
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const array = value => Array.isArray(value) ? value : [];
 const ended = run => ['completed', 'cancelled'].includes(run.state);
@@ -41,8 +42,21 @@ function promptState(source) {
 
 // This module deliberately uses no runner/chat helpers and never refreshes external state.
 export async function viewRun({ ref, cwd }, ports = {}) {
+  const json = ports.json === true;
   const found = await resolveRun(ref, { cwd }, ports);
-  if (found.error) return { exitCode: 1, message: found.error };
+  if (found.error) {
+    // A known run directory with an unreadable or malformed status is still a
+    // valid passive JSON review: expose the unavailable run instead of turning
+    // local corruption into a command failure.
+    if (json && /^#?[1-9][0-9]*$/.test(String(ref ?? '').trim())) {
+      const context = await gitContext(cwd, ports);
+      const runDir = context && runDirFor(context.commonDir, Number(String(ref).replace(/^#/, '')));
+      if (runDir && fileInfo(context.commonDir, runDir, true))
+        return { exitCode: 0, message: JSON.stringify({ version: 1, issue: null, state: null, area: null, gate: null, message: null,
+          links: { stories: [], plan: [], pull_requests: [] }, approvals: [], unavailable: ['run'] }) };
+    }
+    return { exitCode: 1, message: found.error };
+  }
   const run = found.run, root = resolve(run.root), area = array(run.areas)[run.area];
   const exec = ports.execFile ?? ((file, args, opts) => execute(file, args, { ...opts, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const git = async args => {
@@ -91,6 +105,49 @@ export async function viewRun({ ref, cwd }, ports = {}) {
   const reports = urls.filter(url => /\/r\//.test(url)), tries = urls.filter(url => /\/s\//.test(url));
   const runtime = summaries.flatMap(summary => summary.split(/\n|;\s*(?=Report:|Try:|Runtime check)/)).filter(line => /^Runtime check/.test(line.trim()));
   const gate = run.gate && (!ended(run) || run.state === 'completed' && run.gate.kind === 'ask-code') ? run.gate : null;
+  if (json) {
+    const unavailable = [];
+    const issue = run.issue && Number.isSafeInteger(run.number) && typeof run.issue.title === 'string' && typeof run.issue.url === 'string'
+      ? { number: run.number, title: run.issue.title, url: run.issue.url } : null;
+    if (!issue) unavailable.push('run');
+    const stories = [], plan = [], pullRequests = [];
+    const addLink = (value, kind) => {
+      const link = typeof value === 'string' ? value : value?.url ?? value?.href;
+      if (typeof link !== 'string' || !link) return;
+      if (/\/s\//.test(link) || /\/r\//.test(link)) return;
+      if (kind === 'pr' || /\/pull\/\d+(?:[/?#]|$)/.test(link)) { if (!pullRequests.includes(link)) pullRequests.push(link); return; }
+      if (kind === 'plan' || /(?:^|\/)PLAN\.md$/i.test(link)) { if (!plan.includes(link)) plan.push(link); return; }
+      if (kind === 'story' || /(?:^|\/)user_stories\/.*\.md$/i.test(link)) { if (!stories.includes(link)) stories.push(link); }
+    };
+    for (const item of array(run.links)) addLink(item);
+    for (const pr of array(run.pr)) addLink(pr, 'pr');
+    for (const [file, info] of files) {
+      if (info.role === 'Story/plan') {
+        if (!fileInfo(root, file)) unavailable.push(info.path);
+        else addLink(info.path, /(?:^|\/)PLAN\.md$/i.test(info.path) ? 'plan' : 'story');
+      }
+    }
+    let gateNotesAvailable = true;
+    try {
+      const gateRoot = resolve(run.commonDir ?? root);
+      gateNotesAvailable = !!fileInfo(gateRoot, run.runDir, true);
+    } catch { gateNotesAvailable = false; }
+    if (!gateNotesAvailable) unavailable.push('gate_notes');
+    const approvals = array(run.decisions).filter(item => item && typeof item.decision === 'string').map(item => ({
+      decision: item.decision,
+      actor: { via: typeof item.via === 'string' ? item.via : null },
+      timestamp: Number.isFinite(item.at) ? new Date(item.at).toISOString() : null,
+    }));
+    const activeGate = run.gate && !ended(run) ? run.gate : null;
+    const openQuestion = run.question && (!run.gate || run.question.at >= run.gate.at) ? run.question : null;
+    const message = activeGate?.message ? redactTry(activeGate.message) : openQuestion && typeof openQuestion.text === 'string' ? redactTry(openQuestion.text) : null;
+    const output = { version: 1, issue, state: typeof run.state === 'string' ? run.state : null,
+      area: typeof area?.name === 'string' ? area.name : null,
+      gate: activeGate ? { id: typeof activeGate.id === 'string' ? activeGate.id : null, area: typeof activeGate.area === 'string' ? activeGate.area : null, kind: typeof activeGate.kind === 'string' ? activeGate.kind : null } : null,
+      message, links: { stories, plan, pull_requests: pullRequests }, approvals,
+      unavailable: [...new Set(unavailable)] };
+    return { exitCode: 0, message: JSON.stringify(output) };
+  }
   const pending = gate?.kind === 'ask-code' ? 'Optional code-work authorization: make the code PR, or stop at PR 1.'
     : gate?.kind === 'approve-pr' ? `Approve ${text(gate.area)} after review/Try to open the PR.`
     : gate ? `Approve the ${text(gate.area)} area or ask for changes.` : ended(run) ? 'No active gate.'

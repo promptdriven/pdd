@@ -87,7 +87,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'workflow-view': {
       try {
         const { viewRun } = await import('./workflow-view.mjs');
-        const result = await viewRun({ ref: plan.operands[0], cwd });
+        const result = await viewRun({ ref: plan.operands[0], cwd }, { json: plan.options['--json'] === true });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         return result.exitCode;
       } catch (error) { line(stderr, `The saved run could not be read. Check pdd workflow status.${reason(error)}`); return 1; }
