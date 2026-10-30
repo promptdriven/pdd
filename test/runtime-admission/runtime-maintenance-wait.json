@@ -4,11 +4,11 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its end and reason before rechecking."
+      "text": "Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its local end time with the zone and its reason before rechecking."
     },
     {
       "id": "AC2",
-      "text": "When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait."
+      "text": "When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait and notice."
     },
     {
       "id": "AC3",
@@ -27,12 +27,32 @@
     {
       "id": "window",
       "given": "capacity announces deploy until fixed future time, then clear",
-      "required_observation": "no POST during window; one POST after recheck; print reason/end"
+      "required_observation": "no POST during window; one POST after recheck; print reason and local end time with its zone"
     },
     {
       "id": "direct-admission",
-      "given": "capacity 404, POST 503 maintenance/not_started, Retry-After",
-      "required_observation": "wait, recheck 404, retry safely"
+      "given": "capacity 404, POST 503 maintenance/not_started with a future until and reason, Retry-After",
+      "required_observation": "show reason and local end time with its zone; wait, recheck 404, retry safely"
+    },
+    {
+      "id": "summer-local-end",
+      "given": "local zone America/Los_Angeles; synthetic future maintenance until 2026-07-02T02:25:00.000Z, separately from capacity and confirmed not-started 503",
+      "required_observation": "human notice shows local hour/minute 19:25 and PDT with the supplied reason; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission saved from a confirmed not-started 503 retains original until 2026-07-02T02:25:00.000Z; no complete sentence wording is fixed"
+    },
+    {
+      "id": "winter-local-end",
+      "given": "local zone America/Los_Angeles; synthetic future maintenance until 2026-12-01T03:25:00.000Z",
+      "required_observation": "human notice shows local hour/minute 19:25 and PST; it does not reuse the summer zone"
+    },
+    {
+      "id": "end-instant-zone",
+      "given": "local zone America/Los_Angeles; synthetic current time 2026-11-01T08:59:50.000Z, maintenance until 2026-11-01T09:00:10.000Z across the daylight-saving boundary",
+      "required_observation": "human notice shows end hour/minute 01:00 with PST, the zone at the end instant; waiting still follows the supplied UTC instant"
+    },
+    {
+      "id": "configured-local-zone",
+      "given": "local zone Asia/Tokyo; synthetic future maintenance until 2026-07-02T02:25:00.000Z",
+      "required_observation": "human notice shows local hour/minute 11:25 and its zone; no Pacific zone or UTC end-time string is substituted; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission data retains the original UTC until where already captured"
     },
     {
       "id": "old-runtime",

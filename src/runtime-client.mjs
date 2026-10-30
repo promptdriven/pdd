@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c6672385bb051688c30dece7f47f5b295b67379dad67c0f40478121d5f336c21).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 364c3da485b5955c6e4321899650434fec53c3355e81a5ed67ddd8a6db51e087).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -306,11 +306,14 @@ function queueProgress(context, answer) {
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
 }
+const localMaintenanceEnd = until => new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+}).format(new Date(until));
 function maintenanceNotice(context, verdict, reply) {
   const details = reply.json?.error?.details ?? reply.json?.maintenance ?? {};
   const until = Date.parse(details.until);
   if (Number.isFinite(until) && until > context.ports.now()) verdict.wait = Math.max(verdict.wait, until - context.ports.now());
-  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${new Date(until).toISOString()}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
+  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${localMaintenanceEnd(until)}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
 }
 async function waitBudget(context, wait, deadline = context.deadline) {
   if (context.interrupted || context.ports.now() >= deadline) return false;
@@ -327,7 +330,7 @@ async function capacityReady(context, deadline) {
     if (reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) {
       const maintenance = reply.json.maintenance, until = Date.parse(maintenance?.until);
       if (!Number.isFinite(until) || until <= context.ports.now()) return true;
-      const when = new Date(until).toISOString();
+      const when = localMaintenanceEnd(until);
       line(context.ports.stderr, `The runtime is in maintenance until ${when} (${cleanText(maintenance.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
       if (!await waitBudget(context, until - context.ports.now(), deadline)) return false;
     } else {
@@ -658,8 +661,8 @@ async function sendCheckAttempt(context, row) {
 }
 
 // GET one open row once.
-async function readRow(context, row) {
-  const id = row.request_ids.at(-1), end = row.lost ? row.read_until ?? context.deadline : context.deadline;
+async function readRow(context, row, deadline = Infinity) {
+  const id = row.request_ids.at(-1), end = Math.min(deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   if (!id) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
   // A network problem while reading says so once; pdd keeps reading the same IDs.
@@ -988,7 +991,13 @@ async function readUnsentLint(context, rows) {
   if (!held.length) return;
   let answer = context.store.read(join(context.folder, `${id}.json`));
   if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
-    const read = judgeGet(await context.runtime.get(id), id, 'lint');
+    const remaining = context.deadline - context.ports.now();
+    if (context.interrupted || remaining <= 0) {
+      context.lintPending = !!lint.pending;
+      context.lintUnknown = !!lint.unknown || !context.lintPending;
+      return;
+    }
+    const read = judgeGet(await context.runtime.get(id, Math.min(GET_MS, remaining)), id, 'lint');
     if (read.kind === 'blocked') throw new Stop(5, read.message);
     if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
@@ -1036,9 +1045,12 @@ function heldForLint(row) {
       || /lint result is unknown.*sent no checks/i.test(row.note?.message ?? '')
       || row.phase === 'lint' && row.note?.code === 'lint-finished');
 }
+function validSavedCallCeiling(row) {
+  return Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000;
+}
 function validSavedCheck(row) {
   const text = value => typeof value === 'string' && !!value.trim();
-  if (!Number.isInteger(row.max_calls) || row.max_calls < 1 || row.max_calls > 1000
+  if (!validSavedCallCeiling(row)
     || !Number.isInteger(row.criteria_total) || row.criteria_total <= 0
     || !Array.isArray(row.steps) || !row.steps.length) return false;
   const ids = new Set(), criteria = new Set();
@@ -1060,9 +1072,10 @@ async function continueHeld(context, candidates, saved) {
   candidates = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
   if (!candidates.length) return;
   if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
+    || !candidates.every(validSavedCallCeiling)
     || (saved.intent === undefined && !candidates.every(validSavedCheck))
     || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0)) {
-    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
+    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch lacks valid original call ceilings, unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
     return;
   }
   if (context.lintPending || context.lintUnknown) return;
@@ -1133,12 +1146,13 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
       const wait = capacityDelay(admission.error);
       if (wait !== null) { markBusy(context, row, wait); return; }
     }
-    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     const answer = store.read(join(context.folder, `${id}.json`));
+    // Local terminal receipts remain available even when another row used the network wait.
     if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) { await finishReservation(context, row, answer); applyAnswer(row, answer, context); return; }
+    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (['queued', 'running', 'unknown'].includes(row.state)) {
       row.lost = true;
-      await readRow(context, row);
+      await readRow(context, row, context.deadline);
       if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
     } else if (answer) applyAnswer(row, answer, context);
   });
@@ -1173,6 +1187,7 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
   const capture = captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
