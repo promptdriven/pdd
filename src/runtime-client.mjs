@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: dadc5a765534a98d92403606f012a5b00c39465c42a76d93f785c5fd5d05ec91).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c82ba09773ad025bd2a846a08148f9ae2b7e374268543917381f995c7a2d349a).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -87,7 +87,7 @@ function withDefaults(ports) {
 }
 
 function repoRoot(cwd) {
-  const found = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+  const found = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (found.status !== 0 || !found.stdout.trim()) throw new Stop(2, 'pdd check and pdd try work in a Git repository. Run them inside your project.');
   return found.stdout.trim();
 }
@@ -392,6 +392,7 @@ function applyAnswer(row, answer, context) {
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? view.why ?? (view.state === 'unknown' ? row.why : null) : null,
     who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
     next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? view.next_step : null,
+    rerun: view.rerun ?? row.rerun,
     engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
@@ -756,6 +757,7 @@ async function runLintOnly(context, cwd, words, setRelease) {
 
 function runFillHash(root, ports) {
   const result = fillHashes({ root });
+  for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
@@ -1026,7 +1028,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
