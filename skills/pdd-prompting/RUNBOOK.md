@@ -155,6 +155,8 @@ and all Runtime checks stay in force.
 
 ## 5. Saved data
 
+The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [record-id fragment in §21](#verify-a-record-id).
+
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
 line: write it out in full in all 3 places (`$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
@@ -275,7 +277,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 ## 11. `pdd check`
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
-`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
+`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
 Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
@@ -515,9 +517,20 @@ Report: https://…/r/617480ac-…
 
 ## 17. Code space: replay evidence and the formal check
 
+On `agent thread limit reached`, follow the workflow skill's checking fallback. Before checking, close finished subagents if supported, then try a fresh checker first. Only after fresh startup failure may verify/formal reuse an agent that wrote no code, tests or prompts in this run. If no eligible checker can run:
+
+- For review, write `Not checked: review (agent limit)` in the review run file; review always needs a fresh agent, never a reused checker.
+- For another unrun check, write `Not checked: <step> (agent limit)` in its run file.
+
+Stop and tell the person to start a new agent session in the run's worktree. No verdict or `workflow done` for unrun checks.
+`pdd workflow open 42` focuses or resumes the same session; it does not start a new one or clear the limit.
+Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
+
 Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
+
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
@@ -803,6 +816,28 @@ The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The de
 ```
 
 Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/5b26a5ee-1b45-4a79-beb6-ae1dd4c891a3).
+
+### Verify a record id
+
+This is a fragment, not a runnable example. It shows only the two parts that hashing adds. To run it, you also need a Story, a prompt with a full Runtime interface (its `entries`, `prose_sha256` and `limits`), a scenario with steps and checks, and the native module. "Hash exact bytes" above is a complete example.
+
+`verify(record)` gets a record with `text` and `id`, and returns `{"valid": boolean}`. The prompt removes `id`, calls `compute.hash_json` with `{"value": {"text": record.text}}`, and compares the returned lowercase SHA-256 with `id`.
+
+The `resources` entry of the prompt's Runtime interface:
+
+```json
+{"resources":[{"name":"compute","kind":"compute","access":"read","operations":[{"name":"hash_json","access":"read","arguments_schema":{"type":"object","properties":{"value":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}},"required":["value"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}]}]}
+```
+
+The `simulation` entry of the scenario:
+
+```json
+{"simulation":{"compute.hash_json":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"}}}
+```
+
+`hash_json` hashes the runtime's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the runtime's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
+
+Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
 
 ### Inject a fixed-answer callback
 
