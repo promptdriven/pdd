@@ -110,7 +110,8 @@ test('journey progress uses actual selected source identity across its parts', a
   const run = { number: 81, root, state: 'running', pr: [], runtimeHistory: [{ at: 1, source,
     summary: 'Runtime check (J1-coffee-pickup): ✓ 2 of 2 criteria\nRuntime check (J10-unrelated): ✓ 1 of 1 criteria' }] };
   const ports = { listRuns: async () => [run], resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }), planOnBase: async () => true,
-    execFile: async (file, args) => { assert.equal(file, 'gh'); assert.equal(args[0], 'api'); return { stdout: JSON.stringify([[{ number: 81, body: '<!-- pdd-product: run=journeys -->' }]]) }; } };
+    issuePage: async ({ marker, page }) => ({ items: page === 1 && marker === '<!-- pdd-product: run=journeys -->' ? [{ number: 81, body: marker, user: { login: 'project-member' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z' }] : [], total_count: marker === '<!-- pdd-product: run=journeys -->' ? 1 : 0, incomplete_results: false }),
+    timelinePage: async () => [] };
   const journey = async () => (await productStatus({ cwd: root }, ports)).parts.find(row => row.part === 'journeys');
   assert.deepEqual(await journey(), { part: 'journeys', total: 1, pass: 1, stale: 0, notRun: 0 });
   writeFileSync(join(root, 'unrelated.txt'), 'changed unrelated');

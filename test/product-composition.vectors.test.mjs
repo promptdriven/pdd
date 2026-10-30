@@ -20,7 +20,9 @@ for (const name of ['product-compose-try', 'product-journey-seed']) test(`${name
     if (!file) throw Object.assign(Error(`${path} missing`), { code: 'ENOENT' });
     return file.content;
   };
-  const ports = { readFile, statFile(path) { const file = world.files[path]; return { exists: !!file, is_symlink: file?.is_symlink ?? false, size: file ? Buffer.byteLength(file.content) : 0 }; },
+  const ports = {
+    ...Object.fromEntries(['issuePage','timelinePage','pullRequest','currentActor'].filter(name => scenario.simulation['github.' + name]).map(name => [name, async args => { const value = invoke('github.' + name, args); return value.json ? JSON.parse(value.json) : value; }])),
+    readFile, statFile(path) { const file = world.files[path]; return { exists: !!file, is_symlink: file?.is_symlink ?? false, size: file ? Buffer.byteLength(file.content) : 0 }; },
     listRuns: args => JSON.parse(invoke('runs.list', args).json),
     storyEvidence: run => JSON.parse(invoke('runs.evidence', { run_json: JSON.stringify(run) }).json),
     resolveRepository: args => invoke('github.repository', args),

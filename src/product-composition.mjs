@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: 2f230339b103a65adb9b1552bb695b02b6640594dca715f31fdb0de45240a006).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: 6571256d92a0045661b0e172b60de705a1c464c69f68a33166745b87b0e72d72).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
@@ -64,7 +64,32 @@ function scopedHandlers(handlers, screen, encode) {
   return output;
 }
 
+function validateMap(map, part) {
+  const invalid = field => badMap(`app/maps/${part}.json has a missing or malformed ${field} field.`);
+  const required = (value, fields, parent) => {
+    if (!plain(value)) invalid(parent);
+    for (const field of fields) if (!Object.hasOwn(value, field)) invalid(`${parent}.${field}`);
+  };
+  required(map, ['schema_version', 'name', 'initial_screen', 'initial_route', 'initial_state', 'state_schema', 'synthetic', 'screens', 'router', 'routes', 'handlers', 'stylesheets'], 'map');
+  if (map.schema_version !== 'prompt-runtime.app-map.v1') invalid('schema_version');
+  for (const field of ['name', 'initial_screen']) if (typeof map[field] !== 'string' || !map[field]) invalid(field);
+  if (map.initial_route !== null && typeof map.initial_route !== 'string') invalid('initial_route');
+  if (typeof map.synthetic !== 'boolean') invalid('synthetic');
+  for (const field of ['initial_state', 'state_schema']) if (!plain(map[field])) invalid(field);
+  for (const field of ['screens', 'routes', 'handlers', 'stylesheets']) if (!Array.isArray(map[field])) invalid(field);
+  if (map.router !== null) required(map.router, ['handler', 'input', 'result_pointer'], 'router');
+  for (const route of map.routes) required(route, ['name', 'screen', 'input'], 'route');
+  for (const handler of map.handlers) {
+    required(handler, ['screen', 'kind', 'match', 'handler', 'input', 'next', 'state'], 'handler');
+    required(handler.next, ['kind', 'screen', 'route_pointer'], 'handler.next');
+    if (!plain(handler.match)) invalid('handler.match');
+    if (Object.hasOwn(handler, 'after') && !Array.isArray(handler.after)) invalid('handler.after');
+    for (const after of handler.after ?? []) required(after, ['handler', 'input', 'bind'], 'handler.after');
+  }
+}
+
 function joinMaps(product, parts, maps, chain, encode) {
+  maps.forEach((map, index) => validateMap(map, parts[index]));
   let scratch = 'product_after';
   while (parts.includes(scratch)) scratch += '_';
   const slots = Object.fromEntries(chain.map((operation, index) => [String(index), checkInput(null, operation.resultSchema, 0).refusals.length
@@ -198,7 +223,16 @@ export function composeProductTry({ root, parts, journey, testPath }, ports) {
       }
       world = Object.fromEntries([...Object.entries(world), ...Object.entries(value)]);
     }
-    const appMapPath = 'app/maps/product.json', seedPath = 'contracts/product-seed.json';
+    let appMapPath, seedPath;
+    for (let suffix = 0; ; suffix++) {
+      const tag = suffix ? `_${suffix}` : '';
+      appMapPath = `app/maps/product${tag}.json`;
+      seedPath = `contracts/product-seed${tag}.json`;
+      const mapStat = ports.statFile(join(root, appMapPath)), seedStat = ports.statFile(join(root, seedPath));
+      if (mapStat?.is_symlink || seedStat?.is_symlink) throw new PreflightError(4, 'Generated product paths must not be symbolic links.');
+      if (!mapStat || !seedStat || typeof mapStat.exists !== 'boolean' || typeof seedStat.exists !== 'boolean') throw new PreflightError(4, 'Generated product paths could not be inspected.');
+      if (!mapStat.exists && !seedStat.exists) break;
+    }
     if (journey !== undefined) {
       if (typeof testPath !== 'string' || !testPath) fail('invalid-journey', 'Choose one journey test path for this Try.');
       const raw = read(testPath), scenario = parseJsonValue(raw);

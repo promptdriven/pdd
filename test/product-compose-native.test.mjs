@@ -169,3 +169,28 @@ test('missing or malformed required map fields fail finitely before JSON seriali
     assert.throws(() => f.compose({ parts: ['phone'] }), error => error.code === 'invalid-product-map', field);
   }
 });
+
+test('generated artifact names use the first absent pair and preserve stat refusals', () => {
+  const f = fixture();
+  f.put('app/maps/product.json', '{"authored":true}');
+  f.put('contracts/product-seed_1.json', '{"authored":true}');
+  const result = f.compose();
+  assert.equal(result.appMapPath, 'app/maps/product_2.json');
+  assert.equal(result.seedPath, 'contracts/product-seed_2.json');
+  assert.equal(f.files['/project/app/maps/product.json'].content, '{"authored":true}');
+  assert.equal(f.files['/project/contracts/product-seed_1.json'].content, '{"authored":true}');
+  const unsafe = fixture();
+  unsafe.files['/project/contracts/product-seed.json'] = { content: '{}', is_symlink: true };
+  assert.throws(() => unsafe.compose(), error => error.exitCode === 4 && /symbolic links/.test(error.message));
+});
+
+test('nested required fields cannot introduce undefined into composed JSON', () => {
+  for (const field of ['screen', 'kind', 'match', 'handler', 'input', 'next', 'state']) {
+    const f = fixture(); f.editMap('phone', map => { delete map.handlers[0][field]; });
+    assert.throws(() => f.compose(), error => error.code === 'invalid-product-map' && error.message.includes(field));
+  }
+  for (const field of ['handler', 'input', 'result_pointer']) {
+    const f = fixture(); f.editMap('phone', map => { map.router = { handler: {}, input: {}, result_pointer: null }; delete map.router[field]; });
+    assert.throws(() => f.compose(), error => error.code === 'invalid-product-map' && error.message.includes(field));
+  }
+});

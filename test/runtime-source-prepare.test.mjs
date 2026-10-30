@@ -234,3 +234,25 @@ test('PREPARE applies effective file, payload and framed PAX tar limits', t => {
   assert.equal(capture.bytes, 0);
   assert.deepEqual(readFileSync(join(repo, PLACE)), before);
 });
+
+test('PREPARE app-map role chooses the attempt-local map and follows its dependencies', t => {
+  const { repo } = harbor(t);
+  const original = readFileSync(join(repo, PLACE));
+  const mapPath = 'app/maps/virtual_1.json';
+  const capture = captureSource(repo, { tests: [ORDER], prepareSource: () => [
+    { path: mapPath, role: 'app-map', bytes: JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', screens: [{ prompt_path: 'prompts/map-only.prompt.md' }], stylesheets: ['app/map-only.css'] }) },
+    { path: 'prompts/map-only.prompt.md', bytes: original },
+    { path: 'app/map-only.css', bytes: 'body{}' },
+  ] });
+  assert.ok(capture.stories[0].files.some(file => file.path === mapPath));
+  assert.ok(capture.files.some(file => file.path === 'prompts/map-only.prompt.md'));
+  assert.ok(capture.files.some(file => file.path === 'app/map-only.css'));
+  assert.equal(capture.sha256, sha256(capture.tar));
+  assert.equal(existsSync(join(repo, mapPath)), false);
+  for (const outputs of [
+    [{ path: mapPath, role: 'other', bytes: '{}' }],
+    [{ path: mapPath, role: 'app-map', bytes: '{}' }],
+    [{ path: mapPath, role: 'app-map', bytes: '{' }],
+    ['one', 'two'].map(name => ({ path: `app/${name}.json`, role: 'app-map', bytes: '{"schema_version":"prompt-runtime.app-map.v1"}' })),
+  ]) assert.throws(() => captureSource(repo, { tests: [ORDER], prepareSource: () => outputs }), error => error.exitCode === 4);
+});

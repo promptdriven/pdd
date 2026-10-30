@@ -130,6 +130,8 @@ test('product reuse tolerates metadata edits and legacy hashes without uploading
   const statePath = join(setup.state, 'repos', readdirSync(join(setup.state, 'repos'))[0]);
   const saved = JSON.parse(readFileSync(statePath, 'utf8'));
   const originalId = saved.tries['tests/J1.json'].id;
+  assert.deepEqual(saved.tries['tests/J1.json'].product_setup, { parts: ['phone', 'server', 'barista'], journey: 'tests/J1.json' });
+  saved.tries['tests/J1.json'].product_setup.journey = 'J1';
   saved.tries['tests/J1.json'].product_setup.source_sha256 = 'legacy non-gating upload metadata';
   writeFileSync(statePath, JSON.stringify(saved));
   const story = join(setup.repo, setup.scenario.story_path);
@@ -145,4 +147,28 @@ test('product reuse tolerates metadata edits and legacy hashes without uploading
   assert.equal(fake.posts.length, 2);
   assert.equal(fake.deletes.length, 0);
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).tries['tests/J1.json'].id, originalId);
+});
+
+test('product Try uses an absent upload pair without replacing authored JSON', async t => {
+  const setup = coffee(t), fake = await fakeRuntime(t, trying);
+  const authored = { 'app/maps/product.json': '{"authored":"map"}', 'contracts/product-seed_1.json': '{"authored":"seed"}' };
+  for (const [path, text] of Object.entries(authored)) writeFileSync(join(setup.repo, path), text);
+  const result = await open(setup, fake, { '--product': true, '--journey': 'J1' });
+  assert.equal(result.code, 0, result.err + result.out);
+  const post = fake.posts[1];
+  assert.equal(post.request.app_map, 'app/maps/product_2.json');
+  assert.equal(post.request.seed, 'tests/J1.json');
+  assert.equal(post.request.source_sha256, sha(post.tar));
+  assert.equal(JSON.parse(extract(post.tar, 'contracts/product-seed_2.json')).journeyOnly, true);
+  assert.equal(JSON.parse(extract(post.tar, post.request.seed)).initial_world.journeyOnly, true);
+  assert.deepEqual(JSON.parse(extract(post.tar, post.request.seed)).steps, setup.scenario.steps);
+  assert.equal(JSON.parse(extract(post.tar, post.request.app_map)).screens.length, 3);
+  const names = spawnSync('tar', ['-tf', '-'], { input: post.tar });
+  assert.equal(names.status, 0);
+  for (const [path, text] of Object.entries(authored)) {
+    assert.equal(readFileSync(join(setup.repo, path), 'utf8'), text);
+    assert.equal(names.stdout.toString().split('\n').includes(path), false);
+  }
+  assert.equal(existsSync(join(setup.repo, 'app/maps/product_2.json')), false);
+  assert.equal(existsSync(join(setup.repo, 'contracts/product-seed_2.json')), false);
 });

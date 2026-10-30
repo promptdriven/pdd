@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 03445cd1ad917920ba738cc8ff8070f8dbfd2b5d9d2be1088b22eb51a4e1e5d1).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 80aaa367b391ac0a98051fcb3eee7053112d7a59243aa337e6966cf4c240948d).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -978,6 +978,13 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       for (const output of prepared) {
         if (!isObject(output) || !(typeof output.bytes === 'string' || output.bytes instanceof Uint8Array)) throw new PreflightError(4, 'prepareSource files need a path and Buffer, Uint8Array or UTF-8 string bytes.');
         const path = sourcePath(output.path, 'prepareSource');
+        if (output.role !== undefined) {
+          if (output.role !== 'app-map' || prepared.filter(file => file.role === 'app-map').length !== 1) throw new PreflightError(4, 'prepareSource may mark only one app-map file.');
+          let map;
+          try { map = JSON.parse(Buffer.from(output.bytes).toString('utf8')); } catch { throw new PreflightError(4, 'prepareSource app-map must be valid JSON.'); }
+          if (!isObject(map) || map.schema_version !== 'prompt-runtime.app-map.v1') throw new PreflightError(4, 'prepareSource app-map must be a JSON v1 app map.');
+          appMap = path;
+        }
         if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
         for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
         inspectRaw(path, 'prepareSource', true);

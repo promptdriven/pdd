@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 72c0e2e17bead1e9add9abf57f38ee3417a9f95a9fe986a6ab80e2b2b0798144).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: d706b91db1a41621f6c74056320b9153c5c8920c331cf59930e26858b712a193).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1543,7 +1543,7 @@ function productTest(found, words, journey, root) {
 
 function captureProductTry(root, test, options) {
   let composition;
-  const capture = captureSource(root, { tests: [test.path], appMap: 'app/maps/product.json', prepareSource(snapshot) {
+  const capture = captureSource(root, { tests: [test.path], appMap: null, prepareSource(snapshot) {
     const readFile = path => {
       const local = relative(root, path).split(sep).join('/');
       if (!snapshot.statFile(local).exists) throw Object.assign(Error(`${local} is missing.`), { code: 'ENOENT' });
@@ -1563,7 +1563,7 @@ function captureProductTry(root, test, options) {
     }
     scenario.initial_world = { $seed: composition.seedPath };
     const expanded = expandSource({ path: test.path, text: stringifyJsonValue(scenario), format: 'scenario' }, files);
-    return [...composition.files.map(file => ({ path: file.path, bytes: file.content })), { path: test.path, bytes: expanded.text }];
+    return [...composition.files.map(file => ({ path: file.path, bytes: file.content, ...(file.path === composition.appMapPath ? { role: 'app-map' } : {}) })), { path: test.path, bytes: expanded.text }];
   } });
   return { capture, composition };
 }
@@ -1679,7 +1679,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const root = repoRoot(cwd), store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
       return await (await import('./try-doors.mjs')).saveLast({ root, store, identity, ports });
     }
-    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || requestedBudget !== null)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
+    if (options['--stop'] && (options['--tab'] || options['--new'] || options['--no-open'] || options['--no-wait'] || options['--app-map'] !== undefined || ['--product', '--parts', '--journey'].some(key => options[key] !== undefined) || requestedBudget !== null)) throw new Stop(2, 'pdd try --stop takes only a STORY. Run pdd try --help.');
     if (words.length > 1) throw new Stop(2, 'pdd try takes one STORY.');
     const origin = runtimeOrigin(ports.env);
     if (options['--stop']) return await stopByName(context, cwd, words, origin);
@@ -1692,7 +1692,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!context.agentDefinitions.length) throw new Stop(2,'No agents are configured. Add an agent or enable defaults in agents.json.');
       if (options['--agent'] !== undefined && !context.agentDefinitions.some(d => d.name === options['--agent'] || (['codex','claude','gemini'].includes(d.id) && d.id === options['--agent']))) throw new Stop(2,'Unknown agent name. Choose a name from agents.json or an enabled default.');
     }
-    const appMap = productMode ? 'app/maps/product.json' : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
+    let appMap = productMode ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
     const test = productMode ? productTest(found, normalized, options['--journey'], root) : oneTest(found, normalized, root);
     const repoState = store.repo(root), record = repoState.tries?.[test.path];
     Object.assign(context, { root, store, origin, visible: found.visible, appMap, cwd: realpathSync(cwd), seedTest: { path: test.path, storyPath: test.storyPath } });
@@ -1702,12 +1702,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
     const prepared = productMode ? captureProductTry(root, test, options) : null;
+    if (prepared) context.appMap = appMap = prepared.composition.appMapPath;
     const capture = prepared?.capture ?? ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
-    const productSetup = prepared ? { parts: prepared.composition.parts, journey: options['--journey'] ?? null, source_sha256: capture.sha256 } : null;
-    if (prepared) {
-      line(ports.stderr, `Product parts: ${prepared.composition.parts.join(', ')}. ${prepared.composition.labels.map(label => label.title).join('; ')}`);
-      line(ports.stderr, `One tap runs up to ${prepared.composition.tapOperations} operations (limit 40 calls per tap).`);
-    }
+    const productSetup = prepared ? { parts: prepared.composition.parts, journey: options['--journey'] === undefined ? null : test.path } : null;
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
@@ -1726,7 +1723,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
       if (answer) await finishReservation(context, record, answer);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
-      if (live && !options['--new'] && (productSetup || record.product_setup) && !isDeepStrictEqual(productSetup, record.product_setup ?? null)) throw new Stop(4, 'The product Try setup changed. Use --new to replace the existing Try; its session is kept.');
+      if (live && !options['--new'] && (productSetup || record.product_setup) && !isDeepStrictEqual(productSetup, record.product_setup ? { parts: record.product_setup.parts, journey: record.product_setup.journey == null ? null : test.path } : null)) throw new Stop(4, 'The product Try setup changed. Use --new to replace the existing Try; its session is kept.');
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
       if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The runtime did not confirm this Try’s current budget. No budget change or reopen was sent.');
       if (requestedBudget !== null && !options['--new'] && requestedBudget > answer.result.session.max_calls) throw new Stop(5, 'This runtime does not support raising this Try’s budget yet. The same Try and saved data are kept.');
@@ -1748,6 +1745,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (link && !options['--new']) {
         if (!record.storyPath && record.story !== test.story) throw new Stop(4, 'The original Try story changed. Restore its test file, or use --new to start a new Try.');
         context.seedTest.storyPath = record.storyPath ?? test.storyPath;
+        if (productSetup) line(ports.stderr, 'Reusing the original uploaded product map and world.');
         return await showTry(context, test, link, options, record.id, true, answer?.result?.session);
       }
       if (!link && answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state) && !options['--new']) throw new Stop(3, refusedLink(answer, origin));
@@ -1758,6 +1756,10 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (!ended) { line(ports.stderr, 'Stopping the old Try…'); await stopTry(context, record); }
       delete repoState.tries[test.path];
       store.saveRepo(root, repoState);
+    }
+    if (prepared) {
+      line(ports.stderr, `Product parts: ${prepared.composition.parts.join(', ')}. ${prepared.composition.labels.map(label => label.title).join('; ')}`);
+      line(ports.stderr, `One tap runs up to ${prepared.composition.tapOperations} operations (limit 40 calls per tap).`);
     }
     await checkLint(context, [row]);
     if (context.interrupted) throw new Stop(3, 'Stopped before the Try was made. Nothing new was sent.');
