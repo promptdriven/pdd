@@ -75,7 +75,7 @@
     {
       "id": "foreign-predecessor-cleanup",
       "given": "native acquired reservation replaced by a same-ID/PID foreign active record before ended true release, ended false release, or synchronized SIGINT/SIGHUP/SIGTERM cleanup; separately ended false release retains the original record, then a foreign replacement precedes ended true on the same returned reservation object; separately replace an owned waiting ticket or claim before its cleanup",
-      "required_observation": "each old owner stops its refresh work and removes its listeners without unlinking, modifying or refreshing the foreign replacement; same-object ownership evidence survives ended false without retaining released references or restarting heartbeats; confirmation about the original job never releases the replacement; ordinary own ended/unsent cleanup still works"
+      "required_observation": "each old owner stops its refresh work and removes its listeners without unlinking, modifying or refreshing the foreign replacement; a changed/replaced claim cannot authorize admission or registration and its foreign successor survives cleanup; same-object ownership evidence survives ended false without retaining released references or restarting heartbeats; confirmation about the original job never releases the replacement; ordinary own ended/unsent cleanup still works"
     },
     {
       "id": "reused-pid-active",

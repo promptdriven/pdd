@@ -49,7 +49,7 @@ SIGINT, SIGHUP and SIGTERM stop new acquisition/dispatch and clean this command'
 <details>
 <summary>Required native dependency bindings</summary>
 
-These ports supplement the existing module-function arguments for admission and recording, and are not public snapshot fields or a check-only API. Existing files operations are listRecords({directory}), exclusiveCreate(path,record), writeAtomic(path,record) and unlink(path). Admission additionally accepts files.modifiedAt(path), returning the last refresh epoch milliseconds or null when absent, and files.touch(path), refreshing an existing owned file and returning false if absent without recreating it. Native defaults preserve regular-file, permission and owner-identity safeguards. Claim files use their own unique owner identity so stale cleanup cannot unlink a successor.
+These ports supplement the existing module-function arguments for admission and recording, and are not public snapshot fields or a check-only API. Existing files operations are listRecords({directory}), exclusiveCreate(path,record), writeAtomic(path,record) and unlink(path). Admission additionally accepts files.modifiedAt(path), returning the last refresh epoch milliseconds or null when absent, and files.touch(path), refreshing an existing owned file and returning false if absent without recreating it. Native defaults preserve regular-file, permission and owner-identity safeguards. Claim files use their own unique owner identity so stale cleanup cannot unlink a successor. A changed or replaced owned claim is no longer held: it cannot authorize admission or registration, and cleanup must preserve the foreign claim.
 
 The optional timers port supplies setInterval(callback, milliseconds) and clearInterval(handle), with native timer defaults; timer handles remain private and cannot keep a finished command alive. The optional random() port supplies a value in [0,1) for jitter, with a native randomness default. Clock, file freshness, timers and randomness used by decisions must use their supplied ports. Existing now(), sleep(ms), interrupted() and isAlive(pid) retain their bindings. recordRuntimeRequest also honors ports.deadline (absolute epoch milliseconds, absent for no deadline) before waiting for exclusion or updating state and returns false when it cannot register within the caller wait; no POST is then authorized. onInterrupt(handler) covers SIGINT/SIGHUP/SIGTERM for cleanup and returns an unsubscribe function, with native process-signal defaults when omitted.
 
@@ -74,7 +74,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "89c31d8a5f6f62e432729989a215a7cd0c13fb38b7013d69e0758e0fc76023aa",
+  "prose_sha256": "2b2c50b9bdb85e2b4ae4e6afb1fda36cb9e2d9e9799babc49b09a000e8fb03fc",
   "entries": [
     {
       "operation": "listRuntimeJobs",
