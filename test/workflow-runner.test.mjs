@@ -472,7 +472,11 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr2.message, /pdd opens PR 2 now/); assert.match(pr2.message, /pull\/24/);
   assert.equal(f.prs.length, 2);
   assert.equal(f.prs[1].title, 'Use value two (code)'); assert.equal(f.prs[1].headRefName, `${run.branch}-code`); assert.equal(f.prs[1].baseRefName, run.branch);
-  assert.match(f.prs[1].body, /^Closes #17$/m); assert.match(f.prs[1].body, /^Old-code proof: not run\./m); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
+  assert.equal(f.prs[1].body.split('\n')[0], 'Old-code proof: not run.');
+  assert.ok(f.prs[1].body.includes(`Static inventory only; tests were not run.\nTest inventory commits: ${run.baseSha.slice(0,7)} → ${f.git(run.root, 'rev-parse', 'HEAD').slice(0,7)}.`));
+  const inventoryAt = f.prs[1].body.indexOf('Tests vs base:'), issueAt = f.prs[1].body.indexOf('\nCloses #17\n');
+  assert.ok(f.prs[1].body.indexOf('Old-code proof: not run.') < inventoryAt && inventoryAt < issueAt);
+  assert.match(f.prs[1].body, /^Closes #17$/m); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
   assert.doesNotMatch(f.prs[1].body, /Story and cases written/, 'PR 2 lists only the code area');
   record = f.record(); assert.equal(record.stage.id, 'merge'); assert.deepEqual(record.pr.map(pr => pr.number), [23, 24]);
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Next: Review and merge PR 1, then PR 2, on GitHub/);
