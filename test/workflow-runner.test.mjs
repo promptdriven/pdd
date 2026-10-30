@@ -1843,6 +1843,60 @@ test('PRBODY7: failures and report links inside authored details or auto-folded 
   }
 });
 
+test('2531: first code runs in independent clones of one origin each launch in their allocated worktree without touching the active peer', async t => {
+  const f = await fixture(t, { name: 'code-only', agent: 'codex' });
+  const skill = join(f.source, '.agents/skills/pdd-code-only');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# Code only\n');
+  writeFileSync(join(skill, 'workflow.json'), JSON.stringify({ version: 2, areas: [
+    { name: 'code', steps: ['build', 'verify', 'formal', 'review'], optional: [], gate: 'pr' }
+  ] }));
+  f.git(f.source, 'add', '.'); f.git(f.source, 'commit', '-qm', 'custom code workflow');
+  f.git(f.source, 'update-ref', 'refs/remotes/origin/main', f.git(f.source, 'rev-parse', 'HEAD'));
+  const peer = join(f.base, 'second-clone');
+  f.git(f.source, 'clone', '--quiet', '--no-local', f.source, peer);
+  f.git(peer, 'remote', 'set-url', 'origin', f.git(f.source, 'remote', 'get-url', 'origin'));
+  const commonDir = cwd => f.git(cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const record = cwd => JSON.parse(readFileSync(join(commonDir(cwd), 'pdd/runs/17/status.json'), 'utf8'));
+  assert.notEqual(commonDir(peer), commonDir(f.source), 'normal clones have independent Git directories');
+  assert.equal(f.git(peer, 'remote', 'get-url', 'origin'), f.git(f.source, 'remote', 'get-url', 'origin'));
+  const first = await f.run();
+  assert.equal(first.exitCode, 0, first.message);
+  const active = f.record(), owned = structuredClone({ workspaces: f.herdr.workspaces, tabs: f.herdr.tabs, panes: f.herdr.panes });
+  assert.equal(f.herdr.paneOf(active.chats[0]).agent.agent_status, 'working');
+
+  const second = await startRun({ name: 'code-only', issue: '17', agent: 'codex', cwd: peer, packageRoot }, f.ports);
+  assert.equal(second.exitCode, 0, second.message);
+  const other = record(peer);
+  assert.notEqual(other.runId, active.runId);
+  assert.notEqual(other.root, active.root);
+  assert.notEqual(other.chats[0].repoWorkspaceId, active.chats[0].repoWorkspaceId);
+  assert.notEqual(other.chats[0].workspaceId, active.chats[0].workspaceId);
+  for (const [source, run] of [[f.source, active], [peer, other]]) {
+    assert.equal(run.sourceRoot, source);
+    assert.equal(run.chats.length, 1);
+    assert.equal(run.state, 'running');
+    assert.equal(run.area, 0);
+    assert.notEqual(run.root, source);
+    assert.ok(f.git(source, 'worktree', 'list', '--porcelain').split('\n').includes(`worktree ${run.root}`));
+    assert.equal(commonDir(run.root), commonDir(source));
+    assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
+    const chat = run.chats[0], pane = f.herdr.paneOf(chat);
+    assert.equal(f.herdr.tabs.find(tab => tab.tab_id === chat.tabId).label, 'code');
+    assert.equal(pane.cwd, run.root);
+    assert.equal(pane.commands.length, 1);
+    assert.match(pane.commands[0], / codex /);
+    assert.equal(pane.agent.agent, 'codex');
+    assert.equal(f.herdr.workspaces.find(w => w.workspace_id === chat.workspaceId).worktree.checkout_path, run.root);
+  }
+  assert.deepEqual(f.record(), active, 'the active peer run is unchanged');
+  for (const [kind, key] of [['workspaces', 'workspace_id'], ['tabs', 'tab_id'], ['panes', 'pane_id']]) {
+    const ids = new Set(owned[kind].map(row => row[key]));
+    assert.deepEqual(f.herdr[kind].filter(row => ids.has(row[key])), owned[kind], `the active peer's ${kind} stay untouched`);
+  }
+  assert.equal(f.herdr.panes.filter(pane => pane.agent).length, 2);
+});
+
 // A real Git primary/linked/bare layout, with Herdr's repository-parent rule.
 async function linkedSourceFixture(t,kind='linked') {
   const f=await fixture(t,{agent:'codex'});let primary=f.source,source=f.source;
