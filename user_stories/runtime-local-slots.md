@@ -5,7 +5,7 @@ I can run several local agents without exceeding my shared runtime limit.
 ## Acceptance criteria
 
 1. Ten parallel local checks with PDD_MAX_JOBS=3 all finish with at most 3 runtime jobs active at once.
-2. Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees.
+2. Tests, remote lint and Simulator setup share an explicit PDD_MAX_JOBS=4 local limit across repositories and worktrees.
 3. pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes.
 4. Stopping a command preserves slots for dispatched jobs that have not been confirmed ended.
 5. Waiting tickets, active owners and claim locks refresh about every 5 seconds; after 60 seconds without refresh, a reused live process ID cannot keep them alive.

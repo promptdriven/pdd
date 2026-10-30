@@ -86,6 +86,7 @@ for (const kind of ['check', 'lint', 'try']) for (const boundary of ['admitted',
   const prior = { id: 'earlier-uncertain', state: 'active', pid: 99, kind: 'check', started_at: made.clock.now, request_ids: ['original-paid-id'] };
   const priorPath = join(directory, `${prior.id}.json`); mem.records.set(priorPath, structuredClone(prior)); mem.times.set(priorPath, made.clock.now);
   made.ports.isAlive = () => true;
+  made.ports.env.PDD_MAX_JOBS = '4';
   const targetKind = kind === 'lint' ? 'lint' : kind;
   let interrupted = false, targetPath, beforePosts;
   const write = mem.files.writeAtomic;
