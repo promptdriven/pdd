@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 607812bf0787395ceaa2fb3f253a0d1f62e7412ddae3e04e4bd2f6a90eb85bda).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: dceba715dc55d8b91d04db2f3d12e4013c8b0a508800876bcd7fa0dea6f8dc49).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -946,7 +946,7 @@ function preparedText(root, visible, path, text, format) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }) {
+function captureOnce(root, { tests, sourceFiles, appMap = null, prepareSource }) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
@@ -1054,6 +1054,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       try { const version=JSON.parse(text)?.schema_version; return typeof version==='string' && version.startsWith('prompt-runtime.program-scenario'); } catch { return true; }
     })])];
     for (const path of selected) add(path, 'Selected test', 'test');
+    if (sourceFiles !== undefined) {
+      if (!Array.isArray(sourceFiles)) throw new PreflightError(4, 'sourceFiles must be an array of repository-relative file paths.');
+      for (const path of sourceFiles) add(path, 'Selected source');
+    }
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
     const storyTests = new Map();
     let siblingsAdded = false;

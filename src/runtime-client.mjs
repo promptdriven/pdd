@@ -898,7 +898,7 @@ function batchRecord(context) {
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
-    contract_snapshots: capture.stories,
+    contract_snapshots: capture.stories, ...(context.sourceOnly ? { source_only: true } : {}),
     rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
@@ -1288,10 +1288,115 @@ function runFiles(cwd, words, options, ports) {
 
 // pdd check --lint: only the server's lint (0 AI calls) on the captured files.
 // Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
+function completeLintProblems(answer, secrets = [], problems = []) {
+  const program = answer?.result?.report?.program;
+  const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
+  for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
+    const reason = cleanText(item.reason, secrets), fix = cleanText(item.fix, secrets);
+    problems.push({ code: cleanText(item.code, secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, secrets) || null,
+      section: cleanText(item.at ?? item.section, secrets) || null,
+      message: cleanText(item.message, secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
+      severity: cleanText(item.severity, secrets) || 'error', pointer: cleanText(item.pointer, secrets) || null,
+      source: cleanText(item.source, secrets) || null });
+  }
+  for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
+    const problem = { code: cleanText(item.code, secrets) || 'lint-refused', path: cleanText(item.path, secrets) || null,
+      section: cleanText(item.section, secrets) || null, message: cleanText(item.message, secrets) || null, hint: null };
+    if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
+  }
+  return problems;
+}
+
+// This judgment has no Story rows. Its evidence is the confirmed source receipt.
+function printSourceLint(context, lint) {
+  const { ports, capture, secrets = [] } = context, answer = lint.answer, program = answer?.result?.report?.program;
+  const problems = completeLintProblems(answer, secrets);
+  const refusals = projectAnswer(answer ?? {}, { origin: context.origin, secrets }).refusals;
+  for (const item of [...(lint.refusal ? [lint.refusal] : []), ...refusals]) {
+    if (!problems.some(problem => problem.code === item.code && problem.message === item.message)) problems.push({ ...item, path: null });
+  }
+  const usable = isObject(program) && Array.isArray(program.prompts);
+  const selected = new Set(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')));
+  const admitted = new Map((usable ? program.prompts : []).filter(isObject).map(prompt => [prompt.path, prompt]));
+  const refused = new Set((Array.isArray(program?.refused_prompts) ? program.refused_prompts : []).filter(isObject).map(prompt => prompt.path));
+  let promptRefused = false;
+  if (usable) for (const path of selected) {
+    const prompt = admitted.get(path), state = prompt?.admission_state ?? prompt?.state;
+    if (refused.has(path) || !['approved', 'draft'].includes(state)) {
+      promptRefused = true;
+      if (!problems.some(problem => problem.path === path && problem.severity !== 'warning')) problems.push({
+        code: prompt ? `interface-${cleanText(state, secrets) || 'unapproved'}` : 'unknown-target', path,
+        section: 'lint', message: `${path} has no accepted admission in the lint report.`,
+      });
+    }
+  }
+  const canonicalErrors = problems.some(problem => problem.severity && problem.severity !== 'warning');
+  let state = 'unknown', exitCode = 3;
+  if (lint.kind === 'not_run' || lint.kind === 'stop') { state = 'not_run'; exitCode = 5; }
+  else if (!context.interrupted && (lint.kind === 'pending' || ['queued', 'running'].includes(answer?.state))) state = answer.state;
+  else if (!context.interrupted && (lint.kind === 'refused' || ['failed', 'refused'].includes(answer?.state)
+    || ['passed', 'failed', 'refused'].includes(answer?.state) && (canonicalErrors || refusals.length || promptRefused))) { state = 'refused'; exitCode = 4; }
+  else if (!context.interrupted && lint.kind === 'answer' && answer?.state === 'passed' && usable) { state = 'passed'; exitCode = 0; }
+  Object.assign(context.lint, { state, pending: ['queued', 'running'].includes(state), unknown: state === 'unknown' });
+  if (lint.refusal) context.lint.refusal = lint.refusal;
+  if (lint.note) context.lint.note = lint.note;
+  saveBatch(context);
+  const summary = `No tests yet. Source lint ${state}. 0 AI calls. No checks were sent.`;
+  const result = { batch: context.batch, repo: context.root, source_sha256: capture.sha256, exit_code: exitCode,
+    lint_state: state, summary_line: summary, coverage: context.coverage, problems, rows: [], warnings: context.warnings ?? [] };
+  if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
+  if (lint.note?.message) line(ports.stderr, cleanText(lint.note.message, secrets));
+  if (context.json) line(ports.stdout, JSON.stringify(result));
+  else {
+    for (const problem of problems) line(ports.stdout, [problem.code, problem.path, problem.section, problem.pointer, problem.message].filter(Boolean).join('  '));
+    line(ports.stdout, summary);
+    line(ports.stdout, coverageText(context.coverage));
+  }
+  if (exitCode === 3) line(ports.stderr, `Read the result later with: pdd check --read ${context.batch}`);
+  return exitCode;
+}
+
+async function readSourceLint(context) {
+  const id = context.lint?.request_ids?.at(-1);
+  let answer = id && context.store.read(join(context.folder, `${id}.json`));
+  if (!id) return printSourceLint(context, context.lint?.state === 'not_run'
+    ? { kind: 'not_run', note: context.lint.note } : { kind: 'unknown' });
+  if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
+    if (context.lint.refusal) return printSourceLint(context, { kind: 'refused', refusal: context.lint.refusal });
+    if (context.lint.note && context.lint.state === 'not_run') return printSourceLint(context, { kind: 'not_run', note: context.lint.note });
+    const remaining = context.deadline - context.ports.now();
+    if (context.interrupted || remaining <= 0) return printSourceLint(context, { kind: 'unknown' });
+    const read = judgeGet(await context.runtime.get(id, Math.min(GET_MS, remaining)), id, 'lint');
+    if (read.kind === 'blocked') throw new Stop(5, read.message);
+    if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
+    if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
+    answer = read.kind === 'state' ? read.answer : null;
+    if (answer) saveAnswer(context, id, answer);
+  }
+  if (answer) await finishReservation(context, context.lint, answer);
+  return printSourceLint(context, { kind: answer ? 'answer' : 'unknown', answer });
+}
+
+function presentSourceCandidate(root, path) {
+  const parts = path.split('/');
+  // A missing leaf behind a symlink or other unsafe ancestor must reach capture.
+  for (let index = 1; index < parts.length; index++) {
+    const parent = statOrNull(join(root, ...parts.slice(0, index)));
+    if (parent && !parent.isDirectory()) return true;
+  }
+  return !!statOrNull(join(root, path));
+}
+
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
-  const selected = select(found, normalized, root);
+  const sourceFiles = !found.tests.length && !normalized.length ? gitFiles(root).filter(path =>
+    (path === 'product/map.md' || path === 'product/plan.md' || /^contracts\/.*\.(?:md|json)$/.test(path)
+      || path.endsWith('.prompt.md') || /^prompts\/(?:.*\/)?seed\.json$/.test(path)) && presentSourceCandidate(root, path)) : [];
+  const sourceOnly = sourceFiles.length > 0;
+  const selected = sourceOnly ? [] : select(found, normalized, root);
+  context.sourceOnly = sourceOnly;
   context.coverage = bindingCoverage({ root, found, selected });
+  let capture = sourceOnly ? ports.captureSource(root, { tests: [], sourceFiles, appMap: null }) : null;
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
@@ -1312,13 +1417,15 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     const seen = new Set();
     return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
   });
-  if (limitRows.some(row => row.refusals.length)) {
+  const sourceLimits = sourceOnly ? capture.files.filter(file => file.path.endsWith('.prompt.md')).flatMap(file => limitsFor(file.path, new Set())) : [];
+  if (sourceLimits.length || limitRows.some(row => row.refusals.length)) {
     const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
     const problems = [];
-    for (const problem of refusedRows.flatMap(row => row.refusals)) {
+    for (const problem of [...sourceLimits, ...refusedRows.flatMap(row => row.refusals)]) {
       if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
     }
-    const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
+    const summary = sourceOnly ? 'No tests yet. Lint refused local Runtime limits. 0 AI calls. No checks were sent.'
+      : 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
       coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
     else {
@@ -1332,7 +1439,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     }
     return 4;
   }
-  const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  capture ??= ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   const drift=[];
   try {
@@ -1357,6 +1464,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   saveBatch(context);
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context, true);
+  if (sourceOnly) return printSourceLint(context, lint);
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
     for (const row of rows) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', note: { code: 'lint-pending', message: pendingLintMessage(context, lint.answer) } });
     saveBatch(context); throw new Stop(3, pendingLintMessage(context, lint.answer)); }
@@ -1374,20 +1482,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   if (!problems.length && (context.interrupted || lint.kind === 'unknown' || !['passed', 'failed', 'refused'].includes(answer?.state) || !isObject(program))) {
     throw new Stop(3, 'The lint result is unknown. Run pdd check --lint again; a lint uses no AI calls.');
   }
-  const canonical = Array.isArray(answer?.result?.problems) ? answer.result.problems : answer?.result?.report?.problems;
-  for (const item of Array.isArray(canonical) ? canonical.filter(isObject) : []) {
-    const reason = cleanText(item.reason, context.secrets), fix = cleanText(item.fix, context.secrets);
-    problems.push({ code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.file ?? item.path, context.secrets) || null,
-      section: cleanText(item.at ?? item.section, context.secrets) || null,
-      message: cleanText(item.message, context.secrets) || [reason, fix].filter(Boolean).join(' ') || null, hint: null,
-      severity: cleanText(item.severity, context.secrets) || 'error', pointer: cleanText(item.pointer, context.secrets) || null,
-      source: cleanText(item.source, context.secrets) || null });
-  }
-  for (const item of isObject(program) && Array.isArray(program.refused_prompts) ? program.refused_prompts.filter(isObject) : []) {
-    const problem = { code: cleanText(item.code, context.secrets) || 'lint-refused', path: cleanText(item.path, context.secrets) || null,
-      section: cleanText(item.section, context.secrets) || null, message: cleanText(item.message, context.secrets) || null, hint: null };
-    if (!problems.some(p => p.code === problem.code && p.path === problem.path && p.section === problem.section)) problems.push(problem);
-  }
+  completeLintProblems(answer, context.secrets, problems);
   const verdicts = isObject(program) ? judgeLint(answer, rows, root, found.visible, context.secrets) : new Map();
   for (const [row, problem] of verdicts) {
     Object.assign(row, { state: 'refused', refusals: [problem] });
@@ -1575,6 +1670,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
+  if (saved.source_only === true && saved.intent === 'lint-only' && saved.rows.length === 0) {
+    Object.assign(context, { sourceOnly: true, rows: [], reading: true });
+    return readSourceLint(context);
+  }
   const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
