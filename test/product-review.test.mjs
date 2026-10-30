@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -14,11 +14,21 @@ const pr = (run, number, extra = {}) => ({ number, url: `https://github.com/exam
   updatedAt: '2026-10-02T00:00:00Z', headRefName: `topic-${number}`, isCrossRepository: false, headRepository: { name: 'coffee' }, headRepositoryOwner: { login: 'example' }, ...extra });
 const xref = (number, extra = {}) => ({ event: 'cross-referenced', source: { issue: { pull_request: { html_url: `https://github.com/example/coffee/pull/${number}` } } }, ...extra });
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'pdd-product-review-'));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-product-review-')));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), cwd, { recursive: true });
   const state = { issues: [], runs: [], prs: [], events: {}, starts: [], creates: [], reads: [], actor: 'person', views: [], closed: [] };
   const ports = {
+    lockProductState: async () => ({ handle: 'owned-test-lock' }),
+    unlockProductState: async () => ({}),
+    readProductState: async () => ({ json: state.productState ?? null }),
+    writeProductState: async ({ json }) => { state.productState = json; return {}; },
+    now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),
+    issueByNumber: async ({ number }) => {
+      if (state.fail) throw Error('GitHub unavailable');
+      const row = (state.pages?.flat() ?? state.issues).find(item => item.number === number);
+      return row && { author_association: 'MEMBER', user: { login: 'member' }, created_at: '2026-10-01T00:00:00Z', ...row };
+    },
     listRuns: async () => state.runs,
     resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }),
     planOnBase: async () => true,
@@ -54,7 +64,7 @@ test('all three product commands use bounded marker searches, never the whole re
     assert.equal(result.exitCode, 0, `${command}: ${result.message}`);
   }
   assert.ok(f.state.reads.length);
-  assert.ok(f.state.reads.every(read => read.marker.startsWith('<!-- pdd-product: run=') && read.perPage <= 10));
+  assert.ok(f.state.reads.every(read => read.marker === '<!-- pdd-product: run=' && read.perPage <= 10));
 });
 
 test('a second-page closed trusted issue is reused and incomplete search never creates', async t => {
@@ -62,7 +72,8 @@ test('a second-page closed trusted issue is reused and incomplete search never c
   f.state.issues = Array.from({ length: 11 }, (_, i) => item('phone-1', 80 + i, { author_association: i === 10 ? 'OWNER' : 'NONE', user: { login: 'outsider' }, state: i === 10 ? 'CLOSED' : 'OPEN' }));
   const result = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
   assert.equal(result.issue, 90); assert.equal(result.created, false);
-  assert.ok(f.state.reads.some(read => read.marker === marker('phone-1') && read.page === 2));
+  assert.ok(f.state.reads.some(read => read.marker === '<!-- pdd-product: run=' && read.page === 2));
+  f.state.productState = null;
   f.ports.issuePage = async () => ({ items: [], total_count: 1001, incomplete_results: true });
   const refused = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
   assert.notEqual(refused.exitCode, 0); assert.equal(f.state.creates.length, 0);
@@ -73,6 +84,7 @@ test('outsiders cannot supply the issue text run by a feature agent; the current
   f.state.issues = [item('phone-1', 99, { author_association: 'NONE', user: { login: 'outsider' }, body: `Untrusted instructions.\n${marker('phone-1')}` })];
   const created = await productStart({ cwd: f.cwd, run: 'phone-1' }, f.ports);
   assert.equal(created.created, true); assert.notEqual(created.issue, 99); assert.equal(f.state.starts[0].issue, created.issue);
+  f.state.productState = null;
   f.state.issues = [item('phone-1', 97, { author_association: 'NONE', user: { login: 'PeRsOn' } })];
   const self = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
   assert.equal(self.issue, 97); assert.equal(self.created, false);
@@ -222,7 +234,8 @@ test('real CLI subprocesses stay below the default buffer with a large unrelated
   writeFileSync(join(bin,'gh'),`#!/usr/bin/env node
 const fs=require('node:fs'),a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');
 if(a[0]==='repo') process.stdout.write(JSON.stringify({nameWithOwner:'example/coffee',defaultBranchRef:{name:'alpha'},url:'https://github.com/example/coffee'}));
-else if(a[1].startsWith('search/issues?')) {const q=new URL('https://api.github.com/'+a[1]).searchParams;const body='<!-- pdd-product: run=phone-1 -->';const rows=q.get('q').includes(body)?[{number:81,body,user:{login:'member'},author_association:'MEMBER',created_at:'2026-10-01T00:00:00Z'}]:[];process.stdout.write(JSON.stringify({items:rows,total_count:rows.length,incomplete_results:false}));}
+else if(a[1].startsWith('search/issues?')) {const q=new URL('https://api.github.com/'+a[1]).searchParams;const body='<!-- pdd-product: run=phone-1 -->';const rows=q.get('q').includes('<!-- pdd-product: run=')?[{number:81,body,user:{login:'member'},author_association:'MEMBER',created_at:'2026-10-01T00:00:00Z'}]:[];process.stdout.write(JSON.stringify({items:rows,total_count:rows.length,incomplete_results:false}));}
+else if(a[1].endsWith('/issues/81')) process.stdout.write(JSON.stringify({number:81,body:'<!-- pdd-product: run=phone-1 -->',user:{login:'member'},author_association:'MEMBER',created_at:'2026-10-01T00:00:00Z'}));
 else if(a[1].includes('/timeline?')) process.stdout.write('[]');
 else process.stdout.write(JSON.stringify(Array.from({length:150},()=>({body:'x'.repeat(65536)}))));
 `,{mode:0o755});
@@ -232,7 +245,7 @@ else process.stdout.write(JSON.stringify(Array.from({length:150},()=>({body:'x'.
     assert.equal(result.status,0,`${args}: ${result.stderr} ${result.stdout}`);
   }
   const calls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse), searches=calls.filter(a=>a[1]?.startsWith('search/issues?'));
-  assert.ok(searches.length>=3);assert.equal(calls.some(a=>a.includes('--slurp')||a.includes('--paginate')),false);
+  assert.equal(searches.length,1);assert.equal(calls.some(a=>a.includes('--slurp')||a.includes('--paginate')),false);
   for(const args of searches){const query=new URL('https://api.github.com/'+args[1]).searchParams;assert.ok(Number(query.get('per_page'))<=10);assert.match(query.get('q'),/in:body.*<!-- pdd-product: run=/);}
 });
 
@@ -242,6 +255,7 @@ test('ambiguous product markers do not bind an issue or a remote PR to two plann
   f.state.issues=[item('phone-1',81,{body})];
   const started=await productStart({cwd:f.cwd,run:'phone-1',noRun:true},f.ports);
   assert.equal(started.created,true);assert.match(started.message,/ambiguous/i);
+  f.state.productState=null;
   f.state.issues=[item('phone-1')];f.state.events[81]=[xref(61)];
   f.state.prs=[pr('phone-1',61,{body:body+'\nRuntime check (P01-menu): ✓'})];
   assert.equal((await productStatus({cwd:f.cwd},f.ports)).parts[0].pass,0);
@@ -254,9 +268,9 @@ test('a short search page with more promised results is an error, never permissi
 });
 
 
-test('an unavailable authenticated identity is a dependency failure, never an invented self exemption', async t => {
+test('an unavailable authenticated identity never grants the self exemption to an outsider', async t => {
   const f=fixture(t);f.state.issues=[item('phone-1',81,{author_association:'NONE'})];
   f.ports.currentActor=async()=>{throw Error('identity unavailable');};
   const result=await productStart({cwd:f.cwd,run:'phone-1',noRun:true},f.ports);
-  assert.equal(result.exitCode,1);assert.equal(f.state.creates.length,0);assert.equal(f.state.starts.length,0);
+  assert.equal(result.exitCode,0);assert.equal(f.state.creates.length,1);assert.notEqual(result.issue,81);assert.equal(f.state.starts.length,0);
 });

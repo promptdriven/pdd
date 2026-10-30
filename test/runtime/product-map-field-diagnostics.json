@@ -1,0 +1,427 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/product-map-field-diagnostics.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "When a screen is missing prompt_path, Try names prompt_path in its error."
+    },
+    {
+      "id": "AC2",
+      "text": "When a screen is missing operation, Try names operation in its error."
+    },
+    {
+      "id": "AC3",
+      "text": "When a screen is missing source, Try names source in its error."
+    },
+    {
+      "id": "AC4",
+      "text": "When a screen is missing format, Try names format in its error."
+    },
+    {
+      "id": "AC5",
+      "text": "When a screen is missing input, Try names input in its error."
+    },
+    {
+      "id": "AC6",
+      "text": "When a screen is missing result_pointer, Try names result_pointer in its error."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/missing-prompt_path/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-prompt_path/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-operation/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-operation/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-operation/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-operation/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-operation/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-operation/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-operation/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-operation/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-source/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-source/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-source/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-source/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-source/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-source/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-source/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-source/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-format/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-format/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-format/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-format/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-format/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-format/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-format/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-format/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-input/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-input/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-input/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-input/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-input/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-input/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-input/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-input/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/missing-result_pointer/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "missing-prompt_path",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-prompt_path",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "prompt_path"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    },
+    {
+      "step_id": "missing-operation",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-operation",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "operation"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    },
+    {
+      "step_id": "missing-source",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-source",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "source"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    },
+    {
+      "step_id": "missing-format",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-format",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "format"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    },
+    {
+      "step_id": "missing-input",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-input",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "input"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    },
+    {
+      "step_id": "missing-result_pointer",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/missing-result_pointer",
+        "parts": [
+          "phone"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "result_pointer"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    }
+  ]
+}

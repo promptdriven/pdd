@@ -1,10 +1,10 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 6886c6719232947b316ad2d63fb17464086186e7377ef1eff180115b298fa602).
+// Generated from prompts/cli/product.prompt.md.
 import { execFile as execute } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { listRuns } from './workflow-runs.mjs';
 import { runtimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
@@ -15,6 +15,9 @@ const ordinary = promisify(execute);
 const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
 const clean = value => String(value ?? '').trim().replace(/^`(.*)`$/, '$1');
 const csv = value => !value || value === '-' ? [] : value.split(',').map(clean).filter(Boolean);
+const comparisonBases = Symbol('comparisonBases');
+const productPrefix = '<!-- pdd-product: run=';
+const canonicalRoot = cwd => { try { return realpathSync(cwd); } catch { return resolve(cwd); } };
 const marker = run => `<!-- pdd-product: run=${run} -->`;
 const columns = {
   Parts: ['Part', 'Folder', 'What it is'], Stories: ['Id', 'Part', 'Story', 'Tag'],
@@ -56,6 +59,79 @@ const portsFor = given => {
     ['api', `repos/${repository}/issues/${issue}/timeline?per_page=${perPage}&page=${page}`, '--jq', '[.[]|{event,source:{issue:{pull_request:{html_url:.source.issue.pull_request.html_url}}}}]']));
   p.pullRequest ??= async ({ cwd, repository, number }) => parse(await command(p, cwd, 'gh', ['pr', 'view', String(number), '--repo', repository, '--json',
     'number,url,body,state,isDraft,updatedAt,headRefName,isCrossRepository,headRepository,headRepositoryOwner']));
+  p.issueByNumber ??= async ({ cwd, repository, number }) => {
+    let reply;
+    try { reply = await p.execFile('gh', ['api', `repos/${repository}/issues/${number}`, '--include'], { cwd }); }
+    catch (error) { reply = error; }
+    const text = typeof reply?.stdout === 'string' ? reply.stdout : '';
+    const header = /^HTTP\/[\d.]+\s+(\d+)[^\r\n]*\r?\n/.exec(text);
+    if (header) {
+      const split = /\r?\n\r?\n/.exec(text), body = split ? text.slice(split.index + split[0].length) : '';
+      const status = Number(header[1]);
+      if (status >= 200 && status < 300) return parse(body);
+      let value; try { value = JSON.parse(body); } catch {}
+      return { status, message: typeof value?.message === 'string' ? value.message : 'GitHub issue lookup failed.' };
+    }
+    if (reply?.code !== undefined && reply.code !== 0 || reply instanceof Error) throw Error('GitHub issue lookup is unavailable.');
+    return parse(text);
+  };
+  p.now ??= async () => ({ milliseconds: Date.now() });
+  const scopes = new Map();
+  const statePath = input => {
+    const key = `${input.cwd}\0${input.repository.toLowerCase()}`;
+    if (!scopes.has(key)) scopes.set(key, (async () => {
+      const common = (await command(p, input.cwd, 'git', ['rev-parse', '--git-common-dir'])).trim();
+      if (!common) throw Error('The Git common directory is unavailable.');
+      const directory = join(canonicalRoot(isAbsolute(common) ? common : resolve(input.cwd, common)), 'pdd', 'products');
+      const name = createHash('sha256').update(input.repository.toLowerCase()).digest('hex');
+      return join(directory, `${name}.json`);
+    })());
+    return scopes.get(key);
+  };
+  p.readProductState ??= async input => {
+    const path = await statePath(input);
+    try { return { json: await readFile(path, 'utf8') }; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    // Only import legacy folder files until the common-directory v2 exists.
+    let names; try { names = await readdir(dirname(path)); } catch (error) { if (error.code === 'ENOENT') return { json: null }; throw error; }
+    const merged = { version: 2, repository: input.repository, bindings: [] };
+    for (const name of names.filter(name => /^[0-9a-f]{64}\.json$/.test(name))) {
+      let old; try { old = JSON.parse(await readFile(join(dirname(path), name), 'utf8')); } catch { continue; }
+      if (old?.version !== 1 || !sameRepo(old.repository, input.repository) || typeof old.productRoot !== 'string' || !Array.isArray(old.bindings)) continue;
+      const legacyKey = createHash('sha256').update(`${old.repository.toLowerCase()}\0${canonicalRoot(old.productRoot)}`).digest('hex');
+      if (name !== `${legacyKey}.json`) continue;
+      for (const row of old.bindings) if (!merged.bindings.some(saved => saved.run === row.run && saved.issue === row.issue)) merged.bindings.push(row);
+      if (old.search && (!merged.search || old.search.at > merged.search.at)) merged.search = old.search;
+    }
+    return { json: merged.bindings.length || merged.search ? JSON.stringify({ ...merged, version: 1, productRoot: input.cwd }) : null };
+  };
+  p.writeProductState ??= async input => {
+    const path = await statePath(input), temporary = `${path}.${randomUUID()}.tmp`;
+    await mkdir(dirname(path), { recursive: true });
+    try { await writeFile(temporary, input.json, { flag: 'wx', mode: 0o600 }); await rename(temporary, path); }
+    finally { await rm(temporary, { force: true }); }
+    return {};
+  };
+  const locks = new Map();
+  p.lockProductState ??= async input => {
+    const path = `${await statePath(input)}.lock`, until = Date.now() + 10000;
+    await mkdir(dirname(path), { recursive: true });
+    for (;;) {
+      try {
+        const file = await open(path, 'wx', 0o600), handle = randomUUID();
+        locks.set(handle, { file, path }); return { handle };
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        if (Date.now() >= until) throw Error('Product state is busy; try the command again.');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+    }
+  };
+  p.unlockProductState ??= async ({ handle }) => {
+    const lock = locks.get(handle); if (!lock) throw Error('Product state lock is not owned by this command.');
+    try { await lock.file.close(); await rm(lock.path); } finally { locks.delete(handle); }
+    return {};
+  };
   p.currentActor ??= async ({ cwd }) => parse(await command(p, cwd, 'gh', ['api', 'user', '--jq', '{login}']));
   const owned = new Map();
   p.openBaseSource ??= input => openBaseSource(input, p, owned);
@@ -156,40 +232,158 @@ const canonicalPr = (url, repository, number) => {
   return !!found && sameRepo(found[1], repository) && Number(found[2]) === number;
 };
 const pageSize = 10;
-async function issues(p, cwd, repository, run, actor, warning) {
-  const found = new Map();
-  for (let page = 1; ; page++) {
-    const response = await p.issuePage({ cwd, repository, marker: marker(run), page, perPage: pageSize });
-    if (!response || !Array.isArray(response.items) || response.items.length > pageSize || !Number.isSafeInteger(response.total_count)
-      || response.total_count < 0 || response.total_count > 1000 || response.incomplete_results !== false
-      || response.items.length !== Math.min(pageSize, Math.max(0, response.total_count - (page - 1) * pageSize)))
-      invalid(`GitHub returned an incomplete issue search for ${run}.`);
-    for (const issue of response.items) {
-      if (!issue || !Number.isSafeInteger(issue.number) || issue.number < 1) invalid(`GitHub returned an invalid issue for ${run}.`);
-      if (typeof issue.body === 'string' && issue.body.includes(marker(run)) && !issue.pull_request) {
-        const markers = new Set(issue.body.match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? []);
-        if (markers.size > 1) warning.push(`Warning: Ignored issue #${issue.number} with ambiguous planned-run markers.`);
-        else found.set(issue.number, issue);
-      }
+async function issueLookup(p, cwd, repository, localRuns, warning) {
+  const scope = { cwd, repository }, migration = Symbol('legacy-state');
+  const decode = reply => {
+    if (!reply || !(reply.json === null || typeof reply.json === 'string')) invalid('Invalid local product state.');
+    if (reply.json === null) return { version: 2, repository, bindings: [] };
+    let value; try { value = JSON.parse(reply.json); } catch { invalid('Invalid local product state JSON.'); }
+    if (!value || ![1, 2].includes(value.version) || !Array.isArray(value.bindings)
+        || value.bindings.some(row => !row || typeof row.run !== 'string' || !row.run || !Number.isSafeInteger(row.issue) || row.issue < 1)
+        || new Set(value.bindings.map(row => `${row.run}\0${row.issue}`)).size !== value.bindings.length)
+      invalid('Invalid local product bindings.');
+    if (!sameRepo(value.repository, repository)) {
+      if (value.bindings.length) invalid('Foreign local product bindings.');
+      return { version: 2, repository, bindings: [] };
     }
-    if (page * pageSize >= response.total_count) break;
-  }
-  const trusted = [];
-  for (const issue of found.values()) {
-    let accept = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(issue.author_association);
-    if (!accept && typeof issue.user?.login === 'string') accept = sameRepo(issue.user.login, await actor());
-    if (accept) trusted.push(issue);
-    else warning.push(`Warning: Ignored untrusted issue #${issue.number} for ${run}.`);
-  }
-  const time = issue => Date.parse(issue.created_at) || 0;
-  trusted.sort((a, b) => time(a) - time(b) || a.number - b.number);
-  if (trusted.length > 1) warning.push(`Warning: Multiple trusted issues name ${run}; using oldest issue #${trusted[0].number}.`);
-  return trusted[0] ?? null;
+    return { version: 2, repository, bindings: value.bindings, ...(value.search ? { search: value.search } : {}), [migration]: value.version === 1 };
+  };
+  let state = decode(await p.readProductState(scope));
+  const time = (await p.now()).milliseconds;
+  if (!Number.isFinite(time)) invalid('Invalid product clock.');
+  const mutate = async ({ upsert, remove, search }) => {
+    const lock = await p.lockProductState(scope);
+    if (!lock || typeof lock.handle !== 'string' || !lock.handle) invalid('Invalid product state lock.');
+    try {
+      const latest = decode(await p.readProductState(scope));
+      const commitTime = search ? (await p.now()).milliseconds : time;
+      if (!Number.isFinite(commitTime)) invalid('Invalid product clock.');
+      if (remove) latest.bindings = latest.bindings.filter(row => row.run !== remove.run || row.issue !== remove.issue);
+      if (upsert) latest.bindings = [...latest.bindings.filter(row => row.run !== upsert.run), upsert];
+      if (search && (!Number.isFinite(latest.search?.at) || latest.search.at > commitTime || !Array.isArray(latest.search.items)
+          || latest.search.items.length > 1000 || !latest.search.items.every(rawIssue) || search.at > latest.search.at)) latest.search = search;
+      delete latest[migration];
+      await p.writeProductState({ ...scope, json: JSON.stringify(latest) }); state = latest;
+    } finally { await p.unlockProductState({ handle: lock.handle }); }
+  };
+  const bind = async (run, number) => {
+    if (!state[migration] && state.bindings.filter(row => row.run === run).length === 1 && state.bindings.some(row => row.run === run && row.issue === number)) return;
+    await mutate({ upsert: { run, issue: number } });
+  };
+  let actorPromise;
+  const actor = () => actorPromise ??= Promise.resolve().then(() => p.currentActor({ cwd })).then(reply =>
+    typeof reply?.login === 'string' && reply.login.trim() ? reply.login : null).catch(() => null);
+  const trust = async issue => {
+    if (['OWNER', 'MEMBER', 'COLLABORATOR'].includes(issue.author_association)) return 'trusted';
+    const login = await actor();
+    return login === null ? 'unavailable' : typeof issue.user?.login === 'string' && sameRepo(login, issue.user.login) ? 'trusted' : 'untrusted';
+  };
+  const valid = (issue, run, number) => issue && Number.isSafeInteger(issue.number) && issue.number > 0
+    && (number === undefined || issue.number === number) && typeof issue.body === 'string' && !issue.pull_request
+    && (!issue.repository_url || sameRepo(issue.repository_url, `https://api.github.com/repos/${repository}`))
+    && ownProductMarker(issue.body, run);
+  const localFor = (number, run) => localRuns.find(record => record.number === number
+    && (record.workflow === undefined || record.workflow === 'feature')
+    && (record.productMarker === undefined || record.productMarker === marker(run)));
+  const direct = new Map(), excluded = new Map();
+  const excludedFor = run => { if (!excluded.has(run)) excluded.set(run, new Set()); return excluded.get(run); };
+  const failure = (run, number, reason, confirmed) => {
+    warning.push(`Warning: Issue #${number} for ${run} is unverified: ${reason}. Run pdd product start ${run} to link it again.`);
+    return { issue: { number }, unverified: true, reason, confirmed };
+  };
+  const inspect = async (run, number) => {
+    let issue;
+    try { issue = await p.issueByNumber({ ...scope, number }); }
+    catch { return failure(run, number, 'GitHub issue lookup is unavailable', false); }
+    let reason, confirmed = false;
+    if (issue && Number.isInteger(issue.status) && typeof issue.message === 'string') {
+      confirmed = issue.status === 404; reason = confirmed ? 'the saved issue is gone (404)' : `GitHub returned HTTP ${issue.status}`;
+    } else if (!issue || issue.number !== number || typeof issue.body !== 'string') reason = 'GitHub returned a malformed issue';
+    else if (!valid(issue, run, number)) { confirmed = true; reason = 'the issue repository or planned-run marker no longer matches'; }
+    else {
+      const verdict = await trust(issue);
+      if (verdict === 'trusted') return { issue, local: localFor(number, run), unverified: false };
+      confirmed = verdict === 'untrusted'; reason = confirmed ? 'the issue author is untrusted' : 'the authenticated account is unavailable';
+    }
+    if (confirmed) {
+      excludedFor(run).add(number);
+      await mutate({ remove: { run, issue: number } });
+    }
+    return failure(run, number, reason, confirmed);
+  };
+  const bound = async (run, repair = false) => {
+    if (direct.has(run)) return direct.get(run);
+    const numbers = new Set([
+      ...state.bindings.filter(row => row.run === run).map(row => row.issue),
+      ...localRuns.filter(record => record.workflow === 'feature' && record.productMarker === marker(run)).map(record => record.number),
+    ].filter(number => Number.isSafeInteger(number) && number > 0 && !excludedFor(run).has(number)));
+    const candidates = [], failed = [];
+    for (const number of numbers) {
+      const candidate = await inspect(run, number);
+      (candidate.unverified ? failed : candidates).push(candidate);
+    }
+    candidates.sort((a, b) => Number(!!b.local) - Number(!!a.local)
+      || (Date.parse(a.issue.created_at) || 0) - (Date.parse(b.issue.created_at) || 0) || a.issue.number - b.issue.number);
+    let result = candidates[0] ?? failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
+    if (result && !result.unverified) {
+      if (candidates.length > 1) warning.push(`Warning: Multiple saved issues name ${run}; using issue #${result.issue.number}.`);
+      await bind(run, result.issue.number);
+    }
+    direct.set(run, result); return result;
+  };
+  const cached = state.search;
+  const rawIssue = issue => issue && Number.isSafeInteger(issue.number) && issue.number > 0 && typeof issue.body === 'string';
+  let snapshot = cached && Number.isFinite(cached.at) && time >= cached.at && time - cached.at < 60000
+    && Array.isArray(cached.items) && cached.items.length <= 1000 && cached.items.every(rawIssue) ? cached.items : null;
+  let fresh = false;
+  const refresh = async () => {
+    if (fresh) return;
+    const found = new Map();
+    for (let page = 1; ; page++) {
+      const response = await p.issuePage({ ...scope, marker: productPrefix, page, perPage: pageSize });
+      if (!response || !Array.isArray(response.items) || response.items.length > pageSize || !Number.isSafeInteger(response.total_count)
+        || response.total_count < 0 || response.total_count > 1000 || response.incomplete_results !== false
+        || response.items.length !== Math.min(pageSize, Math.max(0, response.total_count - (page - 1) * pageSize)))
+        invalid('GitHub returned an incomplete product issue search.');
+      for (const issue of response.items) { if (!rawIssue(issue)) invalid('GitHub returned an invalid product issue.'); found.set(issue.number, issue); }
+      if (page * pageSize >= response.total_count) break;
+    }
+    snapshot = [...found.values()]; fresh = true;
+    await mutate({ search: { at: time, items: snapshot } });
+  };
+  const select = async (run, repair) => {
+    const trusted = [], failed = [];
+    for (const saved of snapshot) {
+      if (excludedFor(run).has(saved.number) || typeof saved.body !== 'string' || !saved.body.includes(marker(run)) || saved.pull_request) continue;
+      if (!ownProductMarker(saved.body, run)) { warning.push(`Warning: Ignored issue #${saved.number} with ambiguous planned-run markers.`); continue; }
+      if (!fresh && await trust(saved) !== 'trusted') { warning.push(`Warning: Ignored untrusted issue #${saved.number} for ${run}.`); continue; }
+      if (!fresh) {
+        const candidate = await inspect(run, saved.number);
+        if (candidate.unverified) { failed.push(candidate); continue; }
+        trusted.push(candidate.issue);
+      } else if (valid(saved, run, saved.number) && await trust(saved) === 'trusted') trusted.push(saved);
+      else warning.push(`Warning: Ignored untrusted issue #${saved.number} for ${run}.`);
+    }
+    trusted.sort((a, b) => Number(!!localFor(b.number, run)) - Number(!!localFor(a.number, run))
+      || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
+    if (trusted.length > 1) warning.push(`Warning: Multiple trusted issues name ${run}; using issue #${trusted[0].number}.`);
+    if (!trusted.length) return failed.find(row => !row.confirmed) ?? (repair ? null : failed[0]) ?? null;
+    await bind(run, trusted[0].number);
+    return { issue: trusted[0], local: localFor(trusted[0].number, run), unverified: false };
+  };
+  return { bound, bind, async find(run, create = false) {
+    const known = await bound(run, create); if (known) return known;
+    if (snapshot === null) await refresh();
+    let selected = await select(run, create);
+    if (!selected && create && !fresh) { await refresh(); selected = await select(run, create); }
+    return selected;
+  } };
+
 }
 const ownProductMarker = (body, run) => new Set(body.match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? []).size === 1
   && body.split(/\r?\n/).some(line => line === marker(run));
 function eligiblePr(pr, number, repository, run, local, warning) {
-  const reject = () => { warning.push(`Warning: PR #${number} could not be verified as ${run}'s PR.`); return false; };
+  const reject = () => { if (typeof pr?.body === 'string' && pr.body.split(/\r?\n/).includes(marker(run))) warning.push(`Warning: PR #${number} could not be verified as ${run}'s PR.`); return false; };
   if (!pr || pr.number !== number || typeof pr.body !== 'string' || !['OPEN', 'MERGED', 'CLOSED'].includes(pr.state)
     || !canonicalPr(pr.url, repository, number)) return reject();
   const [owner, name] = repository.split('/');
@@ -245,20 +439,20 @@ function cycles(product) {
   }
   return [...new Set(warnings)];
 }
-async function progress(input, given) {
+async function progress(input, given, target) {
   const p = portsFor(given), { product } = await documents(input, p), cwd = input.cwd;
   const localRuns = await p.listRuns({ cwd }), repo = await p.resolveRepository({ cwd });
   const parent = localRuns.find(run => run.workflow === 'product'), warning = cycles(product), views = new Map();
   const planReady = product.runs.some(run => run.needs.includes('plan PR')) ? await basePlan(p, { cwd, baseBranch: parent?.baseBranch ?? repo.defaultBranch }) : true;
-  let actorPromise;
-  const actor = () => actorPromise ??= Promise.resolve(p.currentActor({ cwd })).then(reply => {
-    if (typeof reply?.login !== 'string' || !reply.login.trim()) throw Error('GitHub did not identify the authenticated account.');
-    return reply.login;
-  });
+  const lookup = await issueLookup(p, cwd, repo.repository, localRuns, warning);
+  const targetBound = target ? await lookup.bound(target, true) : null;
+  const plannedRuns = targetBound ? product.runs.filter(run => run.run === target) : product.runs;
+  for (const run of plannedRuns) await lookup.bound(run.run);
   const details = [];
   try {
-    for (const run of product.runs) {
-      const issue = await issues(p, cwd, repo.repository, run.run, actor, warning), local = issue && localRuns.find(record => record.number === issue.number);
+    for (const run of plannedRuns) {
+      const selected = await lookup.find(run.run, run.run === target), { issue = null, local = null, unverified = false } = selected ?? {};
+      if (unverified) { details.push({ run, issue, local: null, prs: [], evidence: [], fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
       const prs = issue ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning) : [];
       const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
       const latest = [...prs].filter(pr => runtimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
@@ -285,9 +479,9 @@ async function progress(input, given) {
     }
     if (errors.length) throw Error(`Could not release the base-source view: ${errors.join('; ')}`);
   }
-  const needsFor = run => run.needs.filter(need => need === 'plan PR' ? !planReady : !details.find(detail => detail.run.run === need)?.done);
+  const needsFor = run => run.needs.filter(need => need === 'plan PR' ? !planReady : targetBound ? false : !details.find(detail => detail.run.run === need)?.done);
   const ready = details.filter(detail => !detail.issue && !needsFor(detail.run).length).map(detail => detail.run.run);
-  return { p, product, details, ready, needsFor, localRuns, repo, warning: [...new Set(warning)] };
+  return { p, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
 }
 
 function counts(ids, details) {
@@ -302,16 +496,17 @@ function counts(ids, details) {
   return { total: new Set(ids).size, pass, stale, notRun: new Set(ids).size - pass - stale };
 }
 export async function productStatus(input, given = {}) {
-  const { product, details, ready, warning } = await progress(input, given);
+  const { product, details, ready, warning, bases } = await progress(input, given);
   const core = product.stories.filter(story => story.tag === 'CORE' && product.runs.some(run => run.stories.includes(story.id)));
   const parts = product.parts.map(part => ({ part: part.part, ...counts(core.filter(story => story.part === part.part).map(story => story.id), details) }));
   const journeyIds = product.runs.filter(run => run.part === 'all').flatMap(run => run.stories);
   if (journeyIds.length) parts.push({ part: 'journeys', ...counts(journeyIds, details) });
-  return { name: product.name, size: product.size, parts,
+  const result = { name: product.name, size: product.size, parts,
     slices: [...new Set(product.runs.map(run => run.slice))].map(slice => ({ slice, ...counts(product.runs.filter(run => run.slice === slice).flatMap(run => run.stories).filter(id => journeyIds.includes(id) || core.some(story => story.id === id)), details) })),
     runs: details.map(detail => ({ run: detail.run.run, issue: detail.issue?.number ?? null,
-      state: detail.done ? 'merged' : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : detail.prs.length ? detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ') : detail.issue ? 'issue ready' : 'planned',
+      state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : detail.prs.length ? detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ') : detail.issue ? 'issue ready' : 'planned',
       prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr })), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
+  Object.defineProperty(result, comparisonBases, { value: bases }); return result;
 }
 export async function productNext(input, given = {}) {
   const { product, details, ready, needsFor, warning } = await progress(input, given);
@@ -333,8 +528,10 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
     const p = portsFor(given), { product, boundaries } = await documents({ cwd }, p), planned = product.runs.find(row => row.run === run);
     if (!planned) invalid(`Unknown planned run ${run}.`);
     if (!['codex', 'claude'].includes(agent)) invalid(`Unknown agent ${agent}.`);
-    const state = await progress({ cwd }, given), { repo, localRuns } = state;
-    issue = state.details.find(detail => detail.run.run === run).issue;
+    const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
+    const selected = state.details.find(detail => detail.run.run === run);
+    issue = selected.issue;
+    if (selected.unverified) throw Error(`Saved issue #${issue.number} for ${run} is unverified: ${selected.reason}. Run pdd product start ${run} to link it again.`);
     const parent = localRuns.find(record => record.workflow === 'product');
     if (!issue) {
       const contractFiles = product.size === 'small' ? [] : [...new Set([...boundaries.filter(row => planned.part === 'all' || [row.From, row.To].includes(planned.part)).map(row => row.Contract), 'contracts/world.md'])];
@@ -349,6 +546,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
       const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(url);
       if (!match || match[1].toLowerCase() !== repo.repository.toLowerCase()) invalid('Issue creation was not confirmed. Inspect GitHub before trying again.');
       issue = { number: Number(match[2]) }; created = true;
+      await state.lookup.bind(run, issue.number);
     }
     const warning = [...state.warning, ...warnings(product).filter(text => text.startsWith(`Warning: ${run} `)), ...(state.needsFor(planned).length ? [`Advice: ${run} still needs ${state.needsFor(planned).join(', ')}.`] : [])].join('\n');
     if (noRun) return { exitCode: 0, message: [warning, `Issue #${issue.number} ready for ${run}.`].filter(Boolean).join('\n'), issue: issue.number, created, started: false };
@@ -375,6 +573,7 @@ export async function runProduct(input, given = {}) {
       ...status.runs.map(run => `${run.run}: ${run.state}${run.issue ? ` · issue #${run.issue}` : ''}${run.fromPr ? ` · from PR #${run.fromPr}` : ''}`),
       ...status.slices.map(slice => `Slice ${slice.slice}: ${slice.pass} of ${slice.total} pass.`),
       `Can start now: ${status.ready.join(', ') || 'none'}. Questions open: ${status.questions.join(', ') || 'none'}.`,
+      ...(status[comparisonBases] ?? []).map(base => `Compared with your local ${base}. Run git pull to see changes merged on GitHub.`),
       'Stale = passed on older files; a contract or prompt changed since.' ].join('\n') };
   } catch (error) { return { exitCode: 1, message: causeText(error.message) || 'The product could not be read.' }; }
 }

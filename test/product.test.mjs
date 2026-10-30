@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -16,11 +16,21 @@ const root = new URL('../', import.meta.url).pathname;
 const stream = () => ({ text: '', write(value) { this.text += value; } });
 const pr = (number, state = 'OPEN', extra = {}) => ({ number, url: `https://github.com/example/coffee/pull/${number}`, isCrossRepository: false, headRepository: {name:'coffee'}, headRepositoryOwner:{login:'example'}, headRefName: `branch-${number}`, state, body: `PR 2 of this run: the code.\n<!-- pdd-workflow:run-${number}:code -->`, isDraft: true, updatedAt: `2026-10-${number}`, ...extra });
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), 'pdd-product-'));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-product-')));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), cwd, { recursive: true });
   const state = { issues: [], runs: [], prs: [], events: [], base: true, starts: [], commands: [] };
   const ports = {
+    lockProductState: async () => ({ handle: 'owned-test-lock' }),
+    unlockProductState: async () => ({}),
+    readProductState: async () => ({ json: state.productState ?? null }),
+    writeProductState: async ({ json }) => { state.productState = json; return {}; },
+    now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),
+    issueByNumber: async ({ number }) => {
+      if (state.fail) throw Error('GitHub unavailable');
+      const row = (state.pages?.flat() ?? state.issues).find(item => item.number === number);
+      return row && { author_association: 'MEMBER', user: { login: 'member' }, created_at: '2026-10-01T00:00:00Z', ...row };
+    },
     listRuns: async () => state.runs,
     openBaseSource: async () => ({root:cwd,handle:null}),
     resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }),
