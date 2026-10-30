@@ -23,7 +23,7 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 
 ## `pdd check`
 
-Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. Apart from the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 ### Hash filling
 
@@ -82,6 +82,44 @@ For confirmed unstarted capacity, wait before a fresh ID using Retry-After, else
 When attempts/time run out, show busy/not-run with zero calls and plain advice that no checks ran; do not display the server's source-repair Fix text. Preserve verified passed and running results under the recovery lifecycle below. Hold tests with no check POST as zero-call not-run, never a failed assertion. `--read` only reads the old IDs; a terminal capacity receipt becomes busy/not-run without posting. JSON distinguishes `busy` and `can_retry`, and text offers `pdd check --retry BATCH` for eligible rows.
 
 `pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved retry-after deadline across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs) and at most three attempts per eligible test. `--read` remains GET-only except saved-lint continuation below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
+
+## Concurrent saved-batch operations
+
+One batch has one writer across processes, including separate terminals. A new Check and
+explicit `--lint` own their batch from before the first saved record until the command ends,
+including its final batch and summary saves. Batch `--read` and `--retry` acquire the same
+ownership before loading the saved record and retain it through all refreshes, retry
+decisions, request-ID persistence, POSTs and final saves. Different batches remain independent.
+A later retry loads the current record anew and never resends a submitted/completed check.
+UUID reads keep the raw-receipt-only rule below and do not acquire batch ownership.
+Saved-lint continuation and permanent dispatch-claim adoption run inside this same ownership.
+The lock owner still applies every saved-lint gate and adopts existing claims before deciding
+whether a check was unsent; the lock does not replace the per-attempt claim or its receipt rules.
+
+The native `acquireRuntimeBatchLock(folder, {onWarning})` boundary, replaceable by
+`ports.acquireBatchLock` for runtime-faked execution, resolves to an idempotent release
+function. Publish the complete PID, host and start-time record atomically beside batch.json:
+write a unique private temporary file, fsync it, then `linkSync` it to the lock path;
+EEXIST means the path already has an owner. Remove the temporary name on every exit.
+Never expose an empty or partially written lock. Folders stay 0700 and files 0600.
+
+| Existing ownership | Outcome for a competing batch read or retry |
+|---|---|
+| Valid same-host live PID, including EPERM on its existence check | Exit 3, no GET, POST or save. One plain line names the running batch, PID and start time and says `run pdd check --read BATCH after it ends`. This also applies while a new Check or explicit lint owns that batch. |
+| Provably dead same-host PID (ESRCH) | Serialize takeover and print one warning through `onWarning`; never use an age-based expiry. |
+| Malformed, foreign-host or unverifiable record | Exit 2. Name the lock file and say to delete it only if no pdd command is running on that host, then run the command again. Never take it over. |
+| Other acquisition error | Exit 2 with `Could not lock batch BATCH (CODE). Nothing was sent.` |
+
+During guarded takeover, reread the current record: unlink only when both the exact file
+identity and all three record fields (PID, host, start time) still match the record that
+proved dead. Apply the same identity-and-content check during release, so inode reuse or
+a replacement record cannot remove another owner's lock. Recovery guards follow the same
+dead-owner rules; valid metadata from a crashed recoverer cannot strand the batch.
+Release after the final batch/summary save on success, refusal, interruption and exception.
+If release fails, warn through the warning boundary; do not replace the command's exit code
+or original exception. Missing batches retain `No saved batch BATCH.` and exit 2 without
+creating a folder. Preserve the existing interrupted saved-evidence projection when ownership
+is free, including unknown usage when a saved success lacks its terminal receipt.
 
 ## Preserve recovered check receipts
 
@@ -171,8 +209,9 @@ posted or incompletely accounted usage never becomes zero by inference. Saved re
 Each continuation gets a fresh finite wait: --timeout MIN when supplied, otherwise 90 seconds,
 including receipt refresh, source validation and check polling. Allocate the original held
 row's first check ID only after these gates; save it and an exclusive dispatch claim before
-POST. Concurrent/repeated reads or retries must share the claim and never duplicate paid
-POSTs. A saved dispatch claim or uncertain/lost POST is read by the same ID, never replayed,
+POST. Repeated reads or retries share the claim; batch ownership refuses an overlapping
+command with exit 3 and no dispatch. Neither duplicates a paid POST. A saved dispatch claim
+or uncertain/lost POST is read by the same ID, never replayed,
 even after interruption. A completed read/retry only shows existing results. Existing capacity
 recovery rules remain unchanged. Remote --lint and --read allow --timeout (1..120 minutes),
 with no Story words on --read; standalone/local SVG lint combinations remain separate.

@@ -1,0 +1,340 @@
+{
+  "cases": [
+    {
+      "name": "max_steps-negative",
+      "limits": {
+        "max_steps": -1,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-zero",
+      "limits": {
+        "max_steps": 0,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-minimum",
+      "limits": {
+        "max_steps": 1,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_steps-above-minimum",
+      "limits": {
+        "max_steps": 2,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_steps-large",
+      "limits": {
+        "max_steps": 1000001,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_steps-safe-edge",
+      "limits": {
+        "max_steps": 9007199254740991,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_steps-above-safe-edge",
+      "limits": {
+        "max_steps": 9007199254740992,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_steps-fraction-below",
+      "limits": {
+        "max_steps": 0.5,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-fraction-above",
+      "limits": {
+        "max_steps": 1.5,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-true",
+      "limits": {
+        "max_steps": true,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-false",
+      "limits": {
+        "max_steps": false,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-string",
+      "limits": {
+        "max_steps": "1",
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-null",
+      "limits": {
+        "max_steps": null,
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-array",
+      "limits": {
+        "max_steps": [],
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_steps-object",
+      "limits": {
+        "max_steps": {},
+        "max_model_calls": 2
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "max_model_calls-negative",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": -1
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-zero",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 0
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-minimum",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 1
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_model_calls-above-minimum",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 2
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_model_calls-large",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 1000001
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_model_calls-safe-edge",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 9007199254740991
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_model_calls-above-safe-edge",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 9007199254740992
+      },
+      "code": null,
+      "pointer": null
+    },
+    {
+      "name": "max_model_calls-fraction-below",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 0.5
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-fraction-above",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": 1.5
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-true",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": true
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-false",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": false
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-string",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": "1"
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-null",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": null
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-array",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": []
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "max_model_calls-object",
+      "limits": {
+        "max_steps": 4,
+        "max_model_calls": {}
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "shape-null",
+      "limits": null,
+      "code": "invalid-limits",
+      "pointer": "/limits"
+    },
+    {
+      "name": "shape-array",
+      "limits": [],
+      "code": "invalid-limits",
+      "pointer": "/limits"
+    },
+    {
+      "name": "shape-string",
+      "limits": "limits",
+      "code": "invalid-limits",
+      "pointer": "/limits"
+    },
+    {
+      "name": "shape-number",
+      "limits": 1,
+      "code": "invalid-limits",
+      "pointer": "/limits"
+    },
+    {
+      "name": "shape-empty",
+      "limits": {},
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "shape-missing-steps",
+      "limits": {
+        "max_model_calls": 1
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_steps"
+    },
+    {
+      "name": "shape-missing-calls",
+      "limits": {
+        "max_steps": 1
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/max_model_calls"
+    },
+    {
+      "name": "shape-extra",
+      "limits": {
+        "max_steps": 1,
+        "max_model_calls": 1,
+        "timeout": 1
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/timeout"
+    },
+    {
+      "name": "shape-escaped-extra",
+      "limits": {
+        "max_steps": 1,
+        "max_model_calls": 1,
+        "a/b~c": 1
+      },
+      "code": "invalid-limits",
+      "pointer": "/limits/a~1b~0c"
+    }
+  ]
+}
