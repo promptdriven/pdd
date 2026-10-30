@@ -1,0 +1,276 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "owner_prompt": "prompts/cli/runtime-preflight.prompt.md",
+  "cases": [
+    {
+      "id": "guide-exact-image-example",
+      "markdown": "Embed each primary SVG using Markdown image syntax\n(`![Descriptive alt text](relative/path.svg)`) beside the requirement it\nillustrates so GitHub displays the preview.\n## Dependencies\nNone.",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "single-backtick-link-and-reference-uses",
+      "markdown": "## Dependencies\n`[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]`\n[full]: ../docs/missing-full.md\n[image]: views/missing-image.svg\n[collapsed]: ../docs/missing-collapsed.md\n[collapsed-image]: views/missing-collapsed.svg\n[shortcut]: ../docs/missing-shortcut.md\n[shortcut-image]: views/missing-shortcut.svg",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "multiple-backtick-span-with-inner-backtick",
+      "markdown": "## Dependencies\n``an inner ` marker [Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]``\n[full]: ../docs/missing-full.md\n[image]: views/missing-image.svg\n[collapsed]: ../docs/missing-collapsed.md\n[collapsed-image]: views/missing-collapsed.svg\n[shortcut]: ../docs/missing-shortcut.md\n[shortcut-image]: views/missing-shortcut.svg",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "real-inline-uses-adjacent-to-span",
+      "markdown": "## Dependencies\n`[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]` [Policy](../docs/policy.md) ![View](views/view.svg)",
+      "files": {
+        "docs/policy.md": "# Policy",
+        "prompts/views/view.svg": "<svg/>"
+      },
+      "expected_files": [
+        "docs/policy.md",
+        "prompts/views/view.svg"
+      ]
+    },
+    {
+      "id": "real-reference-uses-all-styles",
+      "markdown": "## Dependencies\n[Full][full]\n[collapsed][]\n[shortcut]\n## Appearance\n![Image][image]\n![collapsed-image][]\n![shortcut-image]\n\n[full]: ../docs/full.md\n[collapsed]: ../docs/collapsed.md\n[shortcut]: ../docs/shortcut.md\n[image]: views/full.svg\n[collapsed-image]: views/collapsed.svg\n[shortcut-image]: views/shortcut.svg",
+      "files": {
+        "docs/full.md": "# Full",
+        "docs/collapsed.md": "# Collapsed",
+        "docs/shortcut.md": "# Shortcut",
+        "prompts/views/full.svg": "<svg/>",
+        "prompts/views/collapsed.svg": "<svg/>",
+        "prompts/views/shortcut.svg": "<svg/>"
+      },
+      "expected_files": [
+        "docs/full.md",
+        "docs/collapsed.md",
+        "docs/shortcut.md",
+        "prompts/views/full.svg",
+        "prompts/views/collapsed.svg",
+        "prompts/views/shortcut.svg"
+      ]
+    },
+    {
+      "id": "definition-inside-multiline-code-span",
+      "markdown": "## Dependencies\n`example\n[only]: ../docs/missing.md\n`\n[Outside][only]\n![Outside][only]",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "definition-inside-backtick-fence",
+      "markdown": "## Dependencies\n```markdown\n[only]: ../docs/missing.md\n```\n[Outside][only]\n![Outside][only]",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "definition-in-backtick-fence-cannot-shadow-outside",
+      "markdown": "## Dependencies\n```markdown\n[policy]: ../docs/missing.md\n```\n[policy]: ../docs/policy.md\n[Policy][policy]",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "definition-inside-tilde-fence",
+      "markdown": "## Dependencies\n~~~markdown\n[only]: ../docs/missing.md\n~~~\n[Outside][only]\n![Outside][only]",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "definition-in-tilde-fence-cannot-shadow-outside",
+      "markdown": "## Dependencies\n~~~markdown\n[policy]: ../docs/missing.md\n~~~\n[policy]: ../docs/policy.md\n[Policy][policy]",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "definition-in-span-cannot-shadow-outside",
+      "markdown": "## Dependencies\n`example\n[policy]: ../docs/missing.md\n`\n[policy]: ../docs/policy.md\n[Policy][policy]",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "backtick-fence-3-then-real-link",
+      "markdown": "## Dependencies\n```markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/hidden-definition.md\n- `data/missing.json`\n```\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "backtick-fence-4-then-real-link",
+      "markdown": "## Dependencies\n````markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/hidden-definition.md\n- `data/missing.json`\n````\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "backtick-fence-keeps-character-and-length",
+      "markdown": "## Dependencies\n````markdown\n```\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n~~~~\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n```` not a closing fence\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n`````\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "backtick-unclosed-fence",
+      "markdown": "## Dependencies\n```markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/missing.md",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "tilde-fence-3-then-real-link",
+      "markdown": "## Dependencies\n~~~markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/hidden-definition.md\n- `data/missing.json`\n~~~\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "tilde-fence-4-then-real-link",
+      "markdown": "## Dependencies\n~~~~markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/hidden-definition.md\n- `data/missing.json`\n~~~~\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "tilde-fence-keeps-character-and-length",
+      "markdown": "## Dependencies\n~~~~markdown\n~~~\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n````\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n~~~~ not a closing fence\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n~~~~~\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "tilde-unclosed-fence",
+      "markdown": "## Dependencies\n~~~markdown\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n[full]: ../docs/missing.md",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "fenced-heading-cannot-hide-real-dependency",
+      "markdown": "## Dependencies\n```markdown\n## Example heading\n[Inline](../docs/missing.md) ![Inline image](views/missing.svg) [Full][full] ![Image][image] [collapsed][] ![collapsed-image][] [shortcut] ![shortcut-image]\n```\n[Policy](../docs/policy.md)",
+      "files": {
+        "docs/policy.md": "# Policy"
+      },
+      "expected_files": [
+        "docs/policy.md"
+      ]
+    },
+    {
+      "id": "real-bare-list-path-preserved",
+      "markdown": "## Dependencies\n- `data/menu.json`: required runtime input.\n- Explanation mentions `data/not-a-declaration.json`.",
+      "files": {
+        "data/menu.json": "{\"price\":900}"
+      },
+      "expected_files": [
+        "data/menu.json"
+      ]
+    },
+    {
+      "id": "real-missing-link-still-refuses",
+      "markdown": "## Dependencies\n`[Example](../docs/missing.md)`\n[Required](../docs/missing.md)",
+      "files": {},
+      "expected_files": [],
+      "expected_refusal": {
+        "path": "docs/missing.md",
+        "message": "not a Git-visible file"
+      }
+    },
+    {
+      "id": "real-secret-reference-still-refuses",
+      "markdown": "## Dependencies\n`![Example][secret]`\n[Required][secret]\n[secret]: ../credentials.json",
+      "files": {
+        "credentials.json": "{\"fixture\":\"never-send\"}"
+      },
+      "expected_files": [],
+      "expected_refusal": {
+        "path": "credentials.json",
+        "message": "name looks like a secret"
+      }
+    },
+    {
+      "id": "real-symlink-image-still-refuses",
+      "markdown": "`![Example](views/link.svg)`\n![Required](views/link.svg)\n## Dependencies\nNone.",
+      "files": {
+        "prompts/views/real.svg": "<svg/>"
+      },
+      "expected_files": [],
+      "expected_refusal": {
+        "path": "prompts/views/link.svg",
+        "message": "symbolic link"
+      },
+      "symlink": {
+        "path": "prompts/views/link.svg",
+        "target": "real.svg"
+      }
+    },
+    {
+      "id": "fenced-fake-dependencies-does-not-declare",
+      "markdown": "# Notes\n```markdown\n## Dependencies\n[Example](../docs/missing.md)\n![Example](views/missing.svg)\n- `data/missing.json`\n```\n## Rules\nNo dependencies.",
+      "files": {},
+      "expected_files": []
+    },
+    {
+      "id": "fenced-heading-cannot-hide-missing-dependency",
+      "markdown": "## Dependencies\n~~~markdown\n## Other\n[Example](../docs/other-missing.md)\n~~~\n[Required](../docs/missing.md)",
+      "files": {},
+      "expected_files": [],
+      "expected_refusal": {
+        "path": "docs/missing.md",
+        "message": "not a Git-visible file"
+      }
+    }
+  ],
+  "repository_cases": [
+    {
+      "id": "actual-repository-capture",
+      "selected_tests": "all discovered repository PDD scenarios outside test/fixtures/",
+      "required_files": [
+        "docs/prompting-guide.md",
+        "skills/pdd-prompting/guide.md"
+      ],
+      "excluded_files": [
+        "docs/relative/path.svg",
+        "skills/pdd-prompting/relative/path.svg"
+      ],
+      "preserve_file_bytes": true
+    },
+    {
+      "id": "actual-repository-local-lint",
+      "options": {
+        "--lint": true,
+        "--local": true
+      },
+      "selected_tests": "all discovered repository PDD scenarios outside test/fixtures/",
+      "expected_exit_code": 0,
+      "expected_auth_calls": 0,
+      "expected_network_calls": 0
+    }
+  ]
+}
