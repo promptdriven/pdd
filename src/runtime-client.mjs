@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c8de35f2ce7e0092f0580782a6fe1a3c7ad95995a207a7c5a8e68f87baa5b45c).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36e51fa12a749e0de42d6238ebf6fa9536da5063d6455f248f78bc673932b811).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -243,8 +243,15 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
         current = source.sha256 === batch.source_sha256;
       } catch (error) { warning(path, error); }
     }
-    const grouped = new Map();
+    const selected = new Map(), sent = new Map(), grouped = new Map();
     for (const row of rows) {
+      if (!selected.has(row.story)) selected.set(row.story, new Set());
+      selected.get(row.story).add(row.test);
+    }
+    for (const row of rows) {
+      if (!row.request_ids.length) continue;
+      if (!sent.has(row.story)) sent.set(row.story, new Set());
+      sent.get(row.story).add(row.test);
       let pass = false;
       const id = row.request_ids.at(-1);
       if (typeof id === 'string' && UUID.test(id)) {
@@ -274,7 +281,11 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
       const previous = grouped.get(row.story);
       grouped.set(row.story, { story: row.story, pass: pass && (previous?.pass ?? true), current, result: 'no verdict', at: Math.max(previous?.at ?? at, at) });
     }
-    for (const row of grouped.values()) { if (row.pass) row.result = '✓'; stories.push(row); }
+    for (const row of grouped.values()) {
+      if (row.pass && sent.get(row.story).size !== selected.get(row.story).size) continue;
+      if (row.pass) row.result = '✓';
+      stories.push(row);
+    }
   }
   return { stories, warnings: [...new Set(warnings)] };
 }

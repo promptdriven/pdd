@@ -630,18 +630,31 @@ passed. Text metadata is not required to prove these IDs. Incomplete authored
 or receipt criterion coverage supplies no pass and adds the same single hint;
 a complete failed result remains a failure. Explicit Check intent retains its
 existing receipt rules.
-Preserve the recorded Story/test identity. A saved pass label alone is
-insufficient: use the latest attempt's matching-ID check receipt and existing
-receipt projection rules. Unknown, failed, refused, missing or unverifiable
-receipts do not pass, even when an older attempt passed. A Story with several
-selected cases passes only when all its selected cases pass; a partial criterion
-result cannot establish whole-Story success. Aggregate before exposing one row
-per Story per batch, using its newest result time, otherwise batch creation time.
+Preserve the recorded Story/test identity. A well-formed row with empty
+`request_ids` has no sent Check attempt: ignore it as evidence, regardless of its
+saved state or lint receipt. It supplies no pass, failure, unknown or stale
+result, and cannot supersede earlier evidence. A batch's lint request IDs are
+not Check request IDs. Nonempty Check request IDs retain the existing latest
+attempt and receipt rules: a saved pass label alone is insufficient; require
+the latest attempt's matching-ID check receipt. Unknown, failed, refused,
+missing or unverifiable receipts do not pass, even when an older attempt passed.
+
+Whole-Story coverage uses the batch's original unique selected test paths for
+that Story, including unsent rows. A pass requires sent, passing evidence for
+every such test and complete criterion coverage. An unsent duplicate of a test
+already covered by sent evidence adds no missing coverage or failure. If any
+selected test has no sent attempt, omit an otherwise all-passing Story summary;
+do not invent whole-Story success or erase an earlier pass with an unsent
+failure. A genuinely sent nonpassing attempt still supplies a negative summary
+under the existing receipt rules, even with incomplete sent coverage. An
+all-unsent Story supplies no summary. Aggregate before exposing one row per
+Story per batch, using its newest sent result time, otherwise batch creation time.
 
 Currentness belongs here, not to the product reader. Recapture the batch's full
 original selected test set using source capture with no app map, and compare
 that capture hash with the saved batch source hash. Never compare a one-test
-hash with a multi-test batch hash. Missing source identity, changed inputs,
+hash with a multi-test batch hash or shorten the selection to sent rows.
+Missing source identity, changed inputs,
 failed capture or explicit null comparisonRoot make the evidence unverified,
 not current. root still identifies the saved records when comparisonRoot names
 a merged run's current base. Missing state is empty. Malformed or unreadable
