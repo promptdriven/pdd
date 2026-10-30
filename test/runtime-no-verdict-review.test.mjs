@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { renderText, summaryLine, exitCodeFor } from '../src/runtime-output.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, TOKEN } from './runtime-fake.mjs';
@@ -85,7 +85,15 @@ test('REVIEW server why preserves specific advice and drops legacy generic even 
     const path = `${folder}/batch.json`, saved = JSON.parse(readFileSync(path));
     const id = saved.rows[0].request_ids.at(-1);
     Object.assign(saved.rows[0], { state, why, lost: source === 'transport', phase: source === 'local' ? 'local' : 'server' });
-    if (source === 'local') saved.rows[0].request_ids = [];
+    if (source === 'local') {
+      saved.rows[0].request_ids = [];
+      // Model local recovery evidence by removing the receipt and matching claim.
+      // The inert posted marker remains; authoritative claims recover server IDs.
+      for (const name of readdirSync(folder).filter(name => name.endsWith('.dispatch.json'))) {
+        const claim = JSON.parse(readFileSync(`${folder}/${name}`));
+        if (claim.id === id) rmSync(`${folder}/${name}`);
+      }
+    }
     if (source === 'cached') {
       const answer = JSON.parse(readFileSync(`${folder}/${id}.json`));
       Object.assign(answer.result, { why: 'Checks failed.', outcome: 'Inconclusive' });
