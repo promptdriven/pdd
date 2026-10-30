@@ -1371,10 +1371,12 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
         const fresh = readRun(run.runDir);
         if (!fresh || ended(fresh)) throw Object.assign(Error('The run ended during replacement.'), {code:'run_ended'});
         const prior = fresh.chatReplacement;
-        if (record.phase === 'intent') {
+        const sameAttempt = prior && prior.id === record.id && prior.at === record.at && JSON.stringify(prior.original) === JSON.stringify(record.original);
+        if (record.phase === 'intent' && !sameAttempt) {
           if (prior && !['launched','rolledBack'].includes(prior.phase)) throw Error('Replacement already pending');
+          if (prior?.id === record.id) throw Error('Invalid replacement transition');
           (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
-        } else if (!prior || prior.id !== record.id || prior.at !== record.at || JSON.stringify(prior.original) !== JSON.stringify(record.original)) throw Error('Invalid replacement transition');
+        } else if (!sameAttempt || record.phase === 'intent' && prior.phase !== 'intent') throw Error('Invalid replacement transition');
         fresh.chatReplacement = JSON.parse(JSON.stringify(record));
         if (['launchRequested', 'launched', 'rolledBack'].includes(record.phase)) {
           fresh.chats = fresh.chats.filter(item => item.area !== record.area);

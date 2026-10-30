@@ -282,3 +282,52 @@ process.send({result}); process.disconnect();`);
   assert.equal(f.herdr.calls.filter(effect).length, 0, 'Dead process recovery does not dispatch a fresh replacement');
   assert.equal(f.record().abandonedChats.length, 1);
 });
+
+for (const lostResume of [false, true]) {
+  test(`2627 interrupted intent resumes the exact stopped original once${lostResume ? ' despite a lost reply' : ''}`, async t => {
+    const f = await protocolStarted(t);
+    await assert.rejects(() => restart(f, { checkpoint: async record => {
+      const saved = f.record();
+      saved.chatReplacement = copy(record);
+      saved.abandonedChats = [{ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' }];
+      writeFileSync(join(saved.runDir, 'status.json'), JSON.stringify(saved));
+      throw Error('Interrupted after durable intent');
+    } }), /Interrupted after durable intent/);
+    const pending = f.record().chatReplacement;
+    const archivedBytes = readFileSync(pending.original.messageFile);
+    f.herdr.paneOf(f.original).agent = null;
+    const healthy = f.ports.herdr;
+    f.ports.herdr = async args => {
+      if (args[0] === 'pane' && args[1] === 'run') {
+        assert.equal(f.record().chatReplacement.recovery?.resumeRequested, true, 'Persist the resume guard before dispatch');
+        if (lostResume) { f.herdr.calls.push(args); throw lost(); }
+      }
+      return healthy(args);
+    };
+    const result = await open(f);
+    if (lostResume) {
+      assert.notEqual(result.exitCode, 0);
+      assert.equal(f.record().chatReplacement.recovery?.resumeRequested, true);
+      assert.notEqual((await open(f)).exitCode, 0);
+      assert.notEqual((await open(f)).exitCode, 0);
+      assert.equal(f.record().chatReplacement.phase, 'intent');
+    } else {
+      assert.equal(result.exitCode, 0, result.message);
+      assert.equal(f.record().chatReplacement.phase, 'rolledBack');
+      assert.equal(f.record().chats.at(-1).paneId, f.original.paneId);
+      assert.equal(f.record().chats.at(-1).messageFile, f.original.messageFile);
+    }
+    const after = f.record();
+    assert.equal(after.chatReplacement.id, pending.id);
+    assert.equal(after.chatReplacement.at, pending.at);
+    assert.deepEqual(after.chatReplacement.original, pending.original);
+    assert.equal(after.abandonedChats.length, 1);
+    assert.ok(readFileSync(pending.original.messageFile).equals(archivedBytes));
+    const resumes = calls(f, 'pane', 'run');
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0][2], pending.original.paneId);
+    assert.equal(resumes[0][3].match(/--resume '([0-9a-f-]{36})'/)?.[1], pending.original.session.id);
+    assert.equal(calls(f, 'tab', 'close').length, 0);
+    assert.equal(calls(f, 'tab', 'create').length, 0);
+  });
+}
