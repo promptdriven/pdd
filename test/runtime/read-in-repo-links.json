@@ -1,0 +1,132 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/read-in-repo-links.md",
+  "runtime_check": "NOT REPLAYED",
+  "reason": "Owning prompts have no executable Runtime interface for real Git discovery, OS link identity/open races or tar headers. This is a native inventory, not a prompt-runtime.program-scenario.v1 scenario.",
+  "native_test": "test/runtime-source-links.test.mjs",
+  "command": "node --test test/runtime-source-links.test.mjs",
+  "cases": [
+    {
+      "name": "LINK upload direct: server receives regular target bytes under authored path",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK manifest direct: offline arrow names canonical final target and byte size",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK upload folder: server receives regular target bytes under authored path",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK manifest folder: offline arrow names canonical final target and byte size",
+      "criterion_ids": [
+        "AC2"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal outside: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal broken: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal loop: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal secret link: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal secret target: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK refusal invisible target: names link and destination with reason before upload",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK raw reads: safe source reads do not select reference-only input",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK selection metadata: root config follows source-reading policy",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    },
+    {
+      "name": "LINK Markdown context: dependencies resolve from authored linked path",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "baseline_expectation": "assertion failure for existing blanket link refusal or missing link-target diagnostic"
+    }
+  ],
+  "not_replayed": [
+    "Prompt interpreter: forbidden by authorized zero-call manual flow",
+    "OS race/ancestor/chain substitution adversarial injection",
+    "Internal absolute and multi-link resolution acceptance",
+    "Linked-source limits, PAX long/unicode names, submodule and native executable/write-destination preservation beyond existing tests"
+  ],
+  "follow_up": "Build/verify must retain existing refusal suite and exercise consistency/limit boundaries against linked accepted paths. Inventory omissions are not passes.",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A selected direct file link or a selected file inside a linked folder sends the final Git-visible regular file's exact bytes under the authored path, as a regular archive entry with mode 0600."
+    },
+    {
+      "id": "AC2",
+      "text": "`pdd test --files` shows each linked file as `authored/path -> canonical/target` with its byte size, offline."
+    },
+    {
+      "id": "AC3",
+      "text": "Outside targets, broken links, loops, secret link names, secret target names and targets that are not Git-visible are refused before upload; the message names the link and its target and explains why."
+    },
+    {
+      "id": "AC4",
+      "text": "Source metadata and raw preparation/reference reads use the same safe link policy; reference-only source stays unselected and relative Markdown dependencies keep the authored linked path as their base."
+    },
+    {
+      "id": "AC5",
+      "text": "Link resolution and bytes belong to one consistent snapshot; source SHA, archive ordering/PAX, limits, other privacy/type/submodule refusals, prepared output destinations and executable/write-target refusals retain their existing guarantees."
+    }
+  ]
+}
