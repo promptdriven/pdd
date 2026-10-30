@@ -170,3 +170,35 @@ test('discarding observed dead issue 80 preserves a concurrently replaced issue 
   assert.equal(out.exitCode, 0, out.message);
   assert.equal(state().bindings.find(row => row.run === 'phone-1')?.issue, 81);
 });
+
+test('an authoritative v2 deletion never reimports the untouched legacy file', async t => {
+  const f = setup(t); f.s.indexed = []; f.s.issues = [issue('phone-1', 80)];
+  const { createHash } = await import('node:crypto');
+  const dir = join(f.cwd, '.git/pdd/products'); mkdirSync(dir, { recursive: true });
+  const key = createHash('sha256').update(`example/coffee\0${f.cwd}`).digest('hex');
+  writeFileSync(join(dir, `${key}.json`), JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [{ run: 'phone-1', issue: 80 }] }));
+  assert.equal((await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports)).issue, 80);
+  const rawLookup = f.ports.issueByNumber;
+  f.ports.issueByNumber = async () => ({ status: 404, message: 'Not Found' });
+  assert.equal((await runProduct({ command: 'status', cwd: f.cwd }, f.ports)).exitCode, 0);
+  f.ports.issueByNumber = rawLookup;
+  const before = f.s.direct.length;
+  const status = await productStatus({ cwd: f.cwd }, f.ports);
+  assert.equal(status.runs.find(row => row.run === 'phone-1').issue, null);
+  assert.equal(f.s.direct.length, before, 'v2 empty binding is authoritative over still-present v1 hint');
+});
+
+for (const status of [404, 503]) test(`default issue adapter retains the actual HTTP ${status} status`, async t => {
+  const f = setup(t), state = saved(f, [{ run: 'phone-1', issue: 80 }]);
+  delete f.ports.issueByNumber;
+  const git = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (file === 'git') return git(file, args, options);
+    assert.equal(file, 'gh'); assert.ok(args.includes('--include'));
+    throw Object.assign(Error('nonzero gh response'), { code: 1, stdout: `HTTP/2.0 ${status} Failure\r\ncontent-type: application/json\r\n\r\n{"message":"lookup failed"}` });
+  };
+  const out = await runProduct({ command: 'status', cwd: f.cwd, json: true }, f.ports);
+  assert.equal(out.exitCode, 0, out.message);
+  assert.equal(JSON.parse(out.message).runs.find(row => row.run === 'phone-1').state, 'unverified');
+  assert.equal(state().bindings.some(row => row.run === 'phone-1'), status !== 404);
+});
