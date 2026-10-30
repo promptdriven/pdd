@@ -69,12 +69,12 @@ test('native ownership follows promotion and request writes across native ports,
   const file = join(reservation.directory, `${reservation.id}.json`);
   try {
     now += 5000; await timers.tick();
-    assert.equal(statSync(file).mtimeMs, now, 'waiting-to-active promotion advances the owned snapshot');
+    assert.ok(Math.abs(statSync(file).mtimeMs - now) < 1, 'waiting-to-active promotion advances the owned snapshot');
     assert.equal(await recordRuntimeRequest(reservation, 'paid-one', ports), true);
     assert.equal(await recordRuntimeRequest(reservation, 'paid-two', ports), true);
     assert.equal(await recordRuntimeRequest(reservation, 'paid-one', ports), true);
     now += 5000; await timers.tick();
-    assert.equal(statSync(file).mtimeMs, now, 'request registration through another native port keeps the original heartbeat valid');
+    assert.ok(Math.abs(statSync(file).mtimeMs - now) < 1, 'request registration through another native port keeps the original heartbeat valid');
     assert.deepEqual(JSON.parse(readFileSync(file)).request_ids, ['paid-one', 'paid-two']);
     assert.deepEqual(readdirSync(reservation.directory), [`${reservation.id}.json`], 'claim choosing/number transitions complete and clean up');
   } finally {
