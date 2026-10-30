@@ -154,4 +154,4 @@ Bare `pdd try --product` uses the sole root journey scenario as its request skel
 
 Product map composition preserves each part’s handler priority. Some overlapping exact-screen and wildcard rules cannot be represented by the current Runtime map; Try explains unsupported wildcard priority and refuses that map. Wildcard-only maps and faithfully representable mixed rules remain supported.
 
-An open product Try reuses only an unchanged part/journey/source setup. If that setup or standalone/product mode changes, use `--new` to replace the session; the refusal preserves the existing session.
+An open product Try preserves its original world/map when reused. Changing selected parts, explicit journey or standalone/product mode requires `--new`; other source changes retain ordinary prompt-freshness rules rather than a whole-capture reuse pin. Product flags cannot combine with `--stop STORY`.
