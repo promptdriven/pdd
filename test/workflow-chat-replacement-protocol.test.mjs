@@ -331,3 +331,49 @@ for (const lostResume of [false, true]) {
     assert.equal(calls(f, 'tab', 'create').length, 0);
   });
 }
+
+// Interrupted before allocation: later public progress may create an unrelated area tab.
+for (const variant of ['saved-peer', 'unknown', 'relabelled-allocation', 'wrong-pane', 'wrong-terminal', 'wrong-cwd']) {
+  test(`2627 preallocation recovery with ${variant} preserves allocation custody`, async t => {
+    const f = await started(t);
+    await assert.rejects(() => restart(f, { checkpoint: async record => {
+      const saved = f.record();
+      saved.chatReplacement = copy(record);
+      if (record.phase === 'intent') saved.abandonedChats = [{ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' }];
+      writeFileSync(join(saved.runDir, 'status.json'), JSON.stringify(saved));
+      if (record.phase === 'createRequested') throw Error('Interrupted before allocation');
+    } }), /Interrupted before allocation/);
+    const { stepDone, approveRun } = await import('../src/workflow-runner.mjs');
+    assert.equal((await stepDone({ step: 'scope', summary: 'Ready', cwd: f.saved.root }, f.agentPorts())).exitCode, 0);
+    assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+    const saved = f.record(), pending = copy(saved.chatReplacement), peer = saved.chats.at(-1);
+    assert.notEqual(peer.area, pending.area);
+    if (variant === 'unknown') saved.chats = saved.chats.filter(chat => chat.tabId !== peer.tabId);
+    if (variant === 'relabelled-allocation') {
+      // A newly created but relabelled allocation is not explained by a saved peer.
+      await f.ports.herdr(['tab', 'create', '--workspace', peer.workspaceId, '--cwd', saved.root, '--label', 'unexplained', '--no-focus']);
+    }
+    if (variant === 'wrong-pane') peer.paneId = 'unverified-pane';
+    if (variant === 'wrong-terminal') peer.terminalId = 'unverified-terminal';
+    if (variant === 'wrong-cwd') f.herdr.paneOf(peer).cwd = f.source;
+    writeFileSync(join(saved.runDir, 'status.json'), JSON.stringify(saved));
+    f.herdr.calls.length = 0;
+    const result = await open(f);
+    if (variant === 'saved-peer') {
+      assert.equal(result.exitCode, 0, result.message);
+      const after = f.record();
+      assert.equal(after.chatReplacement.id, pending.id);
+      assert.equal(after.chatReplacement.phase, 'launched');
+      assert.equal(after.area, saved.area);
+      assert.deepEqual(after.chats.find(chat => chat.area === peer.area), peer);
+      assert.equal(calls(f, 'tab', 'create').length, 1);
+      assert.equal(calls(f, 'pane', 'run').length, 1);
+    } else {
+      assert.notEqual(result.exitCode, 0, 'Unexplained inventory must remain uncertain');
+      assert.notEqual((await open(f)).exitCode, 0);
+      assert.equal(calls(f, 'tab', 'create').length, 0);
+      assert.equal(calls(f, 'pane', 'run').length, 0);
+      assert.deepEqual(f.record().chatReplacement, pending);
+    }
+  });
+}
