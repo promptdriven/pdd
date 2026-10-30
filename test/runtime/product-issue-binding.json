@@ -28,7 +28,7 @@
     "creates": [],
     "state": {}
   },
-  "simulation": {
+  "simulation": {"productState.lock":{"action":"port.write","world_pointer":"/requests","result_template":{"handle":"product-state-lock"}},"productState.unlock":{"action":"port.write","world_pointer":"/requests","result_template":{}},
     "repository.planOnBase": {
       "action": "port.write",
       "world_pointer": "/requests",
