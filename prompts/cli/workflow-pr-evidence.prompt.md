@@ -25,7 +25,17 @@ For code publication obtain current committed head through `ports.currentHead({r
 
 Insert every lifted/machine line above every replay status block, including PASS, BLOCKED, NOT REPLAYED and publication-pending, and above ordinary verdict/runtime/step prose. Preserve vector failure warnings and pending-before-push lifecycle safeguards; the replay block follows the complete top evidence block. Every lifted/machine line goes through existing marker rejection, Try-link removal, local-path redaction, report-reference retention and 60000-code-point body budget; never truncate into a false success. If lifted evidence itself exceeds available body room, retain whole lines in contract order and explicitly count omitted labels, failures and report references under the existing bounded-description policy. Compute Refs safety from all accepted labels before shortening; never restore Closes because a warning line did not fit. An overlong machine line may be replaced only by an explicit unavailable/omitted-result notice, never a shortened success claim. A failed old-code proof remains visible and publishable. Existing opted-in PRs still receive the replay publication-pending description before pushing source and retain pending on final-description failure. For non-opted code PRs, replace the old proof line with publication-pending before pushing changed source, then replace it with newly prepared current evidence; if either edit fails, report it, and never push source while an old success remains. Relevant PR 1 updates refresh labels too. The final body keeps exactly one canonical ownership marker and existing approval/stacking semantics. Native lifecycle tests must establish these effects; helper Runtime checks alone do not prove them.
 
+## Approval evidence in PRs
+
+After the ordered top evidence block, before ordinary step prose, emit one short line per saved approval in chronological order. The optional `run.decisions` and `run.promptApprovals` input fields carry saved gate decisions and standalone journal entries whose path/hash match currently published prompts. A new decision's `evidence` is authoritative; legacy records remain readable but never acquire invented actor/time/words. Deduplicate identical evidence across gate history/journal. `said` lines begin `Approved in chat:`, terminal lines `Approved in terminal:`, native chat lines `Approved in area chat:`. Include the invoking actor kind/id, epoch-millisecond time, route, verbatim words when present, and every approved prompt path/hash; never silently omit approval records from a successful body. A body budget omission must say approval evidence was omitted, not imply complete evidence.
+
+Every dynamic value, including actor, timestamp, route, path/hash and words, is a quoted JSON literal in a Markdown code span longer than all interior backtick runs. Preserve recoverable raw text: JSON escapes newlines, carriage returns, controls and bidi characters. Escape each exact `pdd-workflow:` prefix colon as `\u003a` inside the JSON literal, preventing an ownership marker. Do not HTML-escape raw identity or allow mentions, issue references, closing instructions, HTML or backticks to escape the span. These approval values use this rule instead of the ordinary lifted-label formatter. Keep exactly one real ownership marker and preserve existing redaction/budget/publication safeguards. A full render through the read-only GitHub Markdown API must show no user-mention/issue anchors or extra workflow markers from supplied evidence.
+
 ## Dependencies
+
+- [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt; this renderer accepts supplied facts and never duplicates run storage policy.
+
+- [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for supplied evidence values. No filesystem journal read is invented inside this renderer.
 
 - [Committed proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification/testing context for the complete saved machine-result schema, classification and exact messages. No execution port from prove is invoked here.
 - The actual injected `currentHead`, `readStepNotes` and `readOldCodeProof` callback contracts are declared in this prompt and Runtime resources. Native defaults use existing project Git/file APIs and the selected saved run supplied by the runner. Callback replies supply all outside facts used by this module; no runner lifecycle, GitHub, Herdr, guide or publication side effects are needed to decide these lines.
@@ -36,7 +46,7 @@ Insert every lifted/machine line above every replay status block, including PASS
 ```json
 {
   "status": "approved",
-  "prose_sha256": "a8850383823cfd7087d0fbddd3ffe79f2ee388944fcd6935026eab6c6c792eb7",
+  "prose_sha256": "36cb9c399dcb7eeeb901d5f2116c42f9bf500dc0c645b4bdc70dd1da50571c93",
   "entries": [
     {
       "operation": "preparePrEvidence",
@@ -85,6 +95,188 @@ Insert every lifted/machine line above every replay status block, including PASS
               },
               "workflow": {
                 "type": "string"
+              },
+              "decisions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "stage": {
+                      "type": "string"
+                    },
+                    "decision": {
+                      "type": "string"
+                    },
+                    "via": {
+                      "type": "string"
+                    },
+                    "at": {
+                      "type": "integer"
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "evidence": {
+                      "type": "object",
+                      "properties": {
+                        "route": {
+                          "type": "string",
+                          "enum": [
+                            "said",
+                            "terminal",
+                            "chat"
+                          ]
+                        },
+                        "actor": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "agent",
+                                "terminal"
+                              ]
+                            },
+                            "id": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "at": {
+                          "type": "integer"
+                        },
+                        "words": {
+                          "oneOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "prompts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "proseSha256": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "proseSha256"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "route",
+                        "actor",
+                        "at",
+                        "words",
+                        "prompts"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "gateAt": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "stage",
+                    "decision",
+                    "via",
+                    "at"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "promptApprovals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "route": {
+                      "type": "string",
+                      "enum": [
+                        "said",
+                        "terminal",
+                        "chat"
+                      ]
+                    },
+                    "actor": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "agent",
+                            "terminal"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "at": {
+                      "type": "integer"
+                    },
+                    "words": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "prompts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string"
+                          },
+                          "proseSha256": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "proseSha256"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "route",
+                    "actor",
+                    "at",
+                    "words",
+                    "prompts"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [

@@ -8,16 +8,16 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring 
 
 ## Names
 
-`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'start'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and start. A rename changes `NAMES` and those words together.
+`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'run'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and run. A rename changes `NAMES` and those words together.
 
-Each of these routes lists `formerly`, the words that people typed before. The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms:
+The Interpreter routes below list `formerly`, the words that people typed before; workflow.run keeps former start compatibility. The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms:
 
 | Route id | Prefix | Local | `formerly` |
 |---|---|---|---|
 | `check` | `test` | `runtime-check` | `check` |
 | `lint` | `lint` | `runtime-check` | `check` with the flag `--lint` |
 | `try` | `simulate` | `runtime-try` | `try` |
-| `workflow.run` | `workflow start` | `workflow-run` | `workflow run` |
+| `workflow.run` | `workflow run` | `workflow-run` | `workflow start` |
 
 The `try` route also has the short form `sim`: it parses like `simulate` and never gets a notice. Help names it once, in the description of the first `simulate` form; completion does not offer it. Help forms, help text and completion show only the new words. The [argument parser](argument-parser.prompt.md#former-names) owns how the former words still parse and the one-line notice that they get.
 
@@ -26,16 +26,18 @@ The `try` route also has the short form `sim`: it parses like `simulate` and nev
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
-- workflow.approve `workflow approve [ISSUE]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
+- workflow.approve `workflow approve [ISSUE] [--said WORDS]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`, workflow.open `workflow open ISSUE`.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Try links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT` (local `workflow-prove`): one required issue operand and two text options. Help says it runs committed changed tests on the merge-base of committed head with the fetched base branch and committed head, with a 120-second limit per phase, and saves a non-gating report. No timeout override or native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
+
+Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Help states one workflow approval approves the gate and all its draft prompts; strict mode requires terminal y/N. The start route is `workflow run`, without a former-name notice for run; the already-supported `workflow start` spelling remains a former-name alias with the parser-owned notice. Other 0.1.12 names stay unchanged.
 
 ## Workflow runner help
 
@@ -45,7 +47,7 @@ Describe the runner routes in plain words without preview labels. workflow.run s
 
 Help calls the hosted service "the PDD interpreter" ([word rule](public-boundary.prompt.md#pdd-interpreter)). It keeps the words "runtime interface", the name of the block in a prompt file.
 
-Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT`: one required text operand, no options. Its help says that it shows the prompt's runtime interface and the text changes since the last approval, and that it is for a person at a terminal.
+Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT [--said WORDS]`: one required text operand and optional text option `--said`. Its help says that it shows the prompt's runtime interface and the text changes since the last approval, and that easy mode accepts the person's chat words through --said; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.
 
 Catalog `check` (prefix `test`, local `runtime-check`) with the forms `pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it checks Stories on the PDD interpreter with the person's gh login, waits for every check, with no limit in a terminal and at most 90 s for an agent, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, `pdd test --fill-hash` and `pdd test --files [STORY...] [--app-map PATH]`. Catalog `lint` (prefix `lint`, local `runtime-check`) with the optional repeated text operand STORY, the options `--json`, `--timeout` and `--local`, and the form `pdd lint [STORY...] [--json] [--timeout MIN]` (help: it prints local SVG layout warnings, then runs only the PDD interpreter lint with 0 AI calls, and sends no checks). The `lint` plan always has the flag `--lint`, so the runtime client runs the same code as for `pdd test --lint`. On `check`, `--lint` and `--local` stay as hidden flags: `pdd test --lint` works like `pdd lint`, and the former `check --lint` keeps all its options. Catalog `try` (prefix `simulate`, local `runtime-try`) with the forms `pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` (`--app-map` is an option of kind `text`; help: it makes a Try link on the PDD interpreter with the person's gh login) and `pdd simulate --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and Check `--max-calls` from 1 to 1000. Try accepts `--max-calls` as a positive integer up to 1000, the server cap. Help states that a new Try defaults to400calls and both Check and Try accept --max-calls1..1000. `--request` (kind `uuid`) is hidden. No help form and no completion show a hidden option. These three routes are the one exception to the no-hosted-operation rule above: they call the PDD interpreter through the [runtime client](runtime-client.prompt.md).
 

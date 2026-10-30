@@ -1,0 +1,44 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/approval-requested-merge.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The bug, feature and small-change skills let my agent merge a pdd PR only after my explicit chat request and green checks, first recording my exact request in a PR comment."
+    },
+    {
+      "id": "AC2",
+      "text": "The merge uses `gh pr merge` with `--merge --match-head-commit <head>`; absent request, failed or pending checks, a changed head or a failed request comment cannot merge."
+    },
+    {
+      "id": "AC3",
+      "text": "Help, docs and skills describe --said, the one-step gate/prompt approval, preserved terminal/native-chat routes and root pdd.json strict_approvals, while the agent never changes expected values on its own."
+    },
+    {
+      "id": "AC4",
+      "text": "The workflow start command is `pdd workflow run`; other 0.1.12 command names and the rule that pdd itself never merges stay unchanged."
+    }
+  ],
+  "cases": [
+    {
+      "id": "explicit-request",
+      "given": "stub gh, explicit person request, exact current head, all checks green",
+      "required_observation": "comment exact safely quoted request first; gh pr merge --merge --match-head-commit HEAD afterwards"
+    },
+    {
+      "id": "no-merge",
+      "given": "no explicit request; separately pending/failing checks, changed head, comment failure",
+      "required_observation": "zero merge calls; no pdd merge command; builder never merges real PR"
+    },
+    {
+      "id": "contracts",
+      "given": "review docs/skills/help/caps/byte-identical RUNBOOK copies using native suite",
+      "required_observation": "all named files describe exact said/default/strict/one-step/native routes; expected-value and no-hand-edit rules remain"
+    },
+    {
+      "id": "names",
+      "given": "parse/run/help/completion workflow run feature 2755; test old check/try notices and view/Interpreter/simulate words",
+      "required_observation": "run canonical and notice-free; existing workflow start remains former-name compatibility; all other 0.1.12 names unchanged"
+    }
+  ]
+}

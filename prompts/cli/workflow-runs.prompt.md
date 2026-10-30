@@ -16,6 +16,14 @@ An active current-area `chatFailure` takes precedence in `waitingFor`: no approv
 
 C3 view: `stage` (current step, or `approve` at a gate, or `merge` after the last PR), `steps` (each step with area, state done/current/next, times, agent, session and summary), `waitingFor` (`{decisions:['changes'], what: QUESTION}` while a question waits; `{decisions:['approve','changes'], what}` at a gate, with what "Make the code PR now, or stop here and merge PR 1" at the code-or-stop gate, also after PR 1 merged, `{decisions:[], what:'Review and merge the PR on GitHub'}` after the PR, else `{decisions:[], what:null}`), `resumeDecisions`, `waitingDecision`, `herdr`, `stageAgent`, `links:[]`, `controller:null`, `message`.
 
+## Approval history
+
+Keep legacy decisions and approvalRecord readable. Each new approval decision retains `gateAt` (the approved gate's original at value) and adds `evidence` with the exact shared [evidence shape](approval-policy.prompt.md#actor-and-evidence), alongside existing stage/decision/via/at/text fields; `approvalRecord` retains its legacy fields and the same evidence. Decisions are the complete gate history, not only the latest approvalRecord. The runner supplies the facts; this storage module never invents actors, words or approval. Preserve every record through atomic write/read and C3 projection; old records lacking evidence stay valid and must not gain invented provenance. The shared prompt journal remains separate from status.json.
+
+## Dependencies
+
+- [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for the evidence value schema; no reverse dependency on runner.
+
 ## Selection
 
 - `gitContext(cwd, ports)` returns `{toplevel, commonDir}` (real paths) or null.

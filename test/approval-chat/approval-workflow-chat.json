@@ -1,0 +1,68 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/approval-workflow-chat.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After I approve in chat, `pdd workflow approve 2755 --said \"yes, go ahead\"` approves the ready gate and every draft prompt belonging to it, listing each path and current hash."
+    },
+    {
+      "id": "AC2",
+      "text": "Unrelated unchanged drafts stay draft; a missing gate, malformed selected prompt or invalid policy refuses without advancing or partially approving a different prompt."
+    },
+    {
+      "id": "AC3",
+      "text": "PR creation and later updates show all recorded gate and matching standalone prompt approvals with actor, time, route and verbatim chat words safely quoted."
+    },
+    {
+      "id": "AC4",
+      "text": "Without --said, existing terminal and native area-chat approvals still work in easy mode; strict mode permits only the person terminal."
+    },
+    {
+      "id": "AC5",
+      "text": "Approving PR 1 does not approve the later code-or-stop gate, and a publication failure leaves the gate retryable without losing or duplicating saved evidence."
+    }
+  ],
+  "cases": [
+    {
+      "id": "batch",
+      "given": "ready story gate; two changed drafts; stale approved third; unchanged unrelated draft; said; no area chat",
+      "required_observation": "all three current paths/hashes approve together; unrelated draft untouched; gate advances once; no stdin/log reader"
+    },
+    {
+      "id": "selection",
+      "given": "tracked staged/unstaged/untracked nonignored changed prompts; deleted prompt; ask-code PR1 paths",
+      "required_observation": "lexical deduplicated existing selected paths; missing comparison/symlink/unreadable selected prompt refuses, not empty set"
+    },
+    {
+      "id": "validation",
+      "given": "valid draft plus malformed selected prompt; missing gate/incomplete steps; malformed policy/journal",
+      "required_observation": "no valid member changes; no approval/commit/push/PR/chat-start; exact failure reported"
+    },
+    {
+      "id": "pr1-code",
+      "given": "ready approve-pr gate with drafts; said; then code-or-stop said separately",
+      "required_observation": "first approves prompts and opens PR1 with evidence already present; later gate remains waiting until second decision; carry approvals before code"
+    },
+    {
+      "id": "legacy-routes",
+      "given": "easy terminal y/N; native Herdr current user reply; wrong session/root/stale/ignore-prefix/code-gate no yes-word; strict valid native evidence",
+      "required_observation": "easy retains exact legacy decisions/refusals; strict accepts only person terminal"
+    },
+    {
+      "id": "failure-retry",
+      "given": "initial PR creation fails after evidence save; later retry succeeds; existing PR edit fails; prompt/journal write fails",
+      "required_observation": "gate retryable, evidence retained/deduplicated; no false success or area advance on write/publication failure; disclose partial paths if rollback failed"
+    },
+    {
+      "id": "safe-render",
+      "given": "said/terminal/native routes; actor/path/words contain newlines, runs of backticks, @mentions, #references, HTML, bidi, pdd-workflow:",
+      "required_observation": "history reload and create/update retain raw values; quoted JSON in long code spans; no mentions/issue anchors/extra markers in GitHub Markdown render"
+    },
+    {
+      "id": "scratch-proof",
+      "given": "private scratch Herdr session/HOME, stub agents; native local CLI sample ready story/drafts/PR1; repeat strict",
+      "required_observation": "easy chat-only decisions approve all gates/prompts and PR records them; strict requests real terminal; no live session/provider; NOT RUN until actual proof"
+    }
+  ]
+}

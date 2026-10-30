@@ -1,0 +1,59 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/approval-prompt-chat.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After I approve in chat, `pdd approve PATH --said \"yes, go ahead\"` approves that prompt without a terminal and reports its current prose hash."
+    },
+    {
+      "id": "AC2",
+      "text": "Absent --said keeps terminal y/N; empty, whitespace-only or missing --said values never approve or change a file."
+    },
+    {
+      "id": "AC3",
+      "text": "Root `pdd.json` with `strict_approvals: true` refuses chat approval and requires a person terminal; missing or false keeps easy mode."
+    },
+    {
+      "id": "AC4",
+      "text": "Every successful approval durably records the invoking actor, time, route, verbatim words and prompt path/hash; unrelated prompt bytes stay unchanged."
+    }
+  ],
+  "cases": [
+    {
+      "id": "said-success",
+      "given": "draft valid prompt; agent/no TTY; said = \" yes, go ahead\\n@person #17 `words` \"",
+      "required_observation": "exit 0, approved/current hash; exact other bytes; journal said/agent/clock/verbatim words/path/hash"
+    },
+    {
+      "id": "bad-words",
+      "given": "missing option value, empty, whitespace, duplicate said; separately no said and piped y",
+      "required_observation": "exit 2, no prompt/journal changes; absent option on a real person TTY still asks y/N"
+    },
+    {
+      "id": "strict",
+      "given": "root pdd.json true; said with TTY and yes; separately no-said agent; separately real person TTY y and n",
+      "required_observation": "said/agent refuse with terminal request; person y approves with terminal evidence, n leaves unchanged"
+    },
+    {
+      "id": "config-root",
+      "given": "nested cwd, linked worktree sourceRoot with true; absent/false; malformed JSON/string/null/unreadable config",
+      "required_observation": "trusted root policy wins; invalid config refuses before writes; missing/false easy"
+    },
+    {
+      "id": "journal",
+      "given": "two native processes approve different prompts sharing commonDir; existing malformed journal; write/rename failure",
+      "required_observation": "successful concurrent evidence survives; invalid existing journal unchanged; failure never reports success"
+    },
+    {
+      "id": "identity",
+      "given": "CODEX_THREAD_ID plus PDD_AGENT_SESSION=1; each marker fallback; USER, LOGNAME, none; fixed clock; standalone approval before workflow PR",
+      "required_observation": "concrete Codex session wins over generic workflow marker, Claude marker beats generic fallback; exact time/words saved and matching path/hash published; later prose invalidates association"
+    },
+    {
+      "id": "legacy",
+      "given": "schema/hash/nested status guards; invalid/symlink/deleted path; stale prose; already current; presentAndApprove Simulator caller",
+      "required_observation": "existing safeguards and exports retain behavior; only named top-level values change; already current no-op"
+    }
+  ]
+}
