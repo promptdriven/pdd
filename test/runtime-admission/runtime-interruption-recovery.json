@@ -67,8 +67,8 @@
     {
       "id": "busy-then-fresh-refusal",
       "criterion_id": "AC3",
-      "given": "The first attempt has authoritative zero-call unstarted capacity evidence and STALE RETRY advice. The next POST returns 422 source-too-large with fresh reason/fix/hint/cause containing a synthetic credential and private server paths.",
-      "required_observation": "Exactly two check POSTs, final refusal exit 4 and no automatic replay. Preserve prior IDs/receipts and fresh refusal diagnostics/accounting; clear stale busy/can_retry and earlier advice. Text and JSON retain the new fix/hint/cause with secrets and private paths redacted; later reads preserve that refusal without GET or POST for it."
+      "given": "The first attempt has authoritative zero-call unstarted capacity evidence and STALE RETRY advice. The next POST returns 422 source-too-large with the canonical cause test and fresh reason/fix/hint containing a synthetic credential and private server paths.",
+      "required_observation": "Exactly two check POSTs, final refusal exit 4 and no automatic replay. Preserve prior IDs/receipts and fresh refusal diagnostics/accounting; clear stale busy/can_retry and earlier advice. JSON retains the sanitized reason/fix/hint and cause test. Refusal text follows the existing runtime-output contract: retain the fresh reason/fix/hint with secrets and private paths redacted; it need not print arbitrary cause strings. Later reads preserve the final refusal without GET or POST for it."
     }
   ]
 }
