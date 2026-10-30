@@ -1,6 +1,6 @@
 # Repository and run layout in Herdr
 
-Own `src/workflow-herdr-layout.mjs`: shared session naming, owned repository and run workspace allocation, and run workspace closure. Export `PDD_HERDR_SESSION` (`pdd`), `withHerdrLayoutLock(action, ports)`, `openHerdrRunLayout(input, ports)` and `closeHerdrRunLayout(input, ports)`. This is behavioral refinement of the authorized 0.1.0 layout: stage acceptance and Git worktree allocation remain with their existing owners.
+Own `src/workflow-herdr-layout.mjs`: shared session naming, owned repository and run workspace allocation, and run workspace closure. Export `PDD_HERDR_SESSION` (`pdd`), `withHerdrLayoutLock(action, ports)`, `openHerdrRunLayout(input, ports)` and `closeHerdrRunLayout(input, ports)`. Preserve public invocation and existing effects except the authorized independent-checkout isolation below: stage acceptance and Git worktree allocation remain with their existing owners.
 
 All new runs use the explicit session `pdd`, never the person's `default` or a per-run server. The [area chat owner](workflow-chat.prompt.md) owns compatible-server startup. Serialize session bootstrap and layout mutations across processes in the same HOME; unrelated repositories may have concurrent active agents. A live owner remains exclusive. Recover a lock only when its recorded process is proved absent; a normal Ctrl+C must not block all later runs. When a live owner holds the lock, fail at once with `herdr_layout_busy`; never wait or poll. Serialize owner inspection/replacement in a synchronous claim section; malformed or interrupted claims fail finitely and require inspection.
 
@@ -36,7 +36,24 @@ must identify a non-linked parent; absent metadata cannot justify accepting chan
 
 ## Allocation and identity
 
-Keep a durable, private ownership registry. A matching repository identity and common Git directory reuse one repository workspace. Refuse a second checkout identity for the same repository instead of silently opening its worktree against the wrong repository. Name the repository workspace after its repo; on a name clash qualify both owned repository labels with owner/repo. HD2: when another workspace in session `pdd` already holds the short label for a different folder, use `owner/repo` from the verified origin identity, even if that workspace is absent from the PDD ownership registry. The checkout folder name must not replace the origin owner/repo. Never rename or adopt an unrelated workspace; refuse an occupied qualified label.
+Keep a durable, private ownership registry, retaining readable version 1 records. **Namespace** means the pair of case-insensitive canonical GitHub `owner/repo` and exact canonical Git common directory verified by the worktree owner. Select by the entire pair before comparing the selected entry's parent path or validating its inventory. A repository-only match belonging to another common directory is a peer, never the selected owner. Duplicate entries for one pair or inconsistent selected ownership fail closed. Preserve legacy records and their bindings in place; no global migration or manual registry edit is needed.
+
+```mermaid
+flowchart TD
+    V{Verified namespace?} -->|No| F[Refuse without allocation]
+    V -->|Yes| E{Exact pair saved?}
+    E -->|Yes| I{Owned identity valid?}
+    I -->|No| F
+    I -->|Yes| R[Reuse owned parent]
+    E -->|No| L{Chosen label free?}
+    L -->|No| F
+    L -->|Yes| N[Allocate own verified parent]
+```
+
+The existing confirmed pre-agent recovery is the only exception to selected-parent mismatch refusal; its evidence and guards above remain mandatory. Uncertain intents, existing run binding failures and forged or changed inventory interrupt either allocation or reuse and refuse without fallback.
+
+**Labels.** For the first namespace, retain the repo short name. For collisions between different canonical repositories, retain qualification to verified `owner/repo`, including qualification of an existing owned short label only after validating its identity. HD2: an unregistered workspace holding that short label for a different folder also requires origin-qualified naming. Never use a caller folder name as origin identity.
+For a new namespace when the same repository already has an owned namespace, use `<owner/repo>@<checkout-token>`, where checkout-token is the first 12 lowercase hexadecimal characters of SHA-256 over the UTF-8 canonical commonDir. Keep this choice stable across explicit retries; an occupied candidate refuses with `repository_label_unavailable`, without searching alternate suffixes or adopting its occupant. Compute the digest deterministically, never by model estimation. Once allocated, reuse that namespace's saved label and opaque workspace identity. Adding a clone must not rename, adopt, close, rebind or otherwise mutate another namespace of the same repository, its registry records, workspaces or tabs. Qualification caused by another repository likewise must not rename a same-repository peer as a side effect. Existing legacy clone A keeps its parent while clone B allocates concurrently in a separate namespace. Linked callers with the same commonDir reuse their verified parent, including a bare primary.
 
 Each run gets one `worktree open --workspace <repo-id> --path <assigned-cwd> --label '<repo name>#<issue> <workflow>' --no-focus` workspace (the repository name keeps runs with the same issue number in two repositories apart; a saved run with the older label `#<issue> <workflow>` still matches). PDD's Git worktree already exists; never ask Herdr to create or remove the Git checkout. Every area chat gets a fresh tab inside that workspace, named after its area (input `stageId`). Preserve the worktree's initial shell tab so closing a stage tab cannot close the run workspace. Return actual `repoWorkspaceId`, `workspaceId`, `tabId`, `paneId`, and `terminalId`; never predict opaque IDs.
 
@@ -46,7 +63,13 @@ Checkpoint and persist allocation intent before mutations and returned ownership
 
 The caller invokes run cleanup after it closed the run's area tabs (for example on cancel). Close exactly the saved run workspace using `workspace close`, never `worktree remove` or group close. Require the documented close acknowledgement and a valid inventory proving absence. Preserve repository workspaces, peer runs, unrelated workspaces and the Git checkout. Uncertain close must not be blindly repeated. Git removal, permitted only after merge or cancellation, remains the Git-worktree owner's responsibility.
 
-Export `closeHerdrRepoLayoutIfIdle({repository, commonDir}, ports)`. After the last open run of a repository is closed, close that repository's own workspace too, so no empty shell workspace stays after cancel. Close it only when no saved run of it is open, its identity still matches, and it holds exactly its one tab and one pane (a person may use more). Remove the repository from the registry, so a later run opens a new repository workspace. Return true when it closed or was already gone, false when it stays.
+Export `closeHerdrRepoLayoutIfIdle({repository, commonDir}, ports)`. Select by the exact namespace pair, including when a peer occurs earlier in the registry. After the last open run belonging to that pair is closed, close only that namespace's own workspace too, so no empty shell workspace stays after cancel. Close it only when no saved run of it is open, its identity still matches, and it holds exactly its one tab and one pane (a person may use more). Remove only that namespace entry from the registry, so a later run opens a new repository workspace. Preserve every peer namespace and its runs, including active runs of the same repository in another common directory. Return true when it closed or was already gone, false when it stays.
+
+## Public bindings and native context
+
+All exports above are module functions, apart from the session constant. Keep `withHerdrLayoutLock(action, ports = {})`, `openHerdrRunLayout(input, ports)`, `closeHerdrRunLayout({runId, cwd, layout}, ports)` and `closeHerdrRepoLayoutIfIdle({repository, commonDir}, ports)` intact. Open input fields are `repository`, positive integer `issueNumber`, nonempty `runId`, `workflowName`, `stageId`, `sourceRoot`, `commonDir`, `cwd`, and optional `preAgentRefusal`. The returned IDs are exactly the five named above. Run closure uses its saved layout identity; idle closure returns the Boolean defined above. Preserve UUID/cwd/label/commonDir guards on an existing run: selecting a new namespace never authorizes moving that run from its saved parent. An explicit retry of a saved run retains its original UUID and assigned cwd.
+
+Native ports retain `command(args)` for public Herdr JSON replies, awaited `checkpoint()`, optional `execFile(file, args, {cwd})` for Git verification and optional `directory` for local registry/locking. Preserve actual native exports and these injected boundaries; no check-only API or replacement Runtime authority is introduced. Host filesystem canonicalization, locking, persistence and process inspection remain native effects. Runtime execution is unbound until those native boundaries have an accepted interface/resource contract.
 
 ## Dependencies
 
