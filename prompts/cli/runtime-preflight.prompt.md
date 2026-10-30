@@ -132,6 +132,8 @@ files. An empty array adds nothing. Absence of the hook preserves the existing
 invocation and results; without references its tar remains byte for byte exact.
 There is no second archive builder and no write to authored source.
 
+A prepared file may additionally declare `role:'app-map'`. At most one returned file may have that role; it must contain a JSON v1 app map. That file selects the effective app map for dependency closure and capture.shared, even though its absent virtual path was chosen inside this attempt. Multiple role-marked maps or an invalid role/map refuse finitely through ordinary preflight rather than choosing silently. Existing `{path,bytes}` callers retain their behavior. Product capture supplies no static appMap; its one marked map determines the selected map. The role does not bypass any privacy, limits, consistency or source-hash rule.
+
 Both ports take a repository-relative path string and observe the raw repository
 in this attempt, including when that path will be replaced. `readFile(path)`
 returns a Buffer with the exact file bytes; changing that Buffer cannot change
@@ -198,4 +200,4 @@ Validate the inventory before use, with ordinary safe-file and repository-relati
 
 ## Product composition reuse
 
-Expose existing discovery, exact Story token matching and interface/schema readers for [product composition](product-composition.prompt.md); preserve standalone semantics. Composition uses product’s pure parseProductWorldWriters({worldText}) for world.md declarations; preflight does not own or invent another writer parser. Effective generated map/seed/prompt bytes must enter the ordinary captureSource prepareSource hook with attempt-local readers, normal closure, privacy, limits and source hash. This module owns that hook; composition reuses it.
+Expose existing discovery, exact Story token matching and interface/schema readers for [product composition](product-composition.prompt.md); preserve standalone semantics. Composition uses product’s pure parseProductWorldWriters({worldText}) for world.md declarations; preflight does not own or invent another writer parser. Effective generated map/seed and selected scenario replacement bytes must enter the ordinary captureSource prepareSource hook with attempt-local readers, normal closure, privacy, limits and source hash. This module owns that hook; composition reuses it.
