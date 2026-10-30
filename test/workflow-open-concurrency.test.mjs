@@ -18,6 +18,14 @@ function paused(f, predicate, failure = false) {
     return f.ports.herdr(args);
   } } };
 }
+async function checkpoint(pause, opening) {
+  const reached = await Promise.race([
+    pause.reached.then(() => true),
+    opening.then(() => false, () => false),
+  ]);
+  if (!reached) pause.release();
+  assert.equal(reached, true, 'AREA open must reach the selected native phase before completing');
+}
 const open = (f, ports) => openRun({ ref: '17', area: 'plan', cwd: f.source, packageRoot }, ports);
 const progress = run => Object.fromEntries(['state', 'area', 'done', 'gate', 'question', 'approvalRecord', 'decisions', 'pr', 'cancelled', 'chatFailure', 'chatReplacement'].map(key => [key, run[key]]));
 
@@ -25,7 +33,7 @@ for (const cancel of [false, true]) test(`2627 AREA focus retains concurrent ${c
   const f = await fixture(t); await f.run();
   const pause = paused(f, args => args[0] === 'tab' && args[1] === 'focus');
   const opening = open(f, pause.ports);
-  await pause.reached;
+  await checkpoint(pause, opening);
   const result = cancel
     ? await cancelRun({ ref: '17', cwd: f.source }, f.ports)
     : await stepDone({ step: 'scope', summary: 'Concurrent human progress', cwd: f.record().root }, f.agentPorts());
@@ -43,7 +51,7 @@ for (const cancel of [false, true]) test(`2627 historical failed resume retains 
   f.herdr.paneOf(chat).agent = null;
   const pause = paused(f, args => args[0] === 'pane' && args[1] === 'run' && args[2] === chat.paneId, true);
   const opening = open(f, pause.ports);
-  await pause.reached;
+  await checkpoint(pause, opening);
   if (cancel) assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
   else {
     // The existing public done interface records later progress while historical navigation waits.
@@ -60,7 +68,7 @@ test('2627 AREA late observation cannot overwrite a newer selected chat', async 
   const f = await fixture(t); await f.run();
   const pause = paused(f, args => args[0] === 'tab' && args[1] === 'focus');
   const opening = open(f, pause.ports);
-  await pause.reached;
+  await checkpoint(pause, opening);
   // Simulate another persisted owner of this area while the native reply waits.
   const latest = f.record();
   const selected = latest.chats.find(chat => chat.area === 'plan');
