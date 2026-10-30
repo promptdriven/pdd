@@ -102,6 +102,8 @@ Deadline, interruption, maintenance, authentication/access, source identity and 
 
 Save both absolute retry time and the refusal's 60-second capacity bound with its evidence. Reads and later explicit retries preserve them rather than starting a new wait or attempt; read-only recovery stays read-only. A new confirmed unstarted refusal establishes its own wait. Missing or unverifiable execution evidence never authorizes capacity retry.
 
+For an older record with authoritative confirmed-unstarted busy proof but without these new timestamps, the first batch read or retry under this rule establishes and saves one conservative anchor at the current observation time: minimum retry no earlier than max(any valid saved retry time, now plus 10 seconds), and capacity bound now plus 60 seconds. Do not infer the busy-answer time from a POST start time. Subsequent operations reuse the saved anchors; a longer saved server delay still wins. This timing repair grants no dispatch eligibility, changes no ID or accounting, and does not apply to a never-posted held row with no busy proof. UUID-only reads keep their existing raw-receipt-only behavior.
+
 </details>
 
 For an accepted queued job, keep its ID and GET it; when supplied, display queue.ahead, queue.slots_in_use and queue.slots on stderr: `Queued on the runtime: 5 ahead, 8 of 8 slots busy. Your test is fine.` Never resubmit an accepted queued/running/lost job. Missing aggregate fields do not authorize guessed counts or change admission.

@@ -19,6 +19,8 @@ With unsupported capacity and one-second server advice, a 90-second finite wait 
 
 Preserve source identity, original call ceilings, receipt/accounting history, truthful interruption messages and existing exits/JSON. Lint/Try keep their existing waits. Assert public POSTs, their IDs and receipts rather than total bookkeeping UUIDs or an exact capacity GET count.
 
+Older confirmed-busy saves without the new timing fields establish one conservative observation-time anchor when first read or retried, preserving any later saved server wait. Later operations reuse it. A POST start time is not a busy-answer time; held rows without a busy refusal keep their existing first-send behavior.
+
 ## Native cases for the code step
 
 [Requirement-derived native cases](../test/runtime-admission/runtime-busy-upload-wait.json) separate causal input from expected observations. Replay through public Check/read/retry with fake transport/clock and real temporary private state; native claim/process effects need ordinary code-step tests.
