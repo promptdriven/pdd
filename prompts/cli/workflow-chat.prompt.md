@@ -86,15 +86,16 @@ A pane-launch acknowledgement does not establish agent readiness. For `sendToCha
 flowchart TD
     I[Inspect original pane] --> R{Known agent status?}
     R -->|idle, working or done| S[Validate custody, then submit once]
+    R -->|Alive unknown outside startup| S
     R -->|blocked| B[Return agent_blocked]
-    R -->|Absent or unknown| W{Startup time remains?}
+    R -->|Absent, or unknown during startup| W{Startup time remains?}
     R -->|Inspection error| F[Return precise failure]
     W -->|Yes| D[Bounded wait]
     D --> I
     W -->|No| N[Return actionable not-ready result]
 ```
 
-Only an alive agent with Herdr status `idle`, `working` or `done` is ready. `blocked` returns `agent_blocked` immediately. An absent agent, an alive `unknown` status or a missing/unrecognized status may wait only within the original window. A `working` agent does not wait for its turn to finish. Expiry after waiting returns `chat_still_starting`; a first confirmed absence outside the window returns `agent_not_found`, while an alive but unknown agent outside it returns `herdr_status_unknown`. Other inspection failures return their actual code immediately and are never proof of readiness.
+During startup, an alive agent with Herdr status `idle`, `working` or `done` is ready; an absent agent or unknown/missing/unrecognized status may wait only within the original window. `blocked` returns `agent_blocked` immediately at any age. A `working` agent does not wait for its turn to finish. Expiry after waiting returns `chat_still_starting`; a first confirmed absence outside the window returns `agent_not_found`. Outside startup, preserve existing delivery to an alive agent even when its status is unknown, missing or unrecognized. Other inspection failures return their actual code immediately and are never proof of readiness.
 
 Immediately before each transport attempt, await optional `ports.beforeSubmit()`. It returns true only after its caller has validated the original target and durably recorded submission intent; false returns `{ok:false,code:"chat_target_changed"}` without transport. Callback failure must also send nothing. Invoke it again before an allowed retry after a confirmed rejection; never call it merely for an inspection. The runner owns the callback's journal and target policy.
 
