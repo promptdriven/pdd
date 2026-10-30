@@ -79,8 +79,11 @@ headings name the requested heading. Never return a partial expansion as success
 
 `initial_world` may be exactly `{"$seed":"contracts/seed-world.json"}` plus an
 optional `set` object mapping JSON Pointers to replacement values. The seed path
-has no fragment and its JSON must be an object. Resolve a nested root `$seed` by
-the same rules, with cycle detection; ordinary nested world values stay literal.
+has no fragment and its JSON must be an object. Its canonical document-root target
+identity is always `path#`, as for a JSON-root `$contract` target. Use that identity
+in `references` and cycle chains for every seed, including nested/transitive seeds.
+Resolve a nested root `$seed` by the same rules, with cycle detection; ordinary
+nested world values stay literal.
 Clone the seed and every replacement; never mutate files, supplied data or another
 scenario's world. Preserve absent, null, false, 0 and empty containers distinctly.
 
@@ -171,7 +174,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "415346a2ce4147999e74834f279a0f9f3f01e876b3dad31879223a3bed94ee7a",
+  "status": "draft", "prose_sha256": "17539e1dd959588d78b64e31cb1f85d0f371c4c3a2ebea0f29ee7f179b0da75a",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
