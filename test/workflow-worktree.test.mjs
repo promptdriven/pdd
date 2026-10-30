@@ -93,13 +93,14 @@ test('2698: saved intent on bare-in-.git layout retains the unconfirmed allocati
   }
 });
 
-test('2698: bare-in-.git layout with a different per-worktree origin retains the generic refusal', async t => {
+test('2698: synthetic environment one pdd process cannot have only proves a different origin keeps the generic refusal', async t => {
   const f = await layoutFixture(t, 'bare-in-dotgit');
   await f.gitAt(f.primary, 'config', 'extensions.worktreeConfig', 'true');
   await f.gitAt(f.primary, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Acme/Project.git');
   await f.gitAt(f.primary, 'config', '--local', '--unset', 'remote.origin.url');
   await f.gitAt(f.cwd, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Other/Thing.git');
-  // Git 2.43 needs an explicit linked work tree when shared core.bare remains true with worktreeConfig.
+  // This is a synthetic environment that one pdd process cannot have;
+  // it only proves that a different origin keeps the generic refusal.
   const env = { ...process.env, GIT_WORK_TREE: f.cwd }, original = f.ports.execFile;
   const linkedGit = (...args) => execute('git', args, { cwd: f.cwd, encoding: 'utf8', env });
   f.ports.execFile = (file, args, options) => {
