@@ -182,3 +182,4 @@ Only Stories using a changed record become stale because of that record.
 `pdd approve` still approves prompt prose; it does not cover shared contract
 contents. Editing a contract never approves a prompt. Sync writes that edit an
 approved interface set it to draft; review the preview and approve it as usual.
+Bare `pdd try --product` uses the sole root journey scenario as its request skeleton when available, while its starting world comes from product and part seeds. Multiple candidates require an explicit Story/test choice. With no journeys it uses ordinary test selection; `--journey` explicitly applies that journey’s start overrides.
