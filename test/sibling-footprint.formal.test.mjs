@@ -125,7 +125,8 @@ test('FORMAL sibling: complete 2 x 6 x 2 selection/error/reference domain, isola
 });
 
 // Each Cartesian member is a separate test so a counterexample cannot hide the
-// other roles/sizes. All observations precede the raw-replacement assertion.
+// other roles/sizes. Source355 preserves unread small replacements; raw prompt
+// hashing still requires an independently bounded read of the original prompt.
 for (const size of [12_582_912,2_147_483_649]) for (const path of ['user_stories/transcript.md','contracts/ignored.md','prompts/ignored.prompt.md']) {
   test(`FORMAL discovery: ${size} bytes in ${path}, ignored skip and selected refusal`, t => {
     const root = fixture(t), before = captureSource(root,{tests:[GOOD]});
@@ -136,8 +137,8 @@ for (const size of [12_582_912,2_147_483_649]) for (const path of ['user_stories
     assert.deepEqual(paths(captured),paths(before)); assert.equal(captured.sha256,before.sha256);
     const port = sourceFilePort(root); assert.equal(port.stat({path}).size,size);
     refusal(() => port.read({path}));
-    let replacementError;
-    try { captureSource(root,{tests:[GOOD],prepareSource:() => [{path,bytes:'small replacement'}]}); }
+    let replacementError, replacement;
+    try { replacement = captureSource(root,{tests:[GOOD],prepareSource:() => [{path,bytes:'small replacement'}]}); }
     catch (error) { replacementError = error; }
     for (const words of [[],['sync']]) {
       const stdout = sink(), stderr = sink();
@@ -147,9 +148,44 @@ for (const size of [12_582_912,2_147_483_649]) for (const path of ['user_stories
     }
     assert.deepEqual(spy.reads,[],'all ignored and selected huge variants stop before open/read');
     spy.restore();
-    assert.equal(replacementError?.exitCode,4,'an oversized raw upload candidate still refuses when replaced by small effective bytes');
+    if (path.endsWith('.prompt.md')) {
+      assert.equal(replacementError?.exitCode,4,'required raw prompt hashing must stat-refuse before reading');
+    } else {
+      assert.equal(replacementError,undefined,'safe unread original size does not refuse supplied replacement bytes');
+      assert.deepEqual(replacement.files,[...before.files,{path,size:17}].sort((a,b)=>a.path.localeCompare(b.path)));
+      assert.deepEqual(replacement.sources,[...before.sources,{path,bytes:Buffer.from('small replacement')}].sort((a,b)=>a.path.localeCompare(b.path)));
+      assert.equal(replacement.bytes,before.bytes+17,'only effective replacement bytes enter the selected total');
+    }
   });
 }
+
+test('FORMAL user evidence: complete 2 known-user modes x 5 consumer states never claim completeness from unavailable discovery', t => {
+  let cases = 0;
+  for (const known of [false,true]) for (const state of ['complete','12MiB','2GiB','unresolved','sibling']) {
+    const root = fixture(t,known), ignored = 'prompts/unavailable.prompt.md';
+    let spy;
+    if (state === '12MiB' || state === '2GiB') {
+      write(root,ignored,'synthetic unread consumer');
+      spy = fakeSizes(t,root,{[ignored]:state === '12MiB' ? 12_582_912 : 2_147_483_649});
+    }
+    if (state === 'unresolved') write(root,ignored,prompt('{"$contract":"contracts/missing.json#"}'));
+    if (state === 'sibling') fs.rmSync(join(root,SP));
+    const stdout = sink(), stderr = sink();
+    assert.equal(runContracts({cwd:root},{env:{HOME:join(root,'home'),PDD_STATE_DIR:join(root,'state')},stdout,stderr}),0,stderr.text);
+    const record = stdout.text.split('\n').find(line => line.startsWith('contracts/input.json#  '));
+    assert.ok(record,'an independent available record remains listed');
+    const users = /  users: (.*?)  Stories:/.exec(record)?.[1];
+    assert.equal(users.includes('prompts/good.prompt.md'),known,'preserve verified consumers without inventing one');
+    if (state === 'complete') assert.equal(users,known ? 'prompts/good.prompt.md' : 'none');
+    else {
+      assert.match(users,/unavailable|incomplete/,'unknown consumers cannot prove an exhaustive users list');
+      assert.doesNotMatch(users,/\bnone\b/,'unavailable discovery cannot prove no users');
+    }
+    if (spy) { assert.deepEqual(spy.reads,[],'oversized consumer remains unread'); spy.restore(); }
+    cases++;
+  }
+  assert.equal(cases,10);
+});
 
 test('FORMAL accounting: complete 6 depths x 2 cached annotation modes preserve exact layout with linear marker work', () => {
   let cases = 0;
