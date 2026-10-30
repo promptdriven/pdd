@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6be0a8c7a9451bc2a6440ac042676aed437612281c1aab96f3748cc077680275).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 34099a29e5fdab3421469db9b22b3ef3d75c36e576adfd862ed70f2d7f5151e2).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -50,11 +50,11 @@ const routes = [
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--local', kind: 'flag' }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
     forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
-      form('pdd check --read [BATCH|CALL_ID] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --read [BATCH|CALL_ID] [--json] [--timeout MIN]', 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
-      form('pdd check --lint [STORY...] [--json]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
+      form('pdd check --lint [STORY...] [--json] [--timeout MIN]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form('pdd check --lint --local [STORY...] [--json]', 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.'),
       form('pdd check --screen URL --drawing PATH [--json]', 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI/runtime calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],

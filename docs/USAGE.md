@@ -384,7 +384,7 @@ pdd check --files place-order  # preview only this Story; offline
 pdd check --lint          # the server checks the format only, 0 AI calls
 pdd check                 # check every story; one table and a report link for each
 pdd check place-order     # check one story
-pdd check --read          # show the last results again; sends nothing new
+pdd check --read          # read saved results; may continue original lint-held checks after lint passes
 pdd try place-order       # open a Try link in your browser; it ends in 24 hours
 pdd try --stop place-order
 ```

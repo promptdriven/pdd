@@ -168,7 +168,7 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd check --lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
 | `pdd check [STORY...]` | Run the tests of the Stories on the runtime. |
 | `pdd check --files` | List the files that a check sends. No network. |
-| `pdd check --read` | Show saved check results again. Sends no check. |
+| `pdd check --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
 | `pdd try STORY` | Open a Try page for the Story. |
 | `pdd try STORY --cli` | Run the program as a command line in your terminal. |
 | `pdd try STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
