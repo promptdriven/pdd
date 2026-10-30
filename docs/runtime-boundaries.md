@@ -54,10 +54,11 @@ native tests cover. Neither a passing check nor a simulation approves a workflow
 ## Read call usage as evidence
 
 A check that pdd never posts has zero check AI calls, including one held behind unfinished lint.
-The lint result can remain unknown while that check was not run. `pdd check --read BATCH` reads
-existing work and sends no new check.
+The lint result can remain unknown while that check was not run. `pdd check --read BATCH` reads existing work; only guarded saved-lint continuation or a confirmed one-time service-restarted replacement can send a check. UUID call reads remain GET-only.
 
 For a submitted run, keep the server's accounting result. If it reports unknown usage or
 incomplete accounting, a raw `provider_calls: 0` does not prove zero cost. Keep the run's call
 ceiling reserved until complete evidence resolves it; do not resubmit the same run to obtain a
 number. Share its report with the PDD team.
+
+The runtime-slots snapshot interface binds the actual files.listRecords port. Supplied records can establish listing order and preserved fields. Local exclusive-create races, process death, crash cleanup, private file permissions and CLI dispatch require native tests; no snapshot replay establishes those effects. See the [shared admission plan](../user_stories/PLAN.md#shared-runtime-admission-2631).
