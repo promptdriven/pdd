@@ -1,7 +1,13 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b1bb7cb3297d1e82153460487139ca0946cb81c547f9989548294b57d44b9a55).
 const form = (form, description) => Object.freeze({ form, description });
-export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
+export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
+  { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
+    forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no runtime calls.')] },
+  { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
+    forms: [form('pdd product next', 'Show ready planned runs and their start commands; no runtime calls.')] },
+  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No runtime calls.')] },
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],

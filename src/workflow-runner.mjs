@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 48bd8466d7ab32723b54e1d6bc7c864a409c0e59e71bd14e7f2493dd83319ce6).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -361,7 +361,7 @@ function hideLocalPaths(text, run) {
 // Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
 // "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
 // at a line break, ";", a "Report" line, a link or the next Runtime check.
-function runtimeLines(text) {
+export function runtimeLines(text) {
   return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
@@ -393,7 +393,7 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-function matchesSource(record, root, fingerprint) {
+export function matchesSource(record, root, fingerprint) {
   const source = record.source;
   if (!source?.sha256) return false;
   if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
@@ -402,7 +402,7 @@ function matchesSource(record, root, fingerprint) {
   }
   return false;
 }
-function storyCount(run) {
+export function storyCount(run) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   if (!records.length) return null;
@@ -416,6 +416,18 @@ function storyCount(run) {
   if (unresolved.length) result.unknown = unresolved;
   if (!compatible.length) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
   return result;
+}
+export function storyEvidence(run) {
+  const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
+    .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  const current = new Map(), older = new Map(), fingerprint = gitFingerprint(run.root);
+  for (const record of records) {
+    const compatible = matchesSource(record, run.root, fingerprint);
+    for (const row of latestStories(runtimeLines(record.summary))) {
+      (compatible ? current : older).set(row.story, { story: row.story, pass: row.pass, current: compatible, result: row.result, at: record.at ?? 0 });
+    }
+  }
+  return [...new Map([...older, ...current]).values()];
 }
 const storyText = count => `${count.pass} of ${count.total} Stories pass${count.unknown?.length ? ` · ${count.unknown.length} unknown` : ''}`;
 const shortLine = text => clip(text, 199);

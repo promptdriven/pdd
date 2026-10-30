@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcf80ff95fe3f5bdf3d88e6ac3d8fabf8acc6d40d2848e6df30e0824516afcac).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8436c3d5bff6cd7a3b98b090d39cad07592a3f6781496ea16eb4e3df65c3075c).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer } = {}) {
+  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -67,6 +67,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         } catch { /* The skills check never changes --version. */ }
         return 0;
       } catch { line(stderr, 'This PDD package has no readable version metadata.');return 1; }
+    case 'product-status': case 'product-next': case 'product-start': {
+      try {
+        const context = await (gitContext ?? (await import('./workflow-runs.mjs')).gitContext)(cwd, productPorts);
+        if (!context?.toplevel) throw Error('No product repository was found.');
+        const module = product ?? await import('./product.mjs');
+        if (typeof module.runProduct !== 'function') throw Error('Missing product export');
+        const result = await module.runProduct({ command: plan.local.slice(8), run: plan.operands[0],
+          noRun: plan.options['--no-run'] === true, agent: plan.options['--agent'] ?? 'codex',
+          json: plan.options['--json'] === true, cwd: context.toplevel, packageRoot }, productPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
+          || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid product reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message.replace(/\n$/, ''));
+        return result.exitCode;
+      } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
+    }
     case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
       if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
