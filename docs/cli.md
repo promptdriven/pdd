@@ -140,3 +140,31 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 Remote lint shares the Check caller wait, including `--timeout`, with no separate lint limit. Recovery of a saved lint-held Check has a fresh finite wait (`--timeout`, otherwise 90 seconds), retains the saved runtime origin and dispatches each original check at most once. Standalone lint reads never send checks.
 
 Before sending work, pdd asks whether the runtime has room. During announced maintenance, it shows the end time and reason, then waits within the same deadline. If the runtime does not offer this information, pdd uses the reply to the submission instead. A queued job keeps its ID while pdd shows its place. If the runtime confirms that a check ended because the service restarted, pdd tries that check once more and saves both attempts and their usage. If a reply is lost or the outcome is uncertain for another reason, pdd reads the original job without sending it again.
+
+## Shared records
+
+| Command | What it does |
+|---|---|
+| `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no runtime calls |
+| `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+
+Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
+The Markdown section has a `### order_in` heading and one JSON code block;
+headings with spaces also accept their normal heading fragment. JSON records use
+`{"$contract":"contracts/records.json#/defs/order"}`. Local `title` and
+`description` may accompany a reference; other constraint siblings are refused.
+Use `"initial_world":{"$seed":"contracts/seed-world.json","set":{"/orders":[]}}`
+for a shared starting world. Paths are relative to the repository root. Set
+pointers apply in written order to a fresh world and may add an object's final
+key; their parents must exist. Expected values and literal inputs stay literal.
+
+Check, lint and Try use expanded schemas/worlds, including uploaded bytes. A
+missing target stops before upload. Real schema `$ref` remains refused. Explicit
+`pdd check --lint` advises about differing copies with the same fields or one
+extra/missing field; advice does not fail a check. Listing uses actual Check
+history, never lint as a check; no baseline is shown as not checked/unavailable.
+Only Stories using a changed record become stale because of that record.
+
+`pdd approve` still approves prompt prose; it does not cover shared contract
+contents. Editing a contract never approves a prompt. Sync writes that edit an
+approved interface set it to draft; review the preview and approve it as usual.

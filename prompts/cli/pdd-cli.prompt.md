@@ -12,6 +12,10 @@ one newline. Preserve other commands and their existing dispatch and effects.
 
 ## Dependencies
 
+- [Contract commands](contracts.prompt.md): required generation and verification
+  context for local list/sync dispatch; the syntax-only Runtime entry does not
+  bind these native effects.
+
 - [Runtime slots](runtime-slots.prompt.md): required generation/verification context for local jobs dispatch. The existing syntax-only Runtime entry does not bind its native filesystem effects.
 
 - [Argument parser](argument-parser.prompt.md) is required for authoring,
@@ -58,13 +62,22 @@ exit code as the result fields below. This transport does not change that
 function's signature. Invalid syntax is resolved locally before any dependency
 with external effects is invoked; no runtime resource is needed for that path.
 
+## Local contract commands
+
+For `contracts` and `contracts-sync`, dynamically import
+[contract commands](contracts.prompt.md), allowing an injected contracts module
+for native tests. Call runContracts with words [] or ['sync'], parsed options,
+cwd and env/stdout/stderr; return its exit code. Do not do runtime authentication,
+slot admission, skill discovery or PATH probing here. A thrown error prints one
+finite local cause and returns 5. Catalog owns all syntax.
+
 <details>
 <summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "515d4fab0cb3817e94fbd63c15525fd90bc44d91507f74f91b47c0acd8dbbf65",
+  "prose_sha256": "c3de9d8f9a6d8c042dbc354252bc930451a8e0bab9e52a25f4e9ce23d1c21c0a",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

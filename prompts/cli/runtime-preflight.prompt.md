@@ -57,6 +57,31 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 ## Source capture
 
+Default shared-reference preparation uses the synchronous module function
+`expandSource` from [references](contract-refs.prompt.md). Expand before
+`readPrompt(root, visible, path)` parses/validates interface schemas and before
+`checkTest` validates a scenario or its inputs. Preserve readPrompt's synchronous
+public API. `--fill-hash` validates references but writes only its existing draft
+hash string, never an expanded schema/world. Explicit lint prepares references
+without adding local engine-rule validation.
+
+Capture uses that same resolver for selected prompt/scenario bytes. Every
+contract/seed read uses the capture attempt's safe, snapshot-aware adapter and
+participates in its before/after stat observations and closure retries. Apply
+expansion within the existing capture path, including generated/replaced source
+when present; do not build a second archive path. Discover dependencies from
+effective prompt/scenario bytes. Reference-only reads do not automatically add
+raw contract files to the upload: their selected record/world is already inline.
+An explicit ordinary dependency still selects its full file. Missing or unsafe
+references stop before upload/sign-in with consumer and target, exit 4.
+
+Retain original authored paths. Effective upload bytes determine byte limits,
+tar contents and source SHA; no-reference captures keep exactly the prior bytes
+and tar. For reference-only reads, unused contracts and unused records in a
+shared file must not affect a selected Story's source or freshness. Expose expansion provenance per consumer
+and a per-Story selected effective-file footprint for local Check history;
+a whole multi-Story batch hash cannot substitute for that footprint.
+
 - `captureSource(root, {tests, appMap, attempts})` captures a sorted, deduplicated selection with original repository-relative names. `tests` is a list of authored test paths; absent means every discovered test. Include each selected test, its `story_path`, step `entry_path`s, declared `entry_paths`, test context `prompt_path`s and `paths`, and recursively every reached prompt's interface `calls[].target`. Missing declared files refuse with exit 4, naming the referring file and missing path; never silently send an incomplete program.
 - Required Markdown context is declared in `## Dependencies`: local inline or reference-style Markdown links, and a backticked file path that leads a dependency list item (optionally followed by a colon and description). A bare declaration must name a directory-qualified file with an extension, or a filename with a common text, data or source-code extension (otherwise use a Markdown link); schema/version labels, dotted API identifiers, regular expressions, commands, absolute/home/environment paths and inline-code mentions inside descriptions or rules are not file declarations. Link destinations remain authoritative even when missing; classification must not depend on whether a descriptive token happens to match a Git file. Resolve links and context paths relative to the declaring file, with repository-root paths accepted when they name Git files. Include linked fragments' whole files, and recurse through dependencies in Markdown context files. Include local image links anywhere in reached Markdown, including SVG mockups. Ignore remote URLs and same-file anchors; do not load ordinary navigation links outside Dependencies. Cycles terminate and files appear once. Invalid or escaping paths refuse. Unusual names can use the include list.
 - The Dependencies section ends at the next level-one/two Markdown heading or a following `<details><summary>` section headed `Required rules`, `Required module rules`, `Required interface reference` or `Decision path` (case-insensitive, optional `Required`, and an optional colon with a descriptive suffix). Inline emphasis tags (`strong`, `em`, `b`, `i`) and line breaks in those summaries do not change the boundary, including quoted tag attributes containing `>`. Unknown or malformed angle markup does not establish a boundary: retain subsequent dependency declarations and their safety checks. This reads a section name only; never treat it as sanitized HTML or alter captured bytes. Literal HTML section markers inside backtick/tilde fenced examples, inline code or HTML comments are not boundaries; they must not hide a genuine dependency declaration or bypass its missing/unsafe-file refusal. Fence delimiters keep their character and opening length, so a shorter or different closing marker does not end the example. Later rule/reference links and source/test filename list items are not dependency declarations, even when Git contains those files. Other details blocks may wrap genuine dependency declarations and do not end the section. Preserve their inline/reference links, bare file declarations, recursive context and missing/unsafe-file refusals. Image links still apply anywhere in the full reached Markdown. This scopes discovery only; never trim the captured prompt or infer file exclusions from its extension.
@@ -67,6 +92,10 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 - Stat each file and selection metadata before and after (ino, size, mtime in ns). If a file or the Git file list changes, discover the closure and capture again, at most 3 times; then stop with exit 5. Keep the captured bytes consistent with these observations and never follow a symlink while reading.
 
 ## Dependencies
+
+- [References](contract-refs.prompt.md): required generation and verification
+  context for synchronous expansion and provenance; native adapters preserve
+  this module's privacy, snapshot and capture rules.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [runtime client](runtime-client.prompt.md) calls this module.
 

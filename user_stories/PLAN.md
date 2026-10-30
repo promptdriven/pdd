@@ -14,3 +14,14 @@ Build on the saved-lint continuation contract. Prompts and expected cases are re
 - [runtime-jobs](runtime-jobs.md) — [scenario](../test/runtime/runtime-jobs.json). Runtime check: snapshot binding only; CLI/native effects NOT REPLAYED.
 
 Live maintenance/drain remains unverified until prompt-runtime #453 supplies a staging window. No runtime-server implementation belongs to this plan.
+
+# Shared records (#2629)
+
+Each Story has one case file. The expansion entries use actual file-resource
+ports; catalog/history, CLI, capture and write effects require native verification.
+
+- [shared-records](shared-records.md) — [scenario](../test/runtime/shared-records.json). Runtime check: expansion binding only.
+- [shared-seed](shared-seed.md) — [scenario](../test/runtime/shared-seed.json). Runtime check: expansion binding only.
+- [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status.json). Runtime check: native effects unbound.
+- [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift.json). Runtime check: CLI advice unbound.
+- [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync.json). Runtime check: native writes unbound.

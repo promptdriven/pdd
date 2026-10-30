@@ -170,6 +170,56 @@ Only a same-ID, correct-command terminal check receipt with state unknown and st
 
 Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The runtime restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred.
 
+## Shared contract advice
+
+Every Check/lint/Try/file-preview capture, held-lint continuation, retry, restart
+and workflow freshness recapture uses preflight's effective reference bytes.
+Validate selected references before sign-in or upload, including explicit lint,
+without adding local engine validation to explicit lint. Missing references send
+nothing. Unused contracts are not added to the selected upload.
+
+Only explicit remote `pdd check --lint` additionally compares selected prompt
+schemas with the current local contract catalog, reading it with preflight
+safe-file rules. Catalog-only reads do not extend the upload selection. Use the reference module's
+comparison authority. Print differing copies with consumer/schema location,
+canonical target, changed/missing/extra fields or constraints and a `$contract`
+suggestion. Exact copies need no drift warning; ambiguous candidates warn and
+skip. Merge this advice into existing warnings; it changes no server request,
+check expectation, refusal or exit status. Ordinary Check's preliminary lint and
+SVG-only `--lint --local` do not run this catalog comparison.
+
+## Shared contract Check history
+
+Export synchronous module function `readContractHistory({root,env})`, returning
+`{stories,warnings}` without gh, network, slots, model calls or writes. Each story
+row has `story_path`, `baseline` (`checked`, `not-checked`, `unavailable`),
+`checked_at` (timestamp or null), `result_state` (`passed`, `failed` or null),
+`files` (per-Story effective `{path,sha256}` rows)
+and `references` (the resolver's provenance rows). Missing snapshots yield
+`unavailable`, never fabricated values. Keep data private under existing state
+permissions; no repository metadata file or new record-hash pins.
+
+Save each actual terminal Check's source footprint and reference snapshots from
+its submitted capture, individually for each Story, even in a multi-Story batch.
+Advance the baseline only for an actual evaluated Check, never a refusal before
+execution, pending/not-run/unknown receipt, standalone lint, Try or file preview.
+Use the latest actual Check for that Story, retaining its real pass/fail result.
+Reading a receipt later can establish that original Check, never substitute the
+current files for its submitted snapshots. Missing legacy snapshots remain
+unavailable until a new actual Check. Do not use unrelated rows' dependencies or
+a whole batch SHA as the Story's freshness identity.
+
+New reference-backed Try records also retain uploaded effective prompt hashes
+and the corresponding contract provenance. Apply the existing pinned-prompt
+freshness promise to the expanded current prompt bytes before connected reuse,
+doors or owner-tool access, so a contract-only prompt change requires `--new`.
+Keep raw authored prompt hashes for compatibility. For legacy records, use the
+existing raw-hash rule; if a currently referenced prompt lacks the matching
+expanded snapshot, explain that its reference baseline is unavailable and ask for
+`--new`. Do not compare the whole scenario/seed/world hash for this guard: an
+existing Try deliberately keeps its original persistent world. Preserve Story
+identity checks and all existing owner/origin/budget guards.
+
 ## State (outside the repo; folders 0700, files 0600; no tar and no token on disk)
 
 ```
@@ -232,6 +282,9 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 - HTTP 401: `The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The runtime answered HTTP 500: <message>.`
 
 ## Dependencies
+
+- [References](contract-refs.prompt.md): required generation and verification
+  context for canonical provenance and explicit-lint copy comparison.
 
 - [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 

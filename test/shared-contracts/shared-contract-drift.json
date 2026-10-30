@@ -1,0 +1,68 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/shared-contract-drift.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Explicit lint advises when a copied schema differs with the same fields or one extra or missing field."
+    },
+    {
+      "id": "AC2",
+      "text": "Changing a nested constraint is visible even when the field names stay the same."
+    },
+    {
+      "id": "AC3",
+      "text": "Equal copies and schemas differing by two fields produce no drift advice."
+    },
+    {
+      "id": "AC4",
+      "text": "Ambiguous matches warn without choosing a record."
+    },
+    {
+      "id": "AC5",
+      "text": "Drift advice leaves the server lint result and exit status unchanged."
+    }
+  ],
+  "cases": [
+    {
+      "id": "field-distance",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "record properties name,run_id; copies missing run_id, extra age, changed name constraint",
+      "required_observation": "all three advise with consumer, canonical target and exact difference"
+    },
+    {
+      "id": "nested",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "same fields; nested count.minimum is 0 in copy and 1 in record",
+      "required_observation": "advice identifies nested minimum difference"
+    },
+    {
+      "id": "limits",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "semantic equal with different key order/title; field symmetric difference 2; literal $contract in default",
+      "required_observation": "no drift advice for any of these"
+    },
+    {
+      "id": "ambiguity",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "two different records equally near the inline copy",
+      "required_observation": "ambiguous warning; no arbitrary selected reference"
+    },
+    {
+      "id": "advice-only",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "fake server lint passes then refuses in separate runs; drift advice in both",
+      "required_observation": "exit 0 then 4 follows server result; same upload/request semantics; no checks or expected-value writes"
+    }
+  ]
+}
