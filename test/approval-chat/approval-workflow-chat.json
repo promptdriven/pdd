@@ -16,7 +16,7 @@
     },
     {
       "id": "AC4",
-      "text": "Without --said, existing terminal and native area-chat approvals still work in easy mode; strict mode permits only the person terminal."
+      "text": "Without --said, a person terminal keeps y/N, while an agent, non-terminal or current area pane must ask me and use --said; strict mode permits only the person terminal."
     },
     {
       "id": "AC5",
@@ -46,8 +46,8 @@
     },
     {
       "id": "legacy-routes",
-      "given": "easy terminal y/N; native Herdr current user reply; wrong session/root/stale/ignore-prefix/code-gate no yes-word; strict valid native evidence",
-      "required_observation": "easy retains exact legacy decisions/refusals; strict accepts only person terminal"
+      "given": "easy terminal y/N; no-said agent/nonTTY/current Herdr pane with latest question/change/I approve/queued evidence; strict valid evidence",
+      "required_observation": "terminal retains y/N; every no-said non-person route refuses without reading evidence, asks person then --said; strict terminal only"
     },
     {
       "id": "failure-retry",
@@ -56,7 +56,7 @@
     },
     {
       "id": "safe-render",
-      "given": "said/terminal/native routes; actor/path/words contain newlines, runs of backticks, @mentions, #references, HTML, bidi, pdd-workflow:",
+      "given": "said/terminal routes and historical native recording; actor/path/words contain newlines, runs of backticks, @mentions, #references, HTML, bidi, pdd-workflow:",
       "required_observation": "history reload and create/update retain raw values; quoted JSON in long code spans; no mentions/issue anchors/extra markers in GitHub Markdown render"
     },
     {

@@ -97,3 +97,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 1. [Approve a prompt through my agent](approval-prompt-chat.md) — [native/manual cases](../test/approval-chat/approval-prompt-chat.json). Runtime check: NOT RUN (provider calls forbidden).
 2. [Approve a gate and its prompts in one step](approval-workflow-chat.md) — [native/manual cases](../test/approval-chat/approval-workflow-chat.json). Runtime check: NOT RUN (provider calls forbidden).
 3. [Ask my agent to merge a checked PR](approval-requested-merge.md) — [native/manual cases](../test/approval-chat/approval-requested-merge.json). Runtime check: NOT RUN (provider calls forbidden).
+
+## Explicit gate decisions (#2762, same PR pair as #2755)
+
+1. [Keep every gate waiting for my decision](approval-explicit-gates.md) — [native/manual cases](../test/approval-chat/approval-explicit-gates.json). Runtime check: NOT RUN (provider calls forbidden). Native gate authority and advisory regressions plus honest terminal/no-auto-advance preservation controls.

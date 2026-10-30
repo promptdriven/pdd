@@ -54,6 +54,11 @@
       "id": "legacy",
       "given": "schema/hash/nested status guards; invalid/symlink/deleted path; stale prose; already current; presentAndApprove Simulator caller",
       "required_observation": "existing safeguards and exports retain behavior; only named top-level values change; already current no-op"
+    },
+    {
+      "id": "tty-source-preservation",
+      "given": "no --said, both stdin/stdout TTY, agent markers present; repeat with strict_approvals true",
+      "required_observation": "easy mode asks y/N and y approves with markers preserved; strict mode refuses marked TTY; original prompt safeguards and unrelated bytes remain unchanged"
     }
   ]
 }

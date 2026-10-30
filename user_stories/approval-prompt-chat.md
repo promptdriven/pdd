@@ -11,7 +11,7 @@ I can approve one prompt through my coding agent without leaving the chat.
 
 ## Rules to check
 
-The [prompt owner](../prompts/cli/prompt-approve.prompt.md) owns validation and editing; [shared policy/journal](../prompts/cli/approval-policy.prompt.md) owns strict configuration and durable provenance. Refuse malformed/unreadable policy and journal before writes. Real terminal decline, schema errors and non-Git-visible/symlink paths never approve. A matching old path with changed prose cannot borrow an earlier approval. No-said agent/piped input still refuses; native Simulator callback remains compatible. An already approved/current standalone prompt remains a no-op. Native concurrent journal writes must retain both successful decisions.
+The [prompt owner](../prompts/cli/prompt-approve.prompt.md) owns validation and editing; [shared policy/journal](../prompts/cli/approval-policy.prompt.md) owns strict configuration and durable provenance. Refuse malformed/unreadable policy and journal before writes. Real terminal decline, schema errors and non-Git-visible/symlink paths never approve. A matching old path with changed prose cannot borrow an earlier approval. No-said non-terminal agent/piped input still refuses; easy mode preserves both-TTY y/N even with agent markers, while strict mode refuses marked TTY invocations; native Simulator callback remains compatible. An already approved/current standalone prompt remains a no-op. Native concurrent journal writes must retain both successful decisions.
 
 ## Acceptance and review
 
