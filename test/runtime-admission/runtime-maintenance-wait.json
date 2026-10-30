@@ -37,7 +37,7 @@
     {
       "id": "summer-local-end",
       "given": "local zone America/Los_Angeles; synthetic future maintenance until 2026-07-02T02:25:00.000Z, separately from capacity and confirmed not-started 503",
-      "required_observation": "human notice shows local hour/minute 19:25 and PDT with the supplied reason; structured JSON and saved state retain original until 2026-07-02T02:25:00.000Z; no complete sentence wording is fixed"
+      "required_observation": "human notice shows local hour/minute 19:25 and PDT with the supplied reason; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission saved from a confirmed not-started 503 retains original until 2026-07-02T02:25:00.000Z; no complete sentence wording is fixed"
     },
     {
       "id": "winter-local-end",
@@ -52,7 +52,7 @@
     {
       "id": "configured-local-zone",
       "given": "local zone Asia/Tokyo; synthetic future maintenance until 2026-07-02T02:25:00.000Z",
-      "required_observation": "human notice shows local hour/minute 11:25 and its zone; no Pacific zone or UTC end-time string is substituted; structured JSON and saved state retain the original UTC until"
+      "required_observation": "human notice shows local hour/minute 11:25 and its zone; no Pacific zone or UTC end-time string is substituted; existing machine JSON schema, values and accounting remain unchanged, with no added until field or localized maintenance time; raw admission data retains the original UTC until where already captured"
     },
     {
       "id": "old-runtime",
