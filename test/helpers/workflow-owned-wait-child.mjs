@@ -2,7 +2,7 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 const W = process.env.W;
 const { changeRun } = await import(W + '/src/workflow-runner.mjs');
-const [source, stateDir, clock] = process.argv.slice(2);
+const [source, stateDir, clock, request = 'First'] = process.argv.slice(2);
 const exec = promisify(execFile);
 const ports = {
   execFile: async (file,args,options) => {
@@ -18,6 +18,6 @@ const ports = {
     await new Promise(resolve => setTimeout(resolve, 60_000));
   }
 };
-const result = await changeRun({ref:'17',text:'First',cwd:source},ports);
+const result = await changeRun({ref:'17',text:request,cwd:source},ports);
 process.send({result});
 process.disconnect();

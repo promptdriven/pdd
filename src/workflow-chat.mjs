@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 789b531e5e37ae9e10641c4b5adb03b7b9a4df1872b038a2e9f912b7036f6cbb).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 70cc88aff21c6fe1fc56985dc1858d9ab167773d20af88c95abf1ec3c393d5b3).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -118,7 +118,7 @@ export async function sendToChat(chat, text, ports = {}) {
     if (retry && remaining() <= 0) return { ok: false, code: 'chat_still_starting' };
     const live = await chatSession(chat, ports);
     if (live.status === 'blocked' && live.alive) return { ok: false, code: 'agent_blocked' };
-    const ready = live.alive && ['idle', 'working', 'done'].includes(live.status);
+    const ready = live.alive && (['idle', 'working', 'done'].includes(live.status) || !retry && budget <= 0);
     if (!ready) {
       if (!live.alive && live.code !== 'agent_not_found') return { ok: false, code: live.code ?? 'herdr_status_unknown' };
       if (remaining() <= 0) return { ok: false, code: retry ? 'chat_still_starting' : live.alive ? 'herdr_status_unknown' : 'agent_not_found' };

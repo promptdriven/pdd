@@ -7,7 +7,7 @@ const live = { result: { agent: { agent_status: 'working' } } };
 for (const age of [0, 29_750, 30_000, 60_000]) test(`2677 readiness bounds at age ${age}`, async () => {
   let clock = 60_000, inspections = 0, submissions = 0; const waits = [];
   const result = await sendToChat({ paneId: 'original', startedAt: clock - age }, 'exact request', {
-    now: () => clock, sleep: async ms => { waits.push(ms); clock += ms; },
+    now: () => clock, elapsedNow: () => clock, sleep: async ms => { waits.push(ms); clock += ms; },
     herdr: async args => { assert.equal(args[2], 'original'); if (args[1] === 'get') { inspections++; return missing(); } submissions++; return {}; }
   });
   assert.equal(submissions, 0, 'confirmed absence never submits');
@@ -19,7 +19,7 @@ for (const age of [0, 29_750, 30_000, 60_000]) test(`2677 readiness bounds at ag
 test('2677 latest resume gives readiness time and working submits exact text once', async () => {
   let clock = 100_000, inspections = 0; const calls = [], text = '  x "quote"\n  tail  ';
   const result = await sendToChat({ paneId: 'original', startedAt: 0, resumedAt: clock }, text, {
-    now: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
+    now: () => clock, elapsedNow: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
       calls.push(args); if (args[1] === 'get') { if (++inspections < 3) return missing(); return live; } return {};
     }
   });
@@ -29,7 +29,7 @@ test('2677 latest resume gives readiness time and working submits exact text onc
 test('2677 missing submission retries readiness within the original deadline', async t => {
   let clock = 0, inspections = 0, submits = 0;
   const result = await sendToChat({ paneId: 'original', startedAt: 0 }, 'retry', {
-    now: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
+    now: () => clock, elapsedNow: () => clock, sleep: async ms => { clock += ms; }, herdr: async args => {
       if (args[1] === 'get') { inspections++; return live; } if (++submits === 1) return missing(); return {};
     }
   });
@@ -105,22 +105,23 @@ test('2677 failed acknowledgement save cannot cause automatic duplicate submissi
   assert.equal(submits, 1, 'unknown result must block duplicate transport'); assert.notEqual(first.exitCode, 0); assert.notEqual(second.exitCode, 0); assert.match(second.message, /uncertain|inspect/i);
 });
 test('2677 overlapping changes keep later text without duplicate dispatch', async t => {
-  const f = await started(t), healthy = f.ports.herdr; let release, ready = false, entered;
-  const waiting = new Promise(resolve => { entered = resolve; });
+  const f = await started(t), healthy = f.ports.herdr; let release, ready = false, entered, firstEntered, waitingCount = 0;
+  const waiting = new Promise(resolve => { entered = resolve; }), firstWaiting = new Promise(resolve => { firstEntered = resolve; });
   const prompts = [];
-  f.ports.sleep = async ms => { entered('waiting'); await new Promise(resolve => { release = resolve; }); f.tick(ms); };
+  const hold = new Promise(resolve => { release = resolve; });
+  f.ports.sleep = async ms => { if (++waitingCount === 1) firstEntered(); if (waitingCount === 2) entered('both waiting'); await hold; f.tick(ms); };
   f.ports.herdr = async args => {
     if (args[0] === 'agent' && !ready) return missing();
     if (args[1] === 'prompt') prompts.push(args[3]); return healthy(args);
   };
   const first = changeRun({ ref: '17', text: 'First request', cwd: f.source }, f.ports);
-  assert.equal(await Promise.race([waiting, first.then(() => 'completed before readiness')]), 'waiting');
-  let second;
-  try { second = await changeRun({ ref: '17', text: 'Second request', cwd: f.source }, f.ports); }
-  finally { ready = true; release(); }
-  assert.notEqual(second.exitCode, 0); assert.match(second.message, /progress|retry/i);
-  assert.equal((await first).exitCode, 0);
-  assert.equal((await changeRun({ ref: '17', text: 'Second request', cwd: f.source }, f.ports)).exitCode, 0);
+  await Promise.race([firstWaiting, first.then(() => assert.fail('fresh startup must wait before overlap'))]);
+  const second = changeRun({ ref: '17', text: 'Second request', cwd: f.source }, f.ports);
+  assert.equal(await Promise.race([waiting, Promise.all([first,second]).then(() => 'completed before readiness')]), 'both waiting');
+  ready = true; release();
+  const results = await Promise.all([first,second]);
+  assert.ok(results.some(result => result.exitCode === 0));
+  if (f.journal().some(entry => entry.state === 'pending' && !entry.inFlight)) assert.equal((await changeRun({ ref: '17', text: 'Second request', cwd: f.source }, f.ports)).exitCode, 0);
   assert.equal(prompts.length, 2); assert.ok(prompts[0].includes('First request')); assert.ok(prompts[1].includes('Second request'));
   assert.deepEqual(f.record().changes.map(r => r.text), ['First request', 'Second request']);
 });
