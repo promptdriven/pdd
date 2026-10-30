@@ -35,6 +35,7 @@ for (const retry of [false, true]) test(`RELAY lint-held ${retry ? 'retry' : 're
   const recover = () => run({ [retry ? '--retry' : '--read']: retry ? batch : true }, retry ? [] : [batch]);
   const open = await recover();
   assert.equal(open.code, 3);
+  assert.equal(open.json.rows[0].state, 'running');
   const paid = f.posts.filter(p => p.command === 'check');
   assert.equal(paid.length, 1); assert.equal(paid[0].request.max_calls, 6);
   assert.equal(paid[0].request.source_sha256, original.source_sha256);
