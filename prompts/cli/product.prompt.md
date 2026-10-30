@@ -54,6 +54,9 @@ single marker and author trust below. A binding is a lookup hint, never authorit
 A bad saved binding or local feature hint affects only its planned run. Status
 marks that run `unverified`, with the issue number, a reason and the action
 "Run `pdd product start RUN` to link it again"; next carries the same warning.
+If another valid trusted link is selected for that run, diagnostics may still
+identify discarded bad hints but omit the now-misleading repair action. Keep
+the reason and repair action for runs that remain unverified.
 Do not read its PRs, count evidence, offer it ready, or advance its dependents.
 Other planned runs remain usable, including explicit starts for other runs.
 
@@ -323,6 +326,12 @@ Do not hold the state lock over GitHub or workflow operations. Atomic reads may
 be lock-free. This protects different-run updates and deletions; it does not
 promise exactly-once concurrent issue creation.
 
+The native lock adapter recovers an abandoned lock when its owner process is
+confirmed dead or its age exceeds 30 seconds. Reclamation and release must
+never remove a successor's lock; ownership of the observed lock is required
+before removing it. A busy lock or lock failure reports the actual lock file
+path so the person can locate the obstruction.
+
 The base adapter may allocate a private local Git snapshot from an existing
 local ref. It copies no credentials, performs no network fetch and changes no
 original repository ref, checkout or file. Its opaque handle is allocation
@@ -364,7 +373,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "030cad8239ade5672a78be1a828129361b1f45fffff8fcaed306dac1434efdbf",
+  "status": "draft", "prose_sha256": "d43d00fbd9d3de7928941c038adb40f35f72e199ece1311e777e2f06901c5cb8",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
