@@ -147,7 +147,7 @@ test('lost allocation recovers its unique attempt after public progress creates 
  assert.equal(after.area,before.area);assert.deepEqual(after.gate,before.gate);assert.deepEqual(after.done,before.done);assert.deepEqual(after.approvals,before.approvals);
  assert.deepEqual(after.chats.find(chat=>chat.area==='build'),current);
  assert.equal(after.abandonedChats.length,1);assert.equal(after.abandonedChats[0].paneId,original.paneId);
- assert.equal(after.chats.filter(chat=>chat.area==='scope').length,1);
+ assert.equal(after.chats.filter(chat=>chat.area===original.area).length,1);
  assert.equal(f.herdr.calls.filter(args=>args[0]==='tab'&&args[1]==='create').length,creates);
  assert.equal(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run'&&args[2]===after.chatReplacement.replacement.paneId).length,1);
 });

@@ -320,10 +320,11 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
       if(!added.length) {await save('createRequested');await allocate();}
       else {
-        if(added.length!==1||added[0].label!==record.recovery.allocationLabel) throw uncertain();
-        const rows=panes.filter(row=>row.tab_id===added[0].tab_id);
+        const matching=added.filter(row=>row.label===record.recovery.allocationLabel);
+        if(matching.length!==1) throw uncertain();
+        const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
         if(rows.length!==1||rows[0].cwd!==run.root||rows[0].workspace_id!==original.workspaceId) throw invalid();
-        record.replacement={area:record.area,agent,tabId:added[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`)};
+        record.replacement={area:record.area,agent,tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`)};
       }
       await save('prepared');
     }
