@@ -96,6 +96,16 @@
       "id": "long-native-observer-deadline",
       "given": "public acquireRuntimeSlot receives a valid absolute deadline 2592000000 ms ahead and borrows a pending 150 ms probe; also exercise several bounded timer chunks, a null deadline and interruption separately",
       "required_observation": "a long native deadline never overflows to a 1 ms timer, warns or expires acquisition early; use positive timer chunks at most 60000 ms and recheck the actual remaining deadline before ending the observer; null means no deadline, interruption still stops that observer without cancelling the shared read, and all timers/subscriptions are cleaned up"
+    },
+    {
+      "id": "interrupt-after-confirmed-admission-pause",
+      "given": "Check, explicit remote lint and new Try setup separately receive an authoritative confirmed unstarted busy refusal after a POST, separately a confirmed not-started maintenance refusal; Ctrl-C occurs during the resulting retry pause, before caller deadline",
+      "required_observation": "text says Stopped. and identifies what was submitted and the confirmed unstarted outcome; it never claims the wait deadline ended or nothing was sent; retain saved IDs, raw receipts and known usage, existing mode-specific interruption exits (including explicit-lint/Try-lint busy5, Check after batch creation3, Try-POST busy3 and door125), valid existing JSON, no further POST and no resend"
+    },
+    {
+      "id": "interrupt-pause-preserves-earlier-evidence",
+      "given": "a command has earlier confirmed completed work and separately an earlier potentially paid dispatch with unknown outcome, while a later confirmed busy or maintenance refusal is paused; Ctrl-C occurs in that pause; compare the existing after-admission-before-current-POST stop boundary",
+      "required_observation": "post-pause text says Stopped. with earlier submitted IDs and confirmed/unknown outcomes, preserves receipts and known/unknown accounting, retains every uncertain paid lease and its read-only recovery advice, and sends nothing further; before-current-POST text stays Stopped before sending. scoped to the unsent request without claiming earlier work was unsent; existing exits and JSON schema stay unchanged"
     }
   ]
 }

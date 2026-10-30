@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 752a2e169063849489e7a9f4b327d751fcc901e469acaa0163dd572774c49500).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: b2dc6d24adb7ff48863483a8b85af885d48800339a098cd2c7155fca4a396536).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -9,6 +9,9 @@ const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS =
 const unavailable = error => Object.assign(new Error(`Local runtime state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
 const order = (a, b) => a.started_at - b.started_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
+const nativeSnapshotKey = row => row.state === undefined ? JSON.stringify([row.id, row.pid, row.choosing, row.number]) : snapshotKey(row);
+const rememberNativeOwnership = Symbol('rememberNativeOwnership');
 const directoryFor = ({ stateDir, origin }) => join(stateDir, 'slots', encodeURIComponent(new URL(origin).host));
 const nativeInterrupt = handler => {
   const signals = ['SIGINT', 'SIGHUP', 'SIGTERM'];
@@ -32,8 +35,15 @@ let claimSequence = 0;
 // cannot unlink a successor, unlike deleting and recreating a shared lock path.
 function nativeFilePort(ports) {
   const heldClaims = new Map(), owned = new Map();
+  const remember = (path, record) => {
+    owned.set(path, nativeSnapshotKey(record));
+    // Request registration resolves its own native port. Advance the live
+    // acquisition's snapshot too, without retaining ownership after release.
+    owners.get(path)?.[rememberNativeOwnership]?.(path, record);
+  };
   const actual = path => path.endsWith('/claim.json') ? heldClaims.get(path) : path;
   const files = {
+    [rememberNativeOwnership]: (path, record) => owned.set(path, nativeSnapshotKey(record)),
     listRecords({ directory }) {
       let names;
       try { names = readdirSync(directory); } catch (error) { if (error.code === 'ENOENT') return { jobs: [] }; throw error; }
@@ -50,7 +60,7 @@ function nativeFilePort(ports) {
     },
     exclusiveCreate(path, record) {
       ensure(resolve(path, '..'));
-      if (!path.endsWith('/claim.json')) { const created = publishExclusive(path, record); if (created) { owned.set(path, { id: record.id, pid: record.pid }); files.touch(path); } return created; }
+      if (!path.endsWith('/claim.json')) { const created = publishExclusive(path, record); if (created) { remember(path, record); files.touch(path); } return created; }
       const directory = resolve(path, '..'), id = `${record.pid}-${ports.randomUUID()}-${++claimSequence}`, mine = join(directory, `.claim-${id}.lock`);
       const contenders = () => {
         const live = [];
@@ -64,7 +74,8 @@ function nativeFilePort(ports) {
         }
         return live;
       };
-      publishExclusive(mine, { id, pid: record.pid, choosing: true }); owned.set(mine, { id, pid: record.pid }); files.touch(mine);
+      const choosing = { id, pid: record.pid, choosing: true };
+      publishExclusive(mine, choosing); remember(mine, choosing); files.touch(mine);
       let held = false;
       try {
         const number = 1 + Math.max(0, ...contenders().filter(row => row.id !== id).map(row => row.number || 0));
@@ -76,7 +87,7 @@ function nativeFilePort(ports) {
     writeAtomic(path, record) {
       const temporary = `${path}.${randomUUID()}.tmp`, fd = openSync(temporary, 'wx', 0o600);
       try { writeFileSync(fd, `${JSON.stringify(record)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
-      renameSync(temporary, path); owned.set(path, { id: record.id, pid: record.pid }); files.touch(path);
+      renameSync(temporary, path); remember(path, record); files.touch(path);
     },
     modifiedAt(path) {
       path = actual(path); if (!path) return null;
@@ -86,7 +97,7 @@ function nativeFilePort(ports) {
     touch(path) {
       path = actual(path); if (!path) return false;
       try { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Slot record is not a regular file'); const identity = owned.get(path), record = readRecord(path);
-        if (!identity || record.id !== identity.id || record.pid !== identity.pid) return false;
+        if (identity === undefined || nativeSnapshotKey(record) !== identity) return false;
         const time = new Date(ports.now()); utimesSync(path, time, time); return true; }
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     },
@@ -118,20 +129,21 @@ async function outsideRead(ports, id) {
 const rows = async (files, directory) => { try { return (await files.listRecords({ directory })).jobs; } catch (error) { throw unavailable(error); } };
 const freshness = async (ports, path) => ports.files.modifiedAt ? await ports.files.modifiedAt(path) : owners.has(path) ? ports.now() : null;
 const expired = (ports, row, modified) => !ports.isAlive(row.pid) || modified === null || ports.now() - modified >= EXPIRED_MS;
-const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
-function heartbeat(path, ports, interrupted) {
+function heartbeat(path, ports, interrupted, retainInterrupt = false) {
   let stopped = false, pending = Promise.resolve(), unsubscribe = () => {};
-  const stop = () => { if (!stopped) { stopped = true; ports.timers.clearInterval(timer); unsubscribe(); } };
+  const pause = () => { if (!stopped) { stopped = true; ports.timers.clearInterval(timer); } };
+  const stop = () => { pause(); unsubscribe(); };
+  const missing = () => { if (retainInterrupt) pause(); else stop(); };
   const timer = ports.timers.setInterval(() => {
     pending = pending.then(async () => {
       if (stopped) return;
-      if (!ports.files.touch || await ports.files.touch(path) === false) stop();
-    }).catch(stop);
+      if (!ports.files.touch || await ports.files.touch(path) === false) missing();
+    }).catch(missing);
   }, HEARTBEAT_MS);
   timer?.unref?.();
   unsubscribe = ports.onInterrupt(() => { stop(); interrupted?.(); });
   if (stopped) unsubscribe();
-  return { stop, pending: () => pending };
+  return { stop, pause, pending: () => pending };
 }
 async function locked(directory, ports, action) {
   const path = join(directory, 'claim.json');
@@ -175,13 +187,13 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingId) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
     // This acquisition still owns its original ticket even if wall time jumps
     // before the next heartbeat. Other owners retain ordinary expiry rules.
-    if (row.state === 'waiting' && row.id === waitingId) continue;
+    if (snapshotKey(row) === snapshotKey(waitingTicket)) continue;
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
@@ -218,17 +230,24 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   const ended = () => cancelled || ports.interrupted() || deadline !== null && ports.now() >= deadline;
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
-  let acquired = false, last = '', failures = 0;
-  const owner = { posted: false, pulse: null };
-  owner.pulse = heartbeat(path, ports, () => {
+  let acquired = false, activeTicket = null, last = '', failures = 0;
+  const owner = { posted: false, pulse: null, [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
+  const interruptOwner = () => {
     cancelled = true;
-    if (!owner.posted) void ports.files.unlink(path);
-  });
+    if (!owner.posted) void removeUnsent();
+  };
+  const ownWaiting = row => row && snapshotKey(row) === snapshotKey(ticket);
+  const removeUnsent = async () => {
+    const current = (await rows(ports.files, directory)).find(row => row.id === id);
+    if (ownWaiting(current) || activeTicket && current && snapshotKey(current) === snapshotKey(activeTicket)) await ports.files.unlink(path);
+  };
+  // Cancellation outlives an absent-file refresh while this wait is pending.
+  owner.pulse = heartbeat(path, ports, interruptOwner, true);
   owners.set(path, owner);
   try {
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
-      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, id);
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket);
       if (ended()) break;
       // Dead waiters are safe to remove by immutable ticket path without a claim.
       for (const item of snapshots.filter(item => item.row.state === 'waiting')) {
@@ -236,9 +255,24 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
         if (current && snapshotKey(current) === item.key && await freshness(ports, join(directory, `${current.id}.json`)) === item.modified)
           await ports.files.unlink(join(directory, `${current.id}.json`));
       }
-      const jobs = await rows(ports.files, directory), waiting = jobs.filter(row => row.state === 'waiting').sort(order), active = jobs.filter(row => row.state === 'active');
+      let jobs = await rows(ports.files, directory);
+      if (ended()) break;
+      if (!jobs.some(row => row.id === id)) {
+        // Only the pending acquisition may restore its immutable waiting ticket.
+        // An absent-file heartbeat may already have stopped; retire it before
+        // restoring so an old in-flight pulse cannot stop the new lifecycle.
+        owner.pulse.pause(); await owner.pulse.pending();
+        if (ended()) break;
+        if (await ports.files.exclusiveCreate(path, ticket)) {
+          const pulse = heartbeat(path, ports, interruptOwner, true);
+          owner.pulse.stop(); owner.pulse = pulse;
+        }
+        if (ended()) break;
+        jobs = await rows(ports.files, directory);
+      }
+      const waiting = jobs.filter(row => row.state === 'waiting').sort(order), active = jobs.filter(row => row.state === 'active');
       const message = `Waiting for a local slot: ${active.length} of ${limit} busy, ${Math.max(0, waiting.findIndex(row => row.id === id))} ahead of you. (Set PDD_MAX_JOBS to change the limit.)`;
-      if (waiting[0]?.id === id) {
+      if (ownWaiting(waiting[0])) {
         const attempt = await locked(directory, ports, async ownsClaim => {
           let currentJobs = await rows(ports.files, directory);
           if (!await ownsClaim()) return false;
@@ -251,8 +285,9 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
             }
           }
           if (!ended() && await ownsClaim() && currentJobs.filter(row => row.state === 'active').length < limit
-            && currentJobs.filter(row => row.state === 'waiting').sort(order)[0]?.id === id) {
-            await ports.files.writeAtomic(path, { ...ticket, state: 'active', started_at: ports.now() });
+            && ownWaiting(currentJobs.filter(row => row.state === 'waiting').sort(order)[0])) {
+            activeTicket = { ...ticket, state: 'active', started_at: ports.now() };
+            await ports.files.writeAtomic(path, activeTicket);
             return true;
           }
           return false;
@@ -265,7 +300,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
     }
     return null;
   } finally {
-    if (!acquired) { owner.pulse.stop(); await owner.pulse.pending(); owners.delete(path); await ports.files.unlink(path); }
+    if (!acquired) { owner.pulse.stop(); await owner.pulse.pending(); owners.delete(path); await removeUnsent(); }
   }
 }
 

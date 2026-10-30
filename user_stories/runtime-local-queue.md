@@ -14,7 +14,7 @@ I can see my place while other local agents use the runtime.
 
 The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
-A forward wall-clock jump of more than 60 seconds before my next heartbeat cannot erase my own waiting ticket or change its identity, original order or ability to take the next slot. Other abandoned owners remain reclaimable. Contention checks prove oldest-first progress, the active limit and eventual completion with a generous watchdog; a busy runner must not fail merely for exceeding a small elapsed-time target.
+A forward wall-clock jump of more than 60 seconds before the next heartbeat must not strand two live waiters when each removes the other's stale-looking ticket. Each ongoing wait restores its missing ticket with its original identity and start time, keeps oldest-first order and can take a free slot. This also applies when the ticket disappears before inspection or the next refresh; restoration resumes refreshes. Never overwrite another record, duplicate a ticket or active reservation, restore an ended wait, or treat ticket loss as proof that a submitted job ended. Interruption and the caller deadline remove the waiting ticket and prevent restoration. Other abandoned owners remain reclaimable. Contention checks prove oldest-first progress, the active limit and eventual completion with a generous watchdog; a busy runner must not fail merely for exceeding a small elapsed-time target.
 
 ## Native cases for the code step
 
