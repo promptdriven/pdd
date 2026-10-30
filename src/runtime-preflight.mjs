@@ -814,7 +814,8 @@ function markdownContainerLine(line, containers) {
 
 // Discovery sees prose only; preserve offsets and newlines without changing captured bytes.
 function markdownSectionText(text) {
-  const parts = [], inline = /`+|<!--/g;
+  const parts = [], inline = /`+|<!--|</g;
+  const opaque = /<(?:[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t\r\n]*=[ \t\r\n]*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*[ \t\r\n]*\/?|\/[A-Za-z][A-Za-z0-9-]*[ \t\r\n]*|[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/y;
   let containers = [], fence = null, comment = false, copied = 0, paragraph = false;
   let scopeStart = null, scopeEnd = 0;
   const mask = (start, end) => {
@@ -833,6 +834,13 @@ function markdownSectionText(text) {
         if (token === '<!--' || token.length === 1) continue;
         // An escape consumes one punctuation character, not the entire run.
         tokenStart++; token = token.slice(1);
+      }
+      if (token === '<') {
+        // Valid tags/autolinks consume their own backticks before code-opener
+        // lexing. Leave their bytes available to the existing capture policy.
+        opaque.lastIndex = tokenStart;
+        if (opaque.test(text) && opaque.lastIndex <= scopeEnd) inline.lastIndex = opaque.lastIndex;
+        continue;
       }
       let closeEnd;
       if (token === '<!--') {
