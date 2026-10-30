@@ -85,8 +85,7 @@ test('native effect observers detect calibrated writes, history, programs and di
   } finally { observed.restore(); fs.rmSync(folder, {recursive: true, force: true}); }
 });
 
-const superseded = new Set(['writer-list','legacy-table-check','unknown-json-role','empty-container-branch','definite-problem-wins-unavailable']);
-for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, {skip:superseded.has(vector.id)?'Lead 13:59 superseded; frozen local-contract-layouts replacement':false}, async () => {
+for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, async () => {
   const sandbox = fs.mkdtempSync(join(tmpdir(), 'pdd-local-contract-'));
   const cwd = join(sandbox, 'repo'), state = join(sandbox, 'state');
   fs.mkdirSync(cwd); fs.mkdirSync(state);
@@ -131,6 +130,12 @@ for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, {skip:
     for (const diagnostic of vector.expected.diagnostics) {
       assert.ok(lines.some(line => line.length <= 8000 && line.includes(diagnostic.file) && line.includes(diagnostic.record) && line.includes(diagnostic.field) && (diagnostic.kind !== 'unavailable' || /unavailable/i.test(line))), JSON.stringify(diagnostic));
     }
+    if (Object.hasOwn(vector.expected,'skipped_files')) {
+      let jsonOut='';
+      const code=runContracts({words,options:{...options,'--json':true},cwd},{env:{...process.env,PDD_STATE_DIR:state},stdout:{write:s=>{jsonOut+=s;}},stderr:{write:()=>{}}});
+      assert.equal(code,vector.expected.exit_code);
+      assert.deepEqual(JSON.parse(jsonOut).skipped_files,vector.expected.skipped_files);
+    }
     for (const [key, value] of Object.entries(vector.expected.calls)) {
       assert.ok(Object.hasOwn(observed.calls, key), `Not replayed: calls.${key}`);
       assert.equal(observed.calls[key], value, `calls.${key}`);
@@ -139,7 +144,7 @@ for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, {skip:
     for (const [key, label] of [['checked_records', 'records?'], ['checked_world_values', 'world[ -]values?']]) {
       if (Object.hasOwn(vector.expected, key)) assert.match(stdout, new RegExp(`(?:${vector.expected[key]}\\s+${label}|${label}\\s*[:=]\\s*${vector.expected[key]})`, 'i'), key);
     }
-    const mapped = new Set(['exit_code', 'diagnostics', 'calls', 'source_bytes_unchanged', 'checked_records', 'checked_world_values']);
+    const mapped = new Set(['exit_code', 'diagnostics', 'calls', 'source_bytes_unchanged', 'checked_records', 'checked_world_values', 'skipped_files']);
     for (const key of Object.keys(vector.expected)) assert.ok(mapped.has(key), `Not replayed: expected.${key}`);
   } finally { fs.rmSync(sandbox, {recursive: true, force: true}); }
 });

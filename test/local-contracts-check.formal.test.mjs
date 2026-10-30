@@ -109,10 +109,9 @@ test('formal E: all 54 ownership, mapping, presence and unused-schema configurat
     },expected,diagnostic);
   }
 });
-test('formal F: 11 active definite/unavailable configurations; one superseded', async () => {
+test('formal F: all12 definite/unavailable configurations', async () => {
   const states=[['{"type":"integer"}','0',0],['{"type":"integer"}','null',4],['{"type":"string","pattern":"[]"}','"A"',5]];
   for (const [schema,value,state] of states) for (let extra=0;extra<4;extra++) {
-    if (state===0 && extra===2) continue; // Lead 13:59: one superseded configuration; frozen replacement covers skip/pass.
     const files={
       'contracts/world.md':table([['owner','A']]),
       'contracts/seed-world.json':`{"item":${value}}`,
@@ -120,11 +119,11 @@ test('formal F: 11 active definite/unavailable configurations; one superseded', 
     };
     if (extra===1||extra===3) files['contracts/bad.md']=record('bad','{"type":"array"}');
     if (extra===2||extra===3) files['contracts/unknown.json']='{"note":"hello"}';
-    const expected=state===4||extra===1||extra===3?4:state===5||extra===2?5:0;
+    const expected=state===4||extra===1||extra===3?4:state===5?5:0;
     const diagnostic=extra===1||extra===3?['contracts/bad.md','contracts/bad.md#bad']:
       state===4?['contracts/seed-world.json','item','/item']:
       state===5?['contracts/seed-world.json','item','/item','unavailable']:
-      extra===2?['contracts/unknown.json','/note','unavailable']:undefined;
+      undefined;
     await checkFiles(files,expected,diagnostic);
   }
 });

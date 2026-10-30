@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const vectors = JSON.parse(fs.readFileSync(join(root, 'test/shared-contracts/local-contract-layouts.json'), 'utf8'));
 
+import {checkWarnings} from './helpers/local-contract-warnings.mjs';
 import {observe,snapshot} from './helpers/local-contract-observers.mjs';
 
 test('layout native observers detect writes, history, programs and network', () => {
@@ -64,7 +65,7 @@ for (const vector of vectors.cases) test(`contract layouts replay: ${vector.id}`
       let facts;
       if (options['--json']) {
         facts = JSON.parse(stdout);
-        assert.deepEqual(Object.keys(facts).sort(),['exit_code','checked_records','checked_world_values','skipped_files','diagnostics'].sort());
+        assert.deepEqual(Object.keys(facts).sort(),['exit_code','checked_records','checked_world_values','skipped_files','diagnostics','warnings'].sort());
         assert.equal(stderr,'');
       } else {
         // Independently repeat the public boundary in JSON mode; each mode
@@ -84,6 +85,7 @@ for (const vector of vectors.cases) test(`contract layouts replay: ${vector.id}`
         for (const diagnostic of vector.expected.diagnostics) assert.ok(lines.some(line=>line.includes(diagnostic.file)&&line.includes(diagnostic.record)&&line.includes(diagnostic.field)));
         if (vector.expected.skipped_files.length) assert.ok(stdout.includes(`Skipped ${vector.expected.skipped_files.length} files that are not schemas: ${vector.expected.skipped_files.join(', ')}`));
       }
+      checkWarnings(facts.warnings,vector.expected.warnings,options['--json'] ? null : stdout);
       assert.equal(facts.exit_code,vector.expected.exit_code);
       assert.equal(facts.checked_records,vector.expected.checked_records);
       assert.equal(facts.checked_world_values,vector.expected.checked_world_values);
@@ -104,7 +106,7 @@ for (const vector of vectors.cases) test(`contract layouts replay: ${vector.id}`
     }
     if (vector.expected.source_bytes_unchanged) assert.deepEqual(snapshot(cwd), before);
     if (vector.expected.source_modes_unchanged) assert.deepEqual(snapshot(cwd),before);
-    const mapped=new Set(['exit_code','diagnostics','calls','source_bytes_unchanged','source_modes_unchanged','checked_records','checked_world_values','skipped_files','syntax_error']);
+    const mapped=new Set(['exit_code','diagnostics','calls','source_bytes_unchanged','source_modes_unchanged','checked_records','checked_world_values','skipped_files','syntax_error','warnings']);
     for (const key of Object.keys(vector.expected)) assert.ok(mapped.has(key),`Not replayed: expected.${key}`);
   } finally { fs.rmSync(sandbox, {recursive: true, force: true}); }
 });

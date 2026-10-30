@@ -2,9 +2,9 @@
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { catalogRecords, compareCopies, expandSource, planSync, parseJsonValue, stringifyJsonValue, jsonNumberText } from './contract-refs.mjs';
+import { catalogRecords, compareCopies, expandSource, planSync, parseJsonValue, stringifyJsonValue, jsonNumberText, schemaValuesEqual } from './contract-refs.mjs';
 import { captureSource, findTests, gitFiles, sourceFilePort, LIMITS, TEST_SCHEMA, validateContract, schemaKeywordNames } from './runtime-preflight.mjs';
 import { readContractHistory } from './runtime-client.mjs';
 
@@ -136,7 +136,7 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
 
 // --check has no dependency on saved Check history or capture/upload state.
 function checkContracts(root,{stdout,stderr,json = false}) {
-  const diagnostics = [], skipped = new Set();
+  const diagnostics = [], warnings = [], skipped = new Set();
   const report = (file,record,field,message,unknown = false,provenance = {}) => diagnostics.push({file,record,field,kind:unknown?'unavailable':'problem',message,...provenance});
   const isUnavailable = error => error.localContractUnavailable === true || error.exitCode === 5 || typeof error.code === 'string' && !error.code.startsWith('contract-') && error.code !== 'seed-invalid';
   let checkedRecords = 0, checkedValues = 0;
@@ -203,6 +203,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       } catch (error) { report(seedPath,'world','',finite(error),isUnavailable(error)); }
     }
     const selected = new Map(), rows = new Map(), authorities = new Set();
+    const escape = key => key.replace(/~/g,'~0').replace(/\//g,'~1');
     let tableKind;
     const select = (target,file,field,record = target, authority = true) => {
       try {
@@ -246,18 +247,26 @@ function checkContracts(root,{stdout,stderr,json = false}) {
         tableKind = table.headings.includes('Key') ? 'Key' : 'Path';
         for (const cells of table.values) {
           const get = name => cells[table.headings.indexOf(name)] ?? '';
-          const raw = get(tableKind), writer = unquote(get('Writer')), target = unquote(get('Schema'));
+          const raw = get(tableKind), actors = unquote(get('Writer')).split(/,|\band\b|\//).map(unquote).filter(Boolean), target = unquote(get('Schema'));
           const quoted = [...raw.matchAll(/`([^`]*)`/g)].map(match => match[1]);
           const keys = tableKind === 'Path' && quoted.length ? quoted : [unquote(raw)];
           for (const key of keys) {
             if (!key) { report(worldPath,'world',tableKind,'missing key/path'); continue; }
-            if (!writer) report(worldPath,key,'Writer','declare one nonblank writer');
+            if (tableKind === 'Path' && !key.startsWith('/') || key.startsWith('/') && /~(?![01])/.test(key)) {
+              report(worldPath,key,tableKind,'use a valid absolute JSON Pointer'); continue;
+            }
+            const pointer = key.startsWith('/') ? key : `/${escape(key)}`;
+            const tokens = pointer.slice(1).split('/').map(token => token.replace(/~1/g,'/').replace(/~0/g,'~'));
             const canonical = target ? select(target,worldPath,'Schema',target) : null;
-            const old = rows.get(key);
-            if (old && old.writer !== writer) report(worldPath,key,'Writer','conflicting writers');
+            const old = rows.get(pointer);
             if (old?.canonical && canonical && old.canonical !== canonical) report(worldPath,key,'Schema','conflicting schema mappings');
-            if (!old) rows.set(key,{writer,canonical});
-            else if (!old.canonical && canonical) old.canonical = canonical;
+            if (!old) rows.set(pointer,{key,tokens,actors:new Set(actors),canonical,explicit:!!target,evidence:[cells.join(' ')]});
+            else {
+              for (const actor of actors) old.actors.add(actor);
+              old.evidence.push(cells.join(' '));
+              old.explicit ||= !!target;
+              if (!old.canonical && canonical) old.canonical = canonical;
+            }
           }
         }
       }
@@ -267,26 +276,26 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       authorities.add(ref.target);
       if (!selected.has(ref.target)) selected.set(ref.target,{file:ref.target.split('#')[0],field:'',record:ref.target,expanded:ref.value_json});
     }
-    const markers = new Set([...schemaKeywordNames(),'$contract']);
+    for (const row of rows.values()) if (row.actors.size !== 1) report(worldPath,row.key,'Writer','declare exactly one unique writer');
+    const annotations = new Set(['enum','const','default','examples','title','description','format']);
+    const markers = new Set([...schemaKeywordNames(),'$contract'].filter(key => !annotations.has(key)));
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && jsonNumberText(value) === null;
-    const escape = key => key.replace(/~/g,'~0').replace(/\//g,'~1');
     for (const source of sources) if (source.path.endsWith('.json') && !seeds.has(source.path)) {
       let document;
       try { document=parseJsonValue(source.text); } catch { report(source.path,`${source.path}#`,'','invalid JSON'); continue; }
       const leaves = [];
-      const classify = (value,pointer) => {
-        if (!object(value) || !Object.keys(value).length) return false;
-        if (Object.keys(value).some(key => markers.has(key))) { leaves.push(pointer); return true; }
-        if (Object.hasOwn(value,'resources') || Object.hasOwn(value,'simulation')) return false;
-        return Object.entries(value).every(([key,child]) => classify(child,`${pointer}/${escape(key)}`));
+      const discover = (value,pointer) => {
+        if (!object(value)) return;
+        if (Object.keys(value).some(key => markers.has(key))) { leaves.push(pointer); return; }
+        for (const [key,child] of Object.entries(value)) if (!annotations.has(key) && !['resources','simulation'].includes(key)) discover(child,`${pointer}/${escape(key)}`);
       };
-      if (classify(document,'')) {
-        for (const pointer of leaves) {
-          const target = `${source.path}#${pointer}`;
-          if (!selected.has(target)) select(target,source.path,'',target,pointer === '');
-          else if (pointer === '') authorities.add(target);
-        }
-      } else if (![...selected.keys()].some(target => target.split('#')[0] === source.path)) skipped.add(source.path);
+      discover(document,'');
+      for (const pointer of leaves) {
+        const target = `${source.path}#${pointer}`;
+        if (!selected.has(target)) select(target,source.path,'',target,pointer === '');
+        else if (pointer === '') authorities.add(target);
+      }
+      if (!leaves.length && ![...selected.keys()].some(target => target.split('#')[0] === source.path)) skipped.add(source.path);
     }
     const catalogSources = new Map(sources.filter(source => !seeds.has(source.path) && !skipped.has(source.path)).map(source => [source.path,source]));
     for (const target of new Set([...selected.keys(),...uses.filter(ref => ref.kind === 'contract').map(ref => ref.target)])) {
@@ -321,16 +330,58 @@ function checkContracts(root,{stdout,stderr,json = false}) {
         for (const item of result.unproved) report(source.file,source.record,item.pointer,item.rule,true);
       } catch (error) { report(source.file,source.record,source.field,finite(error)); }
     }
+    // Row inference uses only known valid records. Resolution supplies canonical
+    // identities; incidental JSON members gain authority only when a row selects them.
+    const names = new Map();
+    for (const target of schemas.keys()) {
+      const [path,fragment] = target.split('#');
+      const name = fragment?.startsWith('/') ? fragment.split('/').at(-1).replace(/~1/g,'/').replace(/~0/g,'~') : fragment || basename(path,'.json');
+      if (!names.has(name)) names.set(name,new Set());
+      names.get(name).add(target);
+    }
+    for (const row of rows.values()) {
+      if (row.explicit) continue;
+      const candidates = new Set();
+      for (const evidence of row.evidence) {
+        for (const [name,targets] of names) {
+          // Boundaries are exact record tokens, not substring/plural aliases.
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+          if (name && new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`,'u').test(evidence.replace(/\[[^\]]*\]\([^)]*\)/g,''))) for (const target of targets) candidates.add(target);
+        }
+        for (const link of evidence.matchAll(/\[[^\]]*\]\(([^\s)]+)\)/g)) {
+          const [path,fragment = ''] = link[1].split('#');
+          if (/^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('/')) continue;
+          const target = `${path ? posix.normalize(posix.join(dirname(worldPath),path)) : worldPath}#${fragment}`;
+          try {
+            const expanded = expand({path:worldPath,text:JSON.stringify({$contract:target}),format:'json-schema'});
+            // The outer reference is last; transitive dependencies are not row choices.
+            const canonical = expanded.references.filter(ref => ref.kind === 'contract').at(-1)?.target;
+            if (schemas.has(canonical)) candidates.add(canonical);
+          } catch { /* Unknown non-Schema links are only inference evidence. */ }
+        }
+      }
+      if (candidates.size === 1) { row.canonical = [...candidates][0]; authorities.add(row.canonical); }
+    }
+    const validDeclared = [...schemas].filter(([target]) => authorities.has(target)).map(([target,text]) => ({target,value:parseJsonValue(text)}));
+    for (let i=0;i<validDeclared.length;i++) for (let j=i+1;j<validDeclared.length;j++) {
+      const a=validDeclared[i],b=validDeclared[j];
+      if (a.value.type !== 'object' || b.value.type !== 'object' || !object(a.value.properties) || !object(b.value.properties)) continue;
+      if (!isDeepStrictEqual(Object.keys(a.value.properties).sort(),Object.keys(b.value.properties).sort()) || schemaValuesEqual(a.value,b.value)) continue;
+      const records=[a.target,b.target].sort();
+      warnings.push({kind:'declared-record-disagreement',records,message:`Declared records ${records.join(' and ')} have the same fields but different shapes`});
+    }
+    const unknownKeys=[...rows].filter(([,row]) => !row.canonical && !row.explicit).map(([pointer]) => pointer).sort();
+    if (unknownKeys.length) warnings.push({kind:'world-schema-missing',file:worldPath,world_keys:unknownKeys,message:`${unknownKeys.length} world keys have no schema; their seed values were not checked`});
     const compared = compareCopies(prompts,catalog.records.filter(record => authorities.has(record.target)));
     for (const match of compared.matches) if (match.kind === 'near') for (const difference of match.differences) report(match.path,match.target,difference.split(':')[0],difference,false,{source_pointer:match.source_pointer,target:match.target});
     for (const warning of compared.warnings) report(warning.split(' ')[0],warning,'',warning,true);
     if (hasWorld && hasSeed) {
       try {
         if (tableKind === 'Key') for (const key of Object.keys(seedWorld ?? {})) {
-          if (!rows.has(key)) report(seedPath,key,`/${escape(key)}`,'present seed key has no writer declaration');
+          if (![...rows.values()].some(row => row.tokens[0] === key)) report(seedPath,key,`/${escape(key)}`,'present seed key has no writer declaration');
         }
-        for (const [key,row] of rows) {
-          const tokens = tableKind === 'Path' ? key.slice(1).split('/').map(token => token.replace(/~1/g,'/').replace(/~0/g,'~')) : [key];
+        for (const [pointer,row] of rows) {
+          const {key,tokens} = row;
           let value = seedWorld, present = true;
           for (const token of tokens) {
             if (value === null || typeof value !== 'object' || !Object.hasOwn(value,token)) { present = false; break; }
@@ -338,7 +389,6 @@ function checkContracts(root,{stdout,stderr,json = false}) {
           }
           const schema_json = schemas.get(row.canonical);
           if (!present || !schema_json) continue;
-          const pointer = tableKind === 'Path' ? key : `/${escape(key)}`;
           const result = validateContract({schema_json,value_json:stringifyJsonValue(value)}); checkedValues++;
           for (const item of result.value_problems) report(seedPath,key,`${pointer}${item.pointer}`,item.rule);
           for (const item of result.unproved) report(seedPath,key,`${pointer}${item.pointer}`,item.rule,true);
@@ -358,7 +408,8 @@ function checkContracts(root,{stdout,stderr,json = false}) {
   unique.sort((a,b) => { for (const key of fields) { const left=a[key] ?? '', right=b[key] ?? ''; if (left!==right) return left<right?-1:1; } return 0; });
   const exit_code = unique.some(item => item.kind==='problem') ? 4 : unique.length ? 5 : 0;
   const skipped_files = [...skipped].sort();
-  if (json) line(stdout,JSON.stringify({exit_code,checked_records:checkedRecords,checked_world_values:checkedValues,skipped_files,diagnostics:unique}));
+  warnings.sort((a,b) => { const left=[a.kind,a.file ?? '',...(a.records ?? [])].join('\n'),right=[b.kind,b.file ?? '',...(b.records ?? [])].join('\n'); return left<right?-1:left>right?1:0; });
+  if (json) line(stdout,JSON.stringify({exit_code,checked_records:checkedRecords,checked_world_values:checkedValues,skipped_files,diagnostics:unique,warnings}));
   else {
     const presentations = new Map();
     for (const item of unique) {
@@ -367,6 +418,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       if (item.source_pointer!==undefined) presentations.get(identity).pointers.push(item.source_pointer);
     }
     for (const item of presentations.values()) line(stderr,`${item.file}: ${item.record} ${item.field}: ${item.kind==='unavailable'?'validation unavailable: ':''}${item.message}${item.pointers.length?` [sources ${item.pointers.join(', ')}]`:''}${item.target!==undefined?` [target ${item.target}]`:''}`);
+    for (const warning of warnings) line(stdout,`Warning: ${warning.message}`);
     if (skipped_files.length) line(stdout,`Skipped ${skipped_files.length} files that are not schemas: ${skipped_files.join(', ')}`);
     line(stdout,`Checked ${checkedRecords} records and ${checkedValues} world values.`);
   }

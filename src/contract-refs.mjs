@@ -360,6 +360,8 @@ function differences(a,b,pointer = '', root = true, schema = true, unordered = f
   }
   return encode(a) === encode(b) ? [] : [`${pointer}: ${encode(a)} -> ${encode(b)}`];
 }
+export function schemaValuesEqual(a,b) { return differences(a,b).length === 0; }
+
 export function compareCopies(sources, records) {
   const matches = [], warnings = [], candidates = records.flatMap(record => {
     try { const value = parse(record.value_json); return object(value) && value.type==='object' && object(value.properties) ? [{...record,value}] : []; } catch { return []; }

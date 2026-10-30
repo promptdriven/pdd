@@ -33,7 +33,7 @@ async function check(label,files,expected,{worldValues,records,skips,problemFile
     };
     const text=await invoke(false),json=await invoke(true);
     const got=JSON.parse(json.stdout);
-    assert.deepEqual(Object.keys(got).sort(),['checked_records','checked_world_values','diagnostics','exit_code','skipped_files']);
+    assert.deepEqual(Object.keys(got).sort(),['checked_records','checked_world_values','diagnostics','exit_code','skipped_files','warnings']);
     assert.equal(got.exit_code,expected,label);
     assert.ok(Number.isInteger(got.checked_records)&&got.checked_records>=0,label);
     assert.ok(Number.isInteger(got.checked_world_values)&&got.checked_world_values>=0,label);
@@ -60,12 +60,12 @@ async function check(label,files,expected,{worldValues,records,skips,problemFile
 }
 
 test('followup formal A:24 exact ownership cases and2 fixed literal/template witnesses',async()=>{
- const sets=[[[['`/a`','owner']],0],[[['`/a`','owner'],['`/a`','owner']],0],[[['`/a`','owner'],['`/a`','second']],4],[[['`/a`','parent'],['`/a/b`','child']],0],[[['`/a`, `/b`','owner'],['`/b`','second']],4],[[['`/a`','owner, second']],0]];
+ const sets=[[[['`/a`','owner']],0],[[['`/a`','owner'],['`/a`','owner']],0],[[['`/a`','owner'],['`/a`','second']],4],[[['`/a`','parent'],['`/a/b`','child']],0],[[['`/a`, `/b`','owner'],['`/b`','second']],4],[[['`/a`','owner, second']],4]];
  for(let i=0;i<sets.length;i++)for(const reversed of [false,true])for(const layout of ['absent','blank']) {
   const [rows,expected]=sets[i];
   await check(`A/${i}/${reversed}/${layout}`,{'contracts/world.md':table('Path',reversed?[...rows].reverse():rows,layout),'contracts/seed-world.json':'{"unrelated":0}'},expected,{records:0,worldValues:0,skips:[],...(expected?{problemFile:'contracts/world.md',problemField:'Writer'}:{})});
  }
- for(const path of ['`/hosts/<machine_id>`','`/a,b`'])await check('A/witness/'+path,{'contracts/world.md':table('Path',[[path,'owner, second']],'absent'),'contracts/seed-world.json':'{"unrelated":0}'},0,{records:0,worldValues:0,skips:[]});
+ for(const path of ['`/hosts/<machine_id>`','`/a,b`'])await check('A/witness/'+path,{'contracts/world.md':table('Path',[[path,'owner, second']],'absent'),'contracts/seed-world.json':'{"unrelated":0}'},4,{records:0,worldValues:0,skips:[]});
 });
 
 test('followup formal B:48 optional schema and value-presence cases',async()=>{
@@ -82,15 +82,15 @@ test('followup formal B:48 optional schema and value-presence cases',async()=>{
 const roles=[
  ['root',integer,'',false,true],['invalid',{type:'array'},'',false,false],
  ['pure',{defs:{leaf:integer}},'/defs/leaf',false,true],
- ['metadata',{note:'business',leaf:integer},'/leaf',true,true],
- ['empty',{empty:{},leaf:integer},'/leaf',true,true],
+ ['metadata',{note:'business',leaf:integer},'/leaf',false,true],
+ ['empty',{empty:{},leaf:integer},'/leaf',false,true],
  ['resources',{resources:{leaf:integer}},'/resources/leaf',true,true],
  ['simulation',{simulation:{leaf:integer}},'/simulation/leaf',true,true],
- ['business',{note:'data',leaf:integer,business:{enum:[{properties:{literal:{$contract:'contracts/missing.json#'}}}],default:{properties:{literal:{$contract:'contracts/missing.json#'}}}}},'/leaf',true,true],
+ ['business',{note:'data',leaf:integer,business:{enum:[{properties:{literal:{$contract:'contracts/missing.json#'}}}],default:{properties:{literal:{$contract:'contracts/missing.json#'}}}}},'/leaf',false,true],
 ];
 test('followup formal C:16 JSON role and explicit selection cases',async()=>{
  for(const [name,value,pointer,skip,valid]of roles)for(const selected of [false,true]) {
-  await check(`C/${name}/${selected}`,{'contracts/shapes.json':J(value),...(selected?{'prompts/select.prompt.md':iface([{$contract:'contracts/shapes.json#'+pointer}])}:{})},valid?0:4,{skips:skip&&!selected?['contracts/shapes.json']:[],...(valid?{}:{problemFile:'contracts/shapes.json'})});
+  await check(`C/${name}/${selected}`,{'contracts/shapes.json':J(value),...(selected?{'prompts/select.prompt.md':iface([{$contract:'contracts/shapes.json#'+pointer}])}:{})},valid?0:4,{skips:skip&&!selected?['contracts/shapes.json']:[],...(['metadata','empty','business'].includes(name)?{records:1}:{}),...(valid?{}:{problemFile:'contracts/shapes.json'})});
  }
 });
 
