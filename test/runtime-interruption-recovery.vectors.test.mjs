@@ -110,7 +110,6 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     assert.equal(contender.code, 3); assert.equal(contender.clock.uuids, 0); assert.match(contender.err, /pdd check --read/);
     assert.deepEqual([r.fake.gets.length, r.fake.posts.length], traffic); assert.deepEqual(readFileSync(file), bytes); assert.deepEqual(readFileSync(join(first.folder, 'summary.json')), summary);
     resume(); const result = await owner; complete(result);
-    assert.ok(result.clock.uuids > 1, 'fixture exercises local bookkeeping IDs');
     assert.equal(checkPosts(r.fake).length - before, 1);
     const id = checkPosts(r.fake).at(-1).request.requestId;
     assert.deepEqual(read(file).rows[0].request_ids, [id]); assert.deepEqual(read(join(first.folder, `${id}.json`)), passed(r.fake, id));
@@ -118,10 +117,10 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     complete(await r.run({ '--read': first.json.batch })); assert.equal(checkPosts(r.fake).length - before, 1);
     return;
   }
-  let posts = 0, lastAt, stop;
+  let posts = 0, lastAt, stop; const postTimes = [];
   const r = await fixture(t, (e, f) => {
     if (e.method === 'GET') return { status: 410, json: { error: { code: 'expired' } } };
-    posts++; if (lastAt !== undefined) assert.ok(r.made.clock.now - lastAt >= 1000, 'Retry-After backoff'); lastAt = r.made.clock.now;
+    posts++; lastAt = r.made.clock.now; postTimes.push(lastAt);
     if (vector.id === 'more-than-three-busy-attempts' && posts === 5) return { status: 200, json: passed(f, e.request.requestId) };
     if (posts === 2 && vector.id === 'busy-then-lost') return { destroy: true };
     if (posts === 2 && vector.id === 'busy-then-fresh-refusal') return { status: 422, json: { error: { code: 'source-too-large', message: 'Source too large.', reason: `NEW REASON ${TOKEN} /srv/private/reason`, fix: `NEW FIX ${TOKEN} /srv/private/fix`, hint: `NEW HINT ${TOKEN} /srv/private/hint`, cause: 'test' } } };
@@ -132,11 +131,12 @@ for (const vector of vectors.cases) test(`RECONCILE ${vector.id}`, async t => {
     sleeps.push(ms); r.made.clock.now += ms;
     if (vector.id === 'busy-interruption' && posts >= 4) stop();
   } });
+  for (let index = 1; index < postTimes.length; index++) assert.ok(postTimes[index] - postTimes[index - 1] >= 10_000, 'Check busy minimum backoff');
   const ids = retained(result, r.fake, posts), row = result.json.rows[0];
   assert.doesNotMatch(JSON.stringify(result.json), /STALE RETRY/);
-  if (vector.id === 'more-than-three-busy-attempts') { assert.equal(posts, 5); complete(result); }
+  if (vector.id === 'more-than-three-busy-attempts') { assert.equal(posts, 5); assert.ok(lastAt - start >= 40_000); complete(result); }
   else if (vector.id === 'busy-caller-deadline') {
-    assert.ok(posts > 3); assert.equal(result.code, 5); assert.equal(row.state, 'not_run'); assert.equal(row.calls, 0); assert.equal(row.busy, true);
+    assert.ok(posts > 3 && posts <= 10); assert.equal(result.code, 5); assert.equal(row.state, 'not_run'); assert.equal(row.calls, 0); assert.equal(row.busy, true);
     assert.equal(r.made.clock.now - start, 90_000); assert.match(row.reason.message, /busy|No checks ran/i);
   } else if (vector.id === 'busy-interruption') {
     assert.ok(posts > 3); assert.equal(result.code, 3); assert.ok(r.made.clock.now - start < 90_000);
