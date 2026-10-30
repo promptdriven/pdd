@@ -170,3 +170,62 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   const saved = JSON.parse(readFileSync(join(f.runDir, 'status.json'), 'utf8'));
   assert.equal(saved.gate.at, 4); assert.equal(saved.area, 0); assert.deepEqual(saved.decisions, []);
 });
+
+function awaitingCode(f) {
+  f.run.gate = { kind: 'ask-code', area: 'prompt-pr', at: 4 };
+  f.run.state = 'waiting'; f.save();
+}
+
+test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body including evidence and canonical marker', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`;
+  for (const prose of ['x'.repeat(59900), '😀'.repeat(59900), `${'ordinary reviewer prose\n'.repeat(2400)}end`]) {
+    const prs = f.data().prs; prs[0].body = `${prose}\n${marker}\n`; f.configure({ prs });
+    assert.ok([...prs[0].body].length <= 60000, 'The existing description starts within the body budget.');
+    writeFileSync(join(f.runDir, 'scope.md'), `Not checked: ${'y'.repeat(2000)}`);
+    const out = f.invoke('', 'approveRun');
+    assert.equal(out.exitCode, 1, 'Synchronization cannot approve an absent chat.');
+    const body = f.data().prs[0].body;
+    assert.ok([...body].length <= 60000, `Whole PR 1 description has ${[...body].length} code points.`);
+    assert.equal(body.split(marker).length - 1, 1);
+    assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+    assert.equal(body.trimEnd().endsWith(marker), true);
+  }
+});
+
+test('PR1-REFRESH-PROSE: real approval synchronization preserves later ordinary and fenced label examples byte for byte', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const example = 'Defect: retain this ordinary example\n\nReviewer explanation:\n```text\nDefect: retain this example\nNot checked: example only\nReview: illustrative\nPart of #17\n```\n\n~~~markdown\nProof (gap closed): another example\n~~~\n';
+  const prs = f.data().prs;
+  prs[0].body = `Old-code proof: ✓ old success\n\nPart of #17\n\n${example}\n<!-- pdd-workflow:${f.run.runId}:prompt-pr -->\n`; f.configure({ prs });
+  writeFileSync(join(f.runDir, 'scope.md'), 'Review: refreshed');
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+  const body = f.data().prs[0].body;
+  assert.ok(body.includes(example), 'Preserve the complete reviewer example, including fences and literal issue reference.');
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});
+
+test('PR1-REFRESH-RETENTION: bounded synchronization counts omitted failures and report references and keeps issue safety', t => {
+  const f = fixture(t, { existing: true, prompt: true }); awaitingCode(f);
+  const marker = `<!-- pdd-workflow:${f.run.runId}:prompt-pr -->`;
+  const prs = f.data().prs;
+  prs[0].body = `Defect: stale owned label\nReview: stale owned review\nPart of #17\n\nReviewer prose.\n\n\`\`\`text\n${'ordinary line\n'.repeat(4500)}✗ retained reviewer failure https://runtime.example/r/reviewer\n\`\`\`\n${marker}\n`;
+  f.configure({ prs });
+  const failures = Array.from({ length: 900 }, (_, i) => `Defect: ✗ failure ${i} ${'detail '.repeat(20)}https://runtime.example/r/report-${i}`);
+  writeFileSync(join(f.runDir, 'scope.md'), `Not fixed yet: ${'x'.repeat(65000)}\n${failures.join('\n')}\nReview: current review`);
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1);
+  const body = f.data().prs[0].body;
+  assert.ok([...body].length <= 60000);
+  assert.match(body, /^Defect: broken value/);
+  assert.doesNotMatch(body, /stale owned label|stale owned review|Part of #17|Closes #17/);
+  assert.match(body, /^Refs #17$/m); assert.match(body, /Evidence omitted: \d+ labels, [1-9]\d* failure lines, [1-9]\d* report references/);
+  const omitted = /Evidence omitted: (\d+) labels, (\d+) failure lines, (\d+) report references/.exec(body).slice(1).map(Number);
+  const shownFailures = (body.match(/^Defect: ✗ failure \d+ /gm) ?? []).length;
+  assert.equal(shownFailures + omitted[1], failures.length, 'Every evidence failure is visible or explicitly counted.');
+  assert.equal(shownFailures + omitted[2], failures.length, 'Every evidence report reference is visible or explicitly counted.');
+  assert.equal((body.match(/^(?:Defect:|Review:)/gm) ?? []).length + omitted[0], failures.length + 3);
+  assert.match(body, /✗ retained reviewer failure/); assert.match(body, /https:\/\/runtime.example\/r\/reviewer/);
+  assert.match(body, /not shown|summary|shortened/i);
+  assert.equal((body.match(/^```/gm) ?? []).length % 2, 0, 'Summarized description closes its fence.');
+  assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
+});

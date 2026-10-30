@@ -473,10 +473,12 @@ const reportsFailure = line => /✗|\bfail(?:s|ed|ing)?\b/i.test(line);
 // verify.md in at most `room` characters: the whole report when it fits. Else each <details> block becomes one line; if it is
 // still too long, its first lines that fit (cut at a line end, a code fence closed), then the lines of the cut part that report
 // a failure. A note says that this is a summary and where the full report is, so no failure is dropped in silence.
-function verifyFit(text, room, env) {
-  const full = verifyBody(text);
+function verifyFit(text, room, env, description = false) {
+  const full = description ? text : verifyBody(text);
   if (characters(full) <= room) return full;
-  const note = what => `_The full verify report has ${characters(text).toLocaleString('en-US')} characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: ${what}. The PR author has the full report: verify.md in the run folder._`;
+  const note = what => description
+    ? `_The existing PR 1 description has ${characters(text).toLocaleString('en-US')} characters. It was shortened to fit the complete description's 60,000-character budget: ${what}._`
+    : `_The full verify report has ${characters(text).toLocaleString('en-US')} characters, more than a PR description can hold (GitHub's limit is 65,536). This is a summary: ${what}. The PR author has the full report: verify.md in the run folder._`;
   const lines = [], hiddenEvidence = new Set();
   let depth = 0, summary = null;
   for (const line of full.split('\n')) {
@@ -530,8 +532,9 @@ async function publicationEvidence(run, area, p) {
 function evidenceFit(lines, room, env) {
   if (characters(lines.join('\n')) <= room) return lines;
   const kept = [], omitted = [];
+  const notice = rows => `Evidence omitted: ${rows.length} labels, ${rows.filter(reportsFailure).length} failure lines, ${rows.flatMap(line => reportLinks(line, env)).length} report references. The full evidence remains in the run folder.`;
   let machineRoom = lines.some(line => line.startsWith('Old-code proof:')) ? 100 : 0;
-  let left = Math.max(0, room - 300 - machineRoom);
+  let left = Math.max(0, room - characters(notice(lines)) - 1 - machineRoom);
   for (const line of lines) {
     if (line.startsWith('Old-code proof:')) { left += machineRoom; machineRoom = 0; }
     if (characters(line) + 1 <= left) { kept.push(line); left -= characters(line) + 1; }
@@ -541,7 +544,7 @@ function evidenceFit(lines, room, env) {
       if (line.startsWith('Old-code proof:') && characters(unavailable) + 1 <= left) { kept.push(unavailable); left -= characters(unavailable) + 1; }
     }
   }
-  kept.push(`Evidence omitted: ${omitted.length} labels, ${omitted.filter(reportsFailure).length} failure lines, ${omitted.flatMap(line => reportLinks(line, env)).length} report references. The full evidence remains in the run folder.`);
+  kept.push(notice(omitted));
   return kept;
 }
 function prBody(run, area, env, drafts = [], tests = true, evidence) {
@@ -854,12 +857,32 @@ async function draftDescription(run, pr1, drafts, p) {
     const draftBody = !old ? body : drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
     const area = askArea(run), evidence = await publicationEvidence(run, area, p), marker = `<!-- pdd-workflow:${run.runId}:${area.name} -->`;
     if (evidence.lines.some(line => line.includes('pdd-workflow:')) || String(draftBody).replace(marker, '').includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers.');
-    const remainder = String(draftBody).replace(marker, '').split('\n')
-      .filter(line => !/^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:)/.test(line))
-      .map(line => new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`).test(line) ? evidence.issueReference : line).join('\n').trim();
+    const rows = String(draftBody).replace(marker, '').split('\n');
+    const owned = /^(?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
+    const reference = new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`);
+    let at = 0;
+    while (at < rows.length && !rows[at].trim()) at++;
+    while (at < rows.length && owned.test(rows[at])) at++;
+    while (at < rows.length && !rows[at].trim()) at++;
+    if (reference.test(rows[at] ?? '')) at++;
+    while (at < rows.length && !rows[at].trim()) at++;
+    let fence = null;
+    const remainder = rows.slice(at).map(line => {
+      const mark = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (mark) {
+        if (!fence) fence = mark[1];
+        else if (mark[1][0] === fence[0] && mark[1].length >= fence.length && !mark[2].trim()) fence = null;
+        return line;
+      }
+      return !fence && reference.test(line) ? evidence.issueReference : line;
+    }).join('\n').trim();
     const safeRemainder = hideLocalPaths(redactTry(remainder), run);
-    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, BODY_BUDGET - 200 - characters(safeRemainder)), p.env);
-    const nextBody = [...lifted, ...(lifted.length ? [''] : []), safeRemainder, '', marker, ''].join('\n');
+    const footer = `\n\n${marker}\n`;
+    const room = BODY_BUDGET - characters(footer) - characters(evidence.issueReference) - 4;
+    const lifted = evidenceFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), Math.max(0, room - Math.min(1000, characters(safeRemainder))), p.env);
+    const leading = [...lifted, ...(lifted.length ? [''] : []), evidence.issueReference, '', ''].join('\n');
+    const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer), p.env, true);
+    const nextBody = `${leading}${fitted}${footer}`;
     if (nextBody === body) return [];
     const reply = await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('PR 1 description update failed.'), { code: reply.code });
