@@ -106,7 +106,7 @@
     },
     {
       "id": "missing-interface",
-      "criterion": "AC1",
+      "criterion": "AC2",
       "input": {
         "files": {
           "product/plan.md": "# Plan",
@@ -114,16 +114,18 @@
         },
         "options": {
           "--lint": true
-        }
+        },
+        "reply": "passed-empty-program"
       },
       "expected": {
-        "exit_code": 2,
-        "capture_calls": 0,
-        "auth_calls": 0,
-        "posts": 0,
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "warning_count": 1,
         "diagnostic_contains": [
-          "prompts/board.prompt.md",
-          "has no Runtime interface block"
+          "prompts/board.prompt.md has no Runtime interface yet"
         ]
       }
     },

@@ -1,0 +1,462 @@
+{
+  "schema_version": "pdd.native-source-prompt-context.v1",
+  "story_path": "user_stories/lint-source-prompt-context.md",
+  "synthetic": true,
+  "boundary": "src/runtime-client.mjs#runCheck",
+  "default_options": {
+    "--lint": true,
+    "--json": true
+  },
+  "fixture_sources": "test/fixtures/source-only-lint-cases.json#fixture_sources",
+  "notes": [
+    "Expected outcomes derive from Lead 10:50 policy approved by Root before code, not implementation output.",
+    "Native descriptors are harness setup, not new public APIs or Runtime wire fields. Reply descriptors materialize canonical matching receipts; all observations come from the actual public boundary.",
+    "For malformed/multiple/stale/unapproved variants, retain actual recognized interface blocks and return canonical errors/refusals; do not turn invalid JSON into prose.",
+    "Disk replacement uses actual complete Runtime-bearing loose-prompt bytes; frozen source identity, saved classification and warning must remain unchanged.",
+    "Conservative legacy controls remove or make unsupported only local classification evidence after save; the injected legacy capture control removes sources from an otherwise actual capture. No verdict-producing ports.",
+    "Legacy metadata controls first use the actual new producer, then mutate only classification metadata. Its recorded prose warning remains one; warning text is not classification proof. A capture result without sources never established classification and keeps zero prose warnings.",
+    "For all four disk mutation cases calibrate a direct filesystem content-read observer against a real source read, then require zero refresh source-content reads. Preserve original saved source hash and lint ID; refresh GETs the original lint only. Empty prose_source_paths from Runtime capture must not be replaced by current disk prose."
+  ],
+  "cases": [
+    {
+      "id": "test-runtime-missing-schema",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/runtime/order.json": "{}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "test-runtime-wrong-schema",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/runtime/order.json": "{\"schema_version\":\"foreign.v1\"}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "test-runtime-oversized",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan"
+        },
+        "generated_file": {
+          "path": "test/runtime/order.json",
+          "prefix": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"padding\":\"",
+          "pad_byte": "x",
+          "bytes": 1048577,
+          "suffix": "\"}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "candidate_content_reads": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "1 MiB"
+        ]
+      }
+    },
+    {
+      "id": "valid-test-outside-conventional-folder",
+      "criterion": "AC1",
+      "input": {
+        "fixture": "harbor",
+        "relocate_test_to": "scenarios/order.json",
+        "reply": "passed-selected-test"
+      },
+      "expected": {
+        "exit_code": 0,
+        "selected_test": "scenarios/order.json",
+        "lint_posts": 1,
+        "check_posts": 0,
+        "prose_warning_count": 0
+      }
+    },
+    {
+      "id": "prose-alone",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "prose_source_paths": [
+          "board.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "warning_contains": [
+          "board.prompt.md has no Runtime interface yet"
+        ]
+      }
+    },
+    {
+      "id": "two-prose",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "a.prompt.md": "# A",
+          "b.prompt.md": "# B"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "prose_source_paths": [
+          "a.prompt.md",
+          "b.prompt.md"
+        ],
+        "prose_warning_count": 2,
+        "warning_contains": [
+          "a.prompt.md has no Runtime interface yet",
+          "b.prompt.md has no Runtime interface yet"
+        ]
+      }
+    },
+    {
+      "id": "mixed-admitted-runtime-prose",
+      "criterion": "AC2",
+      "input": {
+        "fixture": "loose-prompt",
+        "files": {
+          "notes.prompt.md": "# Notes"
+        },
+        "reply": "passed-runtime-admitted-prose-omitted"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "prose_source_paths": [
+          "notes.prompt.md"
+        ],
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "runtime-missing-admission",
+      "criterion": "AC3",
+      "input": {
+        "fixture": "loose-prompt",
+        "runtime_variant": "missing-admission",
+        "reply": "passed-missing-admission"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 0
+      }
+    },
+    {
+      "id": "runtime-invalid-interface-controls",
+      "criterion": "AC3",
+      "input": {
+        "fixture": "loose-prompt",
+        "reply": "canonical-runtime-refusal",
+        "runtime_variants": [
+          "malformed-json",
+          "multiple-blocks",
+          "stale-hash",
+          "unapproved"
+        ]
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 0
+      },
+      "expected_applies_to_each_variant": true
+    },
+    {
+      "id": "prose-refused-prompt",
+      "criterion": "AC3",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "reply": "canonical-refused-prompt"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "prose-explicit-refused-admission",
+      "criterion": "AC3",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "reply": "canonical-explicit-refused-admission"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "prose-global-failed",
+      "criterion": "AC3",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "reply": "canonical-global-failed"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "prose-global-error",
+      "criterion": "AC3",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "reply": "canonical-global-error"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "check_posts": 0,
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "saved-prose-read-disk-mutated",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "initial_reply": "running-empty-program",
+        "after_save_files": {
+          "board.prompt.md": "Runtime-bearing replacement using loose-prompt fixture bytes"
+        },
+        "read_action": "--read",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "prose_source_paths": [
+          "board.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "json_results": 1,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_uses_original_lint_id": true
+      }
+    },
+    {
+      "id": "saved-prose-retry-disk-mutated",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "initial_reply": "running-empty-program",
+        "after_save_files": {
+          "board.prompt.md": "Runtime-bearing replacement using loose-prompt fixture bytes"
+        },
+        "read_action": "--retry",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "prose_source_paths": [
+          "board.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "json_results": 1,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_uses_original_lint_id": true
+      }
+    },
+    {
+      "id": "legacy-missing-metadata",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "classification_evidence": "legacy-missing-metadata",
+        "reply": "passed-empty-program",
+        "classification_mutation": "After actual new producer saves prose_source_paths and warning, remove only classification field or replace it with unsupported metadata. Preserve captured hash, files, warning and receipt."
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "unknown-target",
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "unsupported-metadata",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "classification_evidence": "unsupported-metadata",
+        "reply": "passed-empty-program",
+        "classification_mutation": "After actual new producer saves prose_source_paths and warning, remove only classification field or replace it with unsupported metadata. Preserve captured hash, files, warning and receipt."
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "unknown-target",
+        "prose_warning_count": 1
+      }
+    },
+    {
+      "id": "capture-without-sources",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "classification_evidence": "capture-without-sources",
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "unknown-target",
+        "prose_warning_count": 0
+      }
+    },
+    {
+      "id": "saved-runtime-read-disk-replaced-with-prose",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "loose-prompt",
+        "initial_reply": "running-runtime-inventory",
+        "saved_classification": [],
+        "after_save_files": {
+          "echo.prompt.md": "# Plain prose after capture"
+        },
+        "read_action": "--read",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "unknown-target",
+        "prose_source_paths": [],
+        "prose_warning_count": 0,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "refresh_uses_original_lint_id": true,
+        "json_results": 1
+      }
+    },
+    {
+      "id": "saved-runtime-retry-disk-replaced-with-prose",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "loose-prompt",
+        "initial_reply": "running-runtime-inventory",
+        "saved_classification": [],
+        "after_save_files": {
+          "echo.prompt.md": "# Plain prose after capture"
+        },
+        "read_action": "--retry",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "unknown-target",
+        "prose_source_paths": [],
+        "prose_warning_count": 0,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "refresh_uses_original_lint_id": true,
+        "json_results": 1
+      }
+    }
+  ]
+}

@@ -69,6 +69,19 @@ flowchart TD
     C -->|Pending or uncertain| U[Read saved lint: exit 3]
 ```
 
+For this source-only path, classify each captured `*.prompt.md` from its effective
+`capture.sources` bytes using preflight's module function `interfaceBlocks(text)`.
+No recognized block means prose source: surface one warning per captured path,
+`PATH has no Runtime interface yet`, and do not synthesize a missing-admission
+refusal solely because that path has no program inventory row. The file itself
+is eligible source even without a plan. A present recognized block remains
+Runtime-bearing regardless of JSON validity, block count, hash or status; those
+prompts still require ordinary accepted admission. An explicit refused admission,
+`refused_prompts`, global failed/refused result or error diagnostic remains
+canonical, including for prose. Warning-only prose with a matching passed usable
+empty program inventory can pass. Do not emit these new warnings for unselected
+files, ordinary Check, Try or selected-test lint.
+
 A candidate hint keeps the ordinary No tests found exit 2 and the same bounded
 help, before capture, sign-in or upload. Candidate meaning belongs to
 [preflight Files](runtime-preflight.prompt.md#files), not a broader all-JSON
@@ -88,7 +101,7 @@ Send the existing `POST /v1/lint` request with `complete: true` and the canonica
 captured tar/hash, under the same admission and transport rules. Add no wire flag
 or endpoint. Successful source-only lint requires a matching confirmed terminal
 passed lint and its usable program report, no global refusal/error diagnostic,
-and accepted current-draft/approved admission for the selected prompts. Empty
+and accepted current-draft/approved admission for the Runtime-bearing selected prompts. Empty
 prompt/test lists are valid for a plan-only source archive. A confirmed failed or
 refused lint, error diagnostic or selected prompt refusal exits 4 even with no
 rows; warning-only diagnostics do not refuse. A missing/incompatible report,
@@ -112,7 +125,15 @@ all context warnings, including a Story with no test, and server diagnostics.
 The source summary is the last stdout line after coverage and warning output.
 These summaries describe source lint, never validated Stories
 or passing tests.
-Save ordinary lint-only intent and source identity. Pending source-only lint
+Save ordinary lint-only intent and source identity. Optional local batch field
+`prose_source_paths` records only captured paths classified as prose for that
+saved source hash; `[]` represents a classified snapshot with no prose prompts.
+Persist the resulting warnings. Read/retry restores this classification and
+warnings without inspecting current disk bytes, even after files change. Absent
+or unsupported legacy metadata, or an injected legacy capture result without
+`sources`, supplies no proven prose exclusions: retain prior conservative
+admission judgment without a new metadata refusal gate. This metadata is local,
+never a Runtime wire field. Pending source-only lint
 prints its batch read command; `--read` obtains only that saved lint's result,
 retains source-only state/summary and empty rows, and never dispatches a Check or
 Try. `--retry` of a saved source-only lint has the same read and result semantics
@@ -509,8 +530,9 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 ## Dependencies
 
 - [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
-  verification context for source capture, advisory warnings and Story footprint
-  availability.
+  verification context for source capture, advisory warnings, Story footprint
+  availability and the existing module function `interfaceBlocks(text)` used to
+  classify effective captured prompt bytes.
 
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
