@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 21df3ae4008c651b29c166837132eaa653dcc9d05b3658d3d7529fab6c222331).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 44b6c3adfdc44b6fb0496da1e272c2585ec5bc6d9a67b0633cdc1e0975760a45).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -616,7 +616,11 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     let value;
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
-    if (!Object.hasOwn(value, 'status')) { result.warnings.push({ path, message: `${path} Runtime interface has no status and was skipped.` }); continue; }
+    if (!Object.hasOwn(value, 'status')) {
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      continue;
+    }
     const hash = proseSha256(text);
     if (value.status === 'approved') { (value.prose_sha256 === hash ? result.current : result.stale).push({ path }); continue; }
     if (value.status !== 'draft') { result.refused.push({ path, message: `${path} has status ${show(value.status)}. Use "draft" until the person approves it.` }); continue; }

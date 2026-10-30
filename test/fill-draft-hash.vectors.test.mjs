@@ -22,7 +22,8 @@ function setup(t, names, placement = vectors.placements[1]) {
     const vector = vectors.cases.find(row => row.name === name);
     const path = name === 'draft' ? vectors.placements[0] : name === 'status-absent' ? placement : `other/${name}.prompt.md`;
     const block = body => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${body}\n\`\`\`\n</details>\n`;
-    let text = `# ${name}\n\nKeep these prose bytes.\n\n` + block(vector.interface_json ?? JSON.stringify(vector.interface, null, 2)).repeat(vector.block_count ?? 1);
+    let text = vector.source_bytes ?? `# ${name}\n\nKeep these prose bytes.\n\n` + block(vector.interface_json ?? JSON.stringify(vector.interface, null, 2)).repeat(vector.block_count ?? 1);
+    if (vector.source_fixture) assert.equal(text, readFileSync(new URL(`../${vector.source_fixture}`, import.meta.url), 'utf8'), 'source fixture identity');
     if (text.includes('$CURRENT_PROSE_SHA256')) text = text.replace('$CURRENT_PROSE_SHA256', proseSha256(text));
     mkdirSync(dirname(join(repo, path)), { recursive: true }); writeFileSync(join(repo, path), text);
     before.set(path, text); cases.set(path, vector);
@@ -36,9 +37,22 @@ function verifyBytes({ repo, before, cases }) {
     else assert.equal(actual, original, path);
   }
 }
-function warning(message, path) {
+function advice(message, path, vector) {
   assert.ok(message.includes(path), message);
-  for (const word of vectors.cases.find(row => row.name === 'status-absent').warning_contains) assert.ok(message.includes(word), message);
+  for (const word of [...(vector.warning_contains ?? []), ...(vector.refusal_contains ?? [])]) assert.ok(message.includes(word), message);
+}
+function verifyOutput(text, state, replay) {
+  assert.ok(text.includes(summary(replay.counts)), text);
+  const warnings = text.split('\n').filter(line => line.startsWith('Warning:'));
+  assert.equal(warnings.length, replay.warnings);
+  for (const [path, vector] of state.cases) {
+    if (vector.warning_contains || vector.refusal_contains) {
+      const prefix = vector.outcome === 'warning' ? 'Warning:' : 'Refused:';
+      const line = text.split('\n').find(row => row.startsWith(prefix) && row.includes(path));
+      assert.ok(line, `${replay.name}: missing ${prefix} ${path}`); advice(line, path, vector);
+    }
+  }
+  if (replay.output_order) assert.deepEqual(text.trim().split('\n').map(line => replay.output_order.find(prefix => line.startsWith(prefix))), replay.output_order);
 }
 function summary(counts) { return `Hashes: ${counts.filled} filled, ${counts.current} current, ${counts.refused} refused, ${counts.stale} stale.`; }
 
@@ -50,7 +64,7 @@ test('fill hash native vectors preserve safety while statusless fixtures only wa
   for (const [path, vector] of all.cases) {
     const bucket = vector.outcome === 'warning' ? result.warnings : result[vector.outcome];
     assert.deepEqual(bucket.filter(row => row.path === path).map(row => row.path), [path], vector.name);
-    if (vector.outcome === 'warning') warning(bucket.find(row => row.path === path).message, path);
+    if (vector.warning_contains || vector.refusal_contains) advice(bucket.find(row => row.path === path).message, path, vector);
   }
   verifyBytes(all);
   assert.deepEqual(fillHashes({ root: all.repo, files: [] }), { filled: [], current: [], refused: [], stale: [], warnings: [] });
@@ -63,9 +77,7 @@ test('fill hash native vectors preserve safety while statusless fixtures only wa
       gh: () => { calls.gh++; assert.fail('sign-in'); },
     });
     assert.equal(code, replay.exit_code, replay.name);
-    assert.ok(stdout.text.includes(summary(replay.counts)), stdout.text);
-    const warnings = stdout.text.split('\n').filter(line => line.startsWith('Warning:'));
-    assert.equal(warnings.length, replay.warnings); warning(warnings[0], vectors.placements[1]);
+    assert.equal(stderr.text, ''); verifyOutput(stdout.text, state, replay);
     assert.deepEqual(calls, { fetch: 0, gh: 0 }); verifyBytes(state);
   }
 });
@@ -77,14 +89,12 @@ test('fill hash CLI replays succeed beside unrelated prompts in every directory'
     const git = spawnSync('which', ['git'], { encoding: 'utf8' }); assert.equal(git.status, 0);
     symlinkSync(git.stdout.trim(), join(bin, 'git'));
     const result = spawnSync(process.execPath, [cli, 'check', '--fill-hash'], {
-      cwd: state.repo, input: '', timeout: 10000, encoding: 'utf8',
+      cwd: state.repo, input: '', timeout: 30000, encoding: 'utf8',
       env: { HOME: state.home, PATH: bin, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
     });
     assert.equal(result.error, undefined); assert.equal(result.signal, null);
     assert.equal(result.status, replay.exit_code, `${replay.name}: ${result.stdout}\n${result.stderr}`);
-    assert.ok(result.stdout.includes(summary(replay.counts)), result.stdout);
-    const warnings = result.stdout.split('\n').filter(line => line.startsWith('Warning:'));
-    assert.equal(warnings.length, replay.warnings); warning(warnings[0], placement);
+    assert.equal(result.stderr, ''); verifyOutput(result.stdout, state, replay);
     verifyBytes(state);
   }
 });
