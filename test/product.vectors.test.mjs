@@ -4,19 +4,26 @@ import { readFileSync } from 'node:fs';
 import * as product from '../src/product.mjs';
 
 const pointer = (value, path) => path === '' ? value : path.split('/').slice(1).reduce((item, token) => item?.[token.replace(/~1/g, '/').replace(/~0/g, '~')], value);
-for (const name of ['map', 'status', 'next', 'start']) {
+for (const name of ['map', 'status', 'next', 'start', 'issue-binding', 'search-cache', 'unavailable-actor']) {
   test(`product-${name}: original prompt-space vectors at public module boundaries`, async () => {
     const scenario = JSON.parse(readFileSync(new URL(`./runtime/product-${name}.json`, import.meta.url)));
     const world = structuredClone(scenario.initial_world), calls = {};
     const invoke = (resource, args) => {
-      calls[resource] = (calls[resource] ?? 0) + 1;
+      const key = `product-${resource.replace('.', '-')}`;
+      calls[key] = (calls[key] ?? 0) + 1;
       const binding = scenario.simulation[resource];
       assert.ok(binding, `Unmapped resource ${resource}`);
+      if (binding.action === 'key-value.get') return { json: pointer(world, binding.world_pointer)[pointer(args, binding.key_argument_pointer)] ?? null };
+      if (binding.action === 'key-value.put') { pointer(world, binding.world_pointer)[pointer(args, binding.key_argument_pointer)] = pointer(args, binding.value_argument_pointer); return {}; }
       if (binding.action === 'port.write') pointer(world, binding.world_pointer).push(structuredClone(args));
       return structuredClone(binding.result_template);
     };
+    let fallbackState = null;
     const ports = {
-      ...Object.fromEntries(['issuePage','timelinePage','pullRequest','currentActor'].filter(name=>scenario.simulation['github.'+name]).map(name=>[name,async args=>{const value=invoke('github.'+name,args);return value.json?JSON.parse(value.json):value;}])),
+      readProductState: async args => scenario.simulation['productState.read'] ? invoke('productState.read', args) : ({ json: fallbackState }),
+      writeProductState: async args => { if (scenario.simulation['productState.write']) return invoke('productState.write', args); fallbackState = args.json; return {}; },
+      now: async () => scenario.simulation['clock.now'] ? invoke('clock.now', {}) : ({ milliseconds: 0 }),
+      ...Object.fromEntries(['issuePage','issueByNumber','timelinePage','pullRequest','currentActor'].filter(name=>scenario.simulation['github.'+name]).map(name=>[name,async args=>{const value=invoke('github.'+name,args);return value.json?JSON.parse(value.json):value;}])),
       readFile: async path => {
         const file = world.files[path]; if (!file) throw Object.assign(Error('missing'), { code: 'ENOENT' }); return file.content;
       },
@@ -29,11 +36,12 @@ for (const name of ['map', 'status', 'next', 'start']) {
       startRun: async args => invoke('workflow.start', args),
     };
     for (const step of scenario.steps) {
+      for (const key of Object.keys(calls)) delete calls[key];
       let result, error;
       try { result = await product[step.operation](step.input, ports); } catch (caught) { error = caught; }
       if (!step.expected_error) assert.equal(error, undefined, `${step.step_id}: ${error?.stack}`);
       for (const check of step.checks) {
-        const source = check.target === 'result' ? result : check.target === 'world' ? world : check.target === 'error' ? error : null;
+        const source = check.target === 'result' ? result : check.target === 'world' ? world : check.target === 'error' ? error : check.target === 'calls' ? { resources: new Proxy(calls, { get: (object, key) => object[key] ?? 0 }) } : null;
         assert.notEqual(source, null, `Not replayed target ${check.target}`);
         const actual = pointer(source, check.path), label = `${name}/${step.step_id}/${check.criterion_id}${check.path}`;
         if (check.op === 'equals') assert.deepEqual(actual, check.value, label);

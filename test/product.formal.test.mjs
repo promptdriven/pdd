@@ -10,6 +10,14 @@ const marker = run => `<!-- pdd-product: run=${run} -->`;
 function fixture() {
   const state = { issues: [], rows: [], local: false, split: false, created: 0, starts: [] };
   const ports = {
+    readProductState: async () => ({ json: state.productState ?? null }),
+    writeProductState: async ({ json }) => { state.productState = json; return {}; },
+    now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),
+    issueByNumber: async ({ number }) => {
+      if (state.fail) throw Error('GitHub unavailable');
+      const row = (state.pages?.flat() ?? state.issues).find(item => item.number === number);
+      return row && { author_association: 'MEMBER', user: { login: 'member' }, created_at: '2026-10-01T00:00:00Z', ...row };
+    },
     readFile: async path => { if (!files[path]) throw Object.assign(Error('missing'), { code: 'ENOENT' }); return files[path].content; },
     resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }),
     planOnBase: async () => true,

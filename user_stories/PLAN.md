@@ -13,3 +13,6 @@
 - [Seed a journey](product-journey-seed.md) — Runtime check: test/runtime/product-journey-seed.json
 - [Choose journey checks](product-choose-journeys.md) — Runtime check: test/runtime/product-choose-journeys.json
 - [Coffee journey](journeys/J1-coffee-pickup.md) — Runtime check: test/runtime/J1-coffee-pickup.json
+5. [Keep my prepared run issue](product-issue-binding.md): durable issue identity before search indexing.
+6. [Reuse one product search](product-search-cache.md): one shared query and a short local snapshot across commands.
+7. [Continue when my account lookup is unavailable](product-unavailable-actor.md): untrusted claims cannot break product commands.

@@ -18,3 +18,7 @@ Forks, comments and another run's references cannot supply progress or completio
 After implementation merges, freshness follows current base-branch files, not
 the finished run's retained worktree. An unavailable base is unverified, with a
 warning. A visible dependency cycle names its closed path.
+
+Status names the local comparison base and says to run git pull to see changes
+merged on GitHub. Only a rejected PR claiming this run's marker produces a
+provenance warning; ordinary cross-references from other runs stay quiet.
