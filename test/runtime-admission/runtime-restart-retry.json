@@ -13,6 +13,10 @@
     {
       "id": "AC3",
       "text": "Recovery preserves both attempts' request IDs, receipts and known or unknown usage."
+    },
+    {
+      "id": "AC4",
+      "text": "Waiting through restart recovery avoids repeated source packing while still checking the saved source before an authorized replacement."
     }
   ],
   "cases": [
@@ -40,6 +44,16 @@
       "id": "guards",
       "given": "owner/source/repo mismatch or deadline/interrupt before claim",
       "required_observation": "no replacement ID/POST; preserve prior evidence"
+    },
+    {
+      "id": "reuse-recovery-capture",
+      "given": "same eligible confirmed restart is visited twice in one scheduler turn and over later ticks while its replacement waits; supplied source capture counter",
+      "required_observation": "one capture/hash for that recovery decision, no duplicate packing on the second visit or later pending ticks; one replacement claim/POST maximum, unchanged source and call ceiling"
+    },
+    {
+      "id": "later-recovery-revalidates",
+      "given": "new recovery invocation or newly authorized replacement after prior wait; local source changed",
+      "required_observation": "validate source for the new dispatch decision, refuse changed source before replacement allocation/POST; avoiding repeated packing never removes saved-source equality guard"
     }
   ]
 }
