@@ -3,7 +3,7 @@ import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -148,47 +148,71 @@ class StateStore {
   saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
 }
 
-// Native boundary: exclusive ownership covers a whole batch operation, not one save.
-// The short claim serializes dead-owner recovery with creation. Never expire a live PID.
+// Native boundary: one owner from the fresh batch load through the final saves.
 export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } = {}) {
   const lock = join(folder, 'batch.lock');
   const owner = { pid: process.pid, host: hostname(), started_at: new Date().toISOString() };
-  const busy = record => Object.assign(new Error('BATCH_LOCK_BUSY'), { code: 'BATCH_LOCK_BUSY', owner: record });
+  const problem = (code, path, record) => Object.assign(new Error(code), { code, lock: path, owner: record });
   const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+  const warnRelease = (path, error) => {
+    try { onWarning(`Warning: could not release batch lock ${cleanText(path, [], { paths: false })} (${cleanText(error.code ?? 'state error')}).`); } catch { /* cleanup cannot replace the command outcome */ }
+  };
   let abandoned;
-  function claim(path) {
+  function snapshot(path) {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isFile()) throw problem('BATCH_LOCK_INVALID', path, null);
+    try { return { stat, record: JSON.parse(readFileSync(path, 'utf8')) }; }
+    catch (error) { if (error.code === 'ENOENT') throw error; throw problem('BATCH_LOCK_INVALID', path, null); }
+  }
+  function publish(path) {
+    // A hard link publishes the complete fsynced inode with exclusive EEXIST semantics.
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
     let fd;
-    try { fd = openSync(path, 'wx', 0o600); }
+    try {
+      fd = openSync(temporary, 'wx', 0o600); chmodSync(temporary, 0o600);
+      writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd);
+      const owned = fstatSync(fd, { bigint: true }); closeSync(fd); fd = undefined;
+      linkSync(temporary, path);
+      return owned;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+  function claim(path) {
+    let owned;
+    try { owned = publish(path); }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       let before, previous;
-      try {
-        before = lstatSync(path, { bigint: true });
-        previous = before.isFile() ? JSON.parse(readFileSync(path, 'utf8')) : null;
-      } catch (readError) { if (readError.code === 'ENOENT') return claim(path); throw busy(null); }
+      try { ({ stat: before, record: previous } = snapshot(path)); }
+      catch (readError) { if (readError.code === 'ENOENT') return claim(path); throw readError; }
       if (previous?.host !== owner.host || !Number.isSafeInteger(previous.pid) || previous.pid < 1
-        || typeof previous.started_at !== 'string' || !Number.isFinite(Date.parse(previous.started_at))) throw busy(previous);
-      try { process.kill(previous.pid, 0); throw busy(previous); }
-      catch (pidError) { if (pidError.code !== 'ESRCH') throw busy(previous); }
-      // A recovery guard is tied to this dead PID. Its own dead owner is recoverable
-      // by the same rule. Competing recoverers never unlink a newly created owner.
+        || typeof previous.started_at !== 'string' || !Number.isFinite(Date.parse(previous.started_at))) throw problem('BATCH_LOCK_INVALID', path, previous);
+      let dead = false;
+      try { process.kill(previous.pid, 0); }
+      catch (pidError) {
+        if (pidError.code === 'ESRCH') dead = true;
+        else if (pidError.code !== 'EPERM') throw problem('BATCH_LOCK_INVALID', path, previous);
+      }
+      if (!dead) throw problem('BATCH_LOCK_BUSY', path, previous);
       const releaseGuard = claim(`${path}.recover.${previous.pid}`);
       try {
         let current;
-        try { current = lstatSync(path, { bigint: true }); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
-        if (current && sameFile(before, current)) { unlinkSync(path); if (path === lock) abandoned = previous; }
+        try { current = snapshot(path); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        if (current && sameFile(before, current.stat) && isDeepStrictEqual(previous, current.record)) {
+          unlinkSync(path); if (path === lock) abandoned = previous;
+        }
         return claim(path);
       } finally { releaseGuard(); }
     }
-    let owned;
-    try { owned = fstatSync(fd, { bigint: true }); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); }
-    catch (error) { unlinkSync(path); throw error; }
-    finally { closeSync(fd); }
     let released = false;
     return () => {
       if (released) return; released = true;
-      try { if (sameFile(owned, lstatSync(path, { bigint: true }))) unlinkSync(path); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try {
+        const current = snapshot(path);
+        if (sameFile(owned, current.stat) && isDeepStrictEqual(owner, current.record)) unlinkSync(path);
+      } catch (error) { if (error.code !== 'ENOENT') warnRelease(path, error); }
     };
   }
   const release = claim(lock);
@@ -201,12 +225,12 @@ async function ownBatch(context, name) {
   if (context.releaseBatch) return;
   try {
     context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { onWarning: text => line(context.ports.stderr, text) });
+    context.lockedBatch = name;
   } catch (error) {
-    if (error.code === 'BATCH_LOCK_BUSY') {
-      const owner = error.owner, label = value => cleanText(value ?? 'unverified').slice(0, 120);
-      throw new Stop(2, `Another pdd check command is using batch ${name} (pid ${label(owner?.pid)}, host ${label(owner?.host)}, since ${label(owner?.started_at)}); wait for it, then run pdd check --read ${name}.`);
-    }
-    throw new Stop(2, `Could not lock batch ${name} (${error.code ?? 'state error'}). Nothing was sent.`);
+    const owner = error.owner, label = value => cleanText(value ?? 'unverified').slice(0, 120);
+    if (error.code === 'BATCH_LOCK_BUSY') throw new Stop(3, `Another pdd check command is using batch ${name} (pid ${label(owner?.pid)}, host ${label(owner?.host)}, since ${label(owner?.started_at)}); run pdd check --read ${name} after it ends.`);
+    if (error.code === 'BATCH_LOCK_INVALID') throw new Stop(2, `Lock file ${cleanText(error.lock ?? join(context.folder, 'batch.lock'), [], { paths: false })} has an unverifiable owner (host ${label(owner?.host)}). Delete it only if no pdd command is running on that host, then run the command again.`);
+    throw new Stop(2, `Could not lock batch ${name} (${cleanText(error.code ?? 'state error')}). Nothing was sent.`);
   }
 }
 
@@ -1139,7 +1163,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
       return error.exitCode;
     }
     throw error;
-  } finally { try { context.releaseBatch?.(); } finally { release(); } }
+  } finally {
+    try { context.releaseBatch?.(); }
+    catch (error) {
+      try { line(ports.stderr, `Warning: could not release batch ${context.lockedBatch ?? context.batch ?? 'ownership'} (${cleanText(error.code ?? 'state error')}).`); } catch { /* preserve the command outcome */ }
+    } finally { release(); }
+  }
 }
 
 async function runBatch(context, cwd, words, options, setRelease) {
