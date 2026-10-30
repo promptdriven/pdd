@@ -521,8 +521,8 @@ async function sendCheck(context, row) {
 }
 
 // GET one open row once.
-async function readRow(context, row) {
-  const id = row.request_ids.at(-1), end = row.lost ? row.read_until ?? context.deadline : context.deadline;
+async function readRow(context, row, deadline = Infinity) {
+  const id = row.request_ids.at(-1), end = Math.min(deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   if (!id) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
   // A network problem while reading says so once; pdd keeps reading the same IDs.
@@ -837,7 +837,13 @@ async function readUnsentLint(context, rows) {
   if (!held.length) return;
   let answer = context.store.read(join(context.folder, `${id}.json`));
   if (!sameJob(answer, id, 'lint') || !['passed', 'failed', 'refused'].includes(answer.state)) {
-    const read = judgeGet(await context.runtime.get(id), id, 'lint');
+    const remaining = context.deadline - context.ports.now();
+    if (context.interrupted || remaining <= 0) {
+      context.lintPending = !!lint.pending;
+      context.lintUnknown = !!lint.unknown || !context.lintPending;
+      return;
+    }
+    const read = judgeGet(await context.runtime.get(id, Math.min(GET_MS, remaining)), id, 'lint');
     if (read.kind === 'blocked') throw new Stop(5, read.message);
     if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
@@ -990,7 +996,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (['queued', 'running', 'unknown'].includes(row.state)) {
       row.lost = true;
-      await readRow(context, row);
+      await readRow(context, row, context.deadline);
       if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
     } else if (answer) applyAnswer(row, answer, context);
   });
@@ -1003,6 +1009,7 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
   const capture = captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
