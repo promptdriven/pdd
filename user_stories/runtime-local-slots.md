@@ -8,6 +8,9 @@ I can run several local agents without exceeding my shared runtime limit.
 2. Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees.
 3. pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes.
 4. Stopping a command preserves slots for dispatched jobs that have not been confirmed ended.
+5. Waiting tickets, active owners and claim locks refresh about every 5 seconds; after 60 seconds without refresh, a reused live process ID cannot keep them alive.
+6. SIGHUP and SIGTERM remove my waiting ticket and claim locks, while preserving dispatched jobs whose end is unconfirmed.
+7. Checking a dead owner never holds the local claim lock during a runtime read, and repeated checks reuse each job observation for about 15 seconds.
 
 ## Rules to check
 

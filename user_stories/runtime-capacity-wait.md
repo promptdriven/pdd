@@ -8,6 +8,9 @@ I can leave my command waiting for runtime capacity within its existing wait.
 2. pdd spaces capacity retries by Retry-After within the caller deadline and interruption rules.
 3. An accepted queued job is read by its original request ID, with its supplied queue place and busy slots shown as progress.
 4. pdd never resends a check for capacity when it may have started.
+5. The lint wait limit also bounds dead-owner reads and saving a request ID before submission, including the 90-second agent lint wait during Try setup.
+6. When my lint wait ends for a local slot or maintenance, pdd names that wait and does not claim that the server stayed busy after 0 lint attempts.
+7. Submissions by the same authenticated owner at the same runtime reuse a clear capacity observation for about 10 seconds.
 
 ## Rules to check
 
