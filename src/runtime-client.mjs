@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b67f1883c66ee648ed3a2f6de69b66f379c035fa0506a10f02d35c729f958c69).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5be10a014176b15269a2cd8282c7a5a70b71a385be60724c5f38d48becadebe0).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -273,6 +273,16 @@ function accumulatedCalls(context, row) {
     return admission?.dispatch === 'not_started' && safeAdmission({ json: admission }) ? 0 : 'unknown';
   });
   return calls.every(value => typeof value === 'number' && Number.isFinite(value)) ? calls.reduce((a, b) => a + b, 0) : 'unknown';
+}
+// A confirmed pause follows a POST. Keep its submission and accounting visible
+// when an interrupt ends the pause rather than describing an unsent request.
+function stoppedPause(context, target, kind) {
+  const ids = target.request_ids, calls = accumulatedCalls(context, target);
+  const recovery = context.batch ? ` Read saved results with: pdd check --read ${context.batch}`
+    : calls === 'unknown' ? ' Read the saved request before sending anything again.' : '';
+  return `Stopped. Submitted ${kind} ${ids.length === 1 ? 'request' : 'requests'}: ${ids.join(', ')}. `
+    + 'The runtime confirmed that the last attempt did not start; no work ran for this attempt. '
+    + (calls === 'unknown' ? 'Total usage is unknown; earlier submissions may have run.' : `Recorded usage: ${calls} AI calls.`) + recovery;
 }
 function markBusy(context, row, wait) {
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
@@ -794,10 +804,13 @@ async function runLint(context, complete = false) {
   const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
-  const stopped = () => ({ kind: 'not_run', note: { code: null, message: `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
-  const busy = () => context.interrupted && interruptedAdmissions.has(context.lint) ? stopped()
+  let paused = false;
+  const stopped = () => ({ kind: 'not_run', note: { code: null, message: paused ? stoppedPause(context, context.lint, 'lint')
+    : `Stopped before sending.${context.waitCause === 'maintenance' ? ' pdd stopped while waiting for maintenance.' : ''}` } });
+  const busy = () => context.interrupted && (paused || interruptedAdmissions.has(context.lint)) ? stopped()
     : ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
   const pause = async (wait, maintenance = false) => {
+    paused = true;
     context.waitCause = maintenance ? 'maintenance' : 'server capacity';
     if (context.interrupted || context.ports.now() >= lintEnd) return false;
     if (!maintenance) line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
@@ -806,6 +819,7 @@ async function runLint(context, complete = false) {
   for (;;) {
     if (context.interrupted) return stopped();
     if (context.ports.now() >= lintEnd) return busy();
+    paused = false;
     if (!await admission(context, 'lint', context.lint, lintEnd)) return busy();
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
     context.lint.request_ids.push(request.requestId);
@@ -924,8 +938,9 @@ async function runScheduledChecks(context, rows, toSend) {
   context.timedOut = !stoppedEarly && ports.now() >= context.deadline && rows.some(isOpen);
   for (const row of toSend) {
     if (['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0, busy: true, can_retry: true,
-      phase: row.request_ids.length ? 'server' : 'local', note: { code: 'check-busy', message: row.request_ids.length
-        ? 'The runtime stayed busy. No checks ran for this attempt. Retry this batch later.' : 'Held locally; this check was not sent. Retry this batch later.' } });
+      phase: row.request_ids.length ? 'server' : 'local', note: { code: 'check-busy', message: context.interrupted && row.busy && row.request_ids.length
+        ? stoppedPause(context, row, 'check') : row.request_ids.length
+          ? 'The runtime stayed busy. No checks ran for this attempt. Retry this batch later.' : 'Held locally; this check was not sent. Retry this batch later.' } });
     if (row.state === 'unknown' && row.lost) row.why ??= stoppedEarly ? 'pdd stopped before it could read this run.'
       : Number.isFinite(context.deadline) ? 'pdd could not read this run before the timeout.' : 'pdd could not read this run for 5 min after its answer was lost.';
   }
@@ -1683,7 +1698,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         if (!verdict.maintenance) line(ports.stderr, 'The runtime is busy. Waiting to start your Try…');
         if (await waitBudget(context, verdict.wait)) continue;
         delete repoState.tries[test.path]; store.saveRepo(root, repoState);
-        throw new Stop(context.interrupted ? 3 : 5, 'The runtime stayed busy until the Try setup wait ended.');
+        throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? stoppedPause(context, setup, 'Try setup') : 'The runtime stayed busy until the Try setup wait ended.');
       }
       if (verdict.kind !== 'accepted') {
         if (verdict.kind !== 'unknown') { await finishReservation(context, setup, { state: 'not_run' }); delete repoState.tries[test.path]; store.saveRepo(root, repoState); }

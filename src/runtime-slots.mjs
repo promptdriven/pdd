@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 752a2e169063849489e7a9f4b327d751fcc901e469acaa0163dd572774c49500).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: b2dc6d24adb7ff48863483a8b85af885d48800339a098cd2c7155fca4a396536).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -119,19 +119,21 @@ const rows = async (files, directory) => { try { return (await files.listRecords
 const freshness = async (ports, path) => ports.files.modifiedAt ? await ports.files.modifiedAt(path) : owners.has(path) ? ports.now() : null;
 const expired = (ports, row, modified) => !ports.isAlive(row.pid) || modified === null || ports.now() - modified >= EXPIRED_MS;
 const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
-function heartbeat(path, ports, interrupted) {
+function heartbeat(path, ports, interrupted, retainInterrupt = false) {
   let stopped = false, pending = Promise.resolve(), unsubscribe = () => {};
-  const stop = () => { if (!stopped) { stopped = true; ports.timers.clearInterval(timer); unsubscribe(); } };
+  const pause = () => { if (!stopped) { stopped = true; ports.timers.clearInterval(timer); } };
+  const stop = () => { pause(); unsubscribe(); };
+  const missing = () => { if (retainInterrupt) pause(); else stop(); };
   const timer = ports.timers.setInterval(() => {
     pending = pending.then(async () => {
       if (stopped) return;
-      if (!ports.files.touch || await ports.files.touch(path) === false) stop();
-    }).catch(stop);
+      if (!ports.files.touch || await ports.files.touch(path) === false) missing();
+    }).catch(missing);
   }, HEARTBEAT_MS);
   timer?.unref?.();
   unsubscribe = ports.onInterrupt(() => { stop(); interrupted?.(); });
   if (stopped) unsubscribe();
-  return { stop, pending: () => pending };
+  return { stop, pause, pending: () => pending };
 }
 async function locked(directory, ports, action) {
   const path = join(directory, 'claim.json');
@@ -218,12 +220,19 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   const ended = () => cancelled || ports.interrupted() || deadline !== null && ports.now() >= deadline;
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
-  let acquired = false, last = '', failures = 0;
+  let acquired = false, activeTicket = null, last = '', failures = 0;
   const owner = { posted: false, pulse: null };
-  owner.pulse = heartbeat(path, ports, () => {
+  const interruptOwner = () => {
     cancelled = true;
-    if (!owner.posted) void ports.files.unlink(path);
-  });
+    if (!owner.posted) void removeUnsent();
+  };
+  const ownWaiting = row => row && snapshotKey(row) === snapshotKey(ticket);
+  const removeUnsent = async () => {
+    const current = (await rows(ports.files, directory)).find(row => row.id === id);
+    if (ownWaiting(current) || activeTicket && current && snapshotKey(current) === snapshotKey(activeTicket)) await ports.files.unlink(path);
+  };
+  // Cancellation outlives an absent-file refresh while this wait is pending.
+  owner.pulse = heartbeat(path, ports, interruptOwner, true);
   owners.set(path, owner);
   try {
     while (!ended()) {
@@ -236,9 +245,24 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
         if (current && snapshotKey(current) === item.key && await freshness(ports, join(directory, `${current.id}.json`)) === item.modified)
           await ports.files.unlink(join(directory, `${current.id}.json`));
       }
-      const jobs = await rows(ports.files, directory), waiting = jobs.filter(row => row.state === 'waiting').sort(order), active = jobs.filter(row => row.state === 'active');
+      let jobs = await rows(ports.files, directory);
+      if (ended()) break;
+      if (!jobs.some(row => row.id === id)) {
+        // Only the pending acquisition may restore its immutable waiting ticket.
+        // An absent-file heartbeat may already have stopped; retire it before
+        // restoring so an old in-flight pulse cannot stop the new lifecycle.
+        owner.pulse.pause(); await owner.pulse.pending();
+        if (ended()) break;
+        if (await ports.files.exclusiveCreate(path, ticket)) {
+          const pulse = heartbeat(path, ports, interruptOwner, true);
+          owner.pulse.stop(); owner.pulse = pulse;
+        }
+        if (ended()) break;
+        jobs = await rows(ports.files, directory);
+      }
+      const waiting = jobs.filter(row => row.state === 'waiting').sort(order), active = jobs.filter(row => row.state === 'active');
       const message = `Waiting for a local slot: ${active.length} of ${limit} busy, ${Math.max(0, waiting.findIndex(row => row.id === id))} ahead of you. (Set PDD_MAX_JOBS to change the limit.)`;
-      if (waiting[0]?.id === id) {
+      if (ownWaiting(waiting[0])) {
         const attempt = await locked(directory, ports, async ownsClaim => {
           let currentJobs = await rows(ports.files, directory);
           if (!await ownsClaim()) return false;
@@ -251,8 +275,9 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
             }
           }
           if (!ended() && await ownsClaim() && currentJobs.filter(row => row.state === 'active').length < limit
-            && currentJobs.filter(row => row.state === 'waiting').sort(order)[0]?.id === id) {
-            await ports.files.writeAtomic(path, { ...ticket, state: 'active', started_at: ports.now() });
+            && ownWaiting(currentJobs.filter(row => row.state === 'waiting').sort(order)[0])) {
+            activeTicket = { ...ticket, state: 'active', started_at: ports.now() };
+            await ports.files.writeAtomic(path, activeTicket);
             return true;
           }
           return false;
@@ -265,7 +290,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
     }
     return null;
   } finally {
-    if (!acquired) { owner.pulse.stop(); await owner.pulse.pending(); owners.delete(path); await ports.files.unlink(path); }
+    if (!acquired) { owner.pulse.stop(); await owner.pulse.pending(); owners.delete(path); await removeUnsent(); }
   }
 }
 
