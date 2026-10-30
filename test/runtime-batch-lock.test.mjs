@@ -209,16 +209,18 @@ test('2675: a process killed after dispatch leaves its ID recoverable without an
 
 test('2675: native live-owner refusal leaves persisted data and the live owner intact', async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
-  const r = await fixture(t), bytes = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json')), before = r.fake.posts.length;
+  const r = await fixture(t), bytes = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json')), before = r.fake.posts.length, gets = r.fake.gets.length;
   const release = await client.acquireRuntimeBatchLock(r.folder); t.after(release);
-  const result = await r.run({ '--retry': r.batch });
-  assert.equal(result.code, 3); assert.match(result.err, /pdd check --read/);
-  const metadata = read(join(r.folder, 'batch.lock'));
-  assert.equal(metadata.pid, process.pid); assert.ok(result.err.includes(String(metadata.pid))); assert.ok(result.err.includes(metadata.started_at));
-  assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary); assert.equal(r.fake.posts.length, before);
-  release();
+  const owner = read(join(r.folder, 'batch.lock'));
+  for (const [options, words] of [[{ '--retry': r.batch }, []], [{ '--read': true }, [r.batch]], [{ '--read': true }, []]]) {
+    const result = await r.run(options, words);
+    assert.equal(result.code, 3); assert.match(result.err, /pdd check --read/); assert.equal(result.err.trim().split('\n').length, 1);
+    assert.ok(result.err.includes(String(owner.pid))); assert.ok(result.err.includes(owner.started_at));
+    assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary);
+    assert.equal(r.fake.posts.length, before); assert.equal(r.fake.gets.length, gets); assert.equal(result.clock.gh.length, 0);
+  }
+  assert.deepEqual(read(join(r.folder, 'batch.lock')), owner); release();
 });
-
 
 test('2675: an abandoned recovery guard is recoverable and a live recovery guard is respected', async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
@@ -445,9 +447,29 @@ for (const mode of ['check', 'lint']) test(`2675 review: a new ${mode} owns its 
     before = { bytes: readFileSync(file), gets: r.fake.gets.length, posts: r.fake.posts.length };
     result = await r.run({ '--read': true }, [batch]);
     observed = { bytes: readFileSync(file), gets: r.fake.gets.length, posts: r.fake.posts.length };
-    owner = read(join(r.setup.state, 'batches', batch, 'batch.lock'));
+    const lock = join(r.setup.state, 'batches', batch, 'batch.lock');
+    assert.ok(existsSync(lock), `new ${mode} must publish batch ownership`); owner = read(lock);
   } finally { gate.resume.resolve(); finished = await bounded(running, `${mode} completion`); }
   assert.equal(result.code, 3); assert.deepEqual(observed, before);
   assert.ok(result.err.includes(String(owner.pid))); assert.ok(result.err.includes(owner.started_at));
   assert.equal(finished.code, 0); assert.equal(existsSync(join(r.setup.state, 'batches', batch, 'batch.lock')), false);
+});
+
+
+test('2675 review: takeover rechecks liveness after the same record moves to another inode', async t => {
+  assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
+  const folder = temp(t), lock = join(folder, 'batch.lock'), dead = await deadProcess(t), record = metadata(dead);
+  writeFileSync(lock, JSON.stringify(record)); const original = statSync(lock, { bigint: true });
+  const kill = process.kill; let checks = 0;
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid !== dead) return kill(pid, signal);
+    checks++;
+    if (checks === 1) {
+      renameSync(lock, join(folder, 'original')); writeFileSync(lock, JSON.stringify(record));
+      throw Object.assign(new Error('old owner ended'), { code: 'ESRCH' });
+    }
+    // PID liveness can change between observations; the replacement must be rechecked.
+  });
+  await assert.rejects(client.acquireRuntimeBatchLock(folder), error => error.code === 'BATCH_LOCK_BUSY');
+  assert.equal(checks, 2); assert.notEqual(statSync(lock, { bigint: true }).ino, original.ino); assert.deepEqual(read(lock), record);
 });
