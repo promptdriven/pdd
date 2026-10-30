@@ -1,0 +1,36 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-github-symlinked-repo.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Preparing a pull request from a repository path reached through a folder symlink succeeds and returns the prepared intent with its marker; preparation does not read, write or validate a PR body file."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "prepare-from-symlinked-repository-without-body-file",
+      "entry_path": "prompts/cli/workflow-github.prompt.md",
+      "operation": "prepareWorkflowPr",
+      "input": {
+        "cwd": "/tmp/repo-alias/run-folder-with-any-name",
+        "runId": "run-2444",
+        "stageId": "prompt",
+        "repository": "Acme/Project",
+        "baseBranch": "main"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/marker",
+          "op": "equals",
+          "value": "pdd-workflow:run-2444:prompt"
+        }
+      ]
+    }
+  ]
+}

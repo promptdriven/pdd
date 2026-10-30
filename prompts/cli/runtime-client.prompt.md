@@ -9,6 +9,12 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
 - Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`, `interactive` (stdin and stdout are both terminals). Read the environment only from `env`.
 
+## Subprocess input
+
+Git repository-root and revision lookups are noninteractive: explicitly ignore their stdin and keep stdout and stderr captured as before. This is defensive isolation for scripted callers, including callers whose stdin is an SSH socket; a helper or its descendants must not retain the caller's stdin after pdd exits. Git file discovery belongs to [runtime preflight](runtime-preflight.prompt.md#files).
+
+The default `gh` port likewise ignores stdin and captures stdout and stderr; it must never prompt through the caller's input. The default browser opener ignores all three standard streams. Preserve terminal input for pdd's own interactive approval flow and the explicitly requested Try shell; this policy does not change their owners' contracts.
+
 ## Sign-in
 
 - Token = `gh auth token`, in memory only: never in files, logs, argv, URLs or error text. No `gh`: exit 5, `Install the GitHub CLI, then run gh auth login`. Empty: exit 5, `Run gh auth login`.
@@ -18,6 +24,10 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 ## `pdd check`
 
 Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. Apart from the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits), not the local copy of the engine rules (P1-P10, schema rules). It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json]` reads saved batch results or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+
+### Hash filling
+
+Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. Print to stdout in this group order: warnings as `Warning: <message>`, filled paths as `Filled prose_sha256: <path>`, refusals as `Refused: <message>`, then stale approved paths with the existing stale hint. Preserve each result array's order within its group. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when only warnings were reported and nothing was filled. Do not require tests, sign-in or a runtime request for hash filling.
 
 ### Local drawing checks
 
