@@ -29,10 +29,10 @@ test('PATH1: setup and version identify the running Alpha, selected legacy versi
     const r = f.run(...args);
     assert.equal(r.status, 0, r.stderr);
     if (args[0] === '--version') assert.equal(r.stdout, `${version}\n`);
-    assert.ok(r.stderr.includes(bin)); assert.ok(r.stderr.includes(`PDD Alpha ${version}`));
+    assert.ok(r.stderr.includes(bin)); assert.ok(r.stderr.includes(`Running pdd ${version}`));
     assert.ok(r.stderr.includes(join(f.old, 'pdd'))); assert.ok(r.stderr.includes(join(f.alpha, 'pdd')));
     assert.match(r.stderr, /PATH selects:.*pdd, version 0\.0\.305\.dev214/);
-    assert.match(r.stderr, /conda/); assert.match(r.stderr, /after.*activat/i); assert.match(r.stderr, /shadow Alpha again/);
+    assert.match(r.stderr, /conda/); assert.match(r.stderr, /after.*activat/i); assert.match(r.stderr, /shadow this pdd again/);
     assert.ok(r.stderr.includes(process.execPath)); assert.match(r.stderr, /export PATH=.*hash -r/);
     assert.equal(readFileSync(join(f.old, 'pdd'), 'utf8'), f.legacy);
   }
@@ -43,7 +43,7 @@ test('PATH2: PATH correction selects Alpha and a second version check terminates
   f.env.PATH = [f.alpha, f.old, f.nodeBin, '/usr/bin', '/bin'].join(':');
   const r = f.run('--version');
   assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);
-  assert.match(r.stderr, /PATH selects:.*PDD Alpha/);
+  assert.match(r.stderr, new RegExp(`PATH selects:.*\\(pdd ${version.replaceAll('.', '\\.')}\\)`));
   assert.ok(r.stderr.includes(join(f.old, 'pdd')));
   rmSync(join(f.old, 'pdd'));
   assert.equal(f.run('--version').stderr, '');
@@ -62,11 +62,18 @@ test('PATH3: an unreportable version stays visible and help makes no version pro
 test('PATH4: workflow startup gives a one-line shadow warning before normal dispatch', async t => {
   const f = fixture(t), stdout = { text: '', write(s) { this.text += s; } }, stderr = { text: '', write(s) { this.text += s; } };
   let called = false;
-  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
+  assert.equal(await runPdd(['workflow', 'start', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout, stderr,
     workflowRunner: { startRun: async () => { called = true; return { exitCode: 0, message: 'Local dispatch proof' }; } } }), 0);
   assert.equal(called, true); assert.equal(stdout.text, 'Local dispatch proof\n');
   assert.equal(stderr.text.trim().split('\n').length, 1);
   assert.match(stderr.text, /PATH selects:.*0\.0\.305\.dev214/); assert.ok(stderr.text.includes(bin));
+  // The former name prints its notice first, then the same PATH line, and dispatches the same way.
+  const old = { text: '', write(s) { this.text += s; } };
+  assert.equal(await runPdd(['workflow', 'run', 'small-change', '17'], { cwd: f.cwd, env: f.env, stdout: { write() {} }, stderr: old,
+    workflowRunner: { startRun: async () => ({ exitCode: 0, message: 'Local dispatch proof' }) } }), 0);
+  const [notice, ...rest] = old.text.trim().split('\n');
+  assert.ok(notice.includes('pdd workflow run') && notice.includes('pdd workflow start'), notice);
+  assert.deepEqual(rest, stderr.text.trim().split('\n'));
 });
 
 test('PATH5: without which, relative PATH entries and symlinked Alpha still resolve correctly', t => {
