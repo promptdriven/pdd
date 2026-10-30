@@ -20,7 +20,7 @@ for(const [codex,claude,agent] of cases)test(`2451 setup adapter: ${codex}/${cla
  assert.equal(code,agent?0:1);assert.equal(calls.length,agent?1:0);
  if(agent){assert.equal(calls[0].agent,agent);assert.equal(calls[0].env,env);assert.equal(calls[0].cwd,'/scratch/project');assert.equal(out.join(''),'');}
  else if(codex==='missing')assert.match(out.join(''),/Install Codex or Claude Code first/);
- else {assert.match(out.join(''),/codex login/);assert.match(out.join(''),/claude auth login/);}
+ else assert.deepEqual(out.join('').trim().split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login']);
 });
 test('2451 setup adapter preserves nonzero action results without repeating effects',async()=>{
  let calls=0;const code=await setupWithWorkflowAgent({}, {run:fixture({codex:'ready',claude:'signed_out'}),setup:async()=>{calls++;return 7;}});
