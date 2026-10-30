@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: fd007c49fb06481bf745ccc4911d6307d99c5e6938d65d53ee0705a2a7ed0652).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 19ba84f3b92408b60fe2aba7bcf6004e7b6233c9c5f64668e7993ee2005be457).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
