@@ -1,0 +1,24 @@
+{
+  "story_path": "user_stories/fill-draft-hash.md",
+  "description": "Native hash-fill vectors, not a prompt-runtime scenario. Each interface is wrapped in one Runtime interface block unless block_count says otherwise; use changed prose for stale approved hashes.",
+  "cases": [
+    {"name":"draft","interface":{"status":"draft","prose_sha256":""},"outcome":"filled","changes_hash_only":true},
+    {"name":"status-absent","interface":{"entries":[]},"outcome":"warning","unchanged":true,"warning_contains":["no status","skipped"]},
+    {"name":"status-null","interface":{"status":null,"prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"status-empty","interface":{"status":"","prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"status-invalid","interface":{"status":"pending","prose_sha256":""},"outcome":"refused","unchanged":true},
+    {"name":"malformed","interface_json":"{","outcome":"refused","unchanged":true},
+    {"name":"non-object","interface":[],"outcome":"refused","unchanged":true},
+    {"name":"multiple-statusless-blocks","interface":{},"block_count":2,"outcome":"refused","unchanged":true},
+    {"name":"draft-missing-hash","interface":{"status":"draft"},"outcome":"refused","unchanged":true},
+    {"name":"approved-stale","interface":{"status":"approved","prose_sha256":"stale"},"outcome":"stale","unchanged":true},
+    {"name":"approved-current","interface":{"status":"approved","prose_sha256":"$CURRENT_PROSE_SHA256"},"outcome":"current","unchanged":true}
+  ],
+  "replays": [
+    {"name":"draft-beside-unrelated-fixture","cases":["draft","status-absent"],"exit_code":0,"counts":{"filled":1,"current":0,"refused":0,"stale":0},"warnings":1,"tests_required":false},
+    {"name":"warnings-do-not-hide-refusal","cases":["draft","status-absent","status-null"],"exit_code":4,"counts":{"filled":1,"current":0,"refused":1,"stale":0},"warnings":1},
+    {"name":"unreached-approved-stale","cases":["draft","status-absent","approved-stale"],"exit_code":4,"counts":{"filled":1,"current":0,"refused":0,"stale":1},"warnings":1,"tests_required":false}
+  ],
+  "placements": ["prompts/new.prompt.md", "test/fixtures/unrelated.prompt.md", "examples/unrelated.prompt.md"],
+  "forbidden_effects": ["sign-in", "network request", "AI call", "approval status change"]
+}

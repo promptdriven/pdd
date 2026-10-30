@@ -53,7 +53,9 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 - The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
 - `prose_sha256` = lowercase hex SHA-256 of the UTF-8 bytes of the text with every block removed. Read the file as UTF-8 and do not change newlines.
-- `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": ""`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
+- `fillHashes({root, files})` examines Git-visible `*.prompt.md` files by default, independently of test discovery or source capture. It returns `filled`, `current`, `refused`, `stale` and `warnings` arrays; outcome records name `path`, and refusals and warnings also have `message`. A file without an interface block is skipped. Multiple blocks, invalid JSON or a non-object interface are refused before status classification.
+- An interface object without its own `status` key is not an executable hash-fill target: leave every byte unchanged and return a warning identifying the path and explaining that its Runtime interface has no status and was skipped. This applies in every directory, even without tests. A present status other than `draft` or `approved` (including null or an empty string) remains a refusal.
+- For `draft`, replace only the string value of `"prose_sha256"` in its block and keep every other byte; a missing key is refused (`add "prose_sha256": ""`), as is a value that cannot be replaced safely. `approved` and current = no change; `approved` and stale = no change and a stale result, even when no test reaches that prompt. `--fill-hash` never sets `approved`.
 
 ## Source capture
 
