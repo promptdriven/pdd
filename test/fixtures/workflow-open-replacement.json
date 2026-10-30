@@ -401,6 +401,16 @@
       "action": "Advance run.area through legacy approve/done while replacement is pending; resolve with open ISSUE --new, then separately replace the current area",
       "expected": "Saved attempt remains valid; recovery reconciles only its original recorded area/chat without rewinding progress or changing newer current chatFailure/state/gate/question; terminal history does not block later current-area replacement; a fresh historical replacement still refuses",
       "input": {}
+    },
+    {
+      "id": "recovery-lost-resume",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Lose exact-session recovery resume reply at intent/closeRequested rollback or launchRequested stopped replacement; retry before and after observing that same agent",
+      "expected": "Persist resumeRequested before dispatch for original or replacement target by phase; no repeated resume while observation is absent/unavailable; positive same-session observation finishes existing attempt without a new identity",
+      "input": {}
     }
   ]
 }
