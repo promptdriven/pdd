@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import fs, { mkdirSync, writeFileSync, cpSync, readFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join } from 'node:path';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { captureSource, sha256 } from '../src/runtime-preflight.mjs';
 import { fakeRuntime, portsFor, root, temp } from './runtime-fake.mjs';
 
-// Oracle: lint-before-tests-followup.md Rules to check and the owning public
+// Oracle: lint-source-prompt-context.md and lint-before-tests-followup.md Rules
+// to check and the owning public
 // contracts. No fixture expectations or production predicates supply decisions.
 // Exhaustive finite domain: 84 selector +36 recovery +18 warning configurations.
+// Additional 24 saved-classification configurations and 3 legacy witnesses.
 // Additional witnesses cover stat-before-read and ordinary Check/Try isolation.
 // These tests establish client behavior against canonical fake HTTP receipts,
 // not live Runtime admission, arbitrary transports, or universal filesystem safety.
@@ -37,7 +40,7 @@ function candidate(s, kind) {
 const busy = () => ({ status: 429, headers: { 'retry-after': '60' }, json: {
   dispatch: 'not_started', error: { code: 'server-full', message: 'Synthetic capacity busy.', details: { retryable: true, retry_after: 60 } },
 } });
-async function harness(t, s) {
+async function harness(t, s, { inventory = 'accepted', withoutSources = false } = {}) {
   let outcome = 'passed', problems = [], captures = 0, archive;
   const fake = await fakeRuntime(t, (entry, f) => {
     assert.equal(entry.method === 'POST' ? entry.command : 'lint', 'lint', 'no Check/Try dispatch');
@@ -50,7 +53,7 @@ async function harness(t, s) {
     if (outcome === 'busy') return busy();
     const id = entry.method === 'POST' ? entry.request.requestId : entry.url.split('/').at(-1);
     const paths = archive.files.filter(file => file.path.endsWith('.prompt.md')).map(file => file.path);
-    const answer = f.lint(id, paths.map(path => ({ path, state: 'draft', admission_state: 'draft', interface: { calls: [] } })));
+    const answer = f.lint(id, inventory === 'absent' ? [] : paths.map(path => ({ path, state: inventory === 'refused' ? 'refused' : 'draft', admission_state: inventory === 'refused' ? 'refused' : 'draft', interface: { calls: [] } })));
     answer.state = outcome;
     answer.result.problems = problems;
     return { status: 200, json: answer };
@@ -59,7 +62,7 @@ async function harness(t, s) {
     const env = { HOME: s.home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin };
     const p = portsFor(env, { ...(pending ? { pollMs: 60_000 } : {}), captureSource(repo, opts) {
       captures++; assert.equal(forbidCapture, false, 'saved source lint cannot capture current source');
-      archive = captureSource(repo, opts); return archive;
+      archive = captureSource(repo, opts); if (withoutSources) delete archive.sources; return archive;
     } });
     const before = { posts: fake.posts.length, gets: fake.gets.length, captures };
     let code, thrown;
@@ -90,10 +93,14 @@ test('SOURCE-LINT followup formal: exhaustive 84 candidate/test/operand/plan sel
     const h = await harness(t, s);
     const words = operand === 'none' ? [] : [operand === 'known' ? tests ? 'place-order' : 'known' : 'missing-story'];
     const r = await h.invoke({ words });
-    const permitted = tests ? operand !== 'missing' : operand === 'none' && hint === 'none' && plan;
+    const permitted = tests ? operand !== 'missing' : operand === 'none' && ((hint === 'none' && plan) || hint === 'interface');
     assert.equal(r.code, permitted ? 0 : 2, `${hint}/${tests}/${operand}/${plan}\n${r.output}`);
     if (!permitted) { assert.equal(r.captures, 0); assert.equal(r.p.clock.gh.length, 0); assert.equal(r.posts.length, 0); }
-    else { assert.equal(r.posts.length, 1); if (!tests) sourceResult(r, 'passed', 0); }
+    else {
+      assert.equal(r.posts.length, 1);
+      if (!tests) sourceResult(r, 'passed', 0);
+      else assert.ok(!(r.result?.warnings ?? []).some(w => /has no Runtime interface yet/.test(String(w))), 'selected-test lint gains no unrelated prose warning');
+    }
     count++;
   }
   assert.equal(count, 84);
@@ -177,4 +184,65 @@ test('SOURCE-LINT followup formal: ordinary Check and Try still require tests', 
     const r = await h.invoke({ ordinary: true, tryMode, json: false });
     assert.equal(r.code, 2, r.output); assert.equal(r.posts.length, 0); assert.equal(r.captures, 0); assert.equal(r.p.clock.gh.length, 0);
   }
+});
+
+// These bodies declare the oracle's kind; no production parser derives expectations.
+const snapshotPath = 'prompts/snapshot.prompt.md';
+const snapshotBodies = {
+  prose: '# Source-only prose\n',
+  Runtime: '# Runtime-bearing source\n\n<details><summary>Runtime interface</summary>\n```json\n{"status":"draft","prose_sha256":"","entries":[],"calls":[],"resources":[],"limits":{"max_steps":1,"max_model_calls":1},"conventions":[]}\n```\n</details>\n',
+};
+function snapshotSetup(t, kind) {
+  const s = setup(t);
+  // Keep navigation content out of coverage warning counts.
+  s.write('user_stories/known.md', '# Navigation only\n');
+  s.write('product/plan.md', '# Synthetic plan\n');
+  s.write(snapshotPath, snapshotBodies[kind]); s.track(); return s;
+}
+async function savedSnapshotCase(t, { captured, disk, inventory, mode, metadata = 'supported', withoutSources = false }) {
+  const s = snapshotSetup(t, captured), h = await harness(t, s, { inventory, withoutSources });
+  h.set('queued');
+  const producer = await h.invoke({ pending: true }); sourceResult(producer, 'queued', 3);
+  assert.equal(producer.posts.length, 1);
+  const id = producer.posts[0].request.requestId, hash = producer.result.source_sha256;
+  const establishedProse = captured === 'prose' && !withoutSources;
+  assert.equal(producer.result.warnings.length, establishedProse ? 1 : 0, 'capture determines warnings');
+  const batchPath = join(producer.state, 'batches', producer.result.batch, 'batch.json');
+  const stored = JSON.parse(readFileSync(batchPath, 'utf8'));
+  if (metadata === 'absent') delete stored.prose_source_paths;
+  if (metadata === 'unsupported') stored.prose_source_paths = { unsupported: [snapshotPath] };
+  if (metadata !== 'supported') writeFileSync(batchPath, JSON.stringify(stored));
+  s.write(snapshotPath, snapshotBodies[disk]); h.set('passed');
+  let reads = 0; const original = fs.readFileSync, target = join(s.repo, snapshotPath);
+  fs.readFileSync = function(path, ...args) { if (String(path) === target) reads++; return original.call(this, path, ...args); };
+  syncBuiltinESMExports();
+  let result;
+  try {
+    fs.readFileSync(target); assert.equal(reads, 1, 'read spy calibrated'); reads = 0;
+    result = await h.invoke({ mode, words: [producer.result.batch], state: producer.state, forbidCapture: true });
+    assert.equal(reads, 0, 'read/retry never reads current prompt contents');
+  } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
+  const provenProse = establishedProse && metadata === 'supported';
+  const expected = inventory === 'refused' || inventory === 'absent' && !provenProse ? 4 : 0;
+  sourceResult(result, expected === 0 ? 'passed' : 'refused', expected);
+  assert.equal(result.result.source_sha256, hash, 'saved capture identity survives disk changes');
+  assert.deepEqual(result.result.warnings, producer.result.warnings, 'stored warnings survive independently of classification metadata');
+  assert.equal(result.posts.length, 0); assert.equal(result.captures, 0); assert.equal(result.p.clock.uuids, 0);
+  assert.equal(result.gets.length, 1); assert.ok(result.gets.every(entry => entry.url.endsWith(`/${id}`)), 'only original lint ID');
+  assert.equal(result.stdout.trim().split('\n').length, 1, 'one JSON result');
+  if (mode === '--retry') assert.match(result.output, /nothing to retry/i);
+}
+test('SOURCE-LINT formal: all 24 captured-kind/disk-kind/inventory/read-retry configurations', async t => {
+  let count = 0;
+  for (const captured of ['prose', 'Runtime']) for (const disk of ['prose', 'Runtime'])
+    for (const inventory of ['absent', 'accepted', 'refused']) for (const mode of ['--read', '--retry']) {
+      await savedSnapshotCase(t, { captured, disk, inventory, mode }); count++;
+    }
+  assert.equal(count, 24);
+});
+test('SOURCE-LINT formal: three conservative legacy classification witnesses', async t => {
+  for (const metadata of ['absent', 'unsupported']) await savedSnapshotCase(t, {
+    captured: 'prose', disk: 'Runtime', inventory: 'absent', mode: '--read', metadata,
+  });
+  await savedSnapshotCase(t, { captured: 'prose', disk: 'prose', inventory: 'absent', mode: '--retry', withoutSources: true });
 });
