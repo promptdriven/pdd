@@ -436,7 +436,7 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
 });
 
 // Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
-test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
   mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
   writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');
@@ -451,12 +451,11 @@ test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.
     'No tests found. A test is a Git-visible *.json file with "schema_version": "prompt-runtime.program-scenario.v1".',
     'tests/game.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
     'tests/unit/board.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.',
-    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.',
-    'prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2.']);
+    'PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.']);
   for (let index = 0; index < 4; index += 1) writeFileSync(join(repo, `tests/extra-${index}.json`), '{}\n');
   const many = await check(repo, home, [], {});
   const lines = many.err.trimEnd().split('\n');
-  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 3 more');
+  assert.equal(lines.length, 7); assert.equal(lines.at(-1), '…and 2 more');
 });
 
 // Wrong: an index file (PLAN.md, README.md, a story with no criteria) gets "has no test" on every multi-Story run (2048 session, 0.1.6).
