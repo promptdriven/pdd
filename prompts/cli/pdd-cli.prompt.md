@@ -10,7 +10,7 @@ For a `CommandInputError`, print its message once to stderr, leave stdout empty
 and return its exitCode (2). Every line written to stdout or stderr ends with
 one newline. Preserve other commands and their existing dispatch and effects.
 
-When the plan has a `notice` ([former names](argument-parser.prompt.md#former-names)), print it once to stderr before any other line, help and PATH lines included, then run the plan as usual. Never print it to stdout, so `--json` output stays exact. A `CommandInputError` has no notice.
+A [removed name](argument-parser.prompt.md#removed-names) is a `CommandInputError`, so pdd prints its one line and runs nothing: no help, PATH probe, skill check, sign-in, file read or interpreter call.
 
 ## Authoring
 
@@ -53,15 +53,15 @@ authentication or runtime-client import belongs to these routes.
 
 ## Help contract
 
-The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [help forms](#help-forms) below, in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the help-form lines whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd simulate` lines and `pdd workflow run --help` the `pdd workflow start` line. `pdd sim --help` gives the `pdd simulate` lines with no notice. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
+The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [help forms](#help-forms) below, in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the help-form lines whose form starts with `pdd WORDS`. A [quiet name](argument-parser.prompt.md#quiet-names) gets the lines of its route: `pdd sim --help` gives the `pdd simulate` lines and `pdd workflow start --help` the `pdd workflow run` line. A removed name gets no help, also with a help flag or after `help`. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
 
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
-workflow start opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
+workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
 pdd never merges.
 ```
 
-(`start` is the [NAMES](command-catalog.prompt.md#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.) Help is exit 0 and local, with no runner, network or auth effects.
+(`run` is the [NAMES](command-catalog.prompt.md#names) word. Codex calls a skill with `$name`, Claude Code with `/name`.) Help is exit 0 and local, with no runner, network or auth effects.
 
 
 ## Help forms
@@ -72,7 +72,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
   pdd product start RUN [--no-run] [--agent codex|claude]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.
+  pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
   pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
@@ -107,7 +107,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd jobs  List active and waiting interpreter jobs on this machine without contacting the interpreter.
   pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
   pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
-  pdd mcp  Serve the current repository’s Try tools over stdio MCP.
+  pdd mcp  Serve the current repository’s Simulator tools over stdio MCP.
   pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
 ```
 
@@ -119,7 +119,7 @@ For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md),
 
 For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd}, {stdout, stderr})` unchanged.
 
-For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Return its exit code unchanged. The runtime client also owns local `check --lint --local` and `check --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for check and try stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd check --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
+For the `runtime-check` and `runtime-try` plans, import the [runtime client](runtime-client.prompt.md) dynamically and call `runCheck` or `runTry` with the operands, the options and cwd, plus stdout, stderr and the injected env. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
 
 For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.md) and call `viewRun({ref: operands[0], cwd})`. Print the result once (stdout on success, stderr on failure) and return its exit code. This route must not import the workflow runner, inspect Herdr, or execute PATH version probes.
 
@@ -161,7 +161,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "86727a845600e628f756afffa5abfe5f4f0b08504a9e3a1643a514dfa16d05ea",
+  "prose_sha256": "620179d0a927ffc82cb97dc357a8be9865a7117fdca99dc9fdb8d2ef05e872cd",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

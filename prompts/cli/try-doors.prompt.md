@@ -22,7 +22,7 @@ user's bash or zsh (otherwise /bin/sh) with the PATH and inherited terminal, wai
 omitted unless required, when it is an empty string. --help is passed to the prompt like any argv. Authenticate
 and invoke through runDoorCall. Require stdout/stderr strings and integer exit_code in 0..255 except 125.
 Preserve program stdout byte-for-byte and return its exit code. Preserve program stderr, then append a separated short Try usage line on stderr; wrapper accounting must never enter stdout. If program stderr lacks a final newline, separate the usage line with one. Show known usage on refused calls too, unknown when unconfirmed; never replay for accounting. Reserve 125 for wrapper failures: stderr starts with
-`pdd try:` followed by a plain reason; stdout remains empty. Never print credentials, stacks or internal URLs.
+`pdd simulate:` followed by a plain reason; stdout remains empty. Never print credentials, stacks or internal URLs.
 Record the last confirmed command/result with the original test identity in private state, independently of
 whether the program exited successfully. Unknown execution must not leave an older command eligible for Save.
 
@@ -63,4 +63,4 @@ At CLI startup, read authenticated owner model metadata once (GET /v1/try/ID/mod
 Usage normalization and formatting are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
 
 ## Progress
-A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd try: running <name> on the Try…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.
+A command on the Try can take many seconds. When stderr is a terminal and the call takes more than 2 s, the launcher prints `pdd simulate: running <name> on the Simulator…` on stderr. With a pipe or an agent it prints nothing extra, so the program's output stays exact.

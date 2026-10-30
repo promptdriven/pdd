@@ -33,7 +33,7 @@ its value; otherwise serialize the result fields other than status and headers a
 program response headers, including arrays of header values; validate names and values, remove hop-by-hop
 headers and recompute content-length. Use application/json for JSON values unless the program supplies a
 content-type. Responses to HEAD and statuses 204/304 have no body. Malformed program responses, stopped
-sessions, exhausted budgets, lost outcomes and other wrapper failures return 502 with a plain `pdd try:` reason;
+sessions, exhausted budgets, lost outcomes and other wrapper failures return 502 with a plain `pdd simulate:` reason;
 program-generated error statuses remain intact. Never return gh credentials, stacks or engine URLs.
 
 When the model has an app map, serve its real Screen at GET/HEAD / using the owner-authenticated Screen
@@ -46,7 +46,7 @@ App-map Stories may have zero HTTP entries. For that case open the same listener
 "Screen only (no named HTTP routes)." Do not ask the person to add an HTTP route to use the Screen.
 Only authenticated pinned metadata grants Screen capability; a locally detected map is not remote admission.
 If neither capability exists and a local app map was selected, explain that this saved Try has no Screen map
-and give the exact pdd try STORY --serve PORT --new recovery (including --app-map with the selected map path relative to the invocation directory, safely shell-quoted).
+and give the exact pdd simulate STORY --serve PORT --new recovery (including --app-map with the selected map path relative to the invocation directory, safely shell-quoted).
 Do not silently stop, replace or reset the saved session. If neither capability exists and no map was selected,
 say the Story has neither a Screen app map nor named HTTP routes; explain both valid ways to provide one.
 Reserve GET/HEAD / and every /__pdd/screen/ path when a Screen
@@ -72,4 +72,4 @@ Use authenticated owner model calls.cap/remaining at startup and print the short
 Usage normalization/formatting/header names are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
 
 ## Progress in the pdd window
-Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Try…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd try: port N is in use by another program. Stop it, or run pdd try <story> --serve <N+1>.` (exit 125).
+Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Simulator…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd simulate: port N is in use by another program. Stop it, or run pdd simulate <story> --serve <N+1>.` (exit 125).
