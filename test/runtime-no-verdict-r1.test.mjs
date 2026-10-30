@@ -69,7 +69,7 @@ test('R1 saved lint read drops exact generic advice without submitting checks (A
   assert.equal(fake.posts.filter(e => e.command === 'check').length, 0);
 });
 
-test('R1 cached unknown receipt does not inherit a non-lost row explanation (A10)', async t => {
+test('R1 cached unknown receipt refreshes to the newer terminal GET without stale advice', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => e.command === 'check'
     ? { status: 200, json: f.check(e.request.requestId, 'refused', [], [{ code: 'service', reason: 'Unavailable' }]) } : f.normal(e));
@@ -83,10 +83,70 @@ test('R1 cached unknown receipt does not inherit a non-lost row explanation (A10
   delete answer.result.why;
   writeFileSync(`${folder}/${id}.json`, JSON.stringify(answer));
   const result = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+  // #2655 requires open caches to refresh the same ID; the newer GET owns the verdict.
+  assert.equal(result.json.rows[0].state, 'passed');
+  assert.equal(result.json.rows[0].why, null);
+  assert.doesNotMatch(JSON.stringify(result.json), /OLD REFUSAL/);
+  assert.equal(fake.gets.length, 1);
+  assert.equal(fake.gets[0].url.split('/').at(-1), id);
+  assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
+});
+
+// Integration oracle: polling eligibility is not proof that an old explanation came from transport loss.
+test('R1 unknown GET cannot inherit a non-lost saved refusal explanation (A10 integration)', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (e, f) => {
+    if (e.command === 'check') return { status: 200, json: f.check(e.request.requestId, 'refused', [], [{ code: 'service', reason: 'Unavailable' }]) };
+    if (e.method === 'GET') {
+      const answer = f.check(e.url.split('/').at(-1), 'unknown', [], []);
+      delete answer.result.why;
+      return { status: 200, json: answer };
+    }
+    return f.normal(e);
+  });
+  const first = await run(setup, fake);
+  const folder = `${setup.state}/batches/${first.json.batch}`, file = `${folder}/batch.json`;
+  const saved = JSON.parse(readFileSync(file)), id = saved.rows[0].request_ids.at(-1);
+  Object.assign(saved.rows[0], { why: 'No verdict. OLD REFUSAL', lost: false });
+  writeFileSync(file, JSON.stringify(saved));
+  const cached = fake.check(id, 'unknown', [], []);
+  delete cached.result.why;
+  writeFileSync(`${folder}/${id}.json`, JSON.stringify(cached));
+  const result = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+  assert.equal(result.code, 3);
   assert.equal(result.json.rows[0].state, 'unknown');
   assert.equal(result.json.rows[0].why, null);
   assert.doesNotMatch(JSON.stringify(result.json), /OLD REFUSAL/);
-  assert.equal(fake.gets.length, 0);
+  assert.equal(fake.gets.length, 1);
+  assert.equal(fake.gets[0].url.split('/').at(-1), id);
+  const text = await run(setup, fake, { '--read': first.json.batch });
+  assert.doesNotMatch(text.text, /OLD REFUSAL/);
+  assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
+});
+
+test('R1 legacy unknown transport explanation survives an omitted lost flag', async t => {
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (e, f) => {
+    if (e.command === 'check' || e.method === 'GET') {
+      const answer = f.check(e.request?.requestId ?? e.url.split('/').at(-1), 'unknown', [], []);
+      delete answer.result.why;
+      return { status: 200, json: answer };
+    }
+    return f.normal(e);
+  });
+  const first = await run(setup, fake);
+  const file = `${setup.state}/batches/${first.json.batch}/batch.json`;
+  const saved = JSON.parse(readFileSync(file));
+  saved.rows[0].why = 'The answer to the request was lost.';
+  delete saved.rows[0].lost;
+  writeFileSync(file, JSON.stringify(saved));
+  const result = await run(setup, fake, { '--json': true, '--read': first.json.batch });
+  assert.equal(result.code, 3);
+  assert.equal(result.json.rows[0].state, 'unknown');
+  assert.equal(result.json.rows[0].why, 'The answer to the request was lost.');
+  assert.equal(result.json.rows[0].reason.message, 'The answer to the request was lost.');
+  assert.equal(fake.gets.length, 1);
+  assert.equal(fake.posts.filter(e => e.command === 'check').length, 1);
 });
 
 test('R1 sent NOT RUN without a note explains no execution, with or without next advice (A12)', () => {

@@ -871,6 +871,8 @@ async function runRead(context, batchWord, quiet = false) {
     const answer = store.read(join(context.folder, `${id}.json`));
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
     if (finalPost(row, answer)) return;
+    // Polling an open cache is not evidence that its saved advice came from a lost read.
+    if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD runtime…');
