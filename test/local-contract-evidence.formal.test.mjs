@@ -138,12 +138,12 @@ test('1438 D:8 exact namespace and top-level coverage configurations',async()=>{
  ['descendant','Key',[['/kv/shop','owner']],{kv:{shop:0}},0,['/kv/shop']],
  ['siblings','Key',[['/kv/shop','owner'],['/kv/other','second']],{kv:{shop:0,other:1}},0,['/kv/shop','/kv/other']],
  ['parent','Key',[['/kv/shop','owner'],['/kv','second']],{kv:{shop:0}},0,['/kv/shop','/kv']],
- ['extra','Key',[['/kv/shop','owner']],{kv:{shop:0},outside:0},4,['/kv/shop']],
+ ['extra','Key',[['/kv/shop','owner']],{kv:{shop:0},outside:0},0,['/kv/shop']],
  ['path-extra','Path',[['/kv/shop','owner']],{kv:{shop:0},outside:0},0,['/kv/shop']],
  ['escaped','Key',[['/a~1b','owner']],{'a/b':0},0,['/a~1b']],
  ['symbolic','Key',[['/hosts/<machine_id>','owner']],{},0,['/hosts/<machine_id>']],
  ];
- for(const [name,column,rows,seed,exit,keys]of cases)await check('D/'+name,{'contracts/world.md':table(column,rows),'contracts/seed-world.json':J(seed)},exit,{records:0,warnings:[missing(keys)]});
+ for(const [name,column,rows,seed,exit,keys]of cases)await check('D/'+name,{'contracts/world.md':table(column,rows),'contracts/seed-world.json':J(seed)},exit,{records:0,warnings:[missing(keys),...(['extra','path-extra'].includes(name)?[{kind:'world-writer-missing',file:'contracts/seed-world.json',world_keys:['/outside']}]:[])]});
 });
 
 test('1438 E:19 declared-pair disagreement and independent consumer drift configurations',async()=>{

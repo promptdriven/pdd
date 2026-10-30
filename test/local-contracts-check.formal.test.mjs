@@ -71,7 +71,7 @@ test('formal D: all nine three-way oneOf state pairs', async () => {
 });
 const record = (name,schema) => `### ${name}\n\`\`\`json\n${schema}\n\`\`\`\n`;
 const table = rows => '# World\n| Key | Writer | Schema |\n|---|---|---|\n'+rows.map(([writer,target])=>`| item | ${writer} | contracts/shapes.md#${target} |\n`).join('');
-async function checkFiles(files, expected, diagnostic) {
+async function checkFiles(files, expected, diagnostic, uncovered) {
   const { runContracts } = await import('../src/contracts.mjs');
   const cwd=fs.mkdtempSync(join(tmpdir(),'pdd-formal-contract-'));
   try {
@@ -86,6 +86,18 @@ async function checkFiles(files, expected, diagnostic) {
       {env:{...process.env,PDD_STATE_DIR:join(cwd,'.private-state')},stdout:stream,stderr:stream});
     assert.equal(result,expected,`${j(files)}\n${output}`);
     if (diagnostic) assert.ok(output.split(/\r?\n/).some(line=>diagnostic.every(part=>line.includes(part))),`${j(diagnostic)}\n${output}`);
+    if (uncovered !== undefined) {
+      let stdout='';
+      const code=await runContracts({words:[],options:{'--check':true,'--json':true},cwd},
+        {env:{...process.env,PDD_STATE_DIR:join(cwd,'.private-state')},stdout:{write:s=>{stdout+=s;}},stderr:{write:()=>{}}});
+      const got=JSON.parse(stdout);
+      assert.equal(code,expected);
+      assert.equal(got.checked_records,2);
+      if(expected===0){assert.equal(got.checked_world_values,0);assert.deepEqual(got.diagnostics,[]);}
+      const warnings=got.warnings.filter(w=>w.kind==='world-writer-missing');
+      assert.equal(warnings.length,uncovered.length?1:0);
+      if(uncovered.length){assert.equal(warnings[0].file,'contracts/seed-world.json');assert.deepEqual(warnings[0].world_keys,uncovered);assert.ok(warnings[0].message.includes('/item'));}
+    }
     for (const [path,text] of Object.entries(files)) assert.equal(fs.readFileSync(join(cwd,path),'utf8'),text,`source changed: ${path}`);
   } finally { fs.rmSync(cwd,{recursive:true,force:true}); }
 }
@@ -96,7 +108,7 @@ test('formal E: all 54 ownership, mapping, presence and unused-schema configurat
     const rows=[...base,...extra];
     const pairs=new Set(rows.map(([writer,schema])=>`${writer}/${schema}`));
     const target=rows[0]?.[1];
-    const mismatch=seed!=='absent' && (pairs.size===0 || target==='B' || seed==='null');
+    const mismatch=seed!=='absent' && pairs.size>0 && (target==='B' || seed==='null');
     const expected=!valid||pairs.size>1||mismatch?4:0;
     let diagnostic;
     if (!valid) diagnostic=['contracts/shapes.md','contracts/shapes.md#A'];
@@ -106,7 +118,7 @@ test('formal E: all 54 ownership, mapping, presence and unused-schema configurat
       'contracts/world.md':table(rows),
       'contracts/seed-world.json':seed==='absent'?'{}':`{"item":${seed}}`,
       'contracts/shapes.md':record('A',valid?' {"type":"integer"}':'{"type":"array"}')+record('B','{"type":"string"}'),
-    },expected,diagnostic);
+    },expected,diagnostic,rows.length===0?(seed==='absent'?[]:['/item']):undefined);
   }
 });
 test('formal F: all12 definite/unavailable configurations', async () => {
