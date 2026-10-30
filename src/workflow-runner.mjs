@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: fbabedd7df3ae8bfaff0a355bb9657e289ea34cb8b69f77b14b170084a8618c7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ea506802f19992df26ecf40be3a64cb5ef5f1fa8dda45519c38a4625df1c3029).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
-import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
+import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun as storeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
@@ -74,6 +74,52 @@ function deps(ports = {}) {
   const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
+}
+// Only these callers reconcile a loaded run. Storage and journal ownership stay unchanged.
+const runBaselines = new WeakMap();
+const sameSaved = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+function trackRun(run) {
+  if (!runBaselines.has(run)) runBaselines.set(run, structuredClone(run));
+  return run;
+}
+function mergeRunChanges(before, intended, latest, field) {
+  // Keep live references (notably the selected area) when durable content agrees.
+  if (sameSaved(intended, latest)) return intended;
+  if (sameSaved(before, intended)) return latest;
+  // Clearing an observed question/gate must not clear a replacement saved meanwhile.
+  if ((field === 'question' || field === 'gate') && intended === null && !sameSaved(before, latest)) return latest;
+  if (Array.isArray(before) && Array.isArray(intended) && Array.isArray(latest)) {
+    // Existing records retain their positions; local appends follow any newer appends.
+    return latest.flatMap((value, index) => index >= before.length ? [value]
+      : index < intended.length ? [mergeRunChanges(before[index], intended[index], value)] : [])
+      .concat(intended.slice(before.length));
+  }
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (object(before) && object(intended) && object(latest)) {
+    const merged = { ...latest };
+    for (const key of new Set([...Object.keys(before), ...Object.keys(intended)])) {
+      if (!Object.hasOwn(intended, key)) delete merged[key];
+      else merged[key] = mergeRunChanges(before[key], intended[key], latest[key], key);
+    }
+    return merged;
+  }
+  return intended;
+}
+function writeRun(run, p) {
+  const before = runBaselines.get(run);
+  if (before) {
+    const latest = readRun(run.runDir);
+    if (latest) {
+      const merged = mergeRunChanges(before, run, latest);
+      if (merged !== run) {
+        for (const key of Object.keys(run)) delete run[key];
+        Object.assign(run, merged);
+      }
+    }
+  }
+  storeRun(run, p);
+  if (before) runBaselines.set(run, structuredClone(run));
+  return run;
 }
 // The real reason of a failed gh, git or Herdr call, in plain words.
 function causeOf(error) {
@@ -800,6 +846,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
+  trackRun(run);
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
   if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
   const area = run.areas[run.area], lines = [];
@@ -1081,6 +1128,7 @@ export async function askPerson({ text, cwd }, ports) {
   const p = deps(ports);
   const run = await runForWorktree(cwd, p);
   if (!run) return fail('pdd workflow ask works only in a run worktree. cd to the worktree that pdd made for this run.');
+  trackRun(run);
   if (ended(run)) return done(`The run for #${run.number} is ${run.state}. Stop working on it.`);
   const question = String(text ?? '').trim().slice(0, 500);
   if (!question) return fail('Write the question after pdd workflow ask.');
@@ -1333,6 +1381,7 @@ export async function cancelRun({ ref, cwd }, ports) {
 
 async function refreshPr(run, p) {
   if (!run.pr?.length || run.state === 'cancelled') return;
+  trackRun(run);
   const cwd = existsSync(run.root) ? run.root : run.sourceRoot, before = JSON.stringify([run.state, run.pr]);
   for (const pr of run.pr) Object.assign(pr, await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd, url: pr.url }, p.commandPorts));
   const last = run.pr.at(-1), area = run.areas.find(item => item.name === last.stage);
