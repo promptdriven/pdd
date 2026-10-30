@@ -10,8 +10,8 @@ I can see old and new assertion lines even when the number of tests stays the sa
 
 ## Rules to check
 
-A changed test count cannot stand in for comparing assertion lines. Associate assertions with kept cases only, compare exact lines and retain source order. Do not approve changed expectations or rewrite tests. The bounded line and case matching conventions are draft assumptions for review; this report cannot judge whether an expectation is correct.
+A changed test count cannot stand in for comparing assertion lines. Associate assertions with kept cases only, compare exact lines and retain source order. Do not approve changed expectations or rewrite tests. Preserve exact assertion bytes, including a line-ending carriage return; optional CRLF normalization is deferred. If old assertion count times new assertion count exceeds 1,000,000, report "too many assertion lines to compare" for that kept test alone. At exactly the limit compare normally, with the existing tie and source-order results. Counts, removals, skips and other tests must survive a capped assertion comparison. Matching below the cap must use bounded quadratic work without rebuilding a full table at every mismatch. This report cannot judge whether an expectation is correct.
 
 ## Review status
 
-Draft for the person's review; expectations have not been approved. The runtime cases check the informational report with synthetic snapshots. Real Git enumeration, committed-head timing, PR placement/refresh and report-only publication require native tests in the code area; they are not proved by these scenarios.
+The reviewed contract is approved following the fresh scoped check: all four original synthetic cases passed all 11 checks (receipt in PLAN.md). Their inputs and expected checks remain unchanged. New cap boundary, unchanged tie ordering and a 2,000-line case finishing in under two seconds require native proof in the code area. A model's prompt-runtime duration proves no native timing bound. Real Git enumeration and publication remain separate native obligations.

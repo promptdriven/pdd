@@ -10,8 +10,8 @@ I can see newly skipped, pending or expected-failure cases in the code PR report
 
 ## Rules to check
 
-Skips are differences from the saved start commit, including xfail under "New skips:". Do not remove a skip or introduce an approval gate. JS literal options and t.skip/t.todo, plus contiguous pytest skip/skipif/xfail decorators, are included as draft static conventions; dynamic/generated markers and Go t.Skip are outside scope. Reports are escaped and bounded; full details belong in the run folder when saved successfully.
+Skips are differences between the exact resolved comparison commits, including xfail under "New skips:". Do not remove a skip or introduce an approval gate. JS literal true options and nonempty static string skip options, t.skip/t.todo, xit, describe.skip, pytest.skip calls and contiguous pytest skip/skipif/xfail decorators are included. Count xit as a test and a skip. A suite marker has its own exact static name and occurrence identity, displays as a suite, and never adds a test or copies its marker onto every child. Dynamic/generated markers and Go t.Skip remain outside scope. Reports are escaped and bounded; full details belong in the run folder when saved successfully.
 
 ## Review status
 
-Draft for the person's review; expectations have not been approved. The runtime cases check the informational report with synthetic snapshots. Real Git enumeration, committed-head timing, PR placement/refresh and report-only publication require native tests in the code area; they are not proved by these scenarios.
+The reviewed contract is approved following the fresh scoped check: the four synthetic cases passed all 12 checks (receipt in PLAN.md). The original cases retain their inputs, criteria and step identities; two report strings received explicitly person-approved @-escaping updates. Across the three Stories, the 31 other expected checks remain unchanged. Native regression proof must cover each new skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.
