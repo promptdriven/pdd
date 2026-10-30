@@ -24,7 +24,13 @@ invalidate reused authorization. Missing or malformed declarations fail closed.
 An external assertion is attributed evidence, not independently authenticated approval.
 A declaration under a symlinked folder is accepted after resolving that folder;
 a final symlink or hardlink is refused. Native failures show a useful cleaned single
-line without private paths or Try links. PR replay sections show adopted repository,
+line without private paths or Try links. Declaration refusals identify the 200-path
+limit, missing scenarios key, duplicate path or noncanonical path, with the relevant
+repo-relative path retained. A missing declared scenario names its approved/current
+source and repo-relative path, even after worktree deletion. A failed startup fetch
+says that fetch failed. A `.git` segment in any letter case, including `.GIT`, is
+refused before temporary-view writes. Empty causes for those declaration failures,
+private absolute paths and silently accepting `.GIT` are forbidden. PR replay sections show adopted repository,
 commit, reference, asserting identity and external-assertion-unverified, even blocked.
 
 ## What must not change
