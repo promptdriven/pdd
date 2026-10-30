@@ -84,3 +84,5 @@ The seven workflow Stories retain their separately approved contracts and all 28
 - [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
 
 - [I check shared plan contracts locally](local-contract-check.md) — `test/shared-contracts/local-contract-check.json`; Runtime check: Not run (native local command, no server call).
+
+- [I check real shared-contract layouts locally](local-contract-layouts.md) — `test/shared-contracts/local-contract-layouts.json`; Runtime check: Not run (native local command, no server call).

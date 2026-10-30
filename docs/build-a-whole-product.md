@@ -95,3 +95,10 @@ start or hide unrelated ready runs.
 Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product Try to test the path across parts. Status tracks journeys
 separately from each part's Stories.
+
+World ownership tables may use Key or Path, with one complete Writer label per
+exact path. Schema links are optional; declared links check the corresponding
+seed value. Non-schema JSON files are skipped. Copy drift compares declared
+records only: object copies with fewer than three properties are not compared,
+and differing candidates require a shared record with at least four properties.
+Use `pdd contracts --check --json` for structured counts and diagnostics.

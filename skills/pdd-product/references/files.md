@@ -54,13 +54,19 @@ repository; a reference in a comment or unrelated prose is not PR ownership.
 Each record has a `### record_name` heading and a fenced `json` schema. Schema
 objects name properties, required fields and additionalProperties explicitly.
 `contracts/world.md` has a key table: Key, What it holds, Writer, Readers, How it
-is written, Schema. Each key has one writer and an explicit repository-root
-schema target, for example `contracts/world.md#orders`. Key and Schema cells may
-be plain text or backticked. A key is one exact top-level seed key; Schema names
-the shape of its whole value (an array key needs an array schema). Do not infer
-schema links from names or prose. Identical repeated declarations coalesce;
-conflicting writers or schemas are errors. A declared key may be absent initially,
-but every present seed key needs a declaration. State shared refusal and update rules.
+is written, with an optional Schema column. Accept Key or Path with Writer.
+A Key is an exact top-level seed key; a Path is an exact nested declaration,
+including separately backticked path lists. Each complete nonblank Writer cell
+is one label, including commas. Parent and child paths may have different labels;
+only different labels for the same exact path conflict. Prefer explicit
+repository-root Schema targets for new plans, for example
+`contracts/world.md#orders`; existing tables may omit or leave them blank.
+Only declared schemas validate corresponding present seed values. Symbolic paths
+without schemas declare ownership only, without inferred template matching.
+Do not infer schema links from names or prose. Identical repeated declarations coalesce;
+conflicting writers or explicit schemas for the same exact path are errors. A declared key may be absent initially,
+and Key tables require every present top-level seed key to have a declaration.
+Path tables check only declared paths without inferred seed coverage. State shared refusal and update rules.
 Put shared starting data in `contracts/seed-world.json`.
 
 For example, phone → server crosses order_in and order_view under

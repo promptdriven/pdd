@@ -149,20 +149,22 @@ Before sending work, pdd asks whether the runtime has room. During announced mai
 | Command | What it does |
 |---|---|
 | `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no runtime calls |
-| `pdd contracts --check` | Check supported schemas, references, eligible copy drift, world writers and seed values locally; 0 complete, 4 definite problem, 5 unavailable validation or I/O, 2 syntax/no repository |
+| `pdd contracts --check [--json]` | Check supported schemas, references, eligible copy drift, world writers and seed values locally; 0 complete, 4 definite problem, 5 unavailable validation or I/O, 2 syntax/no repository |
 | `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
 
 `pdd contracts --check` writes nothing and reads no Check history. It cannot be
 combined with `sync` or `--write`. Both world files may be absent; if either
 `contracts/world.md` or `contracts/seed-world.json` exists, both are required.
-The first Key/Writer ownership table needs a Schema column with an explicit
-repository-root contract target per key. A missing initial key is allowed;
-every present seed key needs one schema and one writer. Identical duplicate
-rows coalesce; conflicting mappings/writers fail. Listing and sync are advisory
-and also accept a five-column table without Schema. JSON schema containers are checked
-by their schema leaves, and seed data is never mistaken for schemas. Unclassified
-JSON roles, unjudged patterns and precision that cannot be checked without
-rounding report validation unavailable, with a location. Ordinary finite decimal
+The first Key/Writer or Path/Writer ownership table may omit Schema. Only explicit
+schema links validate seed values. Key tables require every top-level seed key
+to have a declaration; Path tables check exact declared ownership without inferred
+seed coverage or template matching. Complete writer labels may contain commas;
+parent and child paths may have different writers. Identical declarations
+coalesce, while conflicting labels or explicit schema mappings for the same
+exact path fail. JSON schema-map leaves validate without implicitly authorizing
+copy agreement. Seed data is never mistaken for schemas. Unrelated JSON skips;
+unjudged value patterns and precision that cannot be checked without rounding
+report validation unavailable with a location. Ordinary finite decimal
 bounds and enum values can be checked locally; uncertainty never produces a false pass.
 
 Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
@@ -203,3 +205,12 @@ approved interface set it to draft; review the preview and approve it as usual.
 | `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
 
 See [Build a whole product](build-a-whole-product.md).
+
+For `pdd contracts --check`, world tables accept Key or Path and Writer columns;
+Schema is optional. Ownership is per exact path, with the complete Writer cell
+as its label. Non-schema JSON files are skipped in one summary. Inline object
+copies need at least three properties; differing copies need an eligible shared
+record with at least four properties. Smaller copies are not compared. Only
+declared records supply copy authorities; incidental nested schemas do not.
+`--json` requires `--check` and prints counts, skipped files and diagnostics as
+one JSON object with the same exit code as text output.
