@@ -23,15 +23,15 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - Use full URLs (`https://…`).
 - Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". In a run, run `<pdd> workflow ask` first. For a page or a screen, recommend visual: it makes the app map.
 - At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer: "You can also open it now with `pdd simulate <story>` before the check." If visual made an app map, tell the person to run `pdd simulate <story> --new`. End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
-- Before PR 1, show one `Runtime check` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
+- Before PR 1, show one `Prompt tests` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
 - On verify/formal failure or review must-fixes, go back to build in a new subagent, at most 2 times. 2 repair rounds after initial review: fresh build, verify, formal, then fresh review. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; start a fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
 - A person decides expected values. Never change a test to make it pass. Outside code (databases, files, network, clocks, randomness, programs): injected ports; no direct calls (RUNBOOK §21).
 
-## Try tools
+## MCP tools
 
-If asked: `try_open`, `try_state`, `try_run` with input, `try_check`, `try_save_case`. Runs spend AI calls and show in Simulator history. Review saved cases with the person, never as approved expected values.
+If asked: `simulate_open`, `simulate_state`, `simulate_input`, `simulate_test`, `simulate_save_case`. Runs spend AI calls; the Simulator shows them. Saved cases are not approved: review them with the person.
 
 ## In a run
 
