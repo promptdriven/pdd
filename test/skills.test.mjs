@@ -606,7 +606,7 @@ test('SKILLS44: no eligible checker stops with missing-check evidence and a new 
   assert.match(recovery, /stop.*tell the person.*start a new agent session.*run's worktree/i);
   assert.match(recovery, /no verdict.*workflow done.*unrun checks/i);
   // open resumes the existing session; it must never be offered as fresh-session recovery.
-  const open = instruction(recovery, [/`pdd workflow open`/]);
+  const open = instruction(recovery, [/`pdd\s+workflow\s+open\b[^`]*`/i]);
   assert.match(open, /focuses or resumes.*same session/i);
   assert.match(open, /does not.*new.*or clear.*limit/i);
   for (const name of Object.keys(AREAS)) {

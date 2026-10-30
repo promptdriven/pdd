@@ -521,7 +521,7 @@ On `agent thread limit reached`, follow the workflow skill's checking fallback. 
 - For another unrun check, write `Not checked: <step> (agent limit)` in its run file.
 
 Stop and tell the person to start a new agent session in the run's worktree. No verdict or `workflow done` for unrun checks.
-`pdd workflow open` focuses or resumes the same session; it does not start a new one or clear the limit.
+`pdd workflow open 42` focuses or resumes the same session; it does not start a new one or clear the limit.
 Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
 
 Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
