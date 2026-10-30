@@ -7,6 +7,7 @@ I can read test names and source lines in the report without GitHub turning them
 1. Removed names containing "@octocat", "#17", "Closes #17", spaces and backticks appear as quoted JSON literals in Markdown code spans, with their raw identity and source order preserved.
 2. Kept test names and complete changed assertion lines containing Markdown, HTML, mentions, issue references and backticks use code spans longer than every interior backtick run, without HTML entity substitution.
 3. New suite and test skip entries use the same code-span format, preserve leading and trailing spaces, and show carriage returns, controls and bidirectional formatting characters as JSON escapes.
+4. Names and source lines containing "pdd-workflow:" show every matching prefix colon as "\u003a" inside their code spans, so the exact text can be recovered without becoming a workflow marker; later colons and different capitalization stay unchanged.
 
 ## Rules to check
 
@@ -14,4 +15,4 @@ Use the [inventory owner's report format](../prompts/cli/workflow-inventory.prom
 
 ## Review status
 
-The person approved this additive Story and all nine exact expectations before execution. Runtime prompt checks were NOT RUN: both attempts passed lint but sent no Story requests because of #2579. The three criteria and nine checks remain unjudged, with no AI calls. Expected values were derived from the requested format before implementation. The code area must run the native checks and render its final report through the read-only GitHub Markdown API, proving there are no user-mention or issue anchors. Approval is not a Runtime pass and does not authorize publication.
+The person approved the first three criteria and nine exact expectations before their earlier attempts. Those Runtime checks were NOT RUN: lint passed, but #2579 prevented Story requests; the checks remain unjudged, with no AI calls. The person decided the marker-preservation rule; the revised owner is a draft pending prompt approval, and the fourth criterion's three proposed expectations await root review before execution. Expectations come from the required format, never implementation output. Code acceptance requires all 12 native checks, real Git and a final report rendered through the read-only GitHub Markdown API with no user-mention or issue anchors. Approval is not a Runtime pass and does not authorize publication.
