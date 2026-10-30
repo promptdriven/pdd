@@ -178,7 +178,7 @@ test('leases: a later live reader releases terminal check/lint reservations with
   }
 });
 
-test('admission: remote lint, Check and Try setup in different repos share the default four slots', { timeout: 180_000 }, async t => {
+test('admission: remote lint, Check and Try setup in different repos share an explicit cap of four slots', { timeout: 180_000 }, async t => {
   const setups = Array.from({ length: 5 }, () => harbor(t)); let active = 0, peak = 0;
   const jobs = new Map(), completed = new Set(), pending = [];
   let release;
@@ -186,7 +186,7 @@ test('admission: remote lint, Check and Try setup in different repos share the d
   const fake = await fakeRuntime(t, async (e, f) => {
     if (e.command) {
       assert.equal(jobs.has(e.request.requestId), false, 'each command posts one unique request');
-      active++; peak = Math.max(peak, active); assert.ok(active <= 4, 'default capacity is never exceeded');
+      active++; peak = Math.max(peak, active); assert.ok(active <= 4, 'configured capacity is never exceeded');
       jobs.set(e.request.requestId, e.command);
       return { status: 202, json: f.job(e.request.requestId, e.command, 'queued') };
     }
@@ -201,6 +201,7 @@ test('admission: remote lint, Check and Try setup in different repos share the d
   const start = i => {
     const setup = setups[i];
     const made = makePorts({ ...setup, state: setups[0].state }, fake, { now: Date.now, sleep: ms => new Promise(done => setTimeout(done, ms)), pollMs: 20 });
+    made.ports.env.PDD_MAX_JOBS = '4';
     return i < 2 ? runTry({ cwd: setup.repo, words: ['place-order'], options: { '--no-open': true, '--no-wait': true } }, made.ports)
       : runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, ...(i === 2 ? { '--lint': true } : {}) } }, made.ports);
   };
@@ -234,17 +235,19 @@ test('admission: remote lint, Check and Try setup in different repos share the d
   } finally { release(); await Promise.allSettled(pending); }
 });
 
-test('admission: invalid PDD_MAX_JOBS warns and keeps a usable default', async t => {
+test('admission: invalid PDD_MAX_JOBS warns once and uses no cap', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (e, f) => f.normal(e));
   const made = makePorts(setup, fake); made.ports.env.PDD_MAX_JOBS = '0';
   assert.equal(await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, made.ports), 0);
-  assert.match(made.ports.stderr.text, /PDD_MAX_JOBS.*4/);
+  assert.match(made.ports.stderr.text, /PDD_MAX_JOBS.*no (?:local )?(?:cap|limit)/i);
+  assert.equal(made.ports.stderr.text.split('\n').filter(line => /Warning:.*PDD_MAX_JOBS/.test(line)).length, 1);
 });
 
 test('admission: contended registration cannot POST after cancellation or deadline', async t => {
   for (const interrupt of [false, true]) {
     const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('blocked registration posted'); });
     const made = makePorts(setup, fake); const records = new Map(), refreshed = new Map(); let claims = 0;
+    made.ports.env.PDD_MAX_JOBS = '4';
     made.ports.slotFiles = {
       listRecords: () => ({ jobs: [...records.values()].filter(row => row.state) }),
       exclusiveCreate: (path, row) => {
