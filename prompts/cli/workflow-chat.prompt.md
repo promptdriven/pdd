@@ -22,30 +22,36 @@ Full-access flags stay. Do not pin tool versions. No workflow or native-session 
 
 ## Message delivery
 
-A pane-launch acknowledgement does not establish agent readiness. For `sendToChat`, the startup window ends 30,000 ms after the latest finite `startedAt` or `resumedAt`. While inside that window, inspect the same pane through `chatSession`; retry only a confirmed `agent_not_found`, with waits of at least 250 ms between retry inspections, bounded by the remaining time. Do not start another retry inspection or retry submission once the deadline is reached. The first inspection is allowed at any chat age: a live agent is ready whether idle or working, while an absent agent outside the startup window returns promptly. Use injected `now` and `sleep` ports for clock and delay; injected `herdr` owns all Herdr calls.
+A pane-launch acknowledgement does not establish agent readiness. For `sendToChat`, the startup window ends 30,000 ms after the latest finite `startedAt` or `resumedAt`; missing timestamps supply no startup grace. At entry, capture the nonnegative remaining window and an elapsed-clock baseline. Every later wait/check must satisfy both that original elapsed budget and the persisted startup deadline, so a wall-clock change never extends the window. Use injected wall-clock `now`, monotonic millisecond `elapsedNow` and `sleep(ms)` ports, with production clock/delay defaults. A retry never restarts either budget. The first inspection and its known-ready submission are allowed at any chat age. After a not-ready observation or confirmed submission rejection, do not start another inspection or retry submission when either bound has expired. Wait up to 250 ms between inspections, shortened only by the remaining budget.
 
 ```mermaid
 flowchart TD
-    I[Inspect original pane] --> R{Live agent?}
-    R -->|Yes| S[Submit once]
-    R -->|No| W{Missing and startup time remains?}
+    I[Inspect original pane] --> R{Known agent status?}
+    R -->|idle, working or done| S[Validate custody, then submit once]
+    R -->|blocked| B[Return agent_blocked]
+    R -->|Absent or unknown| W{Startup time remains?}
+    R -->|Inspection error| F[Return precise failure]
     W -->|Yes| D[Bounded wait]
     D --> I
-    W -->|No| F[Return precise failure]
+    W -->|No| N[Return actionable not-ready result]
 ```
 
-At expiry after confirmed absence, return `chat_still_starting`. A confirmed absence outside the startup window returns `agent_not_found`. Other inspection failures return their actual code immediately. Send `herdr agent prompt <pane> <text>` as its single ordered paste-and-Enter submission; preserve text exactly, including whitespace and quotes. Do not add separate terminal key/paste calls, arbitrary paste delays or `--wait`. A `working` status is not an error and does not wait for the current turn to finish. Herdr acknowledgement proves submission, not that the agent has acted on it.
+Only an alive agent with Herdr status `idle`, `working` or `done` is ready. `blocked` returns `agent_blocked` immediately. An absent agent, an alive `unknown` status or a missing/unrecognized status may wait only within the original window. A `working` agent does not wait for its turn to finish. Expiry after waiting returns `chat_still_starting`; a first confirmed absence outside the window returns `agent_not_found`, while an alive but unknown agent outside it returns `herdr_status_unknown`. Other inspection failures return their actual code immediately and are never proof of readiness.
 
-A submission rejected with `agent_not_found` may return to readiness inspection only within the same deadline. A confirmed `agent_blocked` returns that code. Never retry any potentially dispatched submission automatically: return its actual code and `uncertain:true`. No readiness path starts, resumes, replaces, focuses or closes an agent, tab or server, or changes its saved identity.
+Immediately before each transport attempt, await optional `ports.beforeSubmit()`. It returns true only after its caller has validated the original target and durably recorded submission intent; false returns `{ok:false,code:"chat_target_changed"}` without transport. Callback failure must also send nothing. Invoke it again before an allowed retry after a confirmed rejection; never call it merely for an inspection. The runner owns the callback's journal and target policy.
+
+Send `herdr agent prompt <pane> <text>` as its single ordered paste-and-Enter submission. This generic transport preserves its supplied text, including gate-message line breaks; user-input normalization belongs only to `changeRun`. Do not add separate terminal key/paste calls, arbitrary paste delays or `--wait`. Herdr acknowledgement proves submission, not that the agent acted on it.
+
+A submission rejected with `agent_not_found` may return to readiness inspection only within the same bounds. A confirmed `agent_blocked` returns that code. Never retry any potentially dispatched submission automatically: return its actual code and `uncertain:true`. No readiness path starts, resumes, replaces, focuses or closes an agent, tab or server, or changes its saved identity.
 
 ## Dependencies
 
 - [Run layout](workflow-herdr-layout.prompt.md): required generation/verification context for existing startup and layout behavior.
-- Native `herdr`, `now` and `sleep` ports supply transport, time and delay. The scoped Runtime entry describes the real module function's JSON-visible arguments/results; it does not bind native Herdr, clock, terminal or session effects. Native stub and private-Herdr tests must establish readiness and submission behavior.
+- Native `herdr`, `now`, `elapsedNow` and `sleep` ports supply transport, wall time, monotonic elapsed time and delay; optional `beforeSubmit` supplies the caller-owned durable precondition. The scoped Runtime entry describes the real module function's JSON-visible arguments/results; it does not bind native Herdr, clock, terminal or session effects. Native stub and private-Herdr tests must establish readiness and submission behavior.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"f660dd0b726880e17b62cdcdc3cdd367fdf29445eb2d88b50a04ad8bf642c90e","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"c27470a22f4272d8cc0c3f219e48736cf575616b6c10ef4b9b818cf627ce13ff","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
