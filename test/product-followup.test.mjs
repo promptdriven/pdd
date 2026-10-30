@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { productStart, productStatus, runProduct } from '../src/product.mjs';
 
 const marker = run => `<!-- pdd-product: run=${run} -->`;
@@ -94,4 +94,134 @@ test('human status explains the actual local comparison branch and how to update
   const status = await runProduct({ command: 'status', cwd: f.cwd }, f.ports);
   assert.equal(status.exitCode, 0);
   assert.match(status.message, /local.*release/i); assert.match(status.message, /git pull/);
+});
+
+test('a saved binding cannot hide a trusted own-marker feature record on another issue', async t => {
+  const f = setup(t);
+  f.s.issues = [issue('phone-1', 201), issue('phone-1', 202, { created_at: '2026-10-02T00:00:00Z' })];
+  let json = JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [{ run: 'phone-1', issue: 201 }] });
+  f.ports.readProductState = async () => ({ json }); f.ports.writeProductState = async args => { json = args.json; return {}; };
+  f.s.runs = [{ workflow: 'feature', number: 202, productMarker: marker('phone-1'), state: 'running' }];
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.issue, 202); assert.equal(f.s.searches.length, 0);
+  assert.equal(JSON.parse(json).bindings.find(row => row.run === 'phone-1').issue, 202);
+});
+
+test('unavailable account on a bound self exception keeps only an unverified hint', async t => {
+  const f = setup(t); f.s.actorError = true;
+  f.s.issues = [issue('phone-1', 80, { author_association: 'NONE', user: { login: 'person' } })];
+  f.s.runs = [{ workflow: 'feature', number: 80, productMarker: marker('phone-1'), state: 'completed', rows: [{ story: 'P01-menu', pass: true, current: true }] }];
+  let timelines = 0, evidence = 0;
+  f.ports.timelinePage = async () => { timelines++; return []; }; f.ports.storyEvidence = async () => { evidence++; return []; };
+  const status = await productStatus({ cwd: f.cwd }, f.ports);
+  assert.equal(status.runs.find(row => row.run === 'phone-1').state, 'unverified');
+  assert.equal(status.runs.find(row => row.run === 'phone-1').issue, 80);
+  assert.equal(status.parts.find(row => row.part === 'phone').pass, 0);
+  assert.ok(!status.ready.includes('phone-1')); assert.equal(timelines, 0); assert.equal(evidence, 0);
+  const next = await runProduct({ command: 'next', cwd: f.cwd }, f.ports); assert.equal(next.exitCode, 0);
+  const before = f.s.searches.length;
+  const start = await productStart({ cwd: f.cwd, run: 'phone-1' }, f.ports);
+  assert.equal(start.exitCode, 1); assert.equal(start.issue, 80); assert.equal(f.s.searches.length, before);
+  assert.equal(f.s.creates.length, 0); assert.equal(f.s.starts.length, 0);
+});
+
+test('an invalid or unreadable saved issue never authorizes replacement', async t => {
+  for (const mode of ['foreign-marker', 'number', 'untrusted', 'transport']) {
+    const f = setup(t);
+    f.ports.readProductState = async () => ({ json: JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [{ run: 'phone-1', issue: 80 }] }) });
+    f.ports.issueByNumber = async () => { if (mode === 'transport') throw Error('not accessible'); return issue(mode === 'foreign-marker' ? 'server-1' : 'phone-1', mode === 'number' ? 81 : 80, mode === 'untrusted' ? { author_association: 'NONE', user: { login: 'outsider' } } : {}); };
+    const out = await productStart({ cwd: f.cwd, run: 'phone-1' }, f.ports);
+    assert.equal(out.exitCode, 1, mode); assert.equal(f.s.creates.length, 0); assert.equal(f.s.starts.length, 0); assert.equal(f.s.searches.length, 0);
+  }
+});
+
+test('a failed binding write reports the created issue and stops before workflow startup', async t => {
+  const f = setup(t); let writes = 0;
+  f.ports.writeProductState = async () => { if (++writes === 2) throw Error('disk full'); return {}; };
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1' }, f.ports);
+  assert.equal(out.exitCode, 1); assert.equal(out.issue, 201); assert.equal(out.created, true);
+  assert.equal(f.s.creates.length, 1); assert.equal(f.s.starts.length, 0);
+});
+
+test('cache age boundaries and cached negatives require at most one fresh query', async t => {
+  for (const [age, expected] of [[0, 0], [59999, 0], [60000, 1], [-1, 1]]) {
+    const f = setup(t); f.s.issues = [issue('phone-1', 80)];
+    let json = JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [], search: { at: 100000 - age, items: f.s.issues } });
+    f.ports.now = async () => ({ milliseconds: 100000 });
+    f.ports.readProductState = async () => ({ json }); f.ports.writeProductState = async args => { json = args.json; return {}; };
+    const out = await productStatus({ cwd: f.cwd }, f.ports);
+    assert.equal(out.runs.find(row => row.run === 'phone-1').issue, 80); assert.equal(f.s.searches.length, expected, `age ${age}`);
+  }
+  const f = setup(t);
+  f.ports.now = async () => ({ milliseconds: 100000 });
+  f.ports.readProductState = async () => ({ json: JSON.stringify({ version: 1, repository: 'example/coffee', productRoot: f.cwd, bindings: [], search: { at: 99999, items: [] } }) });
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.created, true); assert.equal(f.s.searches.length, 1);
+});
+
+test('separate CLI processes persist a paginated snapshot and a newly prepared issue despite search lag and unavailable actor', t => {
+  const f = setup(t), bin = join(f.cwd, 'fake-bin'), log = join(bin, 'calls.jsonl'), created = join(bin, 'created.json');
+  mkdirSync(bin);
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/example/coffee.git'], { cwd: f.cwd });
+  writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs'), a = process.argv.slice(2), log = ${JSON.stringify(log)}, saved = ${JSON.stringify(created)};
+fs.appendFileSync(log, JSON.stringify(a) + '\\n');
+const marker = run => '<!-- pdd-product: run=' + run + ' -->';
+if (a[0] === 'repo') process.stdout.write(JSON.stringify({nameWithOwner:'example/coffee',defaultBranchRef:{name:'release'},url:'https://github.com/example/coffee'}));
+else if (a[0] === 'issue' && a[1] === 'create') {
+  fs.writeFileSync(saved, JSON.stringify({number:201,body:a[a.indexOf('--body')+1],user:{login:'maintainer'},author_association:'MEMBER',created_at:'2026-10-01T00:00:00Z'}));
+  process.stdout.write('https://github.com/example/coffee/issues/201');
+} else if (a[0] === 'api' && a[1] === 'user') { process.stderr.write('HTTP 403: account unavailable'); process.exit(1); }
+else if (a[1].startsWith('search/issues?')) {
+  const q = new URL('https://api.github.com/' + a[1]).searchParams, page = Number(q.get('page')), size = Number(q.get('per_page'));
+  const rows = Array.from({length:11}, (_,i) => ({number:80+i,body:marker('journeys'),user:{login:'outsider'},author_association:'NONE',created_at:'2026-10-01T00:00:00Z'}));
+  process.stdout.write(JSON.stringify({items:rows.slice((page-1)*size,page*size),total_count:rows.length,incomplete_results:false}));
+} else if (a[1].endsWith('/issues/201')) process.stdout.write(fs.readFileSync(saved));
+else if (a[1].includes('/timeline?')) process.stdout.write('[]');
+else { process.stderr.write('Unexpected gh call: ' + JSON.stringify(a)); process.exit(2); }
+`, { mode: 0o755 });
+  const cli = new URL('../bin/pdd.mjs', import.meta.url).pathname;
+  const invoke = args => {
+    const reply = spawnSync(process.execPath, [cli, 'product', ...args], { cwd: f.cwd, encoding: 'utf8', env: { ...process.env, HOME: f.cwd, PATH: `${bin}:${process.env.PATH}` } });
+    assert.equal(reply.status, 0, `${args}: ${reply.stderr} ${reply.stdout}`); return reply.stdout;
+  };
+  invoke(['status']); invoke(['next']);
+  assert.match(invoke(['start', 'phone-1', '--no-run']), /Issue #201/);
+  assert.match(invoke(['start', 'phone-1', '--no-run']), /Issue #201/);
+  const calls = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+  const searches = calls.filter(args => args[1]?.startsWith('search/issues?'));
+  assert.equal(searches.length, 4, 'one two-page query for status, none for next, one fresh negative refresh before creation, none after binding');
+  assert.equal(calls.filter(args => args[0] === 'issue').length, 1);
+  assert.equal(calls.filter(args => args[1] === 'user').length, 3, 'unavailable actor is memoized across eleven claims in each of three searching commands');
+  assert.ok(calls.some(args => args[1]?.endsWith('/issues/201')));
+  for (const args of searches) {
+    const query = new URL('https://api.github.com/' + args[1]).searchParams;
+    assert.equal(query.get('per_page'), '10'); assert.match(query.get('q'), /in:body.*<!-- pdd-product: run=/);
+    assert.ok(args.includes('--jq')); assert.match(args.at(-1), /author_association/);
+    assert.equal(args.includes('--paginate') || args.includes('--slurp'), false);
+  }
+  const stateFiles = readdirSync(join(f.cwd, '.git/pdd/products'));
+  assert.equal(stateFiles.length, 1); assert.ok(stateFiles[0].endsWith('.json'));
+  const state = JSON.parse(readFileSync(join(f.cwd, '.git/pdd/products', stateFiles[0]), 'utf8'));
+  assert.equal(state.repository, 'example/coffee'); assert.equal(state.productRoot, f.cwd);
+  assert.deepEqual(state.bindings, [{ run: 'phone-1', issue: 201 }]); assert.equal(state.search.items.length, 11);
+});
+
+test('a cache from another scope is a miss while foreign bindings fail closed', async t => {
+  for (const bindings of [[], [{ run: 'phone-1', issue: 80 }]]) {
+    const f = setup(t);
+    f.ports.readProductState = async () => ({ json: JSON.stringify({ version: 1, repository: 'foreign/repo', productRoot: '/other', bindings, search: { at: 100000, items: [] } }) });
+    f.ports.now = async () => ({ milliseconds: 100000 }); f.ports.writeProductState = async () => ({});
+    const out = await runProduct({ command: 'status', cwd: f.cwd }, f.ports);
+    assert.equal(out.exitCode, bindings.length ? 1 : 0);
+    assert.equal(f.s.searches.length, bindings.length ? 0 : 1);
+  }
+});
+
+test('a bound start does not claim that unexamined dependencies remain unmet', async t => {
+  const f = setup(t); f.s.issues = [issue('journeys', 80)];
+  f.s.runs = [{ workflow: 'feature', number: 80, productMarker: marker('journeys'), state: 'running' }];
+  const out = await productStart({ cwd: f.cwd, run: 'journeys', noRun: true }, f.ports);
+  assert.equal(out.exitCode, 0); assert.equal(out.issue, 80); assert.equal(f.s.searches.length, 0);
+  assert.doesNotMatch(out.message, /still needs/);
 });

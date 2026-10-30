@@ -21,6 +21,14 @@ function fixture(t) {
   cpSync(new URL('../examples/coffee-pickup/', import.meta.url), cwd, { recursive: true });
   const state = { issues: [], runs: [], prs: [], events: [], base: true, starts: [], commands: [] };
   const ports = {
+    readProductState: async () => ({ json: state.productState ?? null }),
+    writeProductState: async ({ json }) => { state.productState = json; return {}; },
+    now: async () => ({ milliseconds: (state.clock = (state.clock ?? 0) + 60000) }),
+    issueByNumber: async ({ number }) => {
+      if (state.fail) throw Error('GitHub unavailable');
+      const row = (state.pages?.flat() ?? state.issues).find(item => item.number === number);
+      return row && { author_association: 'MEMBER', user: { login: 'member' }, created_at: '2026-10-01T00:00:00Z', ...row };
+    },
     listRuns: async () => state.runs,
     openBaseSource: async () => ({root:cwd,handle:null}),
     resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }),
