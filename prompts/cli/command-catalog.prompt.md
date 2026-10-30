@@ -1,10 +1,12 @@
 # Alpha local command catalog
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that a second run changes nothing). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version, completion bash|zsh, workflow list [--json] and setup (`pdd setup`, local `setup`, no operands or options; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that a second run changes nothing). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
-## Dependencies
+## Authoring
 
-Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
+Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow the [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. These authoring obligations do not add runtime facts: the complete catalog route declarations below own what the pure data module exposes.
+
+## Public routes
 
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
@@ -17,6 +19,7 @@ Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.cancel `workflow cancel ISSUE`, workflow.open `workflow open ISSUE`.
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Try links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
+- workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT` (local `workflow-prove`): one required issue operand and two text options. Help says it runs committed changed tests on the merge-base of committed head with the fetched base branch and committed head, with a 120-second limit per phase, and saves a non-gating report. No timeout override or native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
 
 ## Workflow runner help
@@ -46,3 +49,19 @@ Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Hel
 Remote lint uses the Check caller wait, including --timeout; no separate120second cap. Read help explains that a saved normal Check held for lint may safely continue its original checks; other reads remain GET-only. Runtime-client owns the continuation safeguards and finite recovery wait.
 
 Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting runtime jobs on this machine without contacting the runtime. Root help and shell completion include jobs. The [slots helper](runtime-slots.prompt.md) owns listing; this route does not authenticate or import the runtime client.
+
+## Product routes
+
+Catalog `product.status` (`product status`, local `product-status`, optional flag
+`--json`), `product.next` (`product next`, local `product-next`, no operands or
+options), and `product.start` (`product start`, local `product-start`, required
+text operand RUN, flags `--no-run` and value `--agent` with codex|claude). Forms:
+`pdd product status [--json]`, `pdd product next`, and
+`pdd product start RUN [--no-run] [--agent codex|claude]`. Help says status counts
+Stories by part and slice, next shows ready runs, and start creates or reuses one
+issue then starts a normal feature run unless `--no-run`. All three make zero
+runtime calls. [Product](product.prompt.md) owns their behavior.
+
+## Dependencies
+
+No outside values or callback replies are required for this data-only module. All runtime route IDs, prefixes, dispositions, operand/option types, forms and help facts are owned here. Native authoring/generation uses the repository contracts linked above to identify the receiving modules and public boundary; links in route descriptions are native integration/ownership navigation, not a request to load their unrelated implementation/runtime policies when parsing catalog data.

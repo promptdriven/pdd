@@ -1,0 +1,39 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/product-map.md",
+  "criteria": [
+    {"id": "AC1", "text": "The tip calculator map has the chosen small path, one part and four CORE Stories."},
+    {"id": "AC2", "text": "Without a separate plan, the tip calculator has one planned run named tips with all four Stories."},
+    {"id": "AC3", "text": "The next action for that small product says \"run one feature run\"."}
+  ],
+  "initial_world": {"files": {"/project/product/map.md": {"content": "# Tips: map\nSentence: \"Build a tip calculator page.\"\nSize: small (4 CORE Stories, 1 part)\n\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| tips | prompts/tips | A tip calculator. |\n\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| T01 | tips | I enter a bill. | CORE |\n| T02 | tips | I choose a tip. | CORE |\n| T03 | tips | I see a total. | CORE |\n| T04 | tips | I see a reason for a bad bill. | CORE |\n", "is_symlink": false}, "/project/product/plan.md": {"content": "", "is_symlink": false}}, "requests": [], "starts": []},
+  "simulation": {"productState.lock":{"action":"port.write","world_pointer":"/requests","result_template":{"handle":"product-state-lock"}},"productState.unlock":{"action":"port.write","world_pointer":"/requests","result_template":{}},"files.read": {"action": "blob.read", "world_pointer": "/files", "path_argument_pointer": "/path", "content_argument_pointer": null, "result_template": {"content": ""}, "result_value_pointer": "/content"}, "runs.list": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "[]"}}, "runs.evidence": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "[]"}}, "github.run": {"action": "port.write", "world_pointer": "/requests", "result_template": {"stdout": "[]"}}, "workflow.start": {"action": "port.write", "world_pointer": "/starts", "result_template": {"exitCode": 0, "message": "Started feature #81."}}, "github.repository": {"action": "port.write", "world_pointer": "/requests", "result_template": {"repository": "example/coffee", "defaultBranch": "alpha"}}, "github.issuePage": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "{\"items\":[],\"total_count\":0,\"incomplete_results\":false}"}}, "github.timelinePage": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": "[]"}}, "productState.read": {"action": "port.write", "world_pointer": "/requests", "result_template": {"json": null}}, "productState.write": {"action": "port.write", "world_pointer": "/requests", "result_template": {}}, "clock.now": {"action": "port.write", "world_pointer": "/requests", "result_template": {"milliseconds": 100000}}},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "read-small-map",
+      "entry_path": "prompts/cli/product.prompt.md",
+      "operation": "readProduct",
+      "input": {"cwd": "/project"},
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {"criterion_id": "AC1", "target": "result", "path": "/size", "op": "equals", "value": "small"},
+        {"criterion_id": "AC1", "target": "result", "path": "/parts", "op": "count", "value": 1},
+        {"criterion_id": "AC1", "target": "result", "path": "/stories", "op": "count", "value": 4},
+        {"criterion_id": "AC2", "target": "result", "path": "/runs", "op": "count", "value": 1},
+        {"criterion_id": "AC2", "target": "result", "path": "/runs/0/run", "op": "equals", "value": "tips"},
+        {"criterion_id": "AC2", "target": "result", "path": "/runs/0/stories", "op": "equals", "value": ["T01", "T02", "T03", "T04"]}
+      ]
+    },
+    {
+      "step_id": "small-next",
+      "entry_path": "prompts/cli/product.prompt.md",
+      "operation": "productNext",
+      "input": {"cwd": "/project"},
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {"criterion_id": "AC3", "target": "result", "path": "/guidance", "op": "equals", "value": "run one feature run"}
+      ]
+    }
+  ]
+}
