@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chatCommand, herdrCommand, startChat } from '../src/workflow-chat.mjs';
+import { disposableFixture } from './helpers/disposable-fixture.mjs';
 
-const temp = t => { const path = realpathSync(mkdtempSync(join(tmpdir(), "pdd-chat 'q' "))); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
+const temp = t => disposableFixture(t, "pdd-chat 'q' ").path;
 // A fake native CLI that prints its argv and the marker the chat gets.
 const nativeScript = `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),marker:process.env.PDD_AGENT_SESSION??null,config:process.env.CLAUDE_CONFIG_DIR??process.env.CODEX_HOME??null}));process.exitCode=Number(process.env.PDD_FIXTURE_EXIT??0);\n`;
 
@@ -93,3 +94,47 @@ test('R9: chatCommand refuses a resume id that is not a UUID and quotes a valid 
   assert.match(chatCommand({ agent: 'codex', cwd: '/w', resumeId: id }), new RegExp(`codex resume '${id}' `));
   for (const bad of ['$(touch x)', "x'; rm -rf ~; '", '']) assert.throws(() => chatCommand({ agent: 'claude', cwd: '/w', resumeId: bad }), /session id/);
 });
+
+test('STOP1: native process liveness proves a disposable writer stopped before tab cleanup, without a live Herdr service', async t => {
+  const { spawn } = await import('node:child_process');
+  const { statSync } = await import('node:fs');
+  const { stopChats } = await import('../src/workflow-chat.mjs');
+  const { path: root, ownChild } = disposableFixture(t, "pdd-chat 'q' ");
+  const script = join(root, 'codex.mjs'), writes = join(root, 'writes');
+  writeFileSync(script, `import {appendFileSync} from 'node:fs';setInterval(()=>appendFileSync(${JSON.stringify(writes)},'tick\\n'),10);`);
+  const child = spawn(process.execPath, [script], { cwd: root, detached: true, stdio: 'ignore' });
+  ownChild(child);
+  let exited = false; child.on('exit', () => { exited = true; });
+  while (!exited) { try { if (statSync(writes).size > 0) break; } catch {} await new Promise(r => setTimeout(r, 10)); }
+  assert.equal(exited, false);
+  const calls = [], run = { runId: 'native-test', root, agent: 'codex', state: 'running', chats: [{ paneId: 'only-owned-pane', tabId: 'only-owned-tab', area: 'build' }] };
+  const stopped = await stopChats(run, { herdr: async args => {
+    calls.push(args);
+    if (args[0] === 'pane') return { result: { process_info: { shell_pid: process.pid, foreground_process_group_id: exited ? process.pid : child.pid,
+      foreground_processes: exited ? [] : [{ pid: child.pid, name: 'node', argv: [process.execPath, script], cwd: root }] } } };
+    assert.deepEqual(args, ['tab', 'close', 'only-owned-tab']); assert.equal(exited, true); return {};
+  } });
+  assert.equal(stopped.stopped, true, stopped.warnings.join('\n')); assert.equal(exited, true);
+  const finalSize = statSync(writes).size; await new Promise(r => setTimeout(r, 80)); assert.equal(statSync(writes).size, finalSize);
+  assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
+  assert.deepEqual(calls[0], ['pane','process-info','--pane','only-owned-pane']); assert.equal(calls.at(-1)[0], 'tab');
+});
+
+for (const mode of ['unavailable','missing-pane','unconfirmed','other-worktree','changed-native','lost-stop']) {
+  test(`STOP2: ${mode} cannot establish quiescence or close tabs`, async () => {
+    const { stopChats } = await import('../src/workflow-chat.mjs');
+    let closed = false, signals = 0, reads = 0;
+    const chat = { paneId: 'owned-pane', tabId: 'owned-tab', ...(mode === 'unconfirmed' ? { startUnconfirmed: true } : {}) };
+    const out = await stopChats({ root: '/owned', agent: 'codex', state: 'running', chats: [chat] }, {
+      herdr: async args => {
+        if (args[0] === 'tab') { closed = true; return {}; }
+        if (['unavailable','missing-pane'].includes(mode)) throw Object.assign(Error(mode), { code: mode });
+        return { result: { process_info: mode === 'unconfirmed' ? { shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [] }
+          : { shell_pid: 10, foreground_process_group_id: 20, foreground_processes: [{ pid: 20, name: 'codex', argv: ['codex'], cwd: mode === 'other-worktree' ? '/other' : '/owned' }] } } };
+      },
+      nativeIdentity: async () => ({ group: 20, birth: mode === 'changed-native' ? String(++reads) : 'stable' }),
+      stopProcessGroup: async () => { signals++; if (mode === 'lost-stop') throw Error('lost stop receipt'); },
+    });
+    assert.equal(out.stopped, false); assert.equal(closed, false); assert.equal(signals, mode === 'lost-stop' ? 1 : 0);
+  });
+}

@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 55ebcbc365e6b8dd0c4d8ad8bc6de35fdf0e2fa6c68d50907a197bcf6111dd31).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 5c787d3c27b7ee02e5f1e95391d19d550e463981fb966f4ecb8bcb3be9b38851).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -27,7 +27,8 @@ export async function gitContext(cwd, ports = {}) {
 export function readRun(runDir) {
   try {
     const run = JSON.parse(readFileSync(join(runDir, 'status.json'), 'utf8'));
-    return object(run) && run.v === 1 && Number.isSafeInteger(run.number) ? run : null;
+    return object(run) && run.v === 1 && Number.isSafeInteger(run.number)
+      ? /[\\/][1-9][0-9]*-cancelled-[a-f0-9]+$/.test(runDir) ? { ...run, runDir } : run : null;
   } catch { return null; }
 }
 
@@ -109,14 +110,36 @@ export function writeRun(run, ports = {}) {
   mkdirSync(run.runDir, { recursive: true });
   const temporary = join(run.runDir, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
   writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600 });
+  const file = openSync(temporary, 'r');
+  try { fsyncSync(file); } finally { closeSync(file); }
   renameSync(temporary, join(run.runDir, 'status.json'));
+  const directory = openSync(run.runDir, 'r');
+  try { fsyncSync(directory); } finally { closeSync(directory); }
   try { updateIndex(run, ports); } catch { /* The index only helps selection outside a repository. */ }
   return run;
 }
 
+export function archiveRun(from, to, ports = {}) {
+  renameSync(from, to);
+  const run = readRun(to);
+  if (run) {
+    // A move changes storage location, never journal history or the run identity.
+    const temporary = join(to, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
+    writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600 });
+    const file = openSync(temporary, 'r');
+    try { fsyncSync(file); } finally { closeSync(file); }
+    renameSync(temporary, join(to, 'status.json'));
+    for (const path of [to, join(to, '..')]) {
+      const directory = openSync(path, 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
+    try { updateIndex(run, ports); } catch { /* Selection can also scan the common repository. */ }
+  }
+}
+
 export async function runForWorktree(cwd, ports = {}) {
   const context = await gitContext(cwd, ports);
-  return context ? runsIn(context.commonDir).find(run => run.root === context.toplevel) ?? null : null;
+  return context ? runsIn(context.commonDir, { cancelled: true }).find(run => run.root === context.toplevel) ?? null : null;
 }
 
 export async function listRuns({ cwd, cancelled = false }, ports = {}) {
@@ -147,7 +170,12 @@ export async function resolveRun(ref, { cwd }, ports = {}) {
     return { error: active.length ? `More than one run is active. Name the issue:\n${choices(active)}` : 'No active pdd run here. Start one with: pdd workflow run NAME ISSUE' };
   }
   const wanted = parseRef(ref);
-  if (!wanted) return { error: `"${String(ref).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.` };
+  if (!wanted) {
+    const candidates = [...(context ? runsIn(context.commonDir, { cancelled: true }) : []), ...allRuns({ cancelled: true }, ports)];
+    const matches = [...new Map(candidates.filter(run => run.runId === ref).map(run => [run.runDir, run])).values()];
+    if (matches.length === 1) return { run: matches[0] };
+    return { error: matches.length ? `Run ID ${ref} is ambiguous; inspect the retained run records.` : `No pdd run found for run ID ${String(ref).slice(0, 160)}.` };
+  }
   if (context) {
     const run = readRun(runDirFor(context.commonDir, wanted.number));
     if (run && (!wanted.repo || sameRepo(run.repo, wanted.repo))) return { run };
