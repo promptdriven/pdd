@@ -30,7 +30,7 @@ A native ENOENT counts as missing only with the process port's explicit executab
 ```json
 {
   "status": "draft",
-  "prose_sha256": "d5bb173f1234f16ff9559afdc031335e9ad48bfd4e88e4aa8b3157a777279f6e",
+  "prose_sha256": "40651e66b5e07811a2ee9e67c46069cb26ea588fe51b4cede32ee4a868eb4c78",
   "entries": [{
     "operation": "chooseWorkflowAgent",
     "input_schema": {
