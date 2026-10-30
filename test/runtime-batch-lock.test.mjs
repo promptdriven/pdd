@@ -45,6 +45,7 @@ test('2675: two same-process retries send one check and keep its receipt and acc
   const gate = r.holdCheck(), first = r.run({ '--retry': r.batch }); await gate.entered.promise;
   const second = await r.run({ '--retry': r.batch }); gate.resume.resolve();
   const results = [await first, second];
+  assert.equal(results[0].clock.uuids, 1); assert.equal(second.clock.uuids, 0, 'live competitor allocates no request ID');
   assert.equal(checks(r.fake).length - before, 1, 'only one held check may be sent');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
@@ -127,8 +128,8 @@ for (const kind of ['live', 'dead', 'foreign', 'malformed']) test(`2675: native 
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function', 'native lock boundary must exist');
   const folder = temp(t), lock = join(folder, 'batch.lock'), guard = join(folder, 'batch.lock.claim');
   let deadPid;
-  if (kind === 'dead') { const child = spawn(process.execPath, ['-e', '']); deadPid = child.pid; await new Promise(done => child.on('close', done)); }
-  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : JSON.stringify({ pid: kind === 'dead' ? deadPid : process.pid, host: kind === 'foreign' ? 'another-host' : hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
+  if (kind === 'dead' || kind === 'foreign') { const child = spawn(process.execPath, ['-e', '']); deadPid = child.pid; await new Promise(done => child.on('close', done)); }
+  writeFileSync(kind === 'guard' ? guard : lock, kind === 'malformed' ? 'not a pid' : JSON.stringify({ pid: kind === 'dead' || kind === 'foreign' ? deadPid : process.pid, host: kind === 'foreign' ? 'another-host' : hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
   if (kind === 'dead') {
     const warnings = []; const release = await client.acquireRuntimeBatchLock(folder, { onWarning: line => warnings.push(line) });
     assert.equal(warnings.length, 1); assert.match(warnings[0], /recover|dead|abandon/i);
