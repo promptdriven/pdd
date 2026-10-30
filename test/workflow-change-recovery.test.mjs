@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync, mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
@@ -15,26 +15,18 @@ const setup = async t => { const f=await fixture(t,{agent:'codex'}); assert.equa
 const call = async (f,text,ports=f.ports) => { return changeRun({ref:'17',text,cwd:f.source},ports); };
 const journal = f => { try { const value=JSON.parse(readFileSync(f.record().runDir+'/delivery-journal.json','utf8')); return value.requests ?? value; } catch(error) { if(error.code !== 'ENOENT') throw error; return f.record().deliveryRequests ?? []; } };
 
-for (const signal of ['SIGINT','SIGTERM','SIGHUP','SIGKILL']) {
- test(`A ${signal}: reclaim dead owned sender dispatch lock`, async t => {
-  const f=await setup(t);
-  const child=fork(fileURLToPath(new URL('./helpers/workflow-owned-wait-child.mjs',import.meta.url)),[f.source,f.state,String(f.clock)],{env:{...process.env,W,HOME:f.ports.env.HOME},stdio:['ignore','pipe','pipe','ipc']});
-  let childErr=''; child.stderr.on('data',b=>childErr+=b);
-  t.after(()=>{if(child.exitCode===null && child.signalCode===null)child.kill('SIGKILL');});
-  const [message]=await once(child,'message'); assert.equal(message.waiting,true,childErr);
-  const lock=readdirSync(f.record().runDir).find(x=>/^\.delivery-[a-f0-9]+\.lock$/.test(x));
-  assert.ok(lock); const lockPath=f.record().runDir+'/'+lock;
-  const ownerText=lstatSync(lockPath).isDirectory()?readdirSync(lockPath).map(name=>readFileSync(lockPath+'/'+name,'utf8')).join(''):readFileSync(lockPath,'utf8');
-  assert.ok(ownerText.includes(String(child.pid)), 'claim belongs to the private child');
-  // A living owner must remain protected; only the child started above is killed.
-  const live=await call(f,'Second'); assert.notEqual(live.exitCode,0); assert.match(live.message,/in progress/);
-  const closed=once(child,'close'); assert.equal(child.kill(signal),true); const [code,gotSignal]=await closed;
-  assert.ok(gotSignal === signal || code === 128 + ({SIGINT:2,SIGTERM:15,SIGHUP:1}[signal] ?? 9)); assert.throws(()=>process.kill(child.pid,0),e=>e.code==='ESRCH');
-  f.tick(120_000);
-  const later=await call(f,'Second'), again=await call(f,'Second');
-  assert.equal(later.exitCode,0,'Dead sender must not permanently block later requests');
- });
-}
+for (const signal of ['SIGINT','SIGTERM','SIGHUP','SIGKILL']) test(`A ${signal}: interrupted pending readiness remains retryable without a long claim`, {timeout:10000}, async t => {
+ const f=await setup(t);
+ const child=fork(fileURLToPath(new URL('./helpers/workflow-owned-wait-child.mjs',import.meta.url)),[f.source,f.state,String(f.clock)],{env:{...process.env,W,HOME:f.ports.env.HOME},stdio:['ignore','pipe','pipe','ipc']});
+ t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ const [message]=await once(child,'message'); assert.equal(message.waiting,true);
+ assert.equal(readdirSync(f.record().runDir).filter(x=>/^\.delivery-[a-f0-9]+\.lock$/.test(x)).length,0,'readiness must not hold a dispatch lock');
+ const id=journal(f)[0].id; assert.equal(journal(f)[0].state,'pending'); assert.ok(!journal(f)[0].inFlight);
+ const closed=once(child,'close');child.kill(signal);await closed;
+ const later=await call(f,'First');assert.equal(later.exitCode,0,later.message);
+ assert.equal(journal(f).length,1);assert.equal(journal(f)[0].id,id);assert.equal(journal(f)[0].state,'delivered');
+ assert.equal(f.herdr.paneOf(f.record().chats.at(-1)).agent.prompts.length,1);
+});
 
 test('B real status writer: stale pending snapshot must not revert delivered journal',async t=>{
  const f=await setup(t), healthy=f.ports.herdr, sent=[];
@@ -65,7 +57,6 @@ test('B real status writer: stale pending snapshot must not revert delivered jou
 test('C uncertain request must not block a different new request',async t=>{
  const f=await setup(t),healthy=f.ports.herdr;let fails=1;const sent=[];
  f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='prompt'){if(fails-->0)throw Object.assign(Error('lost acknowledgement'),{code:'herdr_failed'});sent.push(args[3]);}return healthy(args);};
- const original=f.record(); original.question={text:'Which example?',area:original.areas[original.area].name,at:f.clock}; writeRun(original,f.ports);
  const first=await call(f,'First'), second=await call(f,'Totally different');
  assert.notEqual(first.exitCode,0);assert.equal(journal(f)[0]?.state,'uncertain');
  assert.equal(second.exitCode,0,'Uncertain First is preserved but different request must go through');
@@ -74,59 +65,92 @@ test('C uncertain request must not block a different new request',async t=>{
  assert.match(second.message,/uncertain.*check|check.*uncertain/is,'New delivery still warns about uncertain request');
 });
 
-test('E overlapping identical request: following Retry advice must not duplicate it',async t=>{
- const f=await setup(t),healthy=f.ports.herdr;let ready=false,release,entered;const sent=[];
- const waiting=new Promise(resolve=>entered=resolve);
- f.ports.sleep=async ms=>{entered();await new Promise(resolve=>release=resolve);f.tick(ms);};
- f.ports.herdr=async args=>{if(args[0]==='agent'&&!ready)return missing();if(args[0]==='agent'&&args[1]==='prompt')sent.push(args[3]);return healthy(args);};
- const first=call(f,'Same request');assert.equal(await Promise.race([waiting.then(()=>'waiting'),first.then(()=>'returned before readiness')]),'waiting','The first call waits for readiness before an overlap can join');
- const overlap=await call(f,'Same request');
- const advisedRetry = /Retry: pdd workflow changes/.test(overlap.message);
- ready=true;release();assert.equal((await first).exitCode,0);
- const retry=advisedRetry ? await call(f,'Same request') : null;
- assert.equal(sent.length,1,'Retry advice after an overlapping identical request must not lead to duplicate submission');
- assert.equal((await call(f,'Same request')).exitCode,0);
- assert.equal(sent.length,2,'Ordinary identical request after receipt consumption is intentional new work');
+const rendezvous = () => { let release, entered, firstEntered, count=0; const first=new Promise(r=>firstEntered=r),ready=new Promise(r=>entered=r),wait=new Promise(r=>release=r); return {first,ready,release,sleep:async()=>{if(++count===1)firstEntered();if(count===2)entered();await wait;}}; };
+for(const kind of ['change','answer']) test(`E2 ${kind}: failed overlaps retry once then intentional identical text sends again`, {timeout:10000}, async t=>{
+ const f=await setup(t), healthy=f.ports.herdr, waits=rendezvous();let ready=false;const sent=[];
+ const question=text=>{const r=f.record();r.question={text,area:r.areas[r.area].name,at:f.clock};writeRun(r,f.ports);};
+ if(kind==='answer')question('Continue?');const text=kind==='answer'?'yes':'Same request';
+ f.ports.sleep=async()=>{await waits.sleep();f.tick(40000);};
+ f.ports.herdr=async args=>{if(args[0]==='agent'&&!ready)return missing();if(args[1]==='prompt')sent.push(args[3]);return healthy(args);};
+ const first=call(f,text);await Promise.race([waits.first,first]);const second=call(f,text);await Promise.race([waits.ready,second]);const id=journal(f)[0]?.id;
+ waits.release();const failed=await Promise.all([first,second]);assert.ok(failed.every(r=>r.exitCode!==0));
+ assert.equal(journal(f).length,1);assert.equal(journal(f)[0].id,id);
+ ready=true;f.ports.sleep=async ms=>f.tick(ms);assert.equal((await call(f,text)).exitCode,0);
+ if(kind==='answer')question('Continue again?');assert.equal((await call(f,text)).exitCode,0);
+ assert.equal(sent.length,2,'successful retry must not consume later intentional identical work');
+ assert.equal(journal(f).filter(r=>r.state==='delivered').length,2);assert.equal(new Set(journal(f).map(r=>r.id)).size,2);
+ assert.ok(journal(f).every(r=>r.kind===kind));assert.equal(f.record().question??null,null);
 });
 
-
-test('E acknowledgement between dispatch contention and receipt save reports delivery', async t => {
- const f=await setup(t), fs=await import('node:fs'), run=f.record(), chat=run.chats.at(-1);
- const journalPath=join(run.runDir,'delivery-journal.json');
- const request={id:'accepted-overlap',text:'Same request',kind:'change',state:'pending',area:chat.area,paneId:chat.paneId,at:f.clock,question:null,gate:null};
- writeFileSync(journalPath,JSON.stringify({requests:[request]}));
- const lock=join(run.runDir,`.delivery-${createHash('sha256').update(`${chat.area}\0${chat.paneId}`).digest('hex')}.lock`);
- mkdirSync(lock); const other=join(lock,'winner-token.json');
- writeFileSync(other,JSON.stringify({pid:777777,birth:'winner-birth',token:'winner-token'}));
- f.ports.processIdentity=pid=>({alive:true,birth:pid===777777?'winner-birth':'test-self-birth'});
- let acknowledged=false, submits=0;const healthy=f.ports.herdr;
- f.ports.deliveryFiles={...fs,readFileSync:(path,...args)=>{
-   if(path===other&&!acknowledged){acknowledged=true;writeFileSync(journalPath,JSON.stringify({requests:[{...request,state:'delivered'}]}));}
-   return fs.readFileSync(path,...args);
- }};
- f.ports.herdr=async args=>{if(args[1]==='prompt')submits++;return healthy(args);};
- const result=await call(f,'Same request');
- assert.match(result.message,/already.*delivered/is,'A joined caller whose winner just acknowledged gets delivery, never another retry promise');
- assert.equal(result.exitCode,0);assert.equal(submits,0);assert.ok(!journal(f)[0].retryOwed);
+for(const kind of ['change','answer']) test(`E joined ${kind} preserves accepted identity and reports delivered`,{timeout:10000},async t=>{
+ const f=await setup(t),healthy=f.ports.herdr,waits=rendezvous();let ready=false,sends=0;
+ if(kind==='answer'){const r=f.record();r.question={text:'Which?',at:f.clock,area:r.areas[r.area].name};writeRun(r,f.ports);}
+ f.ports.sleep=async ms=>{await waits.sleep();f.tick(ms);};
+ f.ports.herdr=async args=>{if(args[0]==='agent'&&!ready)return missing();if(args[1]==='prompt')sends++;return healthy(args);};
+ const first=call(f,'Same');await Promise.race([waits.first,first]);const second=call(f,'Same',{...f.ports,herdr:async args=>{if(ready&&args[0]==='agent'&&args[1]==='get')await first;return f.ports.herdr(args);}});await Promise.race([waits.ready,second]);ready=true;waits.release();
+ const results=await Promise.all([first,second]);assert.equal(sends,1);assert.equal(journal(f).length,1);
+ const joined=results.find(r=>/already.*delivered/is.test(r.message));assert.ok(joined,JSON.stringify(results));assert.equal(joined.exitCode,0);assert.doesNotMatch(joined.message,/kept|Retry:/i);
+ assert.equal(f.record().changes.length,1);
 });
 
-test('2677 unbound retries retain one identity and cannot renew an expired area window', async t => {
- const f=await setup(t), run=f.record(), chat=run.chats.at(-1), healthy=f.ports.herdr;
- run.chats=[]; writeRun(run,f.ports); f.ports.sleep=async ms=>f.tick(ms);
- const first=await call(f,'Area request');
- assert.match(first.message,/kept/i,'An absent chat record must retain the area request');
- const id=journal(f)[0]?.id; assert.ok(id);
- const appeared=f.record();appeared.chats.push({...chat,startedAt:f.clock});writeRun(appeared,f.ports);
- let sends=0;f.ports.herdr=async args=>{if(args[1]==='prompt')sends++;return healthy(args);};
- const retry=await call(f,'Area request');
- assert.notEqual(retry.exitCode,0);assert.equal(sends,0,'A new chat record cannot restart an expired intent window');
- assert.equal(journal(f).length,1);assert.equal(journal(f)[0].id,id);assert.equal(journal(f)[0].paneId,null);
- assert.equal((await call(f,'Different new request')).exitCode,0);assert.equal(sends,1);
- const g=await setup(t), early=g.record(), original=early.chats.at(-1);early.chats=[];writeRun(early,g.ports);
- g.ports.sleep=async ms=>{g.tick(ms);throw Object.assign(Error('interrupted waiting for record'),{code:'test_interruption'});};
- await assert.rejects(call(g,'Early retry'),error=>error.code==='test_interruption');
- const originalId=journal(g)[0].id, live=g.record();live.chats.push(original);writeRun(live,g.ports);
- assert.equal((await call(g,'Early retry')).exitCode,0);
- assert.equal(journal(g).length,1);assert.equal(journal(g)[0].id,originalId);
- assert.equal(g.herdr.paneOf(original).agent.prompts.length,1,'Retry before expiry binds and sends the original intent once');
+test('E active in-flight joined caller sees progress without kept or retry promises',async t=>{
+ const f=await setup(t),healthy=f.ports.herdr;let release,entered,duplicate,sends=0;const waiting=new Promise(r=>entered=r),duplicated=new Promise(r=>duplicate=r),hold=new Promise(r=>release=r);
+ f.ports.herdr=async args=>{if(args[1]==='prompt'){sends++;entered();if(sends>1)duplicate();await hold;}return healthy(args);};
+ const first=call(f,'Same');await waiting;const secondTask=call(f,'Same');await Promise.race([secondTask,duplicated]);release();const second=await secondTask;assert.notEqual(second.exitCode,0);assert.match(second.message,/in progress/i);assert.doesNotMatch(second.message,/kept|Retry:/i);
+ release();assert.equal((await first).exitCode,0);assert.equal(sends,1);assert.equal(journal(f).length,1);
+});
+
+test('F no chat is immediate without custody; fresh startup after open can really deliver retry',async t=>{
+ const f=await setup(t),run=f.record(),chat=run.chats.at(-1),healthy=f.ports.herdr;run.chats=[];writeRun(run,f.ports);
+ let waits=0,sends=0;f.ports.sleep=async ms=>{waits++;f.tick(ms);};
+ const first=await call(f,'Area request');assert.notEqual(first.exitCode,0);assert.match(first.message,/area has no chat.*workflow open/is);assert.doesNotMatch(first.message,/kept|still starting/i);assert.equal(waits,0);assert.equal(journal(f).length,0);
+ const opened=f.record();opened.chats.push({...chat,startedAt:f.clock});writeRun(opened,f.ports);const began=f.clock;
+ f.ports.herdr=async args=>{if(args[0]==='agent'&&args[1]==='get'&&f.clock-began<500)return missing();if(args[1]==='prompt')sends++;return healthy(args);};
+ const retry=await call(f,'Area request');assert.equal(retry.exitCode,0,'an explicit opened chat must make retry advice work');assert.equal(sends,1);assert.ok(f.clock-began>=500);assert.equal(journal(f).length,1);assert.equal(journal(f)[0].paneId,chat.paneId);
+});
+
+test('H brief live journal contention after transport preserves acknowledgement and round',async t=>{
+ const f=await setup(t),healthy=f.ports.herdr,dir=join(f.record().runDir,'.delivery-journal.lock'),leaf=join(dir,'owner-other.json');let timer,sends=0;t.after(()=>clearTimeout(timer));
+ f.ports.herdr=async args=>{const result=await healthy(args);if(args[1]==='prompt'){sends++;mkdirSync(dir,{recursive:true});writeFileSync(leaf,JSON.stringify({pid:process.pid,hostname:hostname(),token:'other'}));timer=setTimeout(()=>unlinkSync(leaf),10);}return result;};
+ const first=await call(f,'First');assert.equal(first.exitCode,0,'a brief live claim must release while asynchronous ACK save retries');
+ f.ports.herdr=healthy;assert.equal((await call(f,'Second')).exitCode,0);assert.equal(sends,1);assert.deepEqual(journal(f).map(r=>r.state),['delivered','delivered']);assert.deepEqual(f.record().changes.map(r=>r.text),['First','Second']);
+});
+
+for(const owner of ['live','foreign','unverifiable','malformed','dead','stray'])test(`G short journal ${owner} owner is handled conservatively`,async t=>{
+ const f=await setup(t),dir=join(f.record().runDir,'.delivery-journal.lock');mkdirSync(dir,{recursive:true});if(owner==='stray')writeFileSync(join(dir,'notes.json'),'{unrelated-json');const leaf=join(dir,owner==='stray'?'notes.txt':'owner-other.json');
+ writeFileSync(leaf,owner==='stray'?'unrelated':owner==='malformed'?'{broken':JSON.stringify({pid:999999,hostname:owner==='foreign'?'foreign-host':hostname(),token:'other'}));
+ let checks=0;f.ports.processIdentity=()=>{checks++;return {alive:owner==='dead'?false:owner==='unverifiable'?null:true};};
+ const result=await call(f,'Request');
+ if(['dead','stray'].includes(owner)){assert.equal(result.exitCode,0,result.message);assert.equal(journal(f).length,1);assert.equal(journal(f)[0].state,'delivered');assert.equal(existsSync(leaf),owner==='stray');if(owner==='stray')assert.equal(readFileSync(join(dir,'notes.json'),'utf8'),'{unrelated-json');}
+ else{assert.notEqual(result.exitCode,0);assert.match(result.message,/wait.*retry/is);assert.ok(existsSync(leaf));if(owner==='foreign')assert.equal(checks,0,'local PID checks cannot establish a foreign owner death');}
+});
+
+test('approval hint precedes journal contention and legacy snapshots never import requests',async t=>{
+ const f=await setup(t),r=f.record(),dir=join(r.runDir,'.delivery-journal.lock');r.gate={kind:'approve',area:r.areas[r.area].name,at:f.clock};writeRun(r,f.ports);mkdirSync(dir,{recursive:true});const leaf=join(dir,'owner-other.json');writeFileSync(leaf,JSON.stringify({pid:process.pid,hostname:hostname(),token:'other'}));
+ const hint=await call(f,'I approve');assert.equal(hint.exitCode,2);assert.match(hint.message,/workflow approve/);assert.equal(journal(f).length,0);unlinkSync(leaf);
+ const latest=f.record();latest.gate=null;latest.deliveryRequests=[{id:'old',text:'Never import',kind:'change',state:'pending',area:r.areas[r.area].name,paneId:r.chats.at(-1).paneId,at:f.clock}];writeRun(latest,f.ports);
+ assert.equal((await call(f,'New request')).exitCode,0);assert.deepEqual(journal(f).map(e=>e.text),['New request']);
+});
+
+for(const state of ['dead','live','foreign','unverifiable','missing'])test(`in-flight ${state} ownership never permits automatic resend`,async t=>{
+ const f=await setup(t),r=f.record(),chat=r.chats.at(-1),healthy=f.ports.herdr;let sends=0;
+ const entry={id:'owned-intent',text:'Possibly sent',kind:'change',state:'pending',inFlight:true,area:chat.area,paneId:chat.paneId,at:f.clock,...(state==='missing'?{}:{owner:{pid:654321,hostname:state==='foreign'?'foreign-host':hostname(),token:'sender'}})};
+ writeFileSync(join(r.runDir,'delivery-journal.json'),JSON.stringify({requests:[entry]}));
+ f.ports.processIdentity=()=>({alive:state==='dead'?false:state==='unverifiable'?null:true});
+ f.ports.herdr=async args=>{if(args[1]==='prompt')sends++;return healthy(args);};
+ const repeated=await call(f,'Possibly sent');assert.notEqual(repeated.exitCode,0);assert.equal(sends,0);
+ if(state==='dead'){
+  assert.match(repeated.message,/may already be in the chat/i);assert.equal((await call(f,'Later new request')).exitCode,0);assert.equal(sends,1);assert.equal(journal(f)[0].state,'uncertain');
+ }else{
+  assert.match(repeated.message,/in progress/i);assert.doesNotMatch(repeated.message,/kept|Retry:/i);assert.notEqual((await call(f,'Later new request')).exitCode,0);assert.equal(sends,0);assert.equal(journal(f)[0].inFlight,true);
+ }
+});
+
+test('joined caller observes an acknowledgement saved between acceptance and its next journal read',async t=>{
+ const f=await setup(t),fs=await import('node:fs'),r=f.record(),chat=r.chats.at(-1),path=join(r.runDir,'delivery-journal.json');let sends=0,acknowledged=false;
+ const entry={id:'joined-id',text:'Same request',kind:'change',state:'pending',inFlight:true,owner:{pid:654321,hostname:hostname(),token:'other-sender'},area:chat.area,paneId:chat.paneId,at:f.clock};
+ writeFileSync(path,JSON.stringify({requests:[entry]}));f.ports.processIdentity=()=>({alive:true});
+ f.ports.deliveryFiles={...fs,renameSync:(from,to)=>{fs.renameSync(from,to);if(to===path&&!acknowledged){acknowledged=true;writeFileSync(path,JSON.stringify({requests:[{...entry,state:'delivered',inFlight:false}]}));}}};
+ const healthy=f.ports.herdr;f.ports.herdr=async args=>{if(args[1]==='prompt')sends++;return healthy(args);};
+ const result=await call(f,'Same request');assert.equal(result.exitCode,0);assert.match(result.message,/already.*delivered/is);assert.doesNotMatch(result.message,/kept|Retry:/i);assert.equal(sends,0);assert.equal(journal(f).length,1);assert.equal(f.record().changes.length,0);
 });
