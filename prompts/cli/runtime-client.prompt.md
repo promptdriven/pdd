@@ -486,3 +486,38 @@ Door errors carry `unknownOutcome: true` whenever dispatch may have occurred and
 For a confirmed door run, obtain exact before/after worlds from the owner state endpoint when its action list contains the receipt report.action_id. Match that immutable action ID exactly; never use another action or the top-level current world as this run's observation. These snapshots were captured under the server's action lock. A failed observation read cannot erase the confirmed program result or trigger a new dispatch; leave unavailable snapshots missing. Preserve existing receipt snapshots when no matched owner observation is available. This uses B1 state reads, not a new server endpoint or model call.
 
 If owner metadata refuses a saved Try with session-stopped, read that same owner run record. A confirmed paused session is reopened through runTry without --new or a budget change, retaining its session ID, data and allowance; then read owner metadata again. Do not treat another refusal or an uncertain state as confirmation of pause. This makes an explicit tool request resume the same idle-paused Try without resetting it.
+
+
+## Read saved Story evidence locally
+
+Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+returning `{stories, warnings}`. Each Story row is
+`{story, pass, current, result, at}`: repository-relative Story path, Boolean
+pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
+Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+configuration, signs in, calls a service, creates a directory, writes saved state
+or dispatches work. Use the injected `env` for the existing state-directory
+selection. The optional raw ports are `readFile(path)` returning UTF-8 text,
+`readDir(path)` returning entry names, `realpath(path)` returning a canonical
+path, and `captureSource(root,{tests,appMap})` returning the existing capture.
+Defaults use their native local owners; they supply file observations and
+captured hashes, never Story verdicts.
+
+Only check batches belonging to root supply evidence; lint and Try results do
+not. Preserve the recorded Story/test identity. A saved pass label alone is
+insufficient: use the latest attempt's matching-ID check receipt and existing
+receipt projection rules. Unknown, failed, refused, missing or unverifiable
+receipts do not pass, even when an older attempt passed. A Story with several
+selected cases passes only when all its selected cases pass; a partial criterion
+result cannot establish whole-Story success. Aggregate before exposing one row
+per Story per batch, using its newest result time, otherwise batch creation time.
+
+Currentness belongs here, not to the product reader. Recapture the batch's full
+original selected test set using source capture with no app map, and compare
+that capture hash with the saved batch source hash. Never compare a one-test
+hash with a multi-test batch hash. Missing source identity, changed inputs,
+failed capture or explicit null comparisonRoot make the evidence unverified,
+not current. root still identifies the saved records when comparisonRoot names
+a merged run's current base. Missing state is empty. Malformed or unreadable
+records produce finite warnings and no invented pass, while unrelated readable
+batches remain usable. Do not recover by a network read or change saved caches.

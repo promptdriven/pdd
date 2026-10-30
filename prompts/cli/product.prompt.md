@@ -43,6 +43,26 @@ The product module chooses which planned issue and PRs belong to a run; the
 shared evidence owner decides whether a saved local result matches its files.
 All three commands use the same trusted issue selection below.
 
+Combine workflow evidence with `savedStoryEvidence` from the runtime client,
+including standalone checks made before any workflow step completes. Saved
+checks are progress only: they never complete a run, approve a prompt or satisfy
+Needs. Read saved checks rooted in product cwd for planned Stories even when no
+workflow record exists. A verified local workflow additionally authorizes its
+saved run.root, with the same comparison root as workflow evidence, including
+the merged-run base rules below. For a merged run, compare all local saved
+evidence considered for its Stories against that current base, including
+evidence located through cwd; cwd is not a freshness bypass. Attach saved rows
+only to the planned run whose Story IDs they exactly match under the token
+rule below. A different unmerged run must not reintroduce a merged Story
+as current through its own cwd evidence.
+An unverified issue or local link never
+authorizes another root; cwd-only saved evidence remains eligible without
+changing that run's unverified state. Missing evidence is notRun; a failed
+local cache read adds a finite warning and must not invent a pass. Deduplicate
+Story results across both sources using the current-before-stale, newest-row
+precedence below: the newest current failure or unknown result suppresses an
+older current pass across both local sources. Preserve remote-only PR attribution.
+
 <details>
 <summary>Find a trusted planned issue without loading the repository history</summary>
 
@@ -57,7 +77,9 @@ marks that run `unverified`, with the issue number, a reason and the action
 If another valid trusted link is selected for that run, diagnostics may still
 identify discarded bad hints but omit the now-misleading repair action. Keep
 the reason and repair action for runs that remain unverified.
-Do not read its PRs, count evidence, offer it ready, or advance its dependents.
+Do not read its PRs or use evidence authorized by that hint, offer it ready,
+or advance its dependents. Independent saved checks rooted in product cwd may
+still supply Story progress under the local-evidence rule above.
 Other planned runs remain usable, including explicit starts for other runs.
 
 A confirmed 404, foreign repository, wrong/missing marker, or author known to be
@@ -264,6 +286,7 @@ an added hard gate on an explicit start; show unmet needs as advice.
 Defaults use public local files, the existing workflow records/evidence, normal
 gh login and the public feature runner. Existing injected callbacks remain:
 `readFile(path)`, `listRuns({cwd})`, `storyEvidence(run, options?)`,
+`savedStoryEvidence({root, comparisonRoot?})`,
 `execFile(file,args,{cwd})`, `resolveRepository({cwd})`,
 `planOnBase({cwd,baseBranch})`, `createIssue({repository,title,body})` and
 `startRun`. `createIssue` returns `{url}`; its default still delegates to
@@ -341,7 +364,10 @@ caches only for that invocation and reports a finite cleanup failure.
 
 </details>
 
-Runtime bindings: files.read returns content; runs.list and runs.evidence
+Runtime bindings: savedChecks.evidence serializes the runtime client callback
+reply as json; root and optional comparison_root bind its corresponding inputs.
+It supplies named evidence, never product totals or run completion.
+files.read returns content; runs.list and runs.evidence
 serialize the existing callback reply, with optional comparison_root passed to
 storyEvidence. github.repository binds resolveRepository; github.issuePage,
 github.timelinePage and github.pullRequest serialize their raw callbacks;
@@ -367,13 +393,14 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 - [Product file formats](../../skills/pdd-product/references/files.md): required authoring, generation and verification context for tables, size paths and contracts.
 - [Workflow runs](workflow-runs.prompt.md): required generation/runtime context for repository-scoped `listRuns`, which reuses runsIn.
 - [Workflow runner](workflow-runner.prompt.md): required generation/runtime context for startup, shared `storyEvidence`, `storyCount`, `matchesSource` and Runtime-line parsing. Export the parser for remote PR evidence rather than duplicate it.
+- [Runtime client](runtime-client.prompt.md): required generation/runtime context for read-only `savedStoryEvidence`, its source matching and saved result identity.
 - [GitHub helpers](workflow-github.prompt.md): required generation/runtime context for repository identity and gh invocation.
 
 <details><summary>Runtime interface</summary>
 
 ```json
 {
-  "status": "draft", "prose_sha256": "d43d00fbd9d3de7928941c038adb40f35f72e199ece1311e777e2f06901c5cb8",
+  "status": "draft", "prose_sha256": "f3157242f70a6164ca7d7342206dfae98e657cd6c6d6e02481b73ffb33818c16",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
@@ -388,7 +415,8 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
     {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}},{"name":"openBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"root":{"oneOf":[{"type":"string"},{"type":"null"}]},"handle":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root","handle"],"additionalProperties":false}},{"name":"closeBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
     {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
     {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}},{"name":"lock","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false}},{"name":"unlock","access":"write","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
-    {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]}
+    {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]},
+    {"name":"savedChecks","kind":"port","access":"read","operations":[{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}
   ],
   "limits": {"max_steps":20,"max_model_calls":12}, "conventions": []
 }
