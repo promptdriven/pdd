@@ -16,6 +16,10 @@ I can leave my command waiting for runtime capacity within its existing wait.
 
 The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
+After admission and before submission, interruption says "Stopped before sending." and sends no new request; uncertain earlier dispatches keep their leases. A capacity observer with a timeout beyond the native timer range retains its own deadline and interruption while the shared read remains usable by other callers; timer overflow, rapid polling and a false unclear-capacity warning are forbidden. Check causal order, no resend and termination with controlled boundaries and generous watchdogs, rather than small elapsed-time limits.
+
+Unclear capacity responses and read failures reuse an explicitly unclear outcome for about 10 seconds, coalesced and isolated by authenticated owner and exact runtime origin. Each command warns once and follows ordinary admission; expiry permits a fresh read to announce maintenance. Cache reuse never establishes clear capacity or authorizes replay of an uncertain job.
+
 ## Native cases for the code step
 
 [Requirement-derived native cases](../test/runtime-admission/runtime-capacity-wait.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
