@@ -27,3 +27,18 @@ A pr area may explicitly set replay_evidence to `pdd.replay-evidence.v1`. Preser
 areas and saved runs. Reject an unsupported version or a policy on a non-pr area. The bundled feature/bug
 code areas set it; small-change and custom areas have no implicit policy. Never retrofit a policy onto a
 saved area from the current package. [Replay evidence](workflow-replay.prompt.md) owns the manifest contract.
+
+## Per-area agent limits
+
+An area may declare `agent_limits: {codex_threads: N}`. When present,
+`agent_limits` is an object with an optional `codex_threads` key;
+a supplied value must be an integer in inclusive range 4..8. Reject null, arrays,
+nonobjects and invalid codex_threads values with the existing named-file
+validation error. An empty object is valid and supplies no budget. Preserve the
+field, including unrelated metadata keys, through lookup and saved-area snapshots.
+Unrelated keys are tolerated without interpretation; validate only codex_threads
+when present. Absence supplies no implicit budget.
+
+Bundled bug/feature story and prompt-pr areas and small-change plan declare 5;
+bug/feature code and small-change build declare 6. Custom areas opt in explicitly.
+[Thread selection](workflow-agent-limits.prompt.md) owns personal-setting precedence.
