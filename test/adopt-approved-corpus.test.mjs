@@ -17,7 +17,7 @@ function fixture(t) {
   const vector={schema_version:'prompt-runtime.program-scenario.v1',story_path:'stories/use.md',context:[{prompt_path:'prompts/two.prompt.md',paths:['context.txt']}],steps:[{step_id:'one',entry_path:'prompts/one.prompt.md',operation:'one',checks:[{criterion_id:'AC1',target:'result',path:'/ok',op:'equals',value:true}]},{step_id:'two',entry_path:'prompts/two.prompt.md',operation:'two',checks:[{criterion_id:'AC1',target:'calls',path:'/save',op:'equals',value:0}]}]};
   put('arbitrary/é corpus.json',JSON.stringify(vector)+'\n');put('ordinary.json','{}\n');put('empty.txt','');
   git('add','.');git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Approved synthetic corpus');
-  const declaration={schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit:git('rev-parse','HEAD'),prompts:['prompts/one.prompt.md'],approval:{kind:'external-human-assertion',reference:'review:42',asserted_by:'Synthetic reviewer'}};
+  const declaration={schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit:git('rev-parse','HEAD'),prompts:['prompts/one.prompt.md'],scenarios:['arbitrary/é corpus.json'],approval:{kind:'external-human-assertion',reference:'review:42',asserted_by:'Synthetic reviewer'}};
   const file=join(base,'declaration.json');const save=()=>writeFileSync(file,JSON.stringify(declaration));save();
   return {root,base,file,declaration,save,put,git,vector,adopt:()=>adoptReplayCorpus(root,file)};
 }
@@ -30,7 +30,7 @@ test('2640 native: enumerate original Git blobs and complete closure; unrelated 
 for(const path of ['prompts/one.prompt.md','prompts/two.prompt.md','rules/deep.md','stories/use.md','context.txt','arbitrary/é corpus.json']) test(`2640 native: raw bytes cover ${path}`,async t=>{
   const f=fixture(t);f.put(path,readFileSync(join(f.root,path),'utf8')+'\n');const result=await f.adopt();assert.equal(result.outcome,'blocked');assert.equal(result.reason,'content-mismatch');
 });
-for(const mode of ['added','missing','malformed','untracked-malformed','empty','symlink','hardlink','cycle','missing-context','call-context']) test(`2640 native: fail closed ${mode}`,async t=>{
+for(const mode of ['missing','empty','symlink','hardlink','cycle','missing-context','call-context']) test(`2640 native: fail closed ${mode}`,async t=>{
   const f=fixture(t),path=join(f.root,'arbitrary/é corpus.json');
   if(mode==='added')f.put('outside/new.json',JSON.stringify(f.vector));
   if(mode==='missing')rmSync(path);
@@ -51,7 +51,7 @@ for(const mode of ['missing','json','version','repository','commit','assertion',
   else if(mode==='large')writeFileSync(f.file,' '.repeat(65537));
   else if(mode==='symlink'){const other=join(f.base,'other');writeFileSync(other,readFileSync(f.file));rmSync(f.file);symlinkSync(other,f.file);}
   else if(mode==='hardlink')linkSync(f.file,join(f.base,'other'));
-  else if(mode==='ancestor'){symlinkSync(f.base,join(f.base,'alias'));f.file=join(f.base,'alias','declaration.json');}
+  else if(mode==='ancestor'){symlinkSync(f.base,join(f.base,'alias'));f.file=join(f.base,'alias','declaration.json');assert.equal((await adoptReplayCorpus(f.root,f.file)).outcome,'adopted');return;}
   else {if(mode==='version')f.declaration.schema_version='wrong';if(mode==='repository')f.declaration.repository='foreign/repo';if(mode==='commit')f.declaration.commit='f'.repeat(40);if(mode==='assertion')f.declaration.approval.kind='agent-prose';if(mode==='blank')f.declaration.approval.asserted_by=' ';if(mode==='duplicate-prompts')f.declaration.prompts.push(f.declaration.prompts[0]);if(mode==='path')f.declaration.prompts=['../escape'];f.save();}
   assert.equal((await adoptReplayCorpus(f.root,f.file)).outcome,'blocked');
 });
@@ -65,7 +65,7 @@ test('2640 snapshot failures, malformed facts, duplicate inventories and throw n
 test('2640 native preserves long composite check identities and exact whitespace/NUL Git paths',async t=>{
   const f=fixture(t),path='arbitrary/ café \n.json';
   f.vector.steps[0].operation='o'.repeat(900);f.vector.steps[0].step_id='\u0001'.repeat(900);f.vector.steps[0].checks[0].criterion_id='\u0001'.repeat(900);
-  rmSync(join(f.root,'arbitrary/é corpus.json'));f.put(path,JSON.stringify(f.vector)+'\n');f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Approved long identities');f.declaration.commit=f.git('rev-parse','HEAD');f.save();
+  rmSync(join(f.root,'arbitrary/é corpus.json'));f.put(path,JSON.stringify(f.vector)+'\n');f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Approved long identities');f.declaration.commit=f.git('rev-parse','HEAD');f.declaration.scenarios=[path];f.save();
   const result=await f.adopt();assert.equal(result.outcome,'adopted',result.reason);assert.deepEqual(result.paths,[path]);
   const anchor=pinReplayVectors(f.root,result.paths);assert.equal(anchor.vectors[0].checks[0].operation,'o'.repeat(900));assert.equal(anchor.vectors[0].checks[0].criterion_id,'\u0001'.repeat(900));
 });
@@ -88,4 +88,54 @@ for(const mode of ['call','self','cycle'])test(`2640 native approved required ${
   f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Approved required context');f.declaration.commit=f.git('rev-parse','HEAD');f.save();
   const result=await f.adopt();assert.equal(result.outcome,mode==='call'?'adopted':'blocked',result.reason);
   if(mode==='call'){f.put(target,'Changed called context.\n');assert.equal((await f.adopt()).reason,'content-mismatch');}
+});
+
+test('2640 positive helper supports symlink TMPDIR and declaration parent, with strict native snapshot',async t=>{
+  const f=fixture(t),alias=join(f.base,'tmp-alias');symlinkSync(f.base,alias);
+  const moduleUrl=new URL('../src/workflow-replay.mjs',import.meta.url).href;
+  const script=`import assert from 'node:assert/strict';import {adoptReplayCorpus} from ${JSON.stringify(moduleUrl)};let snapshot,bytes;const result=await adoptReplayCorpus(process.argv[1],process.argv[2],{onSnapshot:s=>snapshot=s,onNativeDeclaration:b=>bytes=b});assert.equal(result.outcome,'adopted',JSON.stringify(result));assert.equal(snapshot.approved_commit_ancestor,true);assert.equal(snapshot.cause,'');assert.equal(Object.hasOwn(snapshot,'declaration_bytes'),false);assert.ok(Buffer.isBuffer(bytes));console.log(result.outcome);`;
+  assert.equal(execFileSync(process.execPath,['--input-type=module','-e',script,f.root,join(alias,'declaration.json')],{env:{...process.env,TMPDIR:alias},encoding:'utf8'}).trim(),'adopted');
+});
+test('2640 declared scope ignores malformed JSON and broken Harbor-like fixture',async t=>{
+  const f=fixture(t);f.put('ordinary.json','{');f.put('test/fixtures/harbor/tests/order.json',JSON.stringify({...f.vector,steps:[{...f.vector.steps[0],entry_path:'prompts/place_order.prompt.md'}]}));
+  assert.equal((await f.adopt()).outcome,'adopted');
+  f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Unrelated fixtures');f.declaration.commit=f.git('rev-parse','HEAD');f.save();
+  assert.equal((await f.adopt()).outcome,'adopted');
+});
+test('2640 equal bytes on unrelated commit fail real ancestry, explicit descendant base succeeds',async t=>{
+  const f=fixture(t),original=f.declaration.commit,tree=f.git('rev-parse','HEAD^{tree}');
+  const unrelated=execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.invalid','commit-tree',tree],{cwd:f.root,input:'Unrelated approval\n',encoding:'utf8'}).trim();
+  f.declaration.commit=unrelated;f.save();assert.equal((await f.adopt()).reason,'unrelated-commit');
+  f.declaration.commit=original;f.save();f.git('branch','topic');
+  assert.equal((await adoptReplayCorpus(f.root,f.file,{currentRef:'topic'})).outcome,'adopted');
+  assert.equal((await adoptReplayCorpus(f.root,f.file,{currentRef:unrelated})).reason,'unrelated-commit');
+});
+test('2640 selected sets must equal declaration even when both snapshots agree on subset or extra',async()=>{
+  const doc=JSON.parse(readFileSync(new URL('./runtime/adopt-approved-corpus.json',import.meta.url))),original=doc.initial_world.snapshots[0].snapshot;
+  for(const mode of ['subset','extra']) {
+    const snapshot=structuredClone(original);
+    if(mode==='subset')snapshot.declaration.scenarios.push('tests/missing.json');
+    else {const row={...snapshot.approved_vectors[0],path:'tests/extra.json'};snapshot.approved_vectors.push(row);snapshot.current_vectors.push(row);}
+    const result=await adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>({snapshot})});assert.equal(result.reason,'inventory-mismatch');
+  }
+});
+
+test('2640 immutable corpus reads batch Git blobs across many declared scenarios',async t=>{
+  const f=fixture(t);for(let i=0;i<30;i++){const path=`tests/vector-${i}.json`;f.put(path,JSON.stringify(f.vector));f.declaration.scenarios.push(path);}
+  f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Large declared corpus');f.declaration.commit=f.git('rev-parse','HEAD');f.save();
+  const bin=join(f.base,'bin');mkdirSync(bin);const log=join(f.base,'git.log');
+  const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
+  writeFileSync(join(bin,'git'),`#!/bin/sh\nprintf '%s\\n' "$*" >> "$PDD_GIT_LOG"\nexec '${git.replaceAll("'","'\\''")}' "$@"\n`,{mode:0o755});
+  const script=`import {adoptReplayCorpus} from ${JSON.stringify(new URL('../src/workflow-replay.mjs',import.meta.url).href)};console.log(JSON.stringify(await adoptReplayCorpus(process.argv[1],process.argv[2])));`;
+  const result=JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,f.root,f.file],{env:{...process.env,PATH:`${bin}:${process.env.PATH}`,PDD_GIT_LOG:log},encoding:'utf8'}));
+  assert.equal(result.outcome,'adopted',result.cause);assert.equal(result.paths.length,31);
+  const commands=readFileSync(log,'utf8').trim().split('\n'),batch=commands.filter(c=>c==='cat-file --batch');
+  assert.ok(batch.length>0 && batch.length<12,`31 scenarios used ${batch.length} batch starts`);
+  assert.equal(commands.filter(c=>/^cat-file (?:-s|blob)/.test(c)).length,0);
+  t.diagnostic(`31 declared scenarios: ${batch.length} cat-file --batch starts; zero per-file cat-file starts`);
+});
+
+test('2640 refusal causes are useful, bounded single lines without private paths credentials or Try URLs',async()=>{
+  const result=await adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>{throw Error('Read failed: ENOENT prompts/missing.prompt.md /private/person/corpus.json password=secret Authorization: Bearer hiddenToken ghp_hiddenCredential https://runtime.invalid/s/capability\nnext');}});
+  assert.equal(result.reason,'unavailable');assert.match(result.cause,/Read failed: ENOENT prompts\/missing\.prompt\.md/);assert.ok(result.cause.length<=1000);assert.doesNotMatch(result.cause,/private|person|secret|hiddenToken|hiddenCredential|capability|https:|[\r\n]/);
 });

@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 2b05028ee5f8ab28417f57e1223ceef7e8b0cfc41d2fb55b62e317dc36a1879b).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 29a081ab30c173f0276265c6ac4489029cc33a2a2ac298f87d354c4aec876803).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { gitFiles } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
 export const REPLAY_POLICY = 'pdd.replay-evidence.v1';
@@ -23,6 +23,7 @@ const states = ['pass','fail','blocked','not_replayed'];
 const controls = ['assertion_failure','crash','survived','not_run'];
 const sanitize = value => cleanText(String(value ?? '')).replace(/[\r\n\x00-\x1f]/g,' ').slice(0,1000)
   .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)');
+const adoptionCause = value => sanitize(value).replace(/\b(?:Bearer|Basic)\s+[^\s]+/gi,'credential removed').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g,'credential removed').replace(/https?:\/\/[^\s]+/g,'(URL removed)').replace(/(?<![\w./-])(?:[A-Za-z]:[\\/]|\/)[^\s,;:]+/g,'(path removed)').replace(/(?:token|password|authorization|credential)[=: ]+[^\s]+/gi,'credential removed');
 const render = value => sanitize(value).replace(/[\\`*_[\]()|]/g,'\\$&')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
@@ -97,8 +98,9 @@ const commitId = value => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9
 const repositoryId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
 function validDeclaration(d) {
   const keys=(value,names)=>object(value)&&Object.keys(value).sort().join(',')===names.sort().join(',');
-  return keys(d,['schema_version','repository','commit','prompts','approval']) && d.schema_version === 'pdd.replay-adoption.v1' && repositoryId(d.repository) && commitId(d.commit) &&
+  return keys(d,['schema_version','repository','commit','prompts','scenarios','approval']) && d.schema_version === 'pdd.replay-adoption.v1' && repositoryId(d.repository) && commitId(d.commit) &&
     Array.isArray(d.prompts) && d.prompts.length > 0 && d.prompts.length <= 200 && d.prompts.every(canonicalPath) && new Set(d.prompts).size === d.prompts.length &&
+    Array.isArray(d.scenarios) && d.scenarios.length > 0 && d.scenarios.length <= 200 && d.scenarios.every(canonicalPath) && new Set(d.scenarios).size === d.scenarios.length &&
     keys(d.approval,['kind','reference','asserted_by']) && d.approval.kind === 'external-human-assertion' && text(d.approval.reference) && text(d.approval.asserted_by);
 }
 function gitEnvironment() {
@@ -114,22 +116,38 @@ function repository(root) {
   requireThat(match && repositoryId(match[1]), 'The repository needs a canonical GitHub origin.');
   return match[1];
 }
+// Read requested immutable blobs in one Git process per selection round.
+function batchBlobs(root, rows) {
+  if (!rows.length) return new Map();
+  const output=execFileSync('git',['cat-file','--batch'],{cwd:root,env:gitEnvironment(),input:rows.map(r=>r.oid).join('\n')+'\n',maxBuffer:128*1024*1024,stdio:['pipe','pipe','pipe']});
+  let offset=0;const result=new Map();
+  for(const row of rows) {
+    const end=output.indexOf(10,offset), header=output.subarray(offset,end).toString();
+    const match=/^([a-f0-9]+) blob (\d+)$/.exec(header);
+    requireThat(match && match[1]===row.oid,'Selected blob is unavailable.');
+    const size=Number(match[2]);requireThat(size<=10*1024*1024,'Selected blob exceeds the source limit.');
+    offset=end+1;requireThat(offset+size<output.length,'Incomplete Git blob response.');
+    result.set(row.path,output.subarray(offset,offset+size));offset+=size+1;
+  }
+  return result;
+}
 // Build a disposable local view from exact tracked blobs or bounded current files.
 // No worktree, index, branch, run, or claim in the source repository is changed.
-function adoptionView(root, ref) {
-  const temp = mkdtempSync(join(tmpdir(),'pdd-adoption-'));
+function adoptionView(root, ref, scenarios) {
+  const temp = realpathSync(mkdtempSync(join(tmpdir(),'pdd-adoption-')));
   try {
     const rows = ref ? localGit(root,'ls-tree','-r','-z','--full-tree',ref).toString('utf8').split('\0').filter(Boolean).map(row => {
       const match = /^(\d+) (blob|commit) ([a-f0-9]+)\t([\s\S]+)$/.exec(row);
       requireThat(match, 'Invalid Git tree inventory.'); return {mode:match[1],oid:match[3],path:match[4]};
     }) : [...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].map(path=>({path}));
     const names = new Set(), sources=new Map(), loaded=new Set();
+    const links=ref ? batchBlobs(root,rows.filter(row=>row.mode==='120000')) : new Map();
     for (const row of rows) {
       requireThat(canonicalPath(row.path) && !names.has(row.path), 'Invalid or duplicate source path.'); names.add(row.path);sources.set(row.path,row);
       const full=join(temp,row.path);mkdirSync(dirname(full),{recursive:true});
       if(ref && row.mode==='160000') {mkdirSync(full);continue;}
       let link;
-      if(ref && row.mode==='120000')link=localGit(root,'cat-file','blob',row.oid).toString();
+      if(ref && row.mode==='120000')link=links.get(row.path).toString();
       if(!ref) {
         let stat;try{stat=lstatSync(join(root,row.path));}catch(error){if(error.code!=='ENOENT')throw error;}
         if(stat?.isDirectory()){mkdirSync(full);continue;}
@@ -137,26 +155,29 @@ function adoptionView(root, ref) {
       }
       if(link!==undefined)symlinkSync(link,full);else writeFileSync(full,'');
     }
-    const load=path=>{
-      if(loaded.has(path))return false;
-      const row=sources.get(path);requireThat(row,'Selected source is unavailable.');
-      const full=join(temp,path);requireThat(lstatSync(full).isFile(),'Selected source must be regular.');
-      let bytes;
-      if(ref) {
-        const size=Number(localGit(root,'cat-file','-s',row.oid).toString());requireThat(size<=10*1024*1024,'Selected blob exceeds the source limit.');
-        bytes=localGit(root,'cat-file','blob',row.oid);
-      } else bytes=boundedFile(join(root,path),10*1024*1024,true);
-      writeFileSync(full,bytes);loaded.add(path);return true;
+    const loadMany=paths=>{
+      const pending=[...new Set(paths)].filter(path=>!loaded.has(path));
+      for(const path of pending) {
+        requireThat(sources.has(path),'Selected source is unavailable.');
+        requireThat(lstatSync(join(temp,path)).isFile(),'Selected source must be regular.');
+      }
+      const blobs=ref ? batchBlobs(root,pending.map(path=>sources.get(path))) : null;
+      for(const path of pending) {
+        const bytes=ref ? blobs.get(path) : boundedFile(join(root,path),10*1024*1024,true);
+        writeFileSync(join(temp,path),bytes);loaded.add(path);
+      }
+      return pending.length>0;
     };
-    for(const path of names)if(path.endsWith('.json'))load(path);
+    loadMany(scenarios);
 
     localGit(temp,'init','-q');localGit(temp,'add','-f','--all');
-    return {root:temp,names:[...names],load};
+    return {root:temp,names:[...names],loadMany};
   } catch(error) {rmSync(temp,{recursive:true,force:true});throw error;}
 }
 function selectedFiles(root, tests) {
-  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-preflight.mjs',import.meta.url).href)};process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));`;
-  return JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,root,JSON.stringify(tests)],{env:gitEnvironment(),maxBuffer:16*1024*1024,stdio:['ignore','pipe','pipe']}).toString());
+  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-preflight.mjs',import.meta.url).href)};try{process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));}catch(error){process.stderr.write(String(error.message));process.exitCode=1;}`;
+  try {return JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,root,JSON.stringify(tests)],{env:gitEnvironment(),maxBuffer:16*1024*1024,stdio:['ignore','pipe','pipe']}).toString());}
+  catch(error) {throw Error(`Required context selection failed: ${error.stderr?.toString().trim() || 'local selector failed'}`);}
 }
 function nativeFingerprint(root) {
   const names=[...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].sort();
@@ -168,11 +189,11 @@ function nativeFingerprint(root) {
     } catch(error){if(error.code==='ENOENT')return [path,'missing'];throw error;}
   })));
 }
-function inspectAdoptionView(view, prompts) {
+function inspectAdoptionView(view, prompts, scenarios) {
   const vectors=[], seeds=[...prompts]; let total=0, checks=0, steps=0;
-  for (const path of view.names.filter(path=>path.endsWith('.json')).sort()) {
+  for (const path of [...scenarios].sort()) {
     const raw=boundedFile(join(view.root,path),10*1024*1024); const doc=parse(raw);
-    if(doc?.schema_version !== 'prompt-runtime.program-scenario.v1') continue;
+    requireThat(doc?.schema_version === 'prompt-runtime.program-scenario.v1','Declared scenario has an invalid version.');
     requireThat(raw.length<=LIMIT,'Original vector exceeds its byte limit.');
     const vector=scenario(path,raw); total+=raw.length; checks+=vector.checks.length; steps+=vector.steps.length;
     requireThat(vectors.length < 200 && total<=10*1024*1024 && checks<=MAX && steps<=MAX, 'Corpus exceeds original vector bounds.');
@@ -189,14 +210,14 @@ function inspectAdoptionView(view, prompts) {
   // A private seed supplies declaration prompts without altering original scenarios.
   let seed='.pdd-adoption-seed';while(view.names.includes(seed))seed+='-';
   writeFileSync(join(view.root,seed),JSON.stringify({entry_paths:[...new Set(seeds)]}));localGit(view.root,'add','-f','--',seed);
-  if(view.names.includes('pdd-source.json'))view.load('pdd-source.json');
+  if(view.names.includes('pdd-source.json'))view.loadMany(['pdd-source.json']);
   const paths=vectors.map(v=>v.path);
   // Resolve with the canonical selector until all newly selected files have their
   // actual bytes. Unrelated implementation files remain placeholders in this view.
   let selected;
   for(;;) {
     selected=selectedFiles(view.root,[seed]).map(file=>file.path).filter(path=>path!==seed);
-    let changed=false;for(const path of selected)changed=view.load(path)||changed;
+    const changed=view.loadMany(selected);
     if(!changed)break;
   }
   const context=selected.filter(path=>!paths.includes(path)).map(path=>({path,sha256:hash(boundedFile(join(view.root,path),10*1024*1024,true))}));
@@ -216,35 +237,47 @@ function inspectAdoptionView(view, prompts) {
   return {vectors:vectors.map(v=>({path:v.path,sha256:v.sha256,checks:v.checks.map(c=>JSON.stringify([c.vector,c.step_id,c.check_index,...identity.map(k=>c[k])]))})),context};
 }
 function readNativeAdoptionSnapshot({root,declarationPath}, options) {
-  const raw=boundedFile(resolve(root,declarationPath),64*1024), declaration=parse(raw);
-  const snapshot={available:true,repository:repository(root),commit:declaration.commit,declaration,declaration_sha256:hash(raw),declaration_bytes:raw.toString('base64')};
-  if(!validDeclaration(declaration)) return {snapshot};
+  const requested=resolve(root,declarationPath);
+  const raw=boundedFile(join(realpathSync(dirname(requested)),basename(requested)),64*1024), declaration=parse(raw);
+  const snapshot={available:true,repository:repository(root),commit:declaration.commit,declaration,declaration_sha256:hash(raw),approved_vectors:[],current_vectors:[],approved_context:[],current_context:[],approved_commit_ancestor:false,cause:''};
+  if(!validDeclaration(declaration)) return {snapshot,internal:{declarationBytes:raw}};
+  try {
   const commit=localGit(root,'rev-parse','--verify','--end-of-options',`${declaration.commit}^{commit}`).toString().trim();
   requireThat(commit===declaration.commit,'Approved commit is unavailable.');snapshot.commit=commit;
+  try {localGit(root,'merge-base','--is-ancestor',commit,options.currentRef || 'HEAD');snapshot.approved_commit_ancestor=true;} catch(error) {if(error.status!==1)throw Error('Approved commit ancestry could not be checked.');}
+  if(!snapshot.approved_commit_ancestor)return {snapshot,internal:{declarationBytes:raw}};
   const before=options.currentRef ? null : nativeFingerprint(root);
   requireThat(options.currentRef || before,'Current source is unreadable.');
-  const approved=adoptionView(root,commit);let current;
+  const approved=adoptionView(root,commit,declaration.scenarios);let current;
   try {
-    current=adoptionView(root,options.currentRef);
-    const a=inspectAdoptionView(approved,declaration.prompts),c=inspectAdoptionView(current,declaration.prompts);
+    current=adoptionView(root,options.currentRef,declaration.scenarios);
+    const a=inspectAdoptionView(approved,declaration.prompts,declaration.scenarios),c=inspectAdoptionView(current,declaration.prompts,declaration.scenarios);
     requireThat(options.currentRef || nativeFingerprint(root)===before,'Current source changed while reading.');
     Object.assign(snapshot,{approved_vectors:a.vectors,current_vectors:c.vectors,approved_context:a.context,current_context:c.context});
-    return {snapshot};
+    return {snapshot,internal:{declarationBytes:raw}};
   } finally {rmSync(approved.root,{recursive:true,force:true});if(current)rmSync(current.root,{recursive:true,force:true});}
+  } catch(error) {snapshot.available=false;snapshot.cause=adoptionCause(error.message);return {snapshot,internal:{declarationBytes:raw}};}
 }
 export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
-  const provenance={repository:'',commit:'',reference:'',asserted_by:'',trust:'external-assertion-unverified',declaration_sha256:'',prompts:[]};
-  const blocked=reason=>({outcome:'blocked',reason,paths:[],provenance});
+  const provenance={repository:'',commit:'',reference:'',asserted_by:'',trust:'external-assertion-unverified',declaration_sha256:'',prompts:[],scenarios:[]};
+  let cause='';
+  const blocked=reason=>({outcome:'blocked',reason,cause,paths:[],provenance});
   try {
-    const {snapshot:s}=await (ports.readAdoptionSnapshot ?? (args=>readNativeAdoptionSnapshot(args,ports)))({root,declarationPath});
+    const native=!ports.readAdoptionSnapshot;
+    const {snapshot:s,internal}=await (ports.readAdoptionSnapshot ?? (args=>readNativeAdoptionSnapshot(args,ports)))({root,declarationPath});
+    if(native && internal?.declarationBytes)ports.onNativeDeclaration?.(internal.declarationBytes);
+    cause=adoptionCause(s?.cause);
+    const d=s?.declaration;
+    if(validDeclaration(d))Object.assign(provenance,{repository:d.repository,commit:d.commit,reference:d.approval.reference,asserted_by:d.approval.asserted_by,declaration_sha256:sha(s.declaration_sha256)?s.declaration_sha256:'',prompts:[...d.prompts],scenarios:[...d.scenarios]});
     if(!object(s) || s.available!==true)return blocked('unavailable');
-    const d=s.declaration;
     if(!validDeclaration(d))return blocked('invalid-approval');
     if(d.repository!==s.repository || d.commit!==s.commit)return blocked('foreign-source');
+    if(typeof s.approved_commit_ancestor!=='boolean' || typeof s.cause!=='string')return blocked('unavailable');
+    if(!s.approved_commit_ancestor){cause=cause||'Approved commit is not an ancestor of the selected source.';return blocked('unrelated-commit');}
     const inventory=rows=>Array.isArray(rows) && rows.length>0 && rows.length<=200 && rows.every(r=>object(r)&&canonicalPath(r.path)) && new Set(rows.map(r=>r.path)).size===rows.length;
     if(!inventory(s.approved_vectors)||!inventory(s.current_vectors))return blocked('inventory-mismatch');
     const sorted=rows=>[...rows].sort((a,b)=>a.path.localeCompare(b.path));
-    if(JSON.stringify(sorted(s.approved_vectors).map(r=>r.path))!==JSON.stringify(sorted(s.current_vectors).map(r=>r.path)))return blocked('inventory-mismatch');
+    if([s.approved_vectors,s.current_vectors].some(rows=>JSON.stringify(sorted(rows).map(r=>r.path))!==JSON.stringify([...d.scenarios].sort((a,b)=>a.localeCompare(b)))))return blocked('inventory-mismatch');
     // Tuple strings encode several independently bounded identities; JSON escaping
     // can expand a valid component to six characters per original character.
     const facts=(rows,vector)=>Array.isArray(rows) && rows.length<=10000 &&
@@ -257,12 +290,13 @@ export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
       if(JSON.stringify(normalized(s[`approved_${kind}`]))!==JSON.stringify(normalized(s[`current_${kind}`])))return blocked('content-mismatch');
     }
     ports.onSnapshot?.(s);
-    return {outcome:'adopted',reason:'',paths:sorted(s.approved_vectors).map(r=>r.path),provenance:{repository:d.repository,commit:d.commit,reference:d.approval.reference,asserted_by:d.approval.asserted_by,trust:provenance.trust,declaration_sha256:s.declaration_sha256,prompts:[...d.prompts]}};
-  } catch {return blocked('unavailable');}
+    return {outcome:'adopted',reason:'',cause:'',paths:sorted(s.approved_vectors).map(r=>r.path),provenance};
+  } catch(error) {cause=adoptionCause(error.message);return blocked('unavailable');}
 }
+
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
 export function readReplayEvidence(run) {
-  let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],source:null,manifest_sha256:null,operations:{total:0,executed:0}};
+  let result = {outcome:'blocked',reason:'Structured replay evidence is unavailable.',counts:emptyCounts(),vectors:[],source:null,manifest_sha256:null,operations:{total:0,executed:0},...(run.replayAdoption ? {adoption:run.replayAdoption.provenance} : {})};
   try {
     const baseline = run.replayBaseline;
     requireThat(baseline?.schema_version === 'pdd.replay-vectors.v1' && Array.isArray(baseline.vectors) && baseline.vectors.length <= 200, 'No approved original-vector anchor is saved; return to prompt space.');
@@ -325,6 +359,7 @@ export function formatReplayEvidence(result) {
   const formalLabel={proved_bounded:'Proved (bounded)',proved_solver:'Proved (solver)',failed:'Failed + counterexample',not_run:'Not run',not_applicable:'Not applicable'};
   return [ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(result.formal?.result==='failed' ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
     `Code replay: ${label} — ${render(result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`,
+    ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
     `Formal check (agent reported): ${formalLabel[result.formal?.result]??'not recorded'}${result.formal ? `; scope: ${render(result.formal.scope)}; reason: ${render(result.formal.reason)}` : ''}.`,

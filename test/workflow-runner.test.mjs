@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -2247,7 +2247,7 @@ async function adoptedCorpusRun(t,{adopt=true,multi=false,start=true}={}) {
   const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
   writeFileSync(join(f.source,'tests/add.json'),JSON.stringify(vector));
   f.git(f.source,'add','.');f.git(f.source,'commit','-qm','Approved synthetic corpus');const commit=f.git(f.source,'rev-parse','HEAD');f.git(f.source,'update-ref','refs/remotes/origin/main',commit);
-  const declaration=join(f.base,'adoption.json');writeFileSync(declaration,JSON.stringify({schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit,prompts:['prompts/add.prompt.md'],approval:{kind:'external-human-assertion',reference:'review:fixture',asserted_by:'Synthetic human'}}));
+  const declaration=join(f.base,'adoption.json');writeFileSync(declaration,JSON.stringify({schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit,prompts:['prompts/add.prompt.md'],scenarios:['tests/add.json'],approval:{kind:'external-human-assertion',reference:'review:fixture',asserted_by:'Synthetic human'}}));
   // Keep the canonical origin; perform real fetch/push/ls-remote against a local bare
   // server through a transport-only URL substitution. gh/Herdr remain boundary fakes.
   const bare=join(f.base,'remote.git');execFileSync('git',['init','--bare','-q',bare]);f.git(f.source,'push','-q',bare,'HEAD:refs/heads/main');
@@ -2321,7 +2321,7 @@ test('2640 publication retry revalidates frozen context before updating an open 
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   assert.equal((await stepDone({step:'verify',summary:'Replay',cwd:run.root},f.agentPorts())).exitCode,0);
   const pushes=f.pushes.length,edits=f.edits.length;writeFileSync(join(run.root,'rules/add.md'),'Changed after publication.\n');
-  const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);
+  const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);assert.equal(f.record().replayEvidence.outcome,'blocked');assert.equal(f.record().done.verify.replayEvidence.outcome,'blocked');
 });
 test('2640 invalid adoption preserves cancelled historical run and its claim before restart',async t=>{
   const {f,begin,declaration}=await adoptedCorpusRun(t);const run=f.record();assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
@@ -2349,4 +2349,30 @@ for(const mode of ['cancelled-claim-refusal','allocation-refusal'])test(`2640 de
     const out=await begin();assert.notEqual(out.exitCode,0,out.message);assert.deepEqual(readdirSync(f.base).filter(name=>name.startsWith('pdd-adoption-declaration-')),[]);
     if(savedStatus)assert.deepEqual(readFileSync(join(f.record().runDir,'status.json')),savedStatus);else assert.throws(()=>f.record());
   } finally {if(previous===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previous;}
+});
+
+test('2640 positive runner supports symlink TMPDIR for both native scratch locations',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});
+  const alias=join(f.base,'tmp-alias');symlinkSync(f.base,alias);
+  const old=process.env.TMPDIR;process.env.TMPDIR=alias;
+  try {const out=await begin();assert.equal(out.exitCode,0,out.message);assert.ok(f.record().replayAdoption);}
+  finally {if(old===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=old;}
+});
+
+test('2640 final step publication validates adoption once after automatic commit and persists step evidence',async t=>{
+  const {f}=await adoptedCorpusRun(t),run=f.record();
+  const bin=join(f.base,'git-bin');mkdirSync(bin);const log=join(f.base,'git.log');
+  const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
+  writeFileSync(join(bin,'git'),`#!/bin/sh\nprintf '%s\\n' "$*" >> "$PDD_GIT_LOG"\nexec '${git.replaceAll("'","'\\''")}' "$@"\n`,{mode:0o755});
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const oldPath=process.env.PATH,oldLog=process.env.PDD_GIT_LOG;process.env.PATH=`${bin}:${oldPath}`;process.env.PDD_GIT_LOG=log;
+  try {const out=await stepDone({step:'verify',summary:'Finished',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);}
+  finally {process.env.PATH=oldPath;if(oldLog===undefined)delete process.env.PDD_GIT_LOG;else process.env.PDD_GIT_LOG=oldLog;}
+  const commands=readFileSync(log,'utf8').trim().split('\n');
+  assert.equal(commands.filter(c=>c.startsWith('merge-base --is-ancestor ')).length,1);
+  const committed=commands.findIndex(c=>c.startsWith('commit ')),validated=commands.findIndex(c=>c.startsWith('merge-base --is-ancestor '));
+  assert.ok(committed>=0 && committed<validated);assert.deepEqual(f.record().done.verify.replayEvidence,f.record().replayEvidence);
+  assert.match(f.prs[0].body,/Anchor adopted from example\/project@.*approval reference review:fixture by Synthetic human; external-assertion-unverified/);
+  assert.match(f.prs[0].body,/Code replay: BLOCKED/);
+  t.diagnostic('final step + automatic publication commit: one full adoption validation (one actual Git ancestry check)');
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 857f6f4603b2af6bf7c63ee7c55c6bf9903bf10cf18da0d4827ed8f2b35d48e6).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8481eb77050b2a4a831b51c01a751eb58f3926501cdc7d13283fad222f6977cc).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -116,14 +116,20 @@ async function scenarioInventory(run, p) {
   return paths;
 }
 const replayEnabled = run => run.areas.some(area => area.replay_evidence === REPLAY_POLICY);
-async function adoptionFailure(run) {
+async function adoptionFailure(run,p) {
+  const blocked=reason=>{
+    run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason};
+    const step=run.areas[run.area]?.steps.filter(step=>run.done[step]).at(-1);
+    if(step)run.done[step].replayEvidence=run.replayEvidence;
+    if(p)writeRun(run,p);return reason;
+  };
   if (!run.replayAdoption) return null;
   const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'));
   if (result.outcome !== 'adopted' || JSON.stringify(result.provenance) !== JSON.stringify(run.replayAdoption.provenance))
-    return `Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}). Start an ordinary approval workflow for changed requirements.`;
+    return blocked(`Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}${result.cause ? `: ${result.cause}` : ''}). Start an ordinary approval workflow for changed requirements.`);
   const anchor=pinReplayVectors(run.root,result.paths);
   if(anchor.outcome || JSON.stringify(anchor)!==JSON.stringify(run.replayBaseline))
-    return 'The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.';
+    return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
   return null;
 }
 async function refreshReplayBaseline(run,p) {
@@ -132,8 +138,8 @@ async function refreshReplayBaseline(run,p) {
   catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
   writeRun(run,p);
 }
-async function currentReplayEvidence(run,p) {
-  let reason = await adoptionFailure(run);
+async function currentReplayEvidence(run,p,validated=false) {
+  let reason = validated ? null : await adoptionFailure(run,p);
   try {
     const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
     const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
@@ -308,17 +314,17 @@ export async function startRun({ name, issue, agent = 'codex', base, adoptCorpus
       return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
     }
   }
-  let adoption, adoptionSnapshot, frozenFolder;
+  let adoption, adoptionSnapshot, declarationBytes, frozenFolder;
   try {
   if(adoptCorpus !== undefined) {
     try {
       if(!explicitBase) await rawGit(p,context.toplevel,'fetch','origin',baseBranch);
       const selectedBase=await git(p,context.toplevel,'rev-parse','--verify','--end-of-options',`refs/remotes/origin/${baseBranch}^{commit}`);
-      adoption=await adoptReplayCorpus(context.toplevel,resolve(cwd,adoptCorpus),{currentRef:selectedBase,onSnapshot:s=>{adoptionSnapshot=s;}});
-      if(adoption.outcome!=='adopted')return {exitCode:2,message:`Cannot adopt the approved corpus (${adoption.reason}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};
-      frozenFolder=mkdtempSync(join(tmpdir(),'pdd-adoption-declaration-'));
-      writeFileSync(join(frozenFolder,'declaration.json'),Buffer.from(adoptionSnapshot.declaration_bytes,'base64'),{mode:0o600});
-    } catch {return {exitCode:2,message:'Cannot adopt the approved corpus (unavailable). Repair the declaration/source or start an ordinary approval workflow. No new run was started.'};}
+      adoption=await adoptReplayCorpus(context.toplevel,resolve(cwd,adoptCorpus),{currentRef:selectedBase,onSnapshot:s=>{adoptionSnapshot=s;},onNativeDeclaration:bytes=>{declarationBytes=bytes;}});
+      if(adoption.outcome!=='adopted')return {exitCode:2,message:`Cannot adopt the approved corpus (${adoption.reason}${adoption.cause ? `: ${adoption.cause}` : ''}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};
+      frozenFolder=realpathSync(mkdtempSync(join(tmpdir(),'pdd-adoption-declaration-')));
+      writeFileSync(join(frozenFolder,'declaration.json'),declarationBytes,{mode:0o600});
+    } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
   }
   if (existing) {
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
@@ -358,7 +364,7 @@ export async function startRun({ name, issue, agent = 'codex', base, adoptCorpus
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
   mkdirSync(runDir, { recursive: true });
   if(adoption) {
-    writeFileSync(join(runDir,'replay-adoption.json'),Buffer.from(adoptionSnapshot.declaration_bytes,'base64'),{mode:0o600,flag:'wx'});
+    writeFileSync(join(runDir,'replay-adoption.json'),declarationBytes,{mode:0o600,flag:'wx'});
     run.replayAdoption={declaration:adoptionSnapshot.declaration, declaration_sha256:adoption.provenance.declaration_sha256, provenance:adoption.provenance};
     run.replayBaseline=adoptedAnchor;
     warnings.push(`Adopted ${adoption.paths.length} unchanged scenarios from ${adoption.provenance.repository}@${adoption.provenance.commit}. External authorization: external-assertion-unverified; reference ${adoption.provenance.reference}; asserted by ${adoption.provenance.asserted_by}. pdd cannot independently authenticate that authorization; adoption does not prove execution.`);
@@ -596,7 +602,6 @@ function prBody(run, area, env, drafts = [], tests = true) {
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
 async function publishAreaPr(run, area, p, lines, retry) {
-  const adoption = await adoptionFailure(run); if(adoption) return fail(adoption);
   const label = prLabel(run, area), existing = prOf(run, area.name), title = oneLine(run.issue.title).slice(0, 220) || `Issue #${run.number}`;
   const status = await git(p, run.root, 'status', '--porcelain=v1', '--untracked-files=all');
   if (status) {
@@ -605,9 +610,14 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
-  const changedAdoption = await adoptionFailure(run); if(changedAdoption) return fail(changedAdoption);
+  const changedAdoption = await adoptionFailure(run,p);
+  if(changedAdoption) {run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason:changedAdoption};writeRun(run,p);return fail(changedAdoption);}
   const opted = area.replay_evidence === REPLAY_POLICY;
-  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
+  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
+    const last=area.steps.filter(step=>run.done[step]).at(-1);if(last)run.done[last].replayEvidence=run.replayEvidence;
+    writeRun(run,p);
+    if(run.replayAdoption && /(?:missing from the approved anchor|changed scenario inventory is unavailable)/.test(run.replayEvidence.reason))return fail(`${run.replayEvidence.reason} Start an ordinary approval workflow for changed requirements.`);
+  }
   const markedReplayBody = evidence => {
     const body=prBody({...run,replayEvidence:evidence},area,p.env);
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
@@ -677,6 +687,7 @@ async function finishPr(run, area, step, p, lines) {
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
+  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
@@ -742,7 +753,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
-  if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
+  if (area.replay_evidence === REPLAY_POLICY && (area.steps.some(item=>item!==step && !run.done[item]) || area.gate!=='pr' || area.before==='approve' && !prOf(run,area.name))) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
@@ -832,7 +843,7 @@ async function syncPr1(run, p) {
   if (!ahead && !behind) await refreshReplayBaseline(run,p);
   if (ahead && behind && what) return { failed: `PR 1 has commits that this worktree does not have, so pdd did not push ${what}. Run: ${go}git pull --rebase origin ${shell(run.branch)} && git push origin HEAD:refs/heads/${run.branch}\n${again}` };
   if (!ahead || behind) return { drafts: approved.length ? await pr1Drafts(run, p) : before, lines: [] };
-  const adoption=await adoptionFailure(run);if(adoption)return {failed:adoption};
+  const adoption=await adoptionFailure(run,p);if(adoption)return {failed:adoption};
   try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   await refreshReplayBaseline(run,p);
@@ -888,7 +899,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let carried = [];
-  const adoptedFailure=await adoptionFailure(run); if(adoptedFailure)return fail(adoptedFailure);
+  const adoptedFailure=await adoptionFailure(run,p); if(adoptedFailure)return fail(adoptedFailure);
   if (askCode && run.gate?.kind === 'ask-code') {
     if (replayEnabled(run)) {
       try {
@@ -958,7 +969,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   }
   let based = '';
   if (askCode) {
-    const adoptedFailure=await adoptionFailure(run);if(adoptedFailure)return fail(adoptedFailure);
+    const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
     p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }
