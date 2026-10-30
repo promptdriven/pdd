@@ -51,14 +51,20 @@ for (const lint of [true, false]) test(`check${lint ? ' --lint' : ''} releases c
   writeFileSync(join(bin, 'git'), prefix + `
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-if (process.argv[2] === 'rev-parse' && process.argv[3] === '--show-toplevel') {
-  const helper = spawn(process.execPath, ['-e', 'setTimeout(()=>{},25000)'], { stdio: [0,'ignore','ignore'], detached: true });
-  appendFileSync(${JSON.stringify(log)}, helper.pid+'\\n'); helper.unref();
-}
+// Every git call (repo root, file list, HEAD) starts a helper that keeps whatever stdin git got.
+const helper = spawn(process.execPath, ['-e', 'setTimeout(()=>{},25000)'], { stdio: [0,'ignore','ignore'], detached: true });
+appendFileSync(${JSON.stringify(log)}, helper.pid+'\\n'); helper.unref();
 const r = spawnSync(${JSON.stringify(git)}, process.argv.slice(2), { stdio: [0,1,2] });
 process.exit(r.status ?? 1);
 `, { mode: 0o755 });
-  writeFileSync(join(bin, 'gh'), prefix + `console.log(process.argv[2] === 'auth' ? ${JSON.stringify(TOKEN)} : 'octo 4242');\n`, { mode: 0o755 });
+  // The gh port also starts a helper that keeps whatever stdin gh got.
+  writeFileSync(join(bin, 'gh'), prefix + `
+import { spawn } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+const helper = spawn(process.execPath, ['-e', 'setTimeout(()=>{},25000)'], { stdio: [0,'ignore','ignore'], detached: true });
+appendFileSync(${JSON.stringify(log)}, helper.pid+'\\n'); helper.unref();
+console.log(process.argv[2] === 'auth' ? ${JSON.stringify(TOKEN)} : 'octo 4242');
+`, { mode: 0o755 });
   const helpers = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(Number); } catch { return []; } };
   try {
     const socket = await socketInput(t);
