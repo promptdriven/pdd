@@ -54,7 +54,7 @@ function worker(r, options, words = []) {
   const source = `import {runCheck} from ${JSON.stringify(new URL('../src/runtime-client.mjs', import.meta.url).href)};
     import {portsFor} from ${JSON.stringify(new URL('./runtime-fake.mjs', import.meta.url).href)};
     const {ports}=portsFor(${JSON.stringify(r.env)}); console.error('START');
-    const code=await runCheck(${JSON.stringify({ cwd: r.setup.repo, words, options: { '--json': true, ...options } })},ports); process.exitCode=code;`;
+    const code=await runCheck(${JSON.stringify({ cwd: r.setup.repo, words, options: { '--json': true, ...options } })},ports); process.stdout.write(ports.stdout.text); process.stderr.write(ports.stderr.text); process.exitCode=code;`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = ''; const started = deferred();
   child.stdout.on('data', chunk => { out += chunk; });
