@@ -121,7 +121,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));

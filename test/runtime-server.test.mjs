@@ -561,7 +561,7 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
   });
   const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
@@ -836,7 +836,7 @@ test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, u
   const { summaryLine } = await import('../src/runtime-output.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
-  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: unknown · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: no verdict · /);
   assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
   assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
 });

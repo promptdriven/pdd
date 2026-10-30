@@ -141,7 +141,7 @@ export function jsonRow(row) {
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
-    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
+    reason: ['passed', 'failed'].includes(row.state) ? null : row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
@@ -168,9 +168,10 @@ export function summaryLine(rows, story = null) {
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
-  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state) && !row.busy);
-  const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
-    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
+  const mark = rows.some(row => row.state === 'failed') ? '✗'
+    : rows.length && rows.every(row => row.state === 'passed') ? '✓'
+    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
+    : rows.length && rows.every(row => row.busy && row.state === 'not_run') ? 'busy ·' : 'no verdict ·';
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
     `${checks.passed}/${checks.total} checks`, ...others, `${count(calls, 'AI call')}${unknownCalls ? ` + ${unknownCalls} unknown` : ''}`].join(' · ');
 }
@@ -212,21 +213,28 @@ function checkLines(check, secrets) {
   return [head, ...criterion, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
 }
 // With a plain reason (#379): the reason, where and the fix; an AI service failure is not a problem in the test.
-function refusalLines(item) {
+function refusalLines(item, serverNext = false) {
   const lines = item.reason ? [`  ${item.code}: ${item.reason}`, ...(item.where ? [`  Where: ${item.where}`] : []),
-    ...(item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
+    ...(serverNext ? [] : item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
     : [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
   if (!item.reason && item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
-  if (item.hint) lines.push(`  ${item.hint}`);
+  if (item.hint && !serverNext) lines.push(`  ${item.hint}`);
   return lines;
 }
 
-function localRefusals(rows) {
+const serverAdvice = (row, secrets = []) => [
+  ...(row.why ? [`  Why: ${cleanText(row.why, secrets)}`] : []),
+  ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])];
+
+function localRefusals(rows, secrets) {
   const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
     out.push('REFUSED before sending (not sent, 0 AI calls)');
-    for (const row of local) for (const item of row.refusals) {
-      out.push(`  ${row.test}${item.step ? `  step ${item.step}` : ''}  ${item.code}`, `  ${item.message}`, ...(item.hint ? [`  ${item.hint}`] : []));
+    for (const row of local) {
+      for (const item of row.refusals) {
+        out.push(`  ${row.test}${item.step ? `  step ${item.step}` : ''}  ${item.code}`, `  ${item.message}`, ...(item.hint && !row.next_step ? [`  ${item.hint}`] : []));
+      }
+      out.push(...serverAdvice(row, secrets));
     }
   }
   return out;
@@ -239,6 +247,19 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
   const perStory = storyLines(rows).map(([, text]) => text);
   out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
+  if ([3, 4, 5].includes(exitCode)) {
+    const failed = new Set(rows.filter(row => row.state === 'failed').map(row => row.story));
+    const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));
+    const other = [...inconclusive].filter(story => !failed.has(story)).length;
+    const overlap = [...inconclusive].filter(story => failed.has(story)).length;
+    if (failed.size) {
+      const first = failed.size === 1 ? '1 Story failed its checks.' : `${failed.size} Stories failed their checks.`;
+      const second = other ? other === 1 ? 'Another Story has no verdict' : `${other} other Stories have no verdict`
+        : failed.size === 1 ? 'That Story also has checks with no verdict'
+        : `${overlap} of those Stories also ${overlap === 1 ? 'has' : 'have'} checks with no verdict`;
+      out.push(`${first} ${second}, so the exit code is ${exitCode}.`);
+    }
+  }
   for (const row of rows.filter(row => row.state === 'failed')) {
     const failed = row.failed_checks ?? [], lines = [`FAILED  ${row.title} (${row.test})`];
     for (const check of failed) {
@@ -253,27 +274,27 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     if (!diagnosed && !row.next_step) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
-  out.push(...localRefusals(rows));
+  out.push(...localRefusals(rows, secrets));
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
-    out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(refusalLines), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
+    out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
-    out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
+    out.push(`NOT RUN  ${row.title} (${row.test}): ${row.next_step ? row.why ? '' : 'pdd did not send it.' : row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
     const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
     out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider && !row.time_limit)) {
-    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
+    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.lost && row.why ? [`  ${row.why}`, ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])] : serverAdvice(row, secrets)));
   }
   for (const row of rows.filter(row => row.time_limit)) {
-    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, `  ${row.time_limit.fix}`,
+    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, ...(row.next_step ? [] : [`  ${row.time_limit.fix}`]), ...serverAdvice(row, secrets),
       ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
-      '  To try again, run `pdd check` again (a new request).');
+      ...(row.next_step ? [] : ['  To try again, run `pdd check` again (a new request).']), ...serverAdvice(row, secrets));
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,
