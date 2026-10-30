@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product-composition.prompt.md (sha256: e9b705382bc41702e81bf957d8a72469ce76376120c83c507532753e4b999d85).
+// Generated from prompts/cli/product-composition.prompt.md (sha256: da83412c73f29715e647a6d906a58df0187e8a1fe63ea40fbf91ac95827a2285).
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
@@ -77,7 +77,20 @@ function validateMap(map, part) {
   if (typeof map.synthetic !== 'boolean') invalid('synthetic');
   for (const field of ['initial_state', 'state_schema']) if (!plain(map[field])) invalid(field);
   for (const field of ['screens', 'routes', 'handlers', 'stylesheets']) if (!Array.isArray(map[field])) invalid(field);
-  for (const screen of map.screens) required(screen, ['id', 'prompt_path', 'operation', 'source', 'format', 'input', 'result_pointer'], 'screen');
+  for (const screen of map.screens) {
+    required(screen, ['id', 'prompt_path', 'operation', 'source', 'format', 'input', 'result_pointer'], 'screen');
+    if (typeof screen.prompt_path !== 'string' || !screen.prompt_path) invalid('screen.prompt_path');
+    if (!['operation', 'mockup'].includes(screen.source)) invalid('screen.source');
+    if (screen.source === 'mockup') {
+      if (screen.operation !== null) invalid('screen.operation');
+      if (screen.format !== 'svg') invalid('screen.format');
+      if (screen.result_pointer !== null) invalid('screen.result_pointer');
+    } else {
+      if (typeof screen.operation !== 'string' || !screen.operation) invalid('screen.operation');
+      if (!['html', 'text', 'grid'].includes(screen.format)) invalid('screen.format');
+      if (typeof screen.result_pointer !== 'string' || !/^(?:\/(?:[^~]|~[01])*)?$/.test(screen.result_pointer)) invalid('screen.result_pointer');
+    }
+  }
   if (map.router !== null) required(map.router, ['handler', 'input', 'result_pointer'], 'router');
   for (const route of map.routes) required(route, ['name', 'screen', 'input'], 'route');
   for (const handler of map.handlers) {
