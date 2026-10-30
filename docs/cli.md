@@ -43,6 +43,8 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 - No command has a time limit. You can close the terminal at any time.
 - pdd never merges.
 
+`pdd workflow status --all --json` returns `{ "version": 1, "runs": [...] }`. Each run contains `identity` (`ref`, `repository`, issue `number`/`title`/`url`, and `folder`), `workflow`, `agent`, `area`, `step`, `waits_for`, optional `gate_id` or `question`, `stopped_reason`, `pull_requests` (`number`, `url`, `draft`, `ci`), `stories` (`passed`, `total`) or `null`, `chat` (`session`, `tab`, `pane`), and `last_change` (Unix milliseconds or `null`). `waits_for` is `null`, `gate`, `question`, `chat_stopped`, or `startup_failed`; stopped reasons are `usage_limit`, `exited`, or `unknown`. The JSON never includes Try links.
+
 ## Runtime checks and prompt approval
 
 | Command | What it does |
