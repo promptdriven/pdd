@@ -815,17 +815,48 @@ function markdownContainerLine(line, containers) {
 // Discovery sees prose only; preserve offsets and newlines without changing captured bytes.
 function markdownSectionText(text) {
   const parts = [], inline = /`+|<!--/g;
-  let containers = [], fence = null, copied = 0, protectedEnd = 0, paragraph = false;
+  let containers = [], fence = null, comment = false, copied = 0, paragraph = false;
+  let scopeStart = null, scopeEnd = 0;
   const mask = (start, end) => {
     parts.push(text.slice(copied, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
-    copied = protectedEnd = end;
+    copied = end;
+  };
+  // Inline parsing belongs to one leaf block. A matching run in a later
+  // paragraph, heading or container cannot turn intervening prose into code.
+  const flush = () => {
+    if (scopeStart === null) return;
+    inline.lastIndex = scopeStart;
+    for (let match; (match = inline.exec(text)) && match.index < scopeEnd;) {
+      let tokenStart = match.index, token = match[0], slashes = 0;
+      for (let index = tokenStart - 1; index >= scopeStart && text[index] === '\\'; index--) slashes++;
+      if (slashes % 2) {
+        if (token === '<!--' || token.length === 1) continue;
+        // An escape consumes one punctuation character, not the entire run.
+        tokenStart++; token = token.slice(1);
+      }
+      let closeEnd;
+      if (token === '<!--') {
+        const close = text.indexOf('-->', inline.lastIndex);
+        if (close < 0 || close + 3 > scopeEnd) continue;
+        closeEnd = close + 3;
+      } else {
+        const closing = new RegExp('(?<!`)`{' + token.length + '}(?!`)', 'g');
+        closing.lastIndex = inline.lastIndex;
+        const close = closing.exec(text);
+        if (!close || close.index + close[0].length > scopeEnd) continue;
+        // Backslashes have no escape meaning inside an actual code span.
+        closeEnd = close.index + close[0].length;
+      }
+      mask(tokenStart, closeEnd);
+      inline.lastIndex = closeEnd;
+    }
+    scopeStart = null;
   };
   for (const row of text.matchAll(/[^\r\n]*(?:\r\n|[\r\n]|$)/g)) {
     if (!row[0]) continue;
     const original = row[0].replace(/[\r\n]+$/, '');
     const start = row.index, end = start + original.length;
-    if (start < protectedEnd && end <= protectedEnd) continue;
-    if (start >= protectedEnd) {
+    {
       // Tabs affect Markdown indentation only. This view is never captured.
       let column = 0;
       const expanded = original.replace(/[^\t]|\t/g, char => {
@@ -836,17 +867,36 @@ function markdownSectionText(text) {
       let { line, matched } = markdownContainerLine(expanded, containers);
       const thematic = /^ {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})$/;
       const item = /^ {0,3}([-+*]|[0-9]{1,9}[.)]) +(\S.*)$/.exec(line);
-      const startsBlock = /^ {0,3}(?:>|#{1,6}(?: |$)|`{3,}|~{3,}|<)/.test(line) || thematic.test(line)
-        || (item && (!/^[0-9]/.test(item[1]) || /^1[.)]$/.test(item[1]) || containers[matched] !== '>'));
+      const fenceStart = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const validFence = fenceStart && !(fenceStart[1][0] === '`' && fenceStart[2].includes('`'));
+      // Only HTML block types that can interrupt a paragraph split its inline
+      // scope; ordinary angle prose and custom inline tags do not.
+      const htmlStart = /^ {0,3}<(?:!--|\?|![A-Z]|!\[CDATA\[|(?:pre|script|style|textarea)(?=[\t >]|$))/i.test(line)
+        || /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[\t >]|\/>|$)/i.test(line);
+      const startsBlock = /^ {0,3}(?:>|#{1,6}(?: |$))/.test(line) || validFence || htmlStart || thematic.test(line)
+        || (item && (!paragraph || !/^[0-9]/.test(item[1]) || /^1[.)]$/.test(item[1])
+          || (matched < containers.length && containers[matched] !== '>')));
       // Lazy paragraph continuation keeps its parent containers available for a
       // later indented fence. Code itself never permits lazy continuation.
-      const lazy = matched < containers.length && !fence && paragraph && line.trim() && !startsBlock;
-      if (!lazy && matched < containers.length) { fence = null; paragraph = false; }
+      const lazy = matched < containers.length && !fence && !comment && paragraph && line.trim() && !startsBlock;
+      const boundary = !line.trim() || startsBlock || /^ {0,3}(?:=+|-+) *$/.test(line)
+        || (!lazy && matched < containers.length);
+      if (boundary) flush();
+      if (!lazy && matched < containers.length) { fence = null; comment = false; paragraph = false; }
       if (!lazy) containers = containers.slice(0, matched);
       if (fence) {
         mask(start, end);
         const close = /^ {0,3}(`{3,}|~{3,}) *$/.exec(line);
         if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (comment) {
+        const close = original.indexOf('-->');
+        mask(start, close < 0 ? end : start + close + 3);
+        if (close < 0) continue;
+        comment = false;
+        scopeStart = start + close + 3; scopeEnd = end;
+        flush();
         continue;
       }
       // Start containers only outside code; a list's continuation width belongs
@@ -866,27 +916,22 @@ function markdownSectionText(text) {
       if (!lazy && opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
         fence = opening[1]; paragraph = false; mask(start, end); continue;
       }
-      paragraph = Boolean(line.trim()) && !thematic.test(line)
-        && !/^ {0,3}(?:#{1,6}(?: |$)|=+ *$|<|\[[^\]]+\]:)/.test(line);
-    }
-    inline.lastIndex = Math.max(0, protectedEnd - start);
-    for (let match; (match = inline.exec(original));) {
-      const tokenStart = start + match.index, tokenEnd = start + inline.lastIndex;
-      let closeEnd;
-      if (match[0] === '<!--') {
-        const close = text.indexOf('-->', tokenEnd);
-        closeEnd = close < 0 ? text.length : close + 3;
-      } else {
-        const closing = new RegExp('(?<!`)`{' + match[0].length + '}(?!`)', 'g');
-        closing.lastIndex = tokenEnd;
-        const close = closing.exec(text);
-        if (!close) continue;
-        closeEnd = close.index + close[0].length;
+      if (/^ {0,3}<!--/.test(line)) {
+        const opening = original.indexOf('<!--'), close = original.indexOf('-->', opening + 4);
+        mask(start + opening, close < 0 ? end : start + close + 3);
+        comment = close < 0; paragraph = false;
+        if (!comment) { scopeStart = start + close + 3; scopeEnd = end; flush(); }
+        continue;
       }
-      mask(tokenStart, closeEnd);
-      inline.lastIndex = closeEnd - start;
+      const definition = !paragraph && /^ {0,3}\[[^\]]+\]:/.test(line);
+      paragraph = Boolean(line.trim()) && !thematic.test(line) && !definition && !htmlStart
+        && !/^ {0,3}(?:#{1,6}(?: |$)|=+ *$)/.test(line);
     }
+    if (scopeStart === null) scopeStart = start;
+    scopeEnd = end;
+    if (!paragraph) flush();
   }
+  flush();
   return parts.join('') + text.slice(copied);
 }
 
