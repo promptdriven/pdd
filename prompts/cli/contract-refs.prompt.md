@@ -104,6 +104,8 @@ parseJsonValue accepts JSON text and returns its lossless value, representing JS
 
 stringifyJsonValue accepts ordinary JSON values plus these numeric atoms and returns compact JSON with recursively lexicographically sorted object keys, preserved array order and no final newline. Preserve each numeric atom’s original valid JSON number token exactly. Ordinary JSON numbers retain their normal JSON value; numeric atoms must never turn into strings or serialized implementation fields. Consumers must use these bindings when parsing, cloning or serializing source values that require lossless preservation rather than round-tripping them through JSON.parse/JSON.stringify.
 
+Export native module function `jsonNumberIdentity(value)` for consumers needing exact mathematical JSON number identity. It accepts an opaque JSON numeric atom or a finite JavaScript number and returns the shared codec’s exact mathematical identity string, normalizing equivalent decimal/exponent spellings and treating zero and negative zero identically. Non-numbers throw TypeError. Reuse the shared codec’s identity facility rather than a second numeric parser. This export adds no JSON acceptance gate and does not change schema-equivalence Boolean policy; a caller owns any domain-specific Boolean/number comparison.
+
 ## Effective bytes and provenance
 
 Expansion, provenance, cataloging and sync preserve JSON number values and their
@@ -182,7 +184,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "4ecd985f99d99f7fbc9a9e45cb48846531dd82be070293559821caa42e01675e",
+  "status": "draft", "prose_sha256": "488d8d151fc1f79fadbd442bd45f85334f49bba97468226819f8c52553f47c62",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

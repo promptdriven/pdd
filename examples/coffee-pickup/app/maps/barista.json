@@ -41,8 +41,8 @@
         }
       },
       "next": {
-        "kind": "same",
-        "screen": null,
+        "kind": "screen",
+        "screen": "phone/menu",
         "route_pointer": null
       },
       "state": null,

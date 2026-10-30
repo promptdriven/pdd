@@ -40,8 +40,8 @@
         "size": "M"
       },
       "next": {
-        "kind": "same",
-        "screen": null,
+        "kind": "screen",
+        "screen": "barista/board",
         "route_pointer": null
       },
       "state": null,
