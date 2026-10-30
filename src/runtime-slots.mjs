@@ -161,7 +161,14 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
       const stop = () => { stopWaiting(); done('unknown'); };
       off = ports.onInterrupt(stop);
       if (ended()) { stop(); return; }
-      if (deadline !== null) timer = ports.timers.setInterval(stop, Math.max(1, deadline - ports.now()));
+      const waitForDeadline = () => {
+        if (timer !== undefined) { ports.timers.clearInterval(timer); timer = undefined; }
+        if (ended()) { stop(); return; }
+        // Native timers overflow on far-future absolute deadlines. Each chunk
+        // only wakes this observer to recheck its own deadline and interruption.
+        timer = ports.timers.setInterval(waitForDeadline, Math.max(1, Math.min(60_000, deadline - ports.now())));
+      };
+      if (deadline !== null) waitForDeadline();
     })]);
   } finally {
     if (timer !== undefined) ports.timers.clearInterval(timer);

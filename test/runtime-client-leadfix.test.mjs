@@ -232,6 +232,11 @@ for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline
     return { status: 200, json: server.check('dead-paid', 'running') };
   });
   madeA = make(a, fake); madeB = make(b, fake);
+  // Native timer expiry must advance the supplied clock too, so the observer
+  // can recheck the absolute deadline rather than treating a tick as expiry.
+  madeB.ports.timers = {
+    setInterval: (fn, ms) => setInterval(() => { madeB.clock.now += ms; fn(); }, ms), clearInterval,
+  };
   const base = madeA.clock.now, mem = memorySlots(madeA, fake.origin), deadPath = join(mem.directory, 'dead.json');
   const paid = { id: 'dead', state: 'active', pid: 99, kind: 'check', started_at: base, request_ids: ['dead-paid'] };
   mem.records.set(deadPath, paid);
