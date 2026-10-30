@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "I can keep existing Key tables and use exact nested Path ownership with complete writer labels and optional schema links."
+      "text": "I can keep existing Key tables and use exact nested Path ownership with one writer per path and optional schema links."
     },
     {
       "id": "AC2",
@@ -20,46 +20,6 @@
     }
   ],
   "boundary": "real CLI argv or runContracts with real safe Git-visible filesystem discovery; no Runtime entry is claimed",
-  "supersedes": {
-    "cases": [
-      {
-        "file": "test/shared-contracts/local-contract-check.json",
-        "id": "legacy-table-check",
-        "reason": "Lead 13:59: optional Schema, opaque writer labels and non-schema skip."
-      },
-      {
-        "file": "test/shared-contracts/local-contract-check.json",
-        "id": "writer-list",
-        "reason": "Lead 13:59: optional Schema, opaque writer labels and non-schema skip."
-      },
-      {
-        "file": "test/shared-contracts/local-contract-check.json",
-        "id": "unknown-json-role",
-        "reason": "Lead 13:59: optional Schema, opaque writer labels and non-schema skip."
-      },
-      {
-        "file": "test/shared-contracts/local-contract-check.json",
-        "id": "empty-container-branch",
-        "reason": "Lead 13:59: optional Schema, opaque writer labels and non-schema skip."
-      },
-      {
-        "file": "test/shared-contracts/local-contract-check.json",
-        "id": "definite-problem-wins-unavailable",
-        "reason": "Lead 13:59: optional Schema, opaque writer labels and non-schema skip."
-      }
-    ],
-    "formal": [
-      {
-        "file": "test/local-contracts-check.formal.test.mjs",
-        "group": "formal F",
-        "configuration": {
-          "state": 0,
-          "extra": 2
-        },
-        "reason": "Unrelated note JSON skips; no unavailable predicate."
-      }
-    ]
-  },
   "setup": {
     "git_repository": true,
     "base_files": {
@@ -67,7 +27,7 @@
       "contracts/seed-world.json": "{\"items\":[0,2]}\n"
     },
     "case_files": "Each case starts from base_files, applies delete_files then set_files, all Git-visible. JSON content strings are exact authored bytes. No fixture describes a live app.",
-    "observations": "Diagnostics are exact projections on supplied fields; no extra diagnostics, each message nonempty. Counts count canonical schema validations attempted once and present value validations attempted, including invalid verdicts. JSON is exactly one object containing exit_code, checked_records, checked_world_values, skipped_files, diagnostics; diagnostic messages are nonempty, not fixed prose. Optional source_pointer and target appear only with actual provenance. Preserve all source bytes and modes; count native effects with spies. Superseded cases remain historical, never reported passing."
+    "observations": "Diagnostics are exact projections on supplied fields; no extra diagnostics, each message nonempty. Counts count canonical schema validations attempted once and present value validations attempted, including invalid verdicts. JSON is exactly one object containing exit_code, checked_records, checked_world_values, skipped_files, diagnostics, warnings; diagnostic messages are nonempty, not fixed prose. Optional source_pointer and target appear only with actual provenance. Preserve all source bytes and modes; count native effects with spies. All cases are active; design revisions are disclosed in the PR body. Warning messages must be finite nonblank strings, not exact prose; missing-schema quantities reflect the number of unique world_keys."
   },
   "cases": [
     {
@@ -101,7 +61,16 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/items"
+            ]
+          }
+        ]
       }
     },
     {
@@ -121,10 +90,17 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 0,
+        "exit_code": 4,
         "checked_records": 1,
         "checked_world_values": 1,
-        "diagnostics": [],
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "items",
+            "field": "Writer",
+            "kind": "problem"
+          }
+        ],
         "skipped_files": [],
         "source_bytes_unchanged": true,
         "source_modes_unchanged": true,
@@ -135,7 +111,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -174,7 +151,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -213,7 +191,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -257,7 +236,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -292,7 +272,17 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/wire",
+              "/wire/acks"
+            ]
+          }
+        ]
       }
     },
     {
@@ -334,7 +324,16 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/wire/acks"
+            ]
+          }
+        ]
       }
     },
     {
@@ -355,10 +354,29 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 0,
+        "exit_code": 4,
         "checked_records": 0,
         "checked_world_values": 0,
-        "diagnostics": [],
+        "diagnostics": [
+          {
+            "file": "contracts/world.md",
+            "record": "/calls/codex",
+            "field": "Writer",
+            "kind": "problem"
+          },
+          {
+            "file": "contracts/world.md",
+            "record": "/calls/pdd",
+            "field": "Writer",
+            "kind": "problem"
+          },
+          {
+            "file": "contracts/world.md",
+            "record": "/hosts/<machine_id>",
+            "field": "Writer",
+            "kind": "problem"
+          }
+        ],
         "skipped_files": [],
         "source_bytes_unchanged": true,
         "source_modes_unchanged": true,
@@ -369,7 +387,18 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/calls/codex",
+              "/calls/pdd",
+              "/hosts/<machine_id>"
+            ]
+          }
+        ]
       }
     },
     {
@@ -403,7 +432,16 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/items"
+            ]
+          }
+        ]
       }
     },
     {
@@ -439,7 +477,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -482,7 +521,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -523,7 +563,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -559,7 +600,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -596,7 +638,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -640,7 +683,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -682,7 +726,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -727,7 +772,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -761,7 +807,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -798,7 +845,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -831,7 +879,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -870,7 +919,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     },
     {
@@ -902,7 +952,8 @@
           "history": 0,
           "write": 0
         },
-        "syntax_error": true
+        "syntax_error": true,
+        "warnings": []
       }
     },
     {
@@ -935,7 +986,8 @@
           "history": 0,
           "write": 0
         },
-        "syntax_error": true
+        "syntax_error": true,
+        "warnings": []
       }
     },
     {
@@ -970,7 +1022,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": []
       }
     }
   ]

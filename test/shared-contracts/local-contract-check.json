@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "I see unavailable validation instead of a pass or an invented mismatch when a schema role or value predicate cannot be established locally."
+      "text": "I see unavailable validation instead of a pass or an invented mismatch when a required selected schema or value predicate cannot be established locally."
     },
     {
       "id": "AC6",
@@ -36,7 +36,7 @@
     },
     {
       "id": "AC9",
-      "text": "I can plan without world files when both are absent, while a missing partner or missing schema link identifies what needs fixing."
+      "text": "I can plan without world files when both are absent, while a missing partner or broken explicit schema link identifies what needs fixing."
     }
   ],
   "boundary": "real CLI argv or runContracts with real safe Git-visible filesystem discovery; no Runtime entry is claimed",
@@ -405,14 +405,8 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 4,
-        "diagnostics": [
-          {
-            "file": "contracts/world.md",
-            "record": "items",
-            "field": "Schema"
-          }
-        ],
+        "exit_code": 0,
+        "diagnostics": [],
         "source_bytes_unchanged": true,
         "calls": {
           "runtime": 0,
@@ -421,7 +415,8 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "skipped_files": []
       }
     },
     {
@@ -702,15 +697,8 @@
         "contracts/seed-world.json"
       ],
       "expected": {
-        "exit_code": 5,
-        "diagnostics": [
-          {
-            "file": "contracts/unknown.json",
-            "record": "contracts/unknown.json#",
-            "field": "/note",
-            "kind": "unavailable"
-          }
-        ],
+        "exit_code": 0,
+        "diagnostics": [],
         "source_bytes_unchanged": true,
         "calls": {
           "runtime": 0,
@@ -719,7 +707,10 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
       }
     },
     {
@@ -739,15 +730,8 @@
         "contracts/seed-world.json"
       ],
       "expected": {
-        "exit_code": 5,
-        "diagnostics": [
-          {
-            "file": "contracts/unknown.json",
-            "record": "contracts/unknown.json#",
-            "field": "/defs/bad",
-            "kind": "unavailable"
-          }
-        ],
+        "exit_code": 0,
+        "diagnostics": [],
         "source_bytes_unchanged": true,
         "calls": {
           "runtime": 0,
@@ -756,7 +740,10 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
       }
     },
     {
@@ -1501,12 +1488,6 @@
             "file": "contracts/seed-world.json",
             "record": "items",
             "field": "/items/0"
-          },
-          {
-            "file": "contracts/unknown.json",
-            "record": "contracts/unknown.json#",
-            "field": "/note",
-            "kind": "unavailable"
           }
         ],
         "source_bytes_unchanged": true,
@@ -1517,7 +1498,10 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "skipped_files": [
+          "contracts/unknown.json"
+        ]
       }
     },
     {

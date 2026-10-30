@@ -155,17 +155,24 @@ Before sending work, pdd asks whether the runtime has room. During announced mai
 `pdd contracts --check` writes nothing and reads no Check history. It cannot be
 combined with `sync` or `--write`. Both world files may be absent; if either
 `contracts/world.md` or `contracts/seed-world.json` exists, both are required.
-The first Key/Writer or Path/Writer ownership table may omit Schema. Only explicit
-schema links validate seed values. Key tables require every top-level seed key
-to have a declaration; Path tables check exact declared ownership without inferred
-seed coverage or template matching. Complete writer labels may contain commas;
-parent and child paths may have different writers. Identical declarations
-coalesce, while conflicting labels or explicit schema mappings for the same
-exact path fail. JSON schema-map leaves validate without implicitly authorizing
-copy agreement. Seed data is never mistaken for schemas. Unrelated JSON skips;
-unjudged value patterns and precision that cannot be checked without rounding
-report validation unavailable with a location. Ordinary finite decimal
-bounds and enum values can be checked locally; uncertainty never produces a false pass.
+The first Key/Writer or Path/Writer table may omit Schema. Leading `/` cells
+are JSON Pointers under either heading (`~1` escapes `/`, `~0` escapes `~`);
+bare Keys name exact top-level keys. A nested Key declaration covers its root
+seed namespace without assigning parent ownership. Uncovered extra seed keys
+fail; Path tables require no seed coverage. Split Writer cells on commas,
+standalone `and` or `/`; identical trimmed actors coalesce and multiple actors
+fail. Parent and child paths have independent owners.
+
+Explicit Schema targets take precedence; otherwise one canonical declared record
+named or linked in a row supplies the schema. Ambiguous/unknown inference warns
+that seed values were not checked; it never guesses a plural, array wrapper or
+template. JSON members validate beside primitive metadata; annotations, resources,
+simulation and seed data are not searched for schemas. Files with no schemas
+skip in one named summary. Implicit members do not authorize copy agreement.
+Declared records with identical field sets but different shapes warn once per
+pair without introducing a refusal. Unjudged value patterns and precision that
+cannot be checked without rounding remain unavailable. Ordinary finite decimal
+bounds and enum values can be checked locally.
 
 Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
 The Markdown section has a `### order_in` heading and one JSON code block;
@@ -206,11 +213,10 @@ approved interface set it to draft; review the preview and approve it as usual.
 
 See [Build a whole product](build-a-whole-product.md).
 
-For `pdd contracts --check`, world tables accept Key or Path and Writer columns;
-Schema is optional. Ownership is per exact path, with the complete Writer cell
-as its label. Non-schema JSON files are skipped in one summary. Inline object
-copies need at least three properties; differing copies need an eligible shared
-record with at least four properties. Smaller copies are not compared. Only
-declared records supply copy authorities; incidental nested schemas do not.
-`--json` requires `--check` and prints counts, skipped files and diagnostics as
-one JSON object with the same exit code as text output.
+For `pdd contracts --check --json`, one JSON object contains `exit_code`,
+`checked_records`, `checked_world_values`, `skipped_files`, `diagnostics` and
+`warnings`. Warnings carry unchecked declaration names or disagreeing canonical
+record identities, separate from problems. Warnings alone exit 0; text reports
+the same facts. `--json` requires `--check`. Inline-copy thresholds stay unchanged:
+three properties for exact copies, four in a differing canonical record. Only
+declared records authorize copy agreement; incidental members do not.

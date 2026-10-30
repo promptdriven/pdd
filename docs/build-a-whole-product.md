@@ -28,16 +28,20 @@ Read the [file formats](../skills/pdd-product/references/files.md) for the map,
 plan tables and contract records. `product/map.md` lists parts, Stories, journeys
 and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
-Each world-table row has one Writer and an explicit Schema target for the whole
-value of its Key, for example `contracts/world.md#orders` for an array of orders.
-A declared key may be absent initially; each present seed key needs a declaration.
+Each world-table row has one writer. A Schema target can describe the whole
+value, for example `contracts/world.md#orders` for an array. When omitted, a
+unique declared record named or linked in the row supplies its schema; otherwise
+the check reports unchecked declarations. Leading slash Key or Path cells are
+exact JSON Pointers. Key namespace declarations such as `/kv/shop` cover the
+root seed container without assigning a writer to its parents. A declared key
+may be absent initially; uncovered top-level seed keys need declarations.
 The coffee example adds illustrative world schemas alongside its table; these
 are authored shared shapes, not a proof of how a running part writes data.
 
 Before the plan PR, run `pdd contracts --check`. It checks supported schemas,
 references, eligible inline-copy drift, declared writers and seed values locally,
-with no authentication, runtime slot, server or model call. Exit 0 means the
-local check is complete; 4 identifies a definite problem; 5 means I/O or validation
+with no authentication, runtime slot, server or model call. Exit 0 means no definite problem or unavailable required validation was found;
+review advisory unchecked-values and disagreement warnings; 4 identifies a definite problem; 5 means I/O or validation
 is unavailable. Diagnostics name the file, record/key and field. Nonportable
 patterns and numeric predicates outside the local exact range can be unavailable;
 a local result does not prove runtime behavior. Fix or review reported gaps.
@@ -96,9 +100,10 @@ Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product Try to test the path across parts. Status tracks journeys
 separately from each part's Stories.
 
-World ownership tables may use Key or Path, with one complete Writer label per
-exact path. Schema links are optional; declared links check the corresponding
-seed value. Non-schema JSON files are skipped. Copy drift compares declared
-records only: object copies with fewer than three properties are not compared,
-and differing candidates require a shared record with at least four properties.
-Use `pdd contracts --check --json` for structured counts and diagnostics.
+World ownership tables accept Key or Path. Writer cells split on commas,
+standalone `and` or `/`; repeated identical actors coalesce and multiple actors
+fail. JSON contract members validate beside metadata; files with no schemas
+are skipped in one named summary. Copy drift compares declared authorities,
+while incidental nested copies cannot hide it. Same-field-set disagreements
+between valid declared records warn without refusing the plan. Use
+`pdd contracts --check --json` for counts, diagnostics and separate warnings.

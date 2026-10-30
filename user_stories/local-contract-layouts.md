@@ -2,22 +2,26 @@
 
 ## Acceptance criteria
 
-1. I can keep existing Key tables and use exact nested Path ownership with complete writer labels and optional schema links.
+1. I can keep existing Key tables and use exact nested Path ownership with one writer per path and optional schema links.
 2. I see unrelated JSON skipped once while declared invalid schemas and real copy drift still fail.
 3. I can read the same local check facts as JSON without changing files or contacting a service.
 4. I keep schema-map validation and copy eligibility while incidental legacy copies cannot hide drift.
 
 ## Rules to check
 
-A Key table retains top-level seed coverage. A Path table compares exact declared
-paths only: parent and child may have different writer labels. A writer label is
-the complete nonblank cell, even with commas. Schema links are optional; only
-explicit links require value validation. Declared invalid schemas fail with 4;
-non-schema files skip, while genuinely unproved value predicates remain 5.
-Implicit wrapper leaves validate but cannot authorize copy agreement. The original
-object-copy size thresholds remain unchanged. JSON and text have the same facts;
-JSON alone or with sync is syntax exit 2. No runtime, model, auth, slot, history or
-source write occurs during a valid local check.
+Key and Path cells beginning with `/` are exact JSON Pointers. Bare Keys retain
+top-level identity and namespace declarations cover their root seed container
+without assigning parent ownership. Writer lists split on commas, standalone
+`and` or `/`; repeated identical actors coalesce, multiple actors fail. Optional
+schemas can be inferred from one declared record identity named or linked in a
+row; unresolved or ambiguous inference warns without a refusal. Primitive JSON
+metadata never suppresses a recognized schema member. Annotation/resource/
+simulation and seed values are not mined as schemas. Implicit member leaves
+validate without gaining copy authority. Existing copy thresholds remain.
+Warnings report unchecked declarations and disagreeing declared records without
+changing a successful exit. JSON and text carry the same facts; no runtime,
+model, authentication, slot, history or source write occurs. JSON alone or with
+sync remains syntax exit 2.
 
 Runtime check: Not run: this Story uses native CLI/Git/filesystem cases, with
 no Runtime entry claimed. Native replay follows the reviewed source oracle.
