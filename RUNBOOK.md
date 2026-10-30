@@ -275,7 +275,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 ## 11. `pdd check`
 
 `pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
-`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` and `--read` send nothing.
+`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
 Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
 `pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
