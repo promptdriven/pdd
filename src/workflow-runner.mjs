@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8481eb77050b2a4a831b51c01a751eb58f3926501cdc7d13283fad222f6977cc).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 34e74d202bf4f51cafad8c2797292cc13b1c9df9b3aac219b8804dc2ba595a81).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -318,7 +318,10 @@ export async function startRun({ name, issue, agent = 'codex', base, adoptCorpus
   try {
   if(adoptCorpus !== undefined) {
     try {
-      if(!explicitBase) await rawGit(p,context.toplevel,'fetch','origin',baseBranch);
+      if(!explicitBase) {
+        try {await rawGit(p,context.toplevel,'fetch','origin',baseBranch);}
+        catch {return {exitCode:2,message:'Cannot adopt the approved corpus (unavailable: startup fetch failed). Repair the source or start an ordinary approval workflow. No new run was started.'};}
+      }
       const selectedBase=await git(p,context.toplevel,'rev-parse','--verify','--end-of-options',`refs/remotes/origin/${baseBranch}^{commit}`);
       adoption=await adoptReplayCorpus(context.toplevel,resolve(cwd,adoptCorpus),{currentRef:selectedBase,onSnapshot:s=>{adoptionSnapshot=s;},onNativeDeclaration:bytes=>{declarationBytes=bytes;}});
       if(adoption.outcome!=='adopted')return {exitCode:2,message:`Cannot adopt the approved corpus (${adoption.reason}${adoption.cause ? `: ${adoption.cause}` : ''}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};

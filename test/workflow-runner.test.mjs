@@ -2376,3 +2376,21 @@ test('2640 final step publication validates adoption once after automatic commit
   assert.match(f.prs[0].body,/Code replay: BLOCKED/);
   t.diagnostic('final step + automatic publication commit: one full adoption validation (one actual Git ancestry check)');
 });
+
+for(const mode of ['throw','exit-code'])test(`2640 rework startup fetch failure ${mode} names fetch and never allocates or leaks stderr`,async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});const original=f.ports.execFile;
+  const before=f.git(f.source,'worktree','list','--porcelain');let allocations=0,fetches=0;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git'&&args[0]==='worktree'&&args[1]==='add')allocations++;
+    if(file==='git'&&args[0]==='fetch'){
+      fetches++;const error=Error(`fetch refused ${f.base} password=hiddenPassword ghp_hiddenCredential`);
+      error.stderr=`fatal: /private/person/remote https://runtime.invalid/s/capability Authorization: Bearer hiddenToken`;
+      if(mode==='exit-code')return {code:128,stderr:error.stderr,stdout:error.message};
+      throw error;
+    }
+    return original(file,args,options);
+  };
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/fetch failed/i);assert.equal(fetches,1);assert.equal(allocations,0);
+  assert.ok(!out.message.includes(f.base));assert.doesNotMatch(out.message,/hiddenPassword|hiddenCredential|hiddenToken|capability|private|person|Authorization|fatal:/);
+  assert.equal(f.herdr.calls.length,0);assert.equal(f.git(f.source,'worktree','list','--porcelain'),before);assert.throws(()=>f.record());
+});

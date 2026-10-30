@@ -16,7 +16,11 @@ for(const step of doc.steps) test(`2640 vector ${step.step_id}`,async()=>{
   assert.equal(calls,1);
   for(const [index,check] of step.checks.entries()) {
     assert.equal(check.target,'result',`Unmapped target: ${check.target}`);
-    assert.equal(check.op,'equals',`Unmapped assertion: ${check.op}`);
-    assert.deepEqual(pointer(result,check.path),check.value,`${step.step_id} check ${index} ${check.criterion_id} ${check.path}`);
+    const actual=pointer(result,check.path), label=`${step.step_id} check ${index} ${check.criterion_id} ${check.path}`;
+    if(check.op==='equals')assert.deepEqual(actual,check.value,label);
+    else if(check.op==='contains') {
+      assert.ok(typeof actual==='string' || Array.isArray(actual),`${label}: contains requires a string or array`);
+      assert.ok(actual.includes(check.value),`${label}: missing ${JSON.stringify(check.value)} in ${JSON.stringify(actual)}`);
+    } else assert.fail(`Unmapped assertion: ${check.op}`);
   }
 });

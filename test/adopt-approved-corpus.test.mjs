@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync,symlinkSync,linkSync} from 'node:fs';
+import {existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync,symlinkSync,linkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {adoptReplayCorpus,pinReplayVectors,sourceFingerprint} from '../src/workflow-replay.mjs';
@@ -138,4 +138,63 @@ test('2640 immutable corpus reads batch Git blobs across many declared scenarios
 test('2640 refusal causes are useful, bounded single lines without private paths credentials or Try URLs',async()=>{
   const result=await adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>{throw Error('Read failed: ENOENT prompts/missing.prompt.md /private/person/corpus.json password=secret Authorization: Bearer hiddenToken ghp_hiddenCredential https://runtime.invalid/s/capability\nnext');}});
   assert.equal(result.reason,'unavailable');assert.match(result.cause,/Read failed: ENOENT prompts\/missing\.prompt\.md/);assert.ok(result.cause.length<=1000);assert.doesNotMatch(result.cause,/private|person|secret|hiddenToken|hiddenCredential|capability|https:|[\r\n]/);
+});
+
+for(const mode of ['over-limit','missing-key','duplicate','noncanonical','git-case'])test(`2640 rework native declaration cause ${mode}`,async t=>{
+  const f=fixture(t),path='arbitrary/é corpus.json';
+  const fragments={
+    'over-limit':['scenarios','201','200'],
+    'missing-key':['scenarios','missing'],
+    duplicate:['duplicate',path],
+    noncanonical:['noncanonical','./tests/a.json'],
+    'git-case':['noncanonical','.GIT/config']
+  };
+  if(mode==='over-limit')f.declaration.scenarios=Array.from({length:201},(_,i)=>`tests/${i}.json`);
+  if(mode==='missing-key')delete f.declaration.scenarios;
+  if(mode==='duplicate')f.declaration.scenarios.push(path);
+  if(mode==='noncanonical')f.declaration.scenarios=['./tests/a.json'];
+  if(mode==='git-case')f.declaration.scenarios=['.GIT/config'];
+  f.save();const result=await f.adopt();assert.equal(result.reason,'invalid-approval');
+  for(const fragment of fragments[mode])assert.ok(result.cause.includes(fragment),`Missing ${fragment} in ${result.cause}`);
+  assert.doesNotMatch(result.cause,/[\r\n]/);assert.ok(!result.cause.includes(f.base));
+});
+for(const mode of ['approved','current-commit','deleted-worktree'])test(`2640 rework native missing scenario names source and relative path ${mode}`,async t=>{
+  const f=fixture(t),path='arbitrary/é corpus.json';
+  let result;
+  if(mode==='approved'){f.declaration.scenarios=['tests/missing.json'];f.save();result=await f.adopt();}
+  else {
+    rmSync(join(f.root,path));
+    if(mode==='current-commit'){
+      f.git('add','-A');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Remove current scenario');
+      result=await adoptReplayCorpus(f.root,f.file,{currentRef:'HEAD'});
+    }else result=await f.adopt();
+  }
+  assert.equal(result.reason,'unavailable');assert.match(result.cause,/missing/i);
+  assert.match(result.cause,mode==='approved'?/approved/i:/current/i);
+  assert.ok(result.cause.includes(mode==='approved'?'tests/missing.json':path),result.cause);
+  assert.ok(!result.cause.includes(f.base));assert.doesNotMatch(result.cause,/[\r\n]/);
+});
+test('2640 rework malformed declaration paths retain useful cause without credentials or host paths',async t=>{
+  const f=fixture(t);f.declaration.scenarios=['./tests/a.json\npassword=hiddenPassword ghp_hiddenCredential https://runtime.invalid/s/capability /private/person/data'];f.save();
+  const result=await f.adopt();assert.equal(result.reason,'invalid-approval');assert.match(result.cause,/noncanonical/);assert.ok(result.cause.includes('./tests/a.json'));
+  assert.doesNotMatch(result.cause,/hiddenPassword|hiddenCredential|capability|https:|private|person|[\r\n]/);
+});
+test('2640 rework rejects case-variant Git directory in approved tree before scratch writes',async t=>{
+  const f=fixture(t),index=readFileSync(join(f.root,'.git/index'));
+  const gitInput=(args,input)=>execFileSync('git',args,{cwd:f.root,input,encoding:'utf8'}).trim();
+  const blob=gitInput(['hash-object','-w','--stdin'],`[core]\nworktree = ${f.root}\n`);
+  const subtree=gitInput(['mktree'],`100644 blob ${blob}\tconfig\n`);
+  const tree=gitInput(['mktree'],f.git('ls-tree','HEAD')+`\n040000 tree ${subtree}\t.GIT\n`);
+  const commit=gitInput(['-c','user.name=Test','-c','user.email=test@example.invalid','commit-tree',tree,'-p',f.declaration.commit],'Synthetic unsafe tree\n');
+  f.git('update-ref','HEAD',commit);f.declaration.commit=commit;f.save();
+  // Observe the scratch view at its Git boundary: no source-controlled .GIT
+  // config may be present when Git initializes it, even on case-sensitive CI.
+  const bin=join(f.base,'bin'),marker=join(f.base,'unsafe-view');mkdirSync(bin);
+  const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
+  writeFileSync(join(bin,'git'),`#!/bin/sh\nif [ "$1" = init ] && [ -e .GIT/config ]; then printf unsafe > "$PDD_UNSAFE_VIEW"; fi\nexec '${git.replaceAll("'","'\\''")}' "$@"\n`,{mode:0o755});
+  const script=`import {adoptReplayCorpus} from ${JSON.stringify(new URL('../src/workflow-replay.mjs',import.meta.url).href)};console.log(JSON.stringify(await adoptReplayCorpus(process.argv[1],process.argv[2])));`;
+  const result=JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,f.root,f.file],{encoding:'utf8',env:{...process.env,PATH:`${bin}:${process.env.PATH}`,PDD_UNSAFE_VIEW:marker}}));
+  assert.equal(existsSync(marker),false,'Git must never initialize a view containing the tree-controlled .GIT/config');
+  assert.equal(result.reason,'unavailable');assert.match(result.cause,/path/i);assert.ok(result.cause.includes('.GIT/config'),result.cause);
+  assert.deepEqual(readFileSync(join(f.root,'.git/index')),index);assert.doesNotMatch(f.git('config','--local','--list'),/^core\.worktree=/m);
 });
