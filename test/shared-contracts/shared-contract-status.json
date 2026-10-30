@@ -25,6 +25,14 @@
     {
       "id": "AC6",
       "text": "Listing contracts makes no runtime call and changes no source or history."
+    },
+    {
+      "id": "AC7",
+      "text": "Checking one test, all tests of the same Story or a larger batch leaves an unchanged Story current."
+    },
+    {
+      "id": "AC8",
+      "text": "Listing many records from one JSON file reads and parses that file once and leaves independent uses unchanged."
     }
   ],
   "cases": [
@@ -75,6 +83,22 @@
       ],
       "given": "offline local catalog/history with auth/fetch/slot/write spies",
       "required_observation": "all external and write counts 0; finite local output"
+    },
+    {
+      "id": "selection-independent-story",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "Story A has tests one.json and two.json using distinct prompts and dependency files; Story B has other.json; save actual A baseline from one.json, then list against all tests; repeat baseline from both A tests and A+B batch",
+      "required_observation": "A footprint has both A tests and their own closures and stays identical/current across selections; B dependencies absent from A; selected upload includes only selected tests; changing A second-test dependency makes A stale"
+    },
+    {
+      "id": "single-json-parse",
+      "criteria": [
+        "AC8"
+      ],
+      "given": "one synthetic JSON contract file containing 256 independent object-schema records plus used leaf pointers and repeated nested targets; repeat catalog with 512 records; use parser/read instrumentation on the existing public codec if present, no extra parser",
+      "required_observation": "each file read/parsed once per catalog operation; independent records and annotations do not mutate cached values; no complete-file parse per record; output catalog identities and values exact; no timing gate"
     }
   ]
 }
