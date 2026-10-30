@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 89752e2b49583cc7b857ab463fdfa2d9f42396cb2781a26d440720bf16117265).
+// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 1afdea020a802fdc38eb2660ef9dd5b070d6dcb49b853708ec9fe740c7d6f8e4).
 import { runAgentProcess } from './agent-adapters.mjs';
 
 const agents = ['codex', 'claude'];
