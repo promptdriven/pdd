@@ -83,6 +83,30 @@ When attempts/time run out, show busy/not-run with zero calls and plain advice t
 
 `pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved retry-after deadline across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs) and at most three attempts per eligible test. `--read` remains GET-only. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
 
+## Concurrent saved-batch operations
+
+One batch has one writer across processes, including separate terminals. A new Check or
+explicit lint owns its batch before the first saved record. Batch `--read` and `--retry`
+acquire that same ownership before loading the saved record, and retain it through all
+reads, retry decisions, request-ID persistence, POSTs and final batch/summary saves.
+After waiting, load the current record anew: a competing retry observes the first retry's
+submitted/completed ID and never sends that check again. Different batches remain independent.
+UUID reads retain the raw-receipt-only rule below and do not wait for batch ownership.
+
+Use the native `acquireRuntimeBatchLock(folder, {signal, timeoutMs})` boundary, replaceable
+by `ports.acquireBatchLock` for runtime-faked execution. It resolves to an idempotent release
+function. Wait at most 30 seconds, shortened by the retry's remaining command budget, and
+honor interruption before admission. Ownership is never stolen because of age: a slow or
+unresponsive process may still POST. Only a provably dead local process (PID check gives
+ESRCH) permits abandoned owner recovery, serialized against other claimants. A malformed
+owner, uncertain PID status or abandoned acquisition guard fails closed. Release ownership
+on every normal return, interruption and exception. Native state stays private (0700 folder,
+0600 files); never remove another owner's lock. A timeout or interruption exits 3, explains
+that another command is using this batch (or that waiting stopped), and names the same
+`pdd check --read BATCH` recovery command without sending or modifying batch/summary data.
+If an acquisition guard is abandoned, explain that the person must verify no command is
+using this batch before removing its named guard file; do not automatically erase it.
+
 ## Preserve recovered check receipts
 
 A locally held check becomes a submitted server check as soon as dispatch may have occurred. Recover each latest attempt by this lifecycle; request ID allocation alone is not acceptance:
