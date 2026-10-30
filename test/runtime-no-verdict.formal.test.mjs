@@ -27,7 +27,8 @@ function* partitions(length, prefix = []) {
 function expectedMark(rows) {
   const evidence = new Set(rows.map(row => row.state));
   const candidates = [[0, 'no verdict ·']];
-  if (rows.length && rows.every(row => row.state === 'not_run' && row.busy === true)) candidates.push([1, 'busy ·']);
+  if (rows.some(row => row.state === 'not_run' && row.busy === true) &&
+      rows.every(row => row.state === 'passed' || (row.state === 'not_run' && row.busy === true))) candidates.push([1, 'busy ·']);
   if (evidence.has('queued') || evidence.has('running')) candidates.push([2, 'running ·']);
   if (rows.length && evidence.size === 1 && evidence.has('passed')) candidates.push([3, '✓']);
   if (evidence.has('failed')) candidates.push([4, '✗']);
