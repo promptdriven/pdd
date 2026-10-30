@@ -884,9 +884,12 @@ function heldForLint(row) {
       || /lint result is unknown.*sent no checks/i.test(row.note?.message ?? '')
       || row.phase === 'lint' && row.note?.code === 'lint-finished');
 }
+function validSavedCallCeiling(row) {
+  return Number.isInteger(row.max_calls) && row.max_calls >= 1 && row.max_calls <= 1000;
+}
 function validSavedCheck(row) {
   const text = value => typeof value === 'string' && !!value.trim();
-  if (!Number.isInteger(row.max_calls) || row.max_calls < 1 || row.max_calls > 1000
+  if (!validSavedCallCeiling(row)
     || !Number.isInteger(row.criteria_total) || row.criteria_total <= 0
     || !Array.isArray(row.steps) || !row.steps.length) return false;
   const ids = new Set(), criteria = new Set();
@@ -908,9 +911,10 @@ async function continueHeld(context, candidates, saved) {
   candidates = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
   if (!candidates.length) return;
   if (saved.version !== 1 || (saved.intent !== undefined && saved.intent !== 'check')
+    || !candidates.every(validSavedCallCeiling)
     || (saved.intent === undefined && !candidates.every(validSavedCheck))
     || candidates.some(row => Object.hasOwn(row, 'calls') && row.calls !== 0)) {
-    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch has no unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
+    context.continuationNotice = 'No checks were sent for the lint-held rows: the saved batch lacks valid original call ceilings, unambiguous Check intent or zero-call lint-held proof. Start a fresh selected pdd check.';
     return;
   }
   if (context.lintPending || context.lintUnknown) return;
@@ -980,9 +984,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
       const wait = capacityDelay(admission.error);
       if (wait !== null) { markBusy(context, row, wait); return; }
     }
-    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     const answer = store.read(join(context.folder, `${id}.json`));
+    // Local terminal receipts remain available even when another row used the network wait.
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
+    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     if (['queued', 'running', 'unknown'].includes(row.state)) {
       row.lost = true;
       await readRow(context, row);
