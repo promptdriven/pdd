@@ -19,12 +19,12 @@ explicitly opt in to replay evidence; adoption never enables a custom workflow's
 Before releasing a cancelled-run claim, allocating a worktree, saving a run or starting
 Herdr, validate the selected base content through `adoptReplayCorpus` in
 [replay evidence](workflow-replay.prompt.md#corpus-adoption). Failure exits 2 with a
-finite repair reason; retain historical runs, branches and files unchanged.
+finite repair reason and the replay owner's cleaned native cause when available; retain historical runs, branches and files unchanged.
 
 After worktree allocation, revalidate its actual content before saving an active run
 or starting Herdr; report failure without fabricating success if it differs.
 Save an immutable bounded copy of the declaration bytes and computed digest in the
-new run folder; later validation uses this copy and pinned commit, never a caller
+new run folder, using a realpath-resolved temporary directory even under a symlinked TMPDIR; later validation uses this copy and pinned commit, never a caller
 edit of FILE. Removing or changing the external FILE after successful startup cannot
 alter or invalidate the frozen authority. Save the successful selection's provenance and the anchor produced by existing
 `pinReplayVectors` as `run.replayAdoption` and `run.replayBaseline`. Preserve every
@@ -34,10 +34,15 @@ All ordinary workflow gates remain. Announce the external-assertion trust bounda
 from the replay owner; never describe adoption as authenticated human approval or execution.
 
 For an adopted run, prompt publication must revalidate the same approved prompt,
-required dependency closure and complete scenario bytes against the original source.
+required dependency closure and complete declared scenario bytes against the original source.
 Keep the adopted anchor; the changed-file refresh rule below applies only without
 adoption. Revalidate immediately before entering code and each code publication,
-including retries. A changed, added, removed or unreadable covered file blocks reuse
+including retries. Freeze declaration digest and declared scope with provenance.
+After the automatic publication commit, perform one adoption validation scan per
+publication and reuse its result for replay and publication decisions. Retries use
+the frozen authority and revalidate current content; an invalid observation must
+clear any old PASS before publication, never briefly publish stale PASS.
+A changed, added, removed or unreadable covered file blocks reuse
 with advice to start an ordinary approval workflow for changed requirements; it must
 not replace the anchor or silently fall back to diff selection. Unrelated implementation
 changes remain allowed and bind subsequent replay to the current source fingerprint.
