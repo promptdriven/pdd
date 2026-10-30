@@ -142,7 +142,11 @@ positions as expansion, skipping existing references. Compare object schemas wit
 object `properties` only. Candidate field sets are identical, or their symmetric
 difference has exactly one field. Semantic equality ignores object key order and
 local title/description, but preserves every other value, nested constraint,
-required field and array order. A differing candidate is drift, including changed
+required field and array order. For this comparison, JSON number tokens are equal
+exactly when they represent the same mathematical value: `1`, `1.0` and `1e0`
+are equal, as are `0`, `-0`, `0.0` and `0e0`. Distinct exact values, including
+`9007199254740993` and `9007199254740992`, must compare different even when binary
+rounding would collapse them. A differing candidate is drift, including changed
 nested types with the same field set; an equal candidate needs no drift warning.
 Prefer a unique exact candidate; otherwise require exactly one candidate. Multiple
 candidates produce advice and no selected match.
@@ -167,7 +171,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "b9c620e52419848fb8d8216cc2681affb0b169e7ebfdb202057d439a2a85aa2d",
+  "status": "draft", "prose_sha256": "415346a2ce4147999e74834f279a0f9f3f01e876b3dad31879223a3bed94ee7a",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

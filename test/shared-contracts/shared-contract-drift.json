@@ -63,6 +63,30 @@
       ],
       "given": "fake server lint passes then refuses in separate runs; drift advice in both",
       "required_observation": "exit 0 then 4 follows server result; same upload/request semantics; no checks or expected-value writes"
+    },
+    {
+      "id": "equal-number-spellings",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "one record and inline copies with identical fields and constraints except nested count.minimum uses 1, 1.0 or 1e0; repeat with 0, -0, 0.0 and 0e0",
+      "required_observation": "each copy selects the unique record as an exact match with no differences or drift advice"
+    },
+    {
+      "id": "distinct-large-numbers",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "same fields; nested count.minimum is the exact JSON token 9007199254740993 in copy and 9007199254740992 in the only record",
+      "required_observation": "near match and drift advice identify the nested minimum difference with both exact values; no exact match despite binary rounding"
+    },
+    {
+      "id": "equivalent-number-ambiguity",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "two records with different canonical targets and identical fields and constraints except nested count.minimum uses 1 and 1.0; inline copy uses 1e0",
+      "required_observation": "both records are semantically exact candidates; ambiguous warning and no selected match or arbitrary reference"
     }
   ]
 }
