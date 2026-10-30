@@ -11,3 +11,10 @@ I can see which planned Stories passed on current files and which need another c
 ## Rules to check
 
 Only a pass bound to current files is a local current pass. P010 must never satisfy P01. A stale pass must not appear as current.
+
+Only this run's same-repository PRs supply its progress. A later code PR with no
+check results must not hide the prompt PR's results or change their attribution.
+Forks, comments and another run's references cannot supply progress or completion.
+After implementation merges, freshness follows current base-branch files, not
+the finished run's retained worktree. An unavailable base is unverified, with a
+warning. A visible dependency cycle names its closed path.

@@ -37,6 +37,17 @@ a planned run is done when its implementation PR is merged. Commands read local
 base refs, which may be stale, and do not prove a person's approval. Large plans
 describe the journey of each slice.
 
+## Planned-run identity
+
+The issue for a planned run carries `<!-- pdd-product: run=RUN -->`, with RUN
+replaced by its exact plan run ID. This marker is case-sensitive; phone-1 and
+phone-10 are different. Issue writers put the marker on its own line; lookup
+still recognizes the exact comment within an issue body. More than one
+distinct planned-run marker does not identify one run. The workflow runner may
+retain one unambiguous marker in its private run record and carry it into that
+run's PR descriptions, once on its own line. The marker identifies the planned run within its
+repository; a reference in a comment or unrelated prose is not PR ownership.
+
 ## Contracts
 
 `contracts/*.md` starts with a title and an Owner line naming the plan run.
