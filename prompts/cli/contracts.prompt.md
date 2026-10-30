@@ -28,7 +28,12 @@ check` with the affected record identities and `stale: needs a new check` with
 the affected Stories. A changed common record affects all its users. Another
 record in the same file and another Story in the same batch do not become stale
 merely because they shared a file or batch. Other source changes retain ordinary
-source freshness behavior. A baseline records a check, not necessarily a pass;
+source freshness behavior. Each Story's current effective footprint is independent
+of which other tests were selected: checking one file, all tests for that Story,
+or a multi-Story batch must produce the same footprint for unchanged Story
+inputs. Account for all discovered tests belonging to that Story and their own
+closures, without adding another Story's files. A baseline records a check, not
+necessarily a pass;
 never display a failed result as passing.
 
 With no actual Check baseline or a legacy baseline lacking reference provenance,
@@ -46,7 +51,14 @@ well as near copies; differing near copies explicitly adopt the canonical shape.
 
 `pdd contracts sync --write` explicitly authorizes applying these proposals.
 Before each write require the same safe destination and exact previewed `before`
-bytes; a concurrent edit refuses that file without overwriting it. Preserve
+bytes; a concurrent edit refuses that file without overwriting it. Write the
+complete planned bytes into a new exclusive temporary regular file in the safe
+destination directory, then atomically rename it into place. Recheck destination
+identity, safe ancestors and exact `before` bytes immediately before replacement;
+a concurrent content/identity change or symlink refuses without overwriting it
+or its target. Failed preparation or replacement leaves the original complete
+and removes only this operation's temporary file. Readers see the complete
+original or complete replacement, never a truncated/intermediate file. Preserve
 unrelated files, prose and unmatched schemas. Write only planned `after` bytes;
 report changed paths and skipped/failed paths. Use the planner's draft transition
 for edited approved interfaces; never approve, fill hashes or change expectations.

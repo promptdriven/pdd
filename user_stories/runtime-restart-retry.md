@@ -7,6 +7,7 @@ I can recover a check interrupted by a confirmed runtime restart once while reta
 1. Only a same-ID check ending unknown with service-restarted permits a replacement with a fresh attempt ID and the original source and call ceiling.
 2. Each Story row gets at most one replacement across repeated or concurrent saved reads and retries.
 3. Recovery preserves both attempts' request IDs, receipts and known or unknown usage.
+4. Waiting through restart recovery avoids repeated source packing while still checking the saved source before an authorized replacement.
 
 ## Rules to check
 

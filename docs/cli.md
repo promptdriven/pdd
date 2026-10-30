@@ -174,10 +174,18 @@ key; their parents must exist. Expected values and literal inputs stay literal.
 
 Check, lint and Try use expanded schemas/worlds, including uploaded bytes. A
 missing target stops before upload. Real schema `$ref` remains refused. Explicit
-`pdd check --lint` advises about differing copies with the same fields or one
-extra/missing field; advice does not fail a check. Listing uses actual Check
+`pdd check --lint` skips inline schemas with fewer than three fields. It advises
+about a differing copy only when the shared record has at least four fields and
+the copy has the same fields or one extra/missing field. Equal three-field copies
+can still move to references. Required-field lists and enum alternatives compare
+without order; arrays inside literal values keep their order. Advice does not
+fail a check. Expanded uploads keep the original JSON layout and key order.
+Sync changes only selected schema values and an approved-to-draft status, using
+an atomic file replacement that refuses concurrent edits and unsafe paths. Listing uses actual Check
 history, never lint as a check; no baseline is shown as not checked/unavailable.
-Only Stories using a changed record become stale because of that record.
+Only Stories using a changed record become stale because of that record. A
+Story stays current when you check one of its tests or include it in a larger
+batch without changing its files.
 
 `pdd approve` still approves prompt prose; it does not cover shared contract
 contents. Editing a contract never approves a prompt. Sync writes that edit an

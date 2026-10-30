@@ -41,13 +41,24 @@ and ancestor checks before reading; unsafe paths give `contract-unsafe`.
 `files.read({path})` returns `{content}`. Stat before read; a missing file gives
 `contract-missing`, a symlink gives `contract-unsafe`. The caller supplies a safe
 adapter that also rejects hidden unsafe ancestors and nonregular files. Port
-failures retain the consumer and target in a finite diagnostic.
+failures retain the consumer and target in a finite diagnostic. A target whose
+stat size exceeds 10,485,760 bytes is refused before read with `contract-invalid`
+and a finite too-big diagnostic naming consumer and target. Enforce that same
+existing source-byte limit during recursive expansion, before a branch, clone,
+provenance snapshot or text replacement can materialize an oversized value. The
+final UTF-8 effective source and each expanded record/world must fit; equality
+with the limit is allowed here. Stop with `contract-invalid`, never a partial
+result, a native allocation failure or an unbounded expansion. Preflight still
+owns the aggregate selected-file and tar limits.
 
 <details>
 <summary>Record selection, pointers and cycles</summary>
 
 Markdown targets are `contracts/x.md#heading`: a level-three heading owns text
-until the next level-one/two/three heading outside fenced blocks. Its record is
+until the next level-one/two/three heading outside fenced blocks. Retain literal
+trailing hashes in a title, so `### C#` names `C#`. Remove an optional ATX closing
+run of hashes only when separated from title text by whitespace: `### C# ###`
+also names `C#`. Its record is
 exactly one fenced `json` block. No JSON block means a descriptive section: ignore
 it in the catalog, but selecting it gives `contract-missing`. Multiple JSON blocks
 or invalid JSON give `contract-invalid`. Unrelated descriptive sections do not
@@ -113,21 +124,31 @@ exact number tokens, including `9007199254740993`; never round, coerce to string
 or reject otherwise valid JSON because of numeric representation. This adds no
 numeric acceptance gate; engine schema acceptance remains preflight's concern.
 Outside applicable schema/world slots, literal business inputs, annotations and
-expected values retain their meaning even when surrounding JSON is normalized.
+expected values retain their exact bytes.
 Preserve every own JSON key, including `__proto__` and `constructor`, as ordinary
 data during selection, cloning and writes; never change object prototypes.
 
-If expansion changes a JSON document, encode compact JSON with object keys sorted
-lexicographically at every depth, array order preserved, and no final newline.
-This encoding must be lossless under the preservation rules above.
-For a prompt replace only the JSON inside its single Runtime interface fence;
-keep all surrounding bytes. No applicable references means no reserialization.
+Replace only applicable reference value subtrees. Keep every surrounding byte,
+including JSON whitespace, newlines, key order, literal number tokens and the
+rest of a Runtime interface fence. Insert selected records in their authored key
+order and layout, applying nested substitutions locally. In particular,
+`reasoning` before `answer` stays in that order, as do numeric-looking own keys.
+Local annotations replace existing annotation values without moving their keys;
+append absent annotations in their written consumer order. Expanded seeds retain
+the selected world's layout and key order while replacements affect only their
+value subtrees; append a new object key after existing keys. Preserve literal
+replacement key order and apply overlapping overrides in written order. New
+members use the containing object's existing whitespace/separator layout, or
+compact separators for an empty object. No applicable references means no
+reserialization.
 Do not expand schemas into authored source during ordinary reads.
 
 Each reference has `consumer` (original input path), `source_pointer` (the authored
 schema slot or `/initial_world`), `target` (canonical identity), `kind`
-(`contract` or `seed`) and `value_json` (compact, recursively sorted JSON of that
-target after nested expansion, before this consumer's annotations or set).
+(`contract` or `seed`) and `value_json` (compact JSON of that target after nested
+expansion, before this consumer's annotations or set). Recursively sort object
+keys only; preserve array element order at every length, including 11 or more,
+and leave number tokens and literal values unchanged.
 Include transitive targets under the originating source pointer. Deduplicate by
 consumer/pointer/target/kind and sort by those fields. This is a content snapshot,
 not an approval hash or a pin that prevents changes. A no-reference result has
@@ -144,18 +165,34 @@ object (including a shared world), and nested JSON object nodes that have object
 leaf schema appears in the catalog. JSON identities use escaped JSON Pointers. Ignore
 descriptive Markdown sections; a world is never an inline-schema copy candidate.
 Resolve nested references against the supplied source set before recording
-value_json. Warn about invalid or ambiguous records without choosing an arbitrary
-record.
+value_json. Within one expansion or catalog operation, read and parse each JSON
+contract file once, regardless of how many records, pointers or consumers use it.
+Reuse that parsed document without mutating it; selections, nested expansions and
+seed overrides remain independent. Catalog work must not reparse a complete file
+for every discovered record. Warn about invalid or ambiguous records without
+choosing an arbitrary record.
 
 Module function `compareCopies(sources, records)` takes prompt sources and catalog
 records, returning `{matches,warnings}`. A match is
 `{path,source_pointer,target,kind,differences}`, where `kind` is `exact` or `near`
 and differences are plain field/constraint descriptions. Inspect the same schema
 positions as expansion, skipping existing references. Compare object schemas with
-object `properties` only. Candidate field sets are identical, or their symmetric
-difference has exactly one field. Semantic equality ignores object key order and
-local title/description, but preserves every other value, nested constraint,
-required field and array order. For this comparison, JSON number tokens are equal
+object `properties` only. Skip inline objects with fewer than three properties,
+including empty and one-field no-input schemas. A semantically equal record with
+three properties can be an exact candidate. A differing candidate is eligible
+only when the canonical record has at least four properties and the field sets
+are identical or their symmetric difference has exactly one field. Thus a
+four-field canonical record may match a three-, four- or five-field copy; a
+differing three-field canonical record never creates a near proposal.
+Semantic equality ignores object key order and local title/description. Treat
+schema-keyword `required` lists and `enum` alternatives as order-free with the
+same elements and multiplicities; this does not erase duplicate values in an
+invalid schema. Preserve required membership, enum values and every other nested
+constraint. Order inside
+an enum alternative that is itself an array remains significant. Arrays in
+`default`, `examples`, `const` and other literal data also retain order; names
+`required` or `enum` inside those literal values do not turn them into keywords.
+For this comparison, JSON number tokens are equal
 exactly when they represent the same mathematical value: `1`, `1.0` and `1e0`
 are equal, as are `0`, `-0`, `0.0` and `0e0`. Distinct exact values, including
 `9007199254740993` and `9007199254740992`, must compare different even when binary
@@ -169,14 +206,17 @@ Module function `planSync(sources, matches)` returns `{edits,warnings}`; an edit
 objects, retaining their local title/description. Near conversion deliberately
 adopts the canonical record's constraints: make those differences visible in the
 preview. Never rewrite an ambiguous/unmatched schema, existing reference, ordinary
-prose or expected value. Only edited interface JSON may normalize as above; other
-bytes and unmatched files stay exact. An edited approved interface becomes draft,
+prose or expected value. Only copied schema value subtrees and the
+`approved` to `draft` status value may change; all other interface bytes and
+unmatched files stay exact. Insert `$contract` first, followed by retained local
+annotations in their original written order, using the replaced object's layout.
+An edited approved interface becomes draft,
 never approved. No prompt prose changes or approval hash changes are authorized.
 A second plan after applying the edits has no further edits.
 
 ## Dependencies
 
-None. The caller supplies complete source text and the actual `files` port.
+The caller supplies complete source text and the actual `files` port.
 Preflight owns safe native reads; the contract command owns discovery and writes;
 the runtime client owns saved Check provenance and freshness judgments.
 
@@ -184,7 +224,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "488d8d151fc1f79fadbd442bd45f85334f49bba97468226819f8c52553f47c62",
+  "status": "draft", "prose_sha256": "cdb7b37258b1f16aef7a301bde2a1e0853924ed9f29df94880c5ed6f240eaa31",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

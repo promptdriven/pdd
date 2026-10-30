@@ -81,7 +81,11 @@ export function gitFiles(root) {
 }
 
 const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (['ENOENT', 'ENAMETOOLONG'].includes(error.code)) return null; throw error; } };
-const readText = (root, path) => readFileSync(join(root, path), 'utf8');
+const readText = (root, path) => {
+  const stat=statOf(join(root,path));
+  sourceLimit([{path,size:Number(stat?.size ?? 0)}]);
+  return readFileSync(join(root,path),'utf8');
+};
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
@@ -858,7 +862,8 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
   }
   function bytes(file) {
     if (file.bytes) return file.bytes;
-    beforeRead();
+    sourceLimit([file]);
+    beforeRead(file);
     let fd;
     try {
       fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -900,8 +905,9 @@ function preparedText(root, visible, path, text, format) {
 
 function captureOnce(root, { tests, appMap = null, prepareSource }) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
-  const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set();
-  const reader = snapshotReader(root,new Set(names));
+  const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
+  let selecting = true;
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
     if (overlay.has(path)) return overlay.get(path);
@@ -914,12 +920,13 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     for (const selected of payload.keys()) if (selected.startsWith(`${path}/`) || path.startsWith(`${selected}/`)) {
       throw sourceProblem(from, path, `conflicts with selected file ${selected}.`);
     }
-    if (!payload.has(path)) payload.set(path, file);
+    if (!footprintPayload.has(path)) footprintPayload.set(path,file);
+    if (selecting && !payload.has(path)) payload.set(path, file);
     if (visible.has(from)) {
       if (!edges.has(from)) edges.set(from,new Set());
       edges.get(from).add(path);
     }
-    queue.push({ path, role });
+    queue.push({ path, role, upload:selecting });
   }
   const referenceFiles = {
     stat({path}) {
@@ -940,7 +947,8 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     const content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
     const result = {...file,bytes:content,size:content.length};
     effective.set(file.path,result); provenance.set(file.path,expanded.references);
-    payload.set(file.path,result);
+    footprintPayload.set(file.path,result);
+    if (selecting) payload.set(file.path,result);
     return result;
   }
   const addStrings = (values, from, role) => { if (Array.isArray(values)) for (const path of values) if (typeof path === 'string') add(path, from, role); };
@@ -1002,11 +1010,30 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     })])];
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
-    for (let index = 0; index < queue.length; index++) {
-      const { path, role } = queue[index], key = `${path}\0${role}`;
+    const storyTests = new Map();
+    let siblingsAdded = false;
+    for (let index = 0; index < queue.length || !siblingsAdded; index++) {
+      if (index === queue.length && !siblingsAdded) {
+        siblingsAdded = true; selecting = false;
+        const selectedStories = new Set(storyTests.keys());
+        const discovered=findTests({root,files:names}).tests.filter(test=>!overlay.has(test.path));
+        for (const [path,file] of overlay) {
+          if (!path.endsWith('.json') || file.size>LIMITS.test) continue;
+          try { const doc=JSON.parse(bytes(file).toString('utf8')); if (typeof doc?.schema_version==='string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) discovered.push({path,doc}); } catch {}
+        }
+        for (const test of discovered) {
+          if (!selectedStories.has(test.doc?.story_path)) continue;
+          if (!storyTests.get(test.doc.story_path).includes(test.path)) storyTests.get(test.doc.story_path).push(test.path);
+          add(test.path,'Story footprint','test');
+        }
+        if (index === queue.length) break;
+      }
+      const { path, role, upload } = queue[index], key = `${path}\0${role}\0${upload}`;
+      selecting = upload;
       if (visited.has(key)) continue;
       visited.add(key);
-      let file = payload.get(path);
+      let file = effective.get(path) ?? footprintPayload.get(path);
+      if (selecting) payload.set(path,file);
       if (path.endsWith('.prompt.md')) file = prepare(file,'prompt');
       else if (role === 'test') file = prepare(file,'scenario');
       if (role === 'test' || role === 'app-map' || path.endsWith('.prompt.md') || path.endsWith('.md')) {
@@ -1015,7 +1042,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
           let doc;
           try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
           if (!isObject(doc)) continue;
-          if (typeof doc.story_path === 'string') add(doc.story_path, path, 'story');
+          if (typeof doc.story_path === 'string') {
+            if (selecting) { if (!storyTests.has(doc.story_path)) storyTests.set(doc.story_path,[]); if (!storyTests.get(doc.story_path).includes(path)) storyTests.get(doc.story_path).push(path); }
+            add(doc.story_path, path, 'story');
+          }
           addStrings(doc.entry_paths, path);
           for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
           for (const item of Array.isArray(doc.context) ? doc.context : []) {
@@ -1053,6 +1083,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
+    for (const file of footprintPayload.values()) bytes(file);
     const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
       const after = inspectParentsAndStat(root, file.path);
       return file.stat === null ? after === null : sameStat(file.stat, after);
@@ -1063,7 +1094,9 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       let doc; try { doc = JSON.parse(bytes(payload.get(sourcePath(path,'Selected test'))).toString('utf8')); } catch { continue; }
       if (typeof doc?.story_path !== 'string') continue;
       if (!stories.has(doc.story_path)) stories.set(doc.story_path,{story_path:doc.story_path,tests:[],selected:new Set(shared)});
-      const story = stories.get(doc.story_path); story.tests.push(path); story.selected.add(path);
+      const story = stories.get(doc.story_path);
+      story.tests = storyTests.get(doc.story_path) ?? [path];
+      for (const sibling of story.tests) story.selected.add(sibling);
     }
     const footprints = [...stories.values()].map(story => {
       const reached = new Set(), pending = [...story.selected];
@@ -1071,10 +1104,10 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         const path=pending[i]; if (reached.has(path)) continue;
         reached.add(path); pending.push(...(edges.get(path) ?? []));
       }
-      return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>payload.has(path)).map(path=>({path,sha256:sha256(bytes(payload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
+      return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
     return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
-      references:[...provenance.keys()].sort().flatMap(path=>provenance.get(path)), stories:footprints,
+      references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       raw_prompt_hashes:rawPromptHashes,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }

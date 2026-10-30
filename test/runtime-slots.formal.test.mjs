@@ -15,6 +15,7 @@ test('bounded local admission: limits 1..3 and occupied counts 0..4', async () =
         listRecords: async () => ({ jobs: [...records.values()].filter(row => row.state) }),
         exclusiveCreate: async (path, row) => { if (records.has(path)) return false; records.set(path, row); return true; },
         writeAtomic: async (path, row) => records.set(path, row), unlink: async path => records.delete(path),
+        modifiedAt: async path => records.has(path) ? 0 : null, touch: async path => records.has(path),
       } };
     const lease = await acquireRuntimeSlot({ stateDir: '/state', origin: 'https://host', limit, kind: 'try', deadline: 1 }, ports);
     assert.equal(!!lease, occupied < limit, `limit=${limit}, occupied=${occupied}`);

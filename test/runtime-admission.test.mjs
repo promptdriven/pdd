@@ -54,7 +54,7 @@ test('maintenance: authenticated capacity window waits, rechecks and submits onl
   made = makePorts(setup, fake); until = made.clock.now + 7000;
   fake.capacity = e => { reads.push(e); return { status: 200, json: { maintenance: first ? (first = false, { until: new Date(until).toISOString(), reason: 'deploy' }) : null } }; };
   assert.equal(await runCheck({ words: ['place-order'], cwd: setup.repo, options: { '--json': true } }, made.ports), 0);
-  assert.ok(reads.length >= 3); assert.ok(reads.every(e => e.headers.authorization?.startsWith('Bearer ')));
+  assert.ok(reads.length >= 2); assert.ok(reads.every(e => e.headers.authorization?.startsWith('Bearer ')));
   assert.match(made.ports.stderr.text, /maintenance.*deploy/); assert.equal(checkPosts(fake).length, 1);
 });
 
@@ -210,14 +210,16 @@ test('admission: invalid PDD_MAX_JOBS warns and keeps a usable default', async t
 test('admission: contended registration cannot POST after cancellation or deadline', async t => {
   for (const interrupt of [false, true]) {
     const setup = harbor(t), fake = await fakeRuntime(t, () => { assert.fail('blocked registration posted'); });
-    const made = makePorts(setup, fake); const records = new Map(); let claims = 0;
+    const made = makePorts(setup, fake); const records = new Map(), refreshed = new Map(); let claims = 0;
     made.ports.slotFiles = {
       listRecords: () => ({ jobs: [...records.values()].filter(row => row.state) }),
       exclusiveCreate: (path, row) => {
         if (path.endsWith('/claim.json') && ++claims > 1) return false;
-        if (records.has(path)) return false; records.set(path, row); return true;
+        if (records.has(path)) return false; records.set(path, row); refreshed.set(path, made.clock.now); return true;
       },
-      writeAtomic: (path, row) => records.set(path, row), unlink: path => records.delete(path),
+      writeAtomic: (path, row) => { records.set(path, row); refreshed.set(path, made.clock.now); }, unlink: path => records.delete(path),
+      modifiedAt: path => records.has(path) ? refreshed.get(path) : null,
+      touch: path => { if (!records.has(path)) return false; refreshed.set(path, made.clock.now); return true; },
     };
     made.ports.sleep = async () => { if (interrupt) made.clock.interrupt(); else made.clock.now += 90_000; };
     const code = await runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, made.ports);

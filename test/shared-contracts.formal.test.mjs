@@ -12,7 +12,7 @@ import { harbor, PLACE, sink } from './runtime-fake.mjs';
 // native capture/history use temporary Git/state files, never a live service.
 const path = 'prompts/bounded.prompt.md';
 const schema = (mask, type = 'string') => ({ type:'object', properties:Object.fromEntries(
-  ['a','b','c'].flatMap((name, bit) => mask & (1 << bit) ? [[name,{type}]] : [])), required:[], additionalProperties:false });
+  ['a','b','c','d','e'].flatMap((name, bit) => mask & (1 << bit) ? [[name,{type}]] : [])), required:[], additionalProperties:false });
 const prompt = (input, extra = {}) => `# Unchanged prose\r\n\r\n<details><summary>Runtime interface</summary>\n\n\x60\x60\x60json\n${JSON.stringify({status:'approved',prose_sha256:'unchanged-hash',entries:[{operation:'act',input_schema:input,...extra}],calls:[],resources:[]})}\n\x60\x60\x60\n</details>\nUnchanged tail.\n`;
 const body = text => JSON.parse(interfaceBlocks(text)[0][1]);
 const port = sources => ({
@@ -21,7 +21,7 @@ const port = sources => ({
 });
 const expand = (text, format, sources) => expandSource({path,text,format},port(sources));
 const write = (root, name, value) => { mkdirSync(join(root,name,'..'),{recursive:true}); writeFileSync(join(root,name),typeof value==='string'?value:JSON.stringify(value)); };
-const popcount = n => [1,2,4].filter(bit => n & bit).length;
+const popcount = n => [1,2,4,8,16].filter(bit => n & bit).length;
 
 test('FORMAL shared-records: all 125 three-record successor graphs from all three roots', () => {
   // Each record terminates, references one of three records, or is missing.
@@ -138,25 +138,26 @@ test('FORMAL shared-seed: own escaped names, exact number tokens, invalid parent
   assert.equal(sources['contracts/world.json'],seed);
 });
 
-test('FORMAL shared-contract-drift: all 256 field-set/type pairs and 121 numeric token pairs', () => {
-  for(let copyMask=0;copyMask<8;copyMask++) for(let recordMask=0;recordMask<8;recordMask++) for(const copyType of ['string','boolean']) for(const recordType of ['string','boolean']) {
+test('FORMAL shared-contract-drift: all 4096 field-set/type pairs and 121 numeric token pairs', () => {
+  for(let copyMask=0;copyMask<32;copyMask++) for(let recordMask=0;recordMask<32;recordMask++) for(const copyType of ['string','boolean']) for(const recordType of ['string','boolean']) {
     const inline={...schema(copyMask,copyType),title:'local',description:'local'}, canonical=schema(recordMask,recordType);
     const records=catalogRecords([{path:'contracts/value.json',text:JSON.stringify(canonical)}]);
     const got=compareCopies([{path,text:prompt(inline)}],records.records), distance=popcount(copyMask^recordMask);
     const exact=copyMask===recordMask && (copyMask===0 || copyType===recordType);
-    assert.equal(got.matches.length,distance<=1?1:0,JSON.stringify({copyMask,recordMask,copyType,recordType}));
+    const eligible=popcount(copyMask)>=3 && (exact || popcount(recordMask)>=4 && distance<=1);
+    assert.equal(got.matches.length,eligible?1:0,JSON.stringify({copyMask,recordMask,copyType,recordType}));
     assert.equal(got.warnings.length,0);
-    if(distance<=1) {
+    if(eligible) {
       assert.equal(got.matches[0].kind,exact?'exact':'near');
       assert.equal(got.matches[0].differences.length===0,exact);
-      for(let bit=0;bit<3;bit++) if((copyMask^recordMask)&(1<<bit) || (copyMask&recordMask&(1<<bit)) && copyType!==recordType)
-        assert.ok(got.matches[0].differences.some(d=>d.includes(`/properties/${['a','b','c'][bit]}`)));
+      for(let bit=0;bit<5;bit++) if((copyMask^recordMask)&(1<<bit) || (copyMask&recordMask&(1<<bit)) && copyType!==recordType)
+        assert.ok(got.matches[0].differences.some(d=>d.includes(`/properties/${['a','b','c','d','e'][bit]}`)));
     }
   }
   // Expected equivalence classes are declared independently of binary64 parsing.
   const tokens=[['0',0],['-0',0],['0.0',0],['0e0',0],['1',1],['1.0',1],['1e0',1],['10e-1',1],['2',2],['9007199254740992',3],['9007199254740993',4]];
   for(const [left,a] of tokens) for(const [right,b] of tokens) {
-    const text=token=>`{"type":"object","properties":{"a":{"type":"number","minimum":${token}}},"required":[],"additionalProperties":false}`;
+    const text=token=>`{"type":"object","properties":{"a":{"type":"number","minimum":${token}},"name":{"type":"string"},"kind":{"type":"string"},"active":{"type":"boolean"}},"required":[],"additionalProperties":false}`;
     const records=catalogRecords([{path:'contracts/value.json',text:text(right)}]);
     const source=prompt(schema(1)).replace(JSON.stringify(schema(1)),text(left));
     const got=compareCopies([{path,text:source}],records.records);
@@ -164,11 +165,11 @@ test('FORMAL shared-contract-drift: all 256 field-set/type pairs and 121 numeric
   }
 });
 
-test('FORMAL shared-contract-sync: all 512 two-candidate field sets, ambiguity and second-plan idempotence', () => {
-  for(let copy=0;copy<8;copy++) for(let a=0;a<8;a++) for(let b=0;b<8;b++) {
+test('FORMAL shared-contract-sync: all 32768 two-candidate field sets, ambiguity and second-plan idempotence', () => {
+  for(let copy=0;copy<32;copy++) for(let a=0;a<32;a++) for(let b=0;b<32;b++) {
     const source={path,text:prompt({...schema(copy),title:'local',description:'keep'})};
     const records=catalogRecords([{path:'contracts/a.json',text:JSON.stringify(schema(a))},{path:'contracts/b.json',text:JSON.stringify(schema(b))}]).records;
-    const exact=[a,b].flatMap((mask,i)=>mask===copy?[i]:[]), near=[a,b].flatMap((mask,i)=>popcount(mask^copy)<=1?[i]:[]);
+    const exact=[a,b].flatMap((mask,i)=>popcount(copy)>=3 && mask===copy?[i]:[]), near=[a,b].flatMap((mask,i)=>popcount(copy)>=3 && popcount(mask)>=4 && popcount(mask^copy)<=1?[i]:[]);
     const candidates=exact.length?exact:near, got=compareCopies([source],records), plan=planSync([source],got.matches);
     assert.equal(got.matches.length,candidates.length===1?1:0);
     assert.equal(got.warnings.length,candidates.length>1?1:0);
@@ -246,5 +247,27 @@ test('FORMAL shared-contract-status: all four independent same-file record chang
     assert.equal(current.files.some(file=>file.path==='contracts/both.json'),false);
     const stdout=sink(),stderr=sink();assert.equal(runContracts({cwd:setup.repo},{env,stdout,stderr}),0,stderr.text);
     for(const [story,changed] of [[STORY,a],[OTHER_STORY,b]]) assert.ok(stdout.text.includes(`${story}: ${changed?'stale: needs a new check':'current'}`),stdout.text);
+  }
+});
+
+test('FORMAL shared-contract-drift: all 36 required/enum permutations retain multiplicities and nested literal order',()=>{
+  const permutations=values=>values.length?values.flatMap((value,i)=>permutations(values.filter((_,j)=>j!==i)).map(rest=>[value,...rest])):[[]];
+  const canonical=schema(31);canonical.required=['a','b','a'];
+  canonical.properties.a={type:'array',items:{type:'number'},enum:[[1,2],[3,4],[1,2]]};
+  const records=[{path:'contracts/value.json',target:'contracts/value.json#',value_json:JSON.stringify(canonical)}];
+  for(const required of permutations(canonical.required)) for(const alternatives of permutations(canonical.properties.a.enum)) {
+    const copy=structuredClone(canonical);copy.required=required;copy.properties.a.enum=alternatives;
+    assert.equal(compareCopies([{path,text:prompt(copy)}],records).matches[0].kind,'exact');
+    copy.required=['a','b','b'];
+    assert.equal(compareCopies([{path,text:prompt(copy)}],records).matches[0].kind,'near');
+    copy.required=required;copy.properties.a.enum=[[2,1],[3,4],[1,2]];
+    assert.equal(compareCopies([{path,text:prompt(copy)}],records).matches[0].kind,'near');
+  }
+  for(const keyword of ['default','examples','const']) for(const values of permutations(['a','b','c'])) {
+    const reference=schema(31),copy=schema(31);
+    reference.properties.a[keyword]={required:['a','b','c'],enum:[1,2]};
+    copy.properties.a[keyword]={required:values,enum:[1,2]};
+    const literalRecords=[{path:'contracts/value.json',target:'contracts/value.json#',value_json:JSON.stringify(reference)}];
+    assert.equal(compareCopies([{path,text:prompt(copy)}],literalRecords).matches[0].kind,values.join('')==='abc'?'exact':'near');
   }
 });

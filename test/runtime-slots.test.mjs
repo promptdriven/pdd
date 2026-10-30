@@ -32,7 +32,7 @@ test('slots: native reservation permissions, unique append and confirmed release
 
 test('slots: dead owners retain running, unknown and unreadable jobs until the 30-minute boundary', async t => {
   for (const state of ['running', 'unknown', 'error', 'ended']) for (const age of [1_799_999, 1_800_000]) {
-    const stateDir = join(temp(t), 'state'); seed(stateDir, record('old', { pid: 777, started_at: 0 }));
+    const stateDir = join(temp(t), 'state'); seed(stateDir, record('old', { pid: 777, started_at: 0, request_ids: [`run-${state}-${age}`] }));
     let now = age;
     const found = await acquireRuntimeSlot({ ...options(stateDir), limit: 1, kind: 'try', deadline: age + 1 }, {
       now: () => now, isAlive: pid => pid !== 777, readRun: async () => { if (state === 'error') throw Error('unreadable'); return state; }, sleep: async ms => { now += ms; },
@@ -164,13 +164,14 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
 
 test('slots: an actual exited producer does not free its posted lease until its job is confirmed ended', async t => {
   const sandbox = temp(t), stateDir = join(sandbox, 'state');
-  const code = `const m = await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r = await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:1}); await m.recordRuntimeRequest(r,'live-runtime-job'); console.log(process.pid);`;
-  const produced = await child(['--input-type=module', '-e', code], { cwd: sandbox, env: {} }); assert.equal(produced.code, 0, produced.stderr);
+  const code = `const m = await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r = await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:1}); await m.recordRuntimeRequest(r,'live-runtime-job'); process.stdout.write(String(process.pid)+'\\n');`;
+  const produced = await child(['--input-type=module', '-e', code], { cwd: sandbox, env: { FORCE_COLOR: '3' } }); assert.equal(produced.code, 0, produced.stderr);
   const owner = Number(produced.stdout.trim()); assert.ok(owner > 1);
   let now = Date.now();
   const waiting = await acquireRuntimeSlot({ ...options(stateDir), kind: 'lint', limit: 1, deadline: now + 1 }, { now: () => now, sleep: async ms => now += ms, readRun: async () => 'running' });
   assert.equal(waiting, null); assert.equal((await listRuntimeJobs(options(stateDir))).jobs[0].pid, owner);
-  const ended = await acquireRuntimeSlot({ ...options(stateDir), kind: 'try', limit: 1 }, { readRun: async () => 'ended' });
+  now += 15_000;
+  const ended = await acquireRuntimeSlot({ ...options(stateDir), kind: 'try', limit: 1 }, { now: () => now, readRun: async () => 'ended' });
   assert.ok(ended); await releaseRuntimeSlot(ended, { ended: true });
 });
 
@@ -179,8 +180,11 @@ test('slots: simultaneous native claimants safely reclaim dead unique claims', {
   mkdirSync(folder(stateDir), { recursive: true });
   for (let i = 0; i < 3; i++) writeFileSync(join(folder(stateDir), `.claim-dead-${i}.lock`), JSON.stringify({ id: `dead-${i}`, pid: 2147483647, number: 1, choosing: false }));
   const source = `import {appendFileSync} from 'node:fs'; const m=await import(${JSON.stringify(new URL('../src/runtime-slots.mjs', import.meta.url).href)}); const r=await m.acquireRuntimeSlot({stateDir:${JSON.stringify(stateDir)},origin:${JSON.stringify(origin)},kind:'check',limit:3,deadline:Date.now()+15000}); if(!r)process.exit(2); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'enter',id:r.id})+'\\n'); await new Promise(done=>setTimeout(done,20)); appendFileSync(${JSON.stringify(log)},JSON.stringify({event:'exit',id:r.id})+'\\n'); await m.releaseRuntimeSlot(r,{ended:true});`;
+  const started = performance.now();
   const results = await Promise.all(Array.from({ length: 12 }, () => child(['--input-type=module', '-e', source], { cwd: sandbox, env: {} })));
   for (const result of results) assert.equal(result.code, 0, result.stderr);
+  const elapsed = performance.now() - started; t.diagnostic(`12 contenders, limit 3, 20 ms hold: ${Math.round(elapsed)} ms`);
+  assert.ok(elapsed < 15_000);
   const active = new Set(); let peak = 0, entered = 0;
   for (const line of readFileSync(log, 'utf8').trim().split('\n')) {
     const event = JSON.parse(line);

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runContracts } from '../src/contracts.mjs';
 import { runCheck, runTry, runDoorCall, readContractHistory, readTryOwner } from '../src/runtime-client.mjs';
-import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, readPrompt, sourceFilePort } from '../src/runtime-preflight.mjs';
+import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, proseSha256, readPrompt, sourceFilePort } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
 const ORDER='tests/place-order.json', STORY='user_stories/place-order.md', OTHER='tests/unknown-item.json', OTHER_STORY='user_stories/unknown-item.md';
@@ -115,13 +115,32 @@ test('NATIVE reference-only races retry the whole capture and never upload raw c
   assert.equal(churn,2);
 });
 
-test('NATIVE upload limits count expanded effective bytes rather than larger authored reference syntax',t=>{
+test('NATIVE oversized raw source refuses before read despite replacement references',t=>{
   const setup=shared(t),path=join(setup.repo,PLACE),text=readFileSync(path,'utf8'),block=interfaceBlocks(text)[0];
   const padding=Array(170_000).fill('null'+ ' '.repeat(64)).join(',');
   writeFileSync(path,text.slice(0,block.indices[1][0])+'{"padding":['+padding+'],'+block[1].slice(1)+text.slice(block.indices[1][1]));
-  const capture=captureSource(setup.repo,{tests:[ORDER]});
-  assert.ok(capture.bytes<10_485_760);
-  assert.match(capture.sources.find(file=>file.path===PLACE).bytes.toString(),/"input_schema":\{"additionalProperties"/);
+  const original=fs.openSync;let opens=0;
+  t.after(()=>{fs.openSync=original;syncBuiltinESMExports();});
+  fs.openSync=(file,...args)=>{if(file===path)opens++;return original(file,...args);};syncBuiltinESMExports();
+  assert.throws(()=>captureSource(setup.repo,{tests:[ORDER]}),error=>error.exitCode===4&&/too big/.test(error.message)&&!(error instanceof RangeError));
+  assert.equal(opens,0);
+});
+
+test('NATIVE fitting raw references count expanded bytes while preserving surrounding padding',t=>{
+  const setup=shared(t),path=join(setup.repo,PLACE),text=readFileSync(path,'utf8'),block=interfaceBlocks(text)[0];
+  const value=JSON.parse(block[1]);
+  value.entries[0].input_schema={$contract:'contracts/tiny.json#',description:'x'};
+  json(setup.repo,'contracts/tiny.json',{type:'object',properties:{},required:[],additionalProperties:false});
+  // The reference's own whitespace is replaced; unrelated interface whitespace stays exact.
+  const reference=JSON.stringify(value.entries[0].input_schema), replacement='{'+ ' '.repeat(8192)+reference.slice(1);
+  const authored=text.slice(0,block.indices[1][0])+JSON.stringify(value).replace(reference,replacement).replace('"entries":','"entries" : ')+text.slice(block.indices[1][1]);
+  writeFileSync(path,authored);
+  const capture=captureSource(setup.repo,{tests:[ORDER]}), effective=capture.sources.find(file=>file.path===PLACE).bytes;
+  assert.ok(effective.length<Buffer.byteLength(authored));
+  assert.match(effective.toString(),/"entries" : /);
+  assert.match(effective.toString(),/"input_schema":\{"type":"object","properties":\{\},"required":\[\],"additionalProperties":false,"description":"x"\}/);
+  assert.equal(capture.bytes,capture.sources.reduce((sum,file)=>sum+file.bytes.length,0));
+  assert.equal(capture.files.find(file=>file.path===PLACE).size,effective.length);
 });
 
 test('NATIVE missing and unsafe references stop Check, explicit lint and Try before sign-in/upload',async t=>{
@@ -253,7 +272,7 @@ test('NATIVE real CLI sync preview/write adopts shared shape, preserves hash/pro
 
 test('NATIVE sync ambiguity skips a copy while independent exact copies migrate',t=>{
   const setup=copies(t);json(setup.repo,'contracts/duplicate.json',setup.canonical);
-  const unique={type:'object',properties:{unique:{type:'boolean'}},required:['unique'],additionalProperties:false};
+  const unique={type:'object',properties:{unique:{type:'boolean'},kind:{type:'string'},active:{type:'boolean'}},required:['unique'],additionalProperties:false};
   json(setup.repo,'contracts/unique.json',unique);
   write(setup.repo,'prompts/unique.prompt.md',readFileSync(join(setup.repo,PLACE)));
   updatePrompt(setup.repo,'prompts/unique.prompt.md',value=>value.entries[0].input_schema=unique);
@@ -267,7 +286,7 @@ test('NATIVE sync refuses concurrent destination edits and unsafe originals with
   const setup=copies(t),original=fs.openSync;let edited=false;
   t.after(()=>{fs.openSync=original;syncBuiltinESMExports();});
   fs.openSync=(path,flags,...args)=>{
-    if(path===join(setup.repo,PLACE)&&typeof flags==='number'&&(flags&fs.constants.O_RDWR)&&!edited){edited=true;writeFileSync(path,'# Concurrent edit\n');}
+    if(typeof path==='string'&&path.includes('.pdd-sync-')&&typeof flags==='number'&&(flags&fs.constants.O_EXCL)&&!edited){edited=true;writeFileSync(join(setup.repo,PLACE),'# Concurrent edit\n');}
     return original(path,flags,...args);
   };syncBuiltinESMExports();
   const stdout=sink(),stderr=sink();
@@ -353,4 +372,25 @@ test('NATIVE command parser dispatch and subprocess listing stay local without a
   const setup=shared(t),entry=fileURLToPath(new URL('../bin/pdd.mjs',import.meta.url));
   const result=spawnSync(process.execPath,[entry,'contracts'],{cwd:setup.repo,encoding:'utf8',env:{...process.env,HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'not-an-origin'}});
   assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/contracts\/shop.md#order/);assert.equal(existsSync(setup.state),false);
+});
+
+test('NATIVE actual Check from one sibling, all Story tests or a batch remains current without uploading unselected siblings',async t=>{
+  const setup=shared(t),sibling='tests/sibling.json',siblingPrompt='prompts/sibling.prompt.md',dependency='docs/sibling.txt';
+  const scenario=load(setup.repo,ORDER);for(const step of scenario.steps)step.entry_path=siblingPrompt;
+  json(setup.repo,sibling,scenario);
+  write(setup.repo,dependency,'Sibling dependency before.');
+  write(setup.repo,siblingPrompt,readFileSync(join(setup.repo,PLACE),'utf8').replace('## Dependencies',`## Dependencies\n- [Sibling](../${dependency})`));
+  updatePrompt(setup.repo,siblingPrompt,value=>{value.status='draft';value.prose_sha256=proseSha256(readFileSync(join(setup.repo,siblingPrompt),'utf8'));});
+  const ready=await runtime(t,setup),footprints=[];
+  for(const words of [[ORDER],[STORY],[]]) {
+    assert.equal(await runCheck({cwd:setup.repo,words},ready.ports),0,ready.ports.stderr.text);
+    const current=list(setup,ready.env);assert.equal(current.code,0,current.stderr);assert.match(current.stdout,/place-order.md: current/);
+    footprints.push(captureSource(setup.repo,{tests:words.length===1&&words[0]===ORDER?[ORDER]:words.length?[ORDER,sibling]:undefined}).stories.find(story=>story.story_path===STORY));
+  }
+  assert.deepEqual(footprints[0],footprints[1]);assert.deepEqual(footprints[0],footprints[2]);
+  const first=ready.fake.posts.find(post=>post.command==='check');
+  assert.equal(first.tar.includes(Buffer.from(sibling)),false);assert.equal(first.tar.includes(Buffer.from(dependency)),false);
+  assert.equal(footprints[0].files.some(file=>file.path===OTHER_STORY),false);
+  write(setup.repo,dependency,'Sibling dependency after.');
+  assert.match(list(setup,ready.env).stdout,/place-order.md: stale: needs a new check/);
 });
