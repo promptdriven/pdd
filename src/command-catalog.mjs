@@ -71,7 +71,7 @@ const routes = [
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
-    forms: [form('pdd contracts sync [--write]', 'Preview moving schema copies to references; apply only with --write. No runtime calls.')] },
+    forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No runtime calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
