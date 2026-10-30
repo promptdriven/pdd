@@ -398,7 +398,7 @@ function applyAnswer(row, answer, context) {
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, time_limit: view.time_limit,
+    server_seconds: view.server_seconds, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
     why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
     who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
     next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.next_step : null,
@@ -437,12 +437,9 @@ function batchRecord(context) {
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), lint, warnings, coverage: context.coverage,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
-      phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
+      phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
-      checks: row.checks ?? null, criteria: row.criteria ?? null, calls: row.calls ?? 'unknown',
-      failed_checks: row.failed_checks ?? [], all_checks: row.all_checks ?? [], who: row.who ?? null,
-      requested_model: row.requested_model ?? null, server_seconds: row.server_seconds ?? null, time_limit: row.time_limit ?? null, provider: row.provider ?? null,
       engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
@@ -453,10 +450,11 @@ async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; row.post_verdict = 'uncertain'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
+  if (row) row.post_verdict = verdict.kind;
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   if (verdict.admission) context.store.write(join(context.folder, `${id}.admission.json`), verdict.admission);
   return verdict;
@@ -856,13 +854,10 @@ async function runRead(context, batchWord, quiet = false) {
     if (row.request_ids.length) row.state = 'unknown';
     else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
-  const reads = rows.filter(row => {
-    const id = row.request_ids?.at(-1);
-    if (!id || store.read(join(context.folder, `${id}.admission.json`))?.dispatch === 'not_started') return false;
-    const answer = store.read(join(context.folder, `${id}.json`));
-    return !answer || !['passed', 'failed', 'refused'].includes(answer.state) || !sameJob(answer, id, 'check');
-  }).length;
-  if (reads && !quiet) line(ports.stderr, `Reading ${reads} result${reads === 1 ? '' : 's'} from the PDD runtime…`);
+  // A final POST refusal has no run receipt. Legacy rows retain their final verdict,
+  // but stale busy flags are not evidence that an allocated ID was unstarted.
+  const finalPost = (row, answer) => !answer && (['refused', 'not_run', 'stop'].includes(row.post_verdict)
+    || (!row.post_verdict && (row.state === 'refused' || (row.state === 'not_run' && !row.busy && !row.can_retry))));
   await readUnsentLint(context, rows);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
@@ -875,8 +870,10 @@ async function runRead(context, batchWord, quiet = false) {
     }
     const answer = store.read(join(context.folder, `${id}.json`));
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
+    if (finalPost(row, answer)) return;
     Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
+    if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD runtime…');
     await readRow(context, row);
     if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
@@ -921,17 +918,16 @@ function refreshCheckBatches(context, identity, origin, id, answer) {
   let names;
   try { names = readdirSync(batches); } catch { return; }
   for (const name of names.filter(name => BATCH.test(name))) {
-    const folder = join(batches, name), path = join(folder, 'batch.json'), saved = store.read(path);
-    if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
-      || String(saved.user_id) !== String(identity.userId)) continue;
-    const matching = saved.rows?.filter(row => row.request_ids?.includes(id)) ?? [];
-    if (!matching.length) continue;
-    store.write(join(folder, `${id}.json`), answer);
-    for (const row of matching) if (row.request_ids.at(-1) === id) {
-      row.phase = 'server';
-      applyAnswer(row, answer, { ...context, origin, reading: true, visible: findTests({ root }).visible });
-    }
-    store.write(path, saved);
+    try {
+      const folder = join(batches, name), saved = store.read(join(folder, 'batch.json'));
+      if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
+        || String(saved.user_id) !== String(identity.userId)) continue;
+      if (!saved.rows?.some(row => row.request_ids?.includes(id))) continue;
+      const cached = store.read(join(folder, `${id}.json`));
+      if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
+        && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
+      store.write(join(folder, `${id}.json`), answer);
+    } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
   }
 }
 
