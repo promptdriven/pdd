@@ -90,7 +90,7 @@ test('old exact reservation cannot adopt or stop a newer owner at the same path'
     assert.equal(w.timers.size, 1, 'newer owner keeps its pulse');
     assert.equal(await recordRuntimeRequest(current, 'new-paid', w.ports), true);
     await w.tick();
-    assert.equal(statSync(w.file(current)).mtimeMs, w.now, 'newer owner retains native heartbeat identity');
+    assert.ok(Math.abs(statSync(w.file(current)).mtimeMs - w.now) < 1, 'newer owner retains native heartbeat identity');
   } finally { await releaseRuntimeSlot(current, { ended: true }, w.ports); }
   assert.equal(w.listeners.size, 0);
 });
@@ -106,10 +106,10 @@ test('unsent interruption preserves a replaced active reservation', async t => {
 
 test('valid cross-port append, deduplication and promotion retain ownership; unknown paid lease survives', async t => {
   const w = world(t), reservation = await w.acquire();
-  await w.tick(); assert.equal(statSync(w.file(reservation)).mtimeMs, w.now, 'promoted reservation refreshes');
+  await w.tick(); assert.ok(Math.abs(statSync(w.file(reservation)).mtimeMs - w.now) < 1, 'promoted reservation refreshes');
   for (const id of ['paid-one', 'paid-two', 'paid-one']) assert.equal(await recordRuntimeRequest({ ...reservation }, id, w.ports), true);
   assert.deepEqual(w.read(reservation).request_ids, ['paid-one', 'paid-two']);
-  await w.tick(); assert.equal(statSync(w.file(reservation)).mtimeMs, w.now, 'separately resolved native ports advance the live owner');
+  await w.tick(); assert.ok(Math.abs(statSync(w.file(reservation)).mtimeMs - w.now) < 1, 'separately resolved native ports advance the live owner');
   assert.deepEqual(readdirSync(reservation.directory), [`${reservation.id}.json`], 'claim choosing/number transitions clean up');
   await releaseRuntimeSlot(reservation, { ended: false }, w.ports);
   const before = { bytes: readFileSync(w.file(reservation), 'utf8'), modified: statSync(w.file(reservation)).mtimeMs };

@@ -145,23 +145,59 @@ test('jobs: router, catalog, help and completion expose the local no-option comm
 });
 
 test('slots: ten real CLI checks across repositories share a limit of three and all finish', { timeout: 180_000 }, async t => {
-  const setup = harbor(t), second = harbor(t); let peak = 0, active = 0; const jobs = new Map();
-  const fake = await fakeRuntime(t, (e, f) => {
+  const setup = harbor(t), second = harbor(t); let peak = 0, active = 0;
+  const jobs = new Map(), pending = [];
+  let release;
+  const terminalReplies = new Promise(done => { release = done; });
+  const fake = await fakeRuntime(t, async (e, f) => {
     if (e.method === 'POST') {
-      const id = e.request.requestId; jobs.set(id, { command: e.command }); active++; peak = Math.max(peak, active);
+      const id = e.request.requestId;
+      assert.equal(jobs.has(id), false, 'each CLI posts one unique request');
+      jobs.set(id, { command: e.command }); active++; peak = Math.max(peak, active);
+      assert.ok(active <= 3, 'configured capacity is never exceeded');
       return { status: 202, json: f.job(id, e.command, 'queued') };
     }
     const id = e.url.split('/').at(-1), job = jobs.get(id);
     assert.ok(job, `unknown job ${id}`);
+    await terminalReplies;
     if (!job.ended) { active--; job.ended = true; }
+    assert.ok(active >= 0 && active <= 3);
     return { status: 200, json: job.command === 'lint' ? f.lint(id) : f.check(id) };
   });
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
   const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin };
-  const results = await Promise.all(Array.from({ length: 10 }, (_, i) => child([join(root, 'bin/pdd.mjs'), 'check', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t })));
-  for (const result of results) { assert.equal(result.code, 0, result.stdout + result.stderr); assert.equal(JSON.parse(result.stdout).rows[0].state, 'passed'); }
-  assert.equal(peak, 3); assert.equal(active, 0); assert.equal(fake.posts.filter(e => e.command === 'check').length, 10);
-  assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
+  const start = i => child([join(root, 'bin/pdd.mjs'), 'check', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });
+  const waitFor = async predicate => {
+    const deadline = Date.now() + 60_000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, 'capacity barrier watchdog expired');
+      await new Promise(done => setTimeout(done, 20));
+    }
+  };
+  try {
+    // A slow or staggered start cannot finish the first three before contention.
+    pending.push(...Array.from({ length: 3 }, (_, i) => start(i)));
+    await waitFor(() => active === 3);
+    pending.push(...Array.from({ length: 7 }, (_, i) => start(i + 3)));
+    let snapshot;
+    await waitFor(async () => {
+      snapshot = (await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs;
+      return snapshot.some(row => row.state === 'waiting');
+    });
+    assert.equal(active, 3); assert.equal(fake.posts.length, 3, 'additional callers wait without a POST');
+    assert.equal(snapshot.filter(row => row.state === 'active').length, 3);
+    assert.deepEqual(snapshot.filter(row => row.state === 'active').flatMap(row => row.request_ids).sort(), [...jobs.keys()].sort());
+    assert.ok(snapshot.filter(row => row.state === 'waiting').every(row => row.request_ids.length === 0));
+    release();
+    const results = await Promise.all(pending);
+    for (const result of results) { assert.equal(result.code, 0, result.stdout + result.stderr); assert.equal(JSON.parse(result.stdout).rows[0].state, 'passed'); }
+    assert.equal(results.length, 10); assert.equal(peak, 3); assert.equal(active, 0);
+    assert.equal(jobs.size, 20); assert.ok([...jobs.values()].every(job => job.ended));
+    assert.equal(fake.posts.filter(e => e.command === 'check').length, 10);
+    assert.equal(fake.posts.filter(e => e.command === 'lint').length, 10);
+    assert.equal(fake.posts.length, 20);
+    assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
+  } finally { release(); await Promise.allSettled(pending); }
 });
 
 test('slots: an actual exited producer does not free its posted lease until its job is confirmed ended', async t => {
