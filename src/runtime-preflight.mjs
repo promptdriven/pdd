@@ -1375,7 +1375,14 @@ export function validateContract(args) {
   };
   const project = item => {
     const text = numeric(item);
-    if (text !== null) return stable(item) ? Number(text) : integerToken(text) ? (text.startsWith('-') ? -1 : 1) : 0.5;
+    if (text !== null) {
+      if (stable(item)) return Number(text);
+      // Preserve the schema predicates (sign and integrality) even when its
+      // magnitude cannot be projected exactly. Concrete arithmetic still uses
+      // the independent stable-token evidence below.
+      const magnitude = integerToken(text) ? 1 : 0.5;
+      return text.startsWith('-') ? -magnitude : magnitude;
+    }
     if (Array.isArray(item)) return item.map(project);
     if (isObject(item)) return Object.fromEntries(Object.entries(item).map(([key,child]) => [key,project(child)]));
     return item;
