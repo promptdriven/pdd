@@ -202,3 +202,48 @@ test('formal paid uncertainty: 5 freshness/lease boundary ages x unknown/running
     assert.ok(w.reads.every(id => id === 'uncertain'), 'recovery reads preserve the original request identity'); w.clean();
   }
 });
+
+test('formal same-ID ownership: 5 valid identity/liveness rows x 3 freshness boundaries x waiting/paid-active (30 worlds)', async () => {
+  // The caller's PID is alive. Only a different PID can validly vary liveness.
+  // Expected waiting outcomes come from own-ticket protection and ordinary
+  // owner expiry, independently of the implementation's snapshot comparison.
+  const owners = [
+    { name: 'exact', change: {}, alive: true, waiting: ['own', 'own', 'own'] },
+    { name: 'PID/live', change: { pid: 99 }, alive: true, waiting: ['retain', 'restore', 'restore'] },
+    { name: 'PID/dead', change: { pid: 99 }, alive: false, waiting: ['restore', 'restore', 'restore'] },
+    { name: 'start', change: { started_at: 99_999 }, alive: true, waiting: ['retain', 'restore', 'restore'] },
+    { name: 'kind', change: { kind: 'lint' }, alive: true, waiting: ['retain', 'restore', 'restore'] },
+  ];
+  for (const owner of owners) for (const [index, age] of ages.entries()) for (const state of ['waiting', 'active']) {
+    const w = world(), ports = w.ports('a'); w.seed(record('holder'));
+    const original = record('a', { state: 'waiting', pid: 42, request_ids: [] });
+    const successor = { ...original, ...owner.change, state, request_ids: state === 'active' ? ['uncertain'] : [] };
+    const outcome = state === 'waiting' ? owner.waiting[index] : 'retain';
+    const label = `${owner.name}/${age}/${state}`;
+    ports.isAlive = pid => pid !== 99 || owner.alive;
+    let sleeps = 0;
+    ports.sleep = async () => {
+      if (++sleeps === 1) {
+        w.files.unlink(w.path('holder')); w.now = 200_000;
+        w.seed(successor, w.now - age);
+      } else w.now = 250_000;
+    };
+    const lease = await acquireRuntimeSlot({ ...w.options, deadline: 250_000 }, ports);
+    try {
+      assert.equal(lease?.id ?? null, outcome === 'retain' ? null : 'a', `${label}: ordinary expired owners cannot strand a pending acquisition`);
+      assert.deepEqual(w.waitingCreates('a').filter(entry => !entry.occupied).map(entry => entry.row), outcome === 'restore' ? [original, original] : [original], `${label}: exclusively restore the original ticket only when needed`);
+      if (outcome === 'retain') {
+        assert.deepEqual(w.data.get(w.path('a')), successor, `${label}: successor survives admission and deadline cleanup`);
+        assert.equal(w.writes.length, 0, `${label}: no admission over another owner`);
+      } else {
+        assert.deepEqual(w.data.get(w.path('a')), { ...original, state: 'active', started_at: 200_000 }, `${label}: one original reservation becomes active`);
+        assert.equal(w.writes.length, 1);
+      }
+      assert.deepEqual(w.reads, state === 'active' && (age !== 59_999 || !owner.alive) ? ['uncertain'] : [], `${label}: waiting loss never supplies paid completion evidence`);
+    } finally {
+      await releaseRuntimeSlot(lease, { ended: true }, ports);
+    }
+    assert.deepEqual([...w.data.values()], outcome === 'retain' ? [successor] : [], `${label}: release preserves foreign paid or fresh ownership`);
+    w.clean();
+  }
+});

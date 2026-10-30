@@ -9,6 +9,9 @@ const HEARTBEAT_MS = 5000, EXPIRED_MS = 60_000, LEASE_MS = 1_800_000, PROBE_MS =
 const unavailable = error => Object.assign(new Error(`Local runtime state unavailable: ${String(error?.message ?? error).split('\n')[0]}`), { code: 'local-state-unavailable' });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
 const order = (a, b) => a.started_at - b.started_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
+const nativeSnapshotKey = row => row.state === undefined ? JSON.stringify([row.id, row.pid, row.choosing, row.number]) : snapshotKey(row);
+const rememberNativeOwnership = Symbol('rememberNativeOwnership');
 const directoryFor = ({ stateDir, origin }) => join(stateDir, 'slots', encodeURIComponent(new URL(origin).host));
 const nativeInterrupt = handler => {
   const signals = ['SIGINT', 'SIGHUP', 'SIGTERM'];
@@ -32,8 +35,15 @@ let claimSequence = 0;
 // cannot unlink a successor, unlike deleting and recreating a shared lock path.
 function nativeFilePort(ports) {
   const heldClaims = new Map(), owned = new Map();
+  const remember = (path, record) => {
+    owned.set(path, nativeSnapshotKey(record));
+    // Request registration resolves its own native port. Advance the live
+    // acquisition's snapshot too, without retaining ownership after release.
+    owners.get(path)?.[rememberNativeOwnership]?.(path, record);
+  };
   const actual = path => path.endsWith('/claim.json') ? heldClaims.get(path) : path;
   const files = {
+    [rememberNativeOwnership]: (path, record) => owned.set(path, nativeSnapshotKey(record)),
     listRecords({ directory }) {
       let names;
       try { names = readdirSync(directory); } catch (error) { if (error.code === 'ENOENT') return { jobs: [] }; throw error; }
@@ -50,7 +60,7 @@ function nativeFilePort(ports) {
     },
     exclusiveCreate(path, record) {
       ensure(resolve(path, '..'));
-      if (!path.endsWith('/claim.json')) { const created = publishExclusive(path, record); if (created) { owned.set(path, { id: record.id, pid: record.pid }); files.touch(path); } return created; }
+      if (!path.endsWith('/claim.json')) { const created = publishExclusive(path, record); if (created) { remember(path, record); files.touch(path); } return created; }
       const directory = resolve(path, '..'), id = `${record.pid}-${ports.randomUUID()}-${++claimSequence}`, mine = join(directory, `.claim-${id}.lock`);
       const contenders = () => {
         const live = [];
@@ -64,7 +74,8 @@ function nativeFilePort(ports) {
         }
         return live;
       };
-      publishExclusive(mine, { id, pid: record.pid, choosing: true }); owned.set(mine, { id, pid: record.pid }); files.touch(mine);
+      const choosing = { id, pid: record.pid, choosing: true };
+      publishExclusive(mine, choosing); remember(mine, choosing); files.touch(mine);
       let held = false;
       try {
         const number = 1 + Math.max(0, ...contenders().filter(row => row.id !== id).map(row => row.number || 0));
@@ -76,7 +87,7 @@ function nativeFilePort(ports) {
     writeAtomic(path, record) {
       const temporary = `${path}.${randomUUID()}.tmp`, fd = openSync(temporary, 'wx', 0o600);
       try { writeFileSync(fd, `${JSON.stringify(record)}\n`); fsyncSync(fd); } finally { closeSync(fd); }
-      renameSync(temporary, path); owned.set(path, { id: record.id, pid: record.pid }); files.touch(path);
+      renameSync(temporary, path); remember(path, record); files.touch(path);
     },
     modifiedAt(path) {
       path = actual(path); if (!path) return null;
@@ -86,7 +97,7 @@ function nativeFilePort(ports) {
     touch(path) {
       path = actual(path); if (!path) return false;
       try { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Slot record is not a regular file'); const identity = owned.get(path), record = readRecord(path);
-        if (!identity || record.id !== identity.id || record.pid !== identity.pid) return false;
+        if (identity === undefined || nativeSnapshotKey(record) !== identity) return false;
         const time = new Date(ports.now()); utimesSync(path, time, time); return true; }
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     },
@@ -118,7 +129,6 @@ async function outsideRead(ports, id) {
 const rows = async (files, directory) => { try { return (await files.listRecords({ directory })).jobs; } catch (error) { throw unavailable(error); } };
 const freshness = async (ports, path) => ports.files.modifiedAt ? await ports.files.modifiedAt(path) : owners.has(path) ? ports.now() : null;
 const expired = (ports, row, modified) => !ports.isAlive(row.pid) || modified === null || ports.now() - modified >= EXPIRED_MS;
-const snapshotKey = row => JSON.stringify([row.id, row.pid, row.state, row.kind, row.started_at, row.request_ids]);
 function heartbeat(path, ports, interrupted, retainInterrupt = false) {
   let stopped = false, pending = Promise.resolve(), unsubscribe = () => {};
   const pause = () => { if (!stopped) { stopped = true; ports.timers.clearInterval(timer); } };
@@ -177,13 +187,13 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingId) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
     // This acquisition still owns its original ticket even if wall time jumps
     // before the next heartbeat. Other owners retain ordinary expiry rules.
-    if (row.state === 'waiting' && row.id === waitingId) continue;
+    if (snapshotKey(row) === snapshotKey(waitingTicket)) continue;
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
@@ -221,7 +231,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
   let acquired = false, activeTicket = null, last = '', failures = 0;
-  const owner = { posted: false, pulse: null };
+  const owner = { posted: false, pulse: null, [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
   const interruptOwner = () => {
     cancelled = true;
     if (!owner.posted) void removeUnsent();
@@ -237,7 +247,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   try {
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
-      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, id);
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket);
       if (ended()) break;
       // Dead waiters are safe to remove by immutable ticket path without a claim.
       for (const item of snapshots.filter(item => item.row.state === 'waiting')) {
