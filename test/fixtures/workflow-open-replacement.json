@@ -1,0 +1,326 @@
+{
+  "format": "pdd.native-case-vectors.v1",
+  "runtime": false,
+  "story": "user_stories/restart-workflow-area-session.md",
+  "boundary": [
+    "src/workflow-chat.mjs:restartChat",
+    "src/workflow-runner.mjs:openRun"
+  ],
+  "notes": "Native specification only; no prompt-runtime binding or runtime pass is claimed. Herdr commands are injected fakes; Git and files are isolated real resources. Executable PR2 replay: test/2627-replacement-protocol.test.mjs. Existing navigation/continuation coverage is in the original 18 tests.",
+  "cases": [
+    {
+      "id": "ownership-checkout",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with checkout inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "checkout"
+      }
+    },
+    {
+      "id": "ownership-repository",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with repository inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "repository"
+      }
+    },
+    {
+      "id": "ownership-tab-workspace",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with tab-workspace inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "tab-workspace"
+      }
+    },
+    {
+      "id": "ownership-terminal",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with terminal inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "terminal"
+      }
+    },
+    {
+      "id": "ownership-extra-pane",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with extra-pane inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "extra-pane"
+      }
+    },
+    {
+      "id": "ownership-unavailable",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with unavailable inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "unavailable"
+      }
+    },
+    {
+      "id": "ownership-malformed",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with malformed inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "malformed"
+      }
+    },
+    {
+      "id": "caller-pane",
+      "criteria": [
+        7
+      ],
+      "action": "Restart from selected pdd pane or undetermined Herdr pane",
+      "expected": "Refuse without native effects",
+      "input": {}
+    },
+    {
+      "id": "unconfirmed-original",
+      "criteria": [
+        5
+      ],
+      "action": "Original launch unconfirmed and no same-agent observation",
+      "expected": "Refuse without native effects",
+      "input": {}
+    },
+    {
+      "id": "ordered-checkpoints",
+      "criteria": [
+        2,
+        6,
+        7
+      ],
+      "action": "Replace verified area through acknowledged close and fresh absence",
+      "expected": "Await intent, closeRequested, closed, createRequested, prepared, launchRequested, launched; one launch; exact original bytes archived; new identity prepared before launch",
+      "input": {}
+    },
+    {
+      "id": "reject-intent",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject intent persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "intent"
+      }
+    },
+    {
+      "id": "reject-closeRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject closeRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "closeRequested"
+      }
+    },
+    {
+      "id": "reject-closed",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject closed persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "closed"
+      }
+    },
+    {
+      "id": "reject-createRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject createRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "createRequested"
+      }
+    },
+    {
+      "id": "reject-prepared",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject prepared persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "prepared"
+      }
+    },
+    {
+      "id": "reject-launchRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject launchRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "launchRequested"
+      }
+    },
+    {
+      "id": "close-lost",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "lost close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "lost"
+      }
+    },
+    {
+      "id": "close-malformed",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "malformed close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "malformed"
+      }
+    },
+    {
+      "id": "close-still-present",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "still-present close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "still-present"
+      }
+    },
+    {
+      "id": "lost-launch-identity",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Dispatch pane launch then lose reply",
+      "expected": "Error retains exact launchRequested replacement with startUnconfirmed true",
+      "input": {}
+    },
+    {
+      "id": "runner-lost-close",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose close reply then retry public openRun --new",
+      "expected": "Durable requested phase, one archive, no repeated effects or launch",
+      "input": {
+        "kind": "runner-lost-reply",
+        "variant": "close"
+      }
+    },
+    {
+      "id": "runner-lost-create",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose create reply then retry public openRun --new",
+      "expected": "Durable requested phase, one archive, no repeated effects or launch",
+      "input": {
+        "kind": "runner-lost-reply",
+        "variant": "create"
+      }
+    },
+    {
+      "id": "runner-observe-launch",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose launch reply, positively observe replacement on --new retry",
+      "expected": "Same attempt becomes launched; same pane; one launch and archive",
+      "input": {}
+    },
+    {
+      "id": "runner-absent-launch",
+      "criteria": [
+        5,
+        7
+      ],
+      "action": "Lose launch reply and remove replacement tab/pane, then retry --new",
+      "expected": "Retain same pending unconfirmed identity; absence cannot dispatch another launch",
+      "input": {}
+    },
+    {
+      "id": "concurrent-run",
+      "criteria": [
+        7
+      ],
+      "action": "Hold first close while second openRun --new competes",
+      "expected": "Second refuses; one replacement and launch",
+      "input": {}
+    },
+    {
+      "id": "process-interruption",
+      "criteria": [
+        7
+      ],
+      "action": "SIGKILL child public openRun at durable closeRequested; retry from another process",
+      "expected": "Pending attempt survives; retry refuses without another close, allocation or launch",
+      "input": {}
+    }
+  ]
+}

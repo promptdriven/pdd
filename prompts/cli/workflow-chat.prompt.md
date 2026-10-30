@@ -19,3 +19,43 @@ Forward the command execFile port to the layout's verified repository-parent loo
 Herdr transport reads complete stdout/stderr before interpreting JSON or a nonzero exit. Responses larger than a pipe buffer must retain their full content, and a nonzero response must keep its structured error code. Attaching to a session waits for stream closure before reporting its exit status.
 
 Full-access flags stay. Do not pin tool versions. No timeouts. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
+
+
+<a id="explicit-fresh-session"></a>
+## Explicit fresh session
+
+Export module function `restartChat({run,chat,message}, ports={})`, returning one replacement chat record. The [runner](workflow-runner.prompt.md#open-a-saved-area-or-replace-its-session) owns selection, continuation content, run locking, archives and persistence. This module owns native ownership verification and replacement effects; ordinary start/open retains its existing behavior. Use the same saved agent/config and assigned worktree, full-access flags and shell quoting. Never pass a resume id for the fresh launch.
+
+```mermaid
+flowchart TD
+    V{Ownership and caller safe?} -->|No| R([Refuse without close])
+    V -->|Yes| I[Checkpoint intent and archive]
+    I --> C[Checkpoint closeRequested; close owned tab]
+    C --> A{Acknowledged and absent?}
+    A -->|No| B([Blocked attempt])
+    A -->|Yes| N[Checkpoint closed then createRequested]
+    N --> P[Create one tab; checkpoint prepared]
+    P --> L[Checkpoint launchRequested; launch once]
+    L --> K{Launch acknowledged?}
+    K -->|No| U([Same chat unconfirmed])
+    K -->|Yes| D[Checkpoint launched; return chat]
+```
+
+Any failed inspection/checkpoint/creation interrupts this route before its next effect. Never retry a native request internally. Unknown/malformed replies are uncertainty, not success. A pending saved attempt follows the runner's refusal/observation rules, not a fresh pass through this diagram.
+
+Before intent, inspect complete workspace/tab/pane inventories and agent state. Require the saved workspace to be the run's linked worktree (`checkout_path` equals assigned `run.root`, `repo_key` equals `run.commonDir`), the tab in that workspace, and its single pane to match saved pane, cwd and any saved terminal id. Refuse missing/changed/extra-pane ownership, malformed inventories and inspection failures. The caller's Herdr pane (from injected `ports.env`, default process env) uses the existing runner `chatPane` session identity rule: `HERDR_PANE_ID` together with the `pdd` session component in `HERDR_SOCKET_PATH`. Equal owned pane refuses with another-terminal advice; a matching pane id in another session is not the target. When inside Herdr but caller pane cannot be determined, refuse. An unconfirmed original launch requires positive observation of that same saved agent before replacement; absence never clears uncertainty. Preserve any positively observed valid native UUID in the archived original; an alive original agent need not expose a session UUID, and absence of that UUID does not invalidate an already saved valid Claude session id.
+
+Close only this verified area tab, retaining peer tabs and both workspaces. Require the documented tab-close success response and fresh inventories confirming both selected tab and pane absent; a failed/lost acknowledgement blocks even when a later read shows absence. Reuse the verified run layout under its existing lock for the new tab; no new Git worktree or workspace cleanup. Persist createRequested before requesting allocation so interruption cannot allocate twice. Before dispatching pane run, prepare and checkpoint the exact new identity, including tab/pane/workspace/terminal, area, agent, configDir, startedAt, label, messageFile and known native session UUID (Claude preallocates; Codex remains null until observed). On a thrown/lost launch reply attach this same `error.chat` with `startUnconfirmed:true`; never invent a different identity.
+
+<details>
+<summary>Required checkpoint and message artifact interface</summary>
+
+`ports.checkpoint(record)` is required and awaited; it resolves only after runner persistence. The JSON-serializable envelope is `{id,area,phase,at,original,replacement?}`. `id` is a new UUID for the attempt, `area` is the selected area's name, `at` is its initial epoch milliseconds, and `phase` is exactly `intent`, `closeRequested`, `closed`, `createRequested`, `prepared`, `launchRequested` or `launched`. `original` is the complete saved chat plus `originalMessageFile` (its prior path) and `messageFile` (the immutable archived path); retain original session/config/identity fields. `replacement` is absent until prepared and required thereafter. launchRequested carries `replacement.startUnconfirmed:true`; launched clears that flag only after an acknowledged launch or the runner's positive observation of the same installed launchRequested identity; observation recovery never dispatches again. No callback takes a bare phase string or mutates unrelated run fields.
+
+Before intent and before touching `<area>-start.md`, copy the original first-message file's exact bytes to `<runDir>/abandoned-chats/<id>-start.md` with exclusive creation, and point `original.messageFile` there. Missing/unreadable original bytes refuse before close; never substitute the continuation text. Write the fresh continuation to `<runDir>/<area>-restart-<id>-start.md`; never overwrite an original or archived message artifact. A failed checkpoint prevents the next native effect and retains earlier effects and the last durable custody record. Before the initial close authorization, failure leaves at most these local artifacts, never a close or launch. All filesystem, clock, UUID and Herdr effects use injected boundaries for native testing; these contracts add no unsupported Runtime interface or check-only export.
+
+</details>
+
+## Dependencies
+
+- [Herdr layout](workflow-herdr-layout.prompt.md): required authoring/generation/verification context for workspace ownership, allocation and its existing lock. The runner's replacement protocol is the caller contract above, not a recursively loaded dependency.

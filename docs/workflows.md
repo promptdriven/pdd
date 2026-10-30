@@ -264,3 +264,6 @@ pdd-mybug/
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
 
 Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves or merges. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
+
+
+`pdd workflow open ISSUE [AREA] [--new]` focuses or resumes the current area's saved session by default. AREA opens a recorded current or earlier area's chat without moving the run or changing its gate and approvals; this does not enforce read-only execution. `--new` replaces only the current area's verified owned chat with one fresh session in the same worktree and saved agent configuration. It archives the old chat, native session identity and original first message, and the continuation explains completed work and any pending gate. Run it from another terminal: replacement refuses from the pane it would close and for an earlier area. Unavailable ownership, interrupted replacement or uncertain close/launch stays blocked with inspection advice, rather than launching another session. Replacement keeps completed work, decisions, approvals and PRs and never approves new work.
