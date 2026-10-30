@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 3e3dcebf7ac610fcc6f4fc53f676cbe278f5fcf51ca191bef8fc4a02b3271bcc).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 36d0e5fd080d47226c5d4e249f08028c8b15aebae220b24abc277ad69886b3b2).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { causeText } from './runtime-output.mjs';
@@ -108,6 +108,10 @@ function issueSelector(issue) {
     ?? /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*)\/issues\/([1-9][0-9]*)$/.exec(issue);
   if (!match) fail('workflow_github_issue_invalid');
   return { repository: match[1], number: Number(match[2]) };
+}
+
+export async function resolveWorkflowRepository({ cwd } = {}, ports = {}) {
+  return repositoryAt(cwd, dependencies(ports));
 }
 
 export async function resolveWorkflowIssue(input, ports = {}) {
