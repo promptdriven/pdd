@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "A journey uses its explicit initial world over base and part seed values, including null."
+      "text": "My journey starts with its chosen values over the product and part starting data, including an explicit empty value."
     },
     {
       "id": "AC2",
-      "text": "Two distinct parts declaring orders writable refuse before any upload."
+      "text": "Two parts claiming to write orders stop my Try before anything is uploaded."
     },
     {
       "id": "AC3",
-      "text": "Current J1 evidence gives the journey row one pass out of one; J10 is not another J1."
+      "text": "My current J1 result counts as one passed journey; J10 does not count as another J1."
     }
   ],
   "initial_world": {
@@ -176,6 +176,20 @@
         "size": 0
       },
       "result_value_pointer": ""
+    },
+    "github.issuePage": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"items\":[{\"number\":81,\"body\":\"<!-- pdd-product: run=phone-1 -->\",\"state\":\"OPEN\",\"user\":{\"login\":\"project-member\"},\"author_association\":\"MEMBER\",\"created_at\":\"2026-10-01T00:00:00Z\"}],\"total_count\":1,\"incomplete_results\":false}"
+      }
+    },
+    "github.timelinePage": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "[]"
+      }
     }
   },
   "context": [],

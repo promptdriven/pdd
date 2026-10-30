@@ -1,7 +1,9 @@
-# Product compose try
+# Try my product together
+
+I can try my phone and barista screens together without changing my project files.
 
 ## Acceptance criteria
 
-1. Joining phone and barista namespaces both screen labels and reports two operations per executable tap.
-2. Composition returns generated map and seed upload paths without changing the input files.
-3. The uploaded map scopes screen navigation and state references and appends the typed background operation to executable handlers.
+1. My joined phone and barista screens have distinct labels, and each tap runs at most two operations.
+2. Trying my product prepares its map and starting data without changing my project files.
+3. My joined screens keep their own navigation and saved choices, and run the background work after each tap.

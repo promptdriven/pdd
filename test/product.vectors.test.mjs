@@ -16,6 +16,7 @@ for (const name of ['map', 'status', 'next', 'start']) {
       return structuredClone(binding.result_template);
     };
     const ports = {
+      ...Object.fromEntries(['issuePage','timelinePage','pullRequest','currentActor'].filter(name=>scenario.simulation['github.'+name]).map(name=>[name,async args=>{const value=invoke('github.'+name,args);return value.json?JSON.parse(value.json):value;}])),
       readFile: async path => {
         const file = world.files[path]; if (!file) throw Object.assign(Error('missing'), { code: 'ENOENT' }); return file.content;
       },

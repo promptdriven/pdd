@@ -52,6 +52,7 @@ Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI pr
 
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
 - [Replay evidence](workflow-replay.prompt.md): required generation/runtime context for policy, source fingerprints, original anchors, validation and formatting.
+- [Product marker format](../../skills/pdd-product/references/files.md#planned-run-identity): required generation/testing context for the optional saved product association and its PR description line.
 - Ports: `execFile` (git and gh), `herdr`, `env`, `stdin`, `stderr`, `confirm`, `readApprovalEvidence`, `stateDir`, `now`, `pdd` (the command prefix). Defaults are the real ones.
 
 ## Recover a missing unconfirmed area tab
@@ -114,10 +115,26 @@ Honor structured nonzero command exits as failures. The bounded whole-descriptio
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
 
+## Product-run association
+
+At startup, inspect the actual resolved `binding.issue.body` for the
+[planned-run marker](../../skills/pdd-product/references/files.md#planned-run-identity).
+Save its full canonical HTML comment as optional `productMarker` only when one
+unambiguous planned-run marker is present. Do not persist the issue body or
+infer a product association from its title or branch suffix. Multiple distinct
+markers produce a warning and no `productMarker`; ordinary issues and legacy
+records without this field retain their normal behavior. No new publication
+lookup or gate is added for a legacy record.
+
+Carry a saved `productMarker` once, on its own line, into both PR descriptions.
+It accompanies the existing unique workflow ownership marker and never replaces
+or weakens that marker's checks. The workflow allocation branch suffix and the
+workflow `runId` are independent identifiers; do not infer one from the other.
+
 ## Shared Story evidence
 
 Export module functions `matchesSource(record, root, fingerprint)`,
-`storyCount(run)`, `runtimeLines(text)` and `storyEvidence(run)` for read-only product status. Preserve
+`storyCount(run)`, `runtimeLines(text)` and `storyEvidence(run, {comparisonRoot} = {})` for read-only product status. Preserve
 existing status counts and source matching. `runtimeLines(text)` preserves the
 existing parser's `{story,draft,result,line,pass}` rows, including null unnamed
 Stories, DRAFT flags, result boundaries and pass recognition.
@@ -131,3 +148,11 @@ Story, retain partial earlier compatible results, and otherwise report the lates
 unverified record with `current:false`. No record means no row. It must not write
 state, refresh PRs, call models or start chats. Product status may use the rows
 for attribution; it must not copy this evidence policy.
+
+`comparisonRoot` selects only the files against which the saved source is
+checked. Omission preserves `run.root`; an explicit path checks that checkout
+or snapshot without changing the run, its records or their location. Explicit
+null means no comparison source is available: retain the latest rows as
+unverified, never fall back to the old worktree or report a current pass.
+Both capture-based matching and legacy Git-content matching use the selected
+comparison root through the existing matching policy.

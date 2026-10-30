@@ -55,6 +55,12 @@ also do them in order with one agent. Start finds the exact run marker in an
 existing issue, including closed issues, before making one. `--no-run` only makes
 or finds that issue. Each started run keeps the normal feature gates and PRs.
 
+The marker search reads bounded pages, including closed issues. A run belongs
+to an issue by a repository owner, member or collaborator, or by you. An
+outsider's marker does not claim your run. If trusted duplicates exist, pdd uses
+the oldest issue and warns. Long issue titles use a Story count or range; the
+body keeps the full IDs and tells the agent how to name the Story files.
+
 Status counts current passing Stories per part and slice, shows stale results,
 PRs and what can start next. A stale pass used older files and needs another
 check. On another machine, status can read Runtime check lines in the run's PR
@@ -63,6 +69,16 @@ Name each Story file with its map id first, for example `P01-menu.md`.
 LATER Stories do not count toward planned progress.
 No result files are committed, and these commands make no runtime calls.
 
+Only the run's own same-repository PRs count. Status takes check results from the
+latest PR with named results, so a code PR without them does not hide the prompt
+PR's checks. An implementation merge satisfies a need; a prompt merge does not.
+For merged work, current and stale compare with the base branch's files. If
+that base is unavailable, status warns and leaves those results unverified.
+Needs cycles show their path in status and next. They do not prevent an explicit
+start or hide unrelated ready runs.
+
 Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product Try to test the path across parts. Status tracks journeys
 separately from each part's Stories.
+
+A composed map may navigate directly between parts with a qualified `next.screen`, such as `barista/board`. A target first matches a screen ID local to the current part, even if that local ID contains a slash; otherwise it must name a selected product screen. Select all parts needed by explicit navigation targets. In coffee pickup, Order on the phone opens the barista board; Done returns to the phone, where the background work has made the order Ready.

@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Joining phone and barista namespaces both screen labels and reports two operations per executable tap."
+      "text": "My joined phone and barista screens have distinct labels, and each tap runs at most two operations."
     },
     {
       "id": "AC2",
-      "text": "Composition returns generated map and seed upload paths without changing the input files."
+      "text": "Trying my product prepares its map and starting data without changing my project files."
     },
     {
       "id": "AC3",
-      "text": "The uploaded map scopes screen navigation and state references and appends the typed background operation to executable handlers."
+      "text": "My joined screens keep their own navigation and saved choices, and run the background work after each tap."
     }
   ],
   "initial_world": {
