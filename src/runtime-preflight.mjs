@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8f070b0a96f95c7b7ce04d70606344569dc3f8e60450e6e604260ede7e6d94d9).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 607812bf0787395ceaa2fb3f253a0d1f62e7412ddae3e04e4bd2f6a90eb85bda).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -75,7 +75,7 @@ export function storyCriteria(source) {
 }
 
 export function gitFiles(root) {
-  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024 });
+  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (listed.status !== 0) throw new PreflightError(5, 'pdd could not list the Git files of this repository.');
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
@@ -340,9 +340,38 @@ function annotationRules(schema, add) {
   if (Object.hasOwn(schema, 'examples') && !Array.isArray(schema.examples)) add('graph-schema-invalid', '"examples" must be a list.');
 }
 
+// Preserve numeric JSON spelling only for parsed prompt interfaces; ordinary callers supply JSON values.
+const numberSources = new WeakMap();
+function limitProblems(iface) {
+  const out = [], keys = ['max_steps', 'max_model_calls'];
+  const add = (code, pointer, rule, hint) => out.push({code,pointer,rule,hint});
+  const shapeHint = 'Fix limits: use exactly "max_steps" and "max_model_calls", each an integer of at least 1.';
+  if (!isObject(iface) || !Object.hasOwn(iface, 'limits')) {
+    add('invalid-interface', '/limits', 'has no limits object.', 'Add "limits": {"max_steps": 1, "max_model_calls": 1}.');
+    return out;
+  }
+  const limits = iface.limits;
+  if (!isObject(limits)) {
+    add('invalid-limits', '/limits', 'must be an object with exactly max_steps and max_model_calls.', shapeHint);
+    return out;
+  }
+  for (const key of Object.keys(limits)) if (!keys.includes(key)) {
+    add('invalid-limits', `/limits/${pointerOf([key]).slice(1)}`, 'is not an allowed limit field.', `Remove the extra limits key ${JSON.stringify(key)}; use exactly "max_steps" and "max_model_calls", each an integer of at least 1.`);
+  }
+  for (const key of keys) {
+    const token = numberSources.get(limits)?.get(key);
+    const integer = typeof limits[key] === 'number' && (token === undefined ? Number.isInteger(limits[key]) && limits[key] >= 1
+      : /^-?(?:0|[1-9]\d*)$/.test(token) && BigInt(token) >= 1n);
+    if (!Object.hasOwn(limits, key) || !integer) {
+      add('invalid-limits', `/limits/${key}`, Object.hasOwn(limits, key) ? 'must be an integer JSON literal of at least 1.' : 'is missing; must be an integer JSON literal of at least 1.', `Fix limits.${key}: set an integer of at least 1 (for example 1), without a decimal point or exponent.`);
+    }
+  }
+  return out;
+}
+
 // Every schema problem of one interface: entry input and result schemas (any root) and resource operation schemas (object root).
 export function interfaceSchemaProblems(iface) {
-  const out = [];
+  const out = limitProblems(iface);
   for (const [index, entry] of (Array.isArray(iface?.entries) ? iface.entries : []).entries()) {
     for (const key of ['input_schema', 'result_schema']) if (isObject(entry) && Object.hasOwn(entry, key)) schemaRules(entry[key], `/entries/${index}/${key}`, out);
   }
@@ -368,7 +397,15 @@ export function readPrompt(root, visible, path) {
   if (!blocks.length) return { path, text, blocks, error: 'interface-missing' };
   if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
   let value;
-  try { value = JSON.parse(blocks[0][1]); } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
+  try {
+    value = JSON.parse(blocks[0][1], function(key, value, context) {
+      if (typeof value === 'number' && context?.source !== undefined) {
+        if (!numberSources.has(this)) numberSources.set(this, new Map());
+        numberSources.get(this).set(key, context.source);
+      }
+      return value;
+    });
+  } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
   if (!isObject(value)) return { path, text, blocks, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
   return { path, text, blocks, interface: value, prose: proseSha256(text), references:prepared.references };
 }
@@ -511,7 +548,7 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
   if (!prompt?.interface || seen.has(prompt.path)) return [];
   seen.add(prompt.path);
   prompt.schemaIssues ??= interfaceSchemaProblems(prompt.interface).map(problem =>
-    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`));
+    refusal(problem.code, problem.pointer, `${prompt.path} ${problem.pointer} ${problem.rule}`, problem.hint ? {hint:problem.hint,path:prompt.path} : {}));
   const called = (Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).map(call => call?.target).filter(target => typeof target === 'string');
   return [...prompt.schemaIssues, ...called.flatMap(target => {
     if (!prompts.has(target)) prompts.set(target, readPrompt(root, found.visible, target));
@@ -616,7 +653,7 @@ export function preflight({ root, found, selected }) {
 
 // --fill-hash: fill draft hashes; report approved interfaces whose text changed.
 export function fillHashes({ root, files = gitFiles(root) }) {
-  const result = { filled: [], current: [], refused: [], stale: [] };
+  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
   for (const path of files) {
     if (!path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     const text = readText(root, path), blocks = interfaceBlocks(text);
@@ -628,6 +665,11 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     let value;
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
+    if (!Object.hasOwn(value, 'status')) {
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      continue;
+    }
     const hash = proseSha256(text);
     if (value.status === 'approved') { (value.prose_sha256 === hash ? result.current : result.stale).push({ path }); continue; }
     if (value.status !== 'draft') { result.refused.push({ path, message: `${path} has status ${show(value.status)}. Use "draft" until the person approves it.` }); continue; }
