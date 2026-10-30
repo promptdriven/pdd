@@ -53,7 +53,7 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 - The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
 - `prose_sha256` = lowercase hex SHA-256 of the UTF-8 bytes of the text with every block removed. Read the file as UTF-8 and do not change newlines.
-- `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": "fe7511b0fa75d8bc17c66d176c65c5f242f32201437bff8d717463d465229f59"`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
+- `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": "56d0ab43ab5426c98d7b54ea6f72a5810bbede74cb757d6217387c91141d8ae1"`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
 
 ## Source capture
 
@@ -182,4 +182,4 @@ Validate the inventory before use, with ordinary safe-file and repository-relati
 
 ## Product composition reuse
 
-Expose existing discovery, exact Story token matching and interface/schema readers for [product composition](product-composition.prompt.md); preserve standalone semantics. Share product world writer parsing rather than implementing multiple ownership parsers. Effective generated map/seed/prompt bytes must enter the ordinary captureSource prepareSource hook with attempt-local readers, normal closure, privacy, limits and source hash. E1 owns that hook; this issue must reuse its implementation.
+Expose existing discovery, exact Story token matching and interface/schema readers for [product composition](product-composition.prompt.md); preserve standalone semantics. Composition uses product’s pure parseProductWorldWriters({worldText}) for world.md declarations; preflight does not own or invent another writer parser. Effective generated map/seed/prompt bytes must enter the ordinary captureSource prepareSource hook with attempt-local readers, normal closure, privacy, limits and source hash. E1 owns that hook; this issue must reuse its implementation.
