@@ -21,7 +21,7 @@ Modes: `--fill-hash` takes no other option or STORY and makes no network call. `
 
 ### Hash filling
 
-Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. Print each filled path as `Filled prose_sha256: <path>`, each refusal as `Refused: <message>`, each warning as `Warning: <message>`, and every stale approved path with the existing stale hint. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when warnings were reported. Do not require tests, sign-in or a runtime request for hash filling.
+Use the [preflight hash-fill contract](runtime-preflight.prompt.md#prose-hash) for local classification and updates. Print to stdout in this group order: warnings as `Warning: <message>`, filled paths as `Filled prose_sha256: <path>`, refusals as `Refused: <message>`, then stale approved paths with the existing stale hint. Preserve each result array's order within its group. Finish with `Hashes: N filled, N current, N refused, N stale.` Warnings do not enter those counts. Return exit 4 if any refusal or stale result exists, otherwise exit 0, including when only warnings were reported and nothing was filled. Do not require tests, sign-in or a runtime request for hash filling.
 
 ### Local drawing checks
 
