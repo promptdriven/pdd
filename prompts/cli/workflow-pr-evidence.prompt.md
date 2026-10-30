@@ -23,7 +23,7 @@ Insert this block above ordinary verdict/runtime/step prose, while keeping struc
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "ebb27cc12de39601402ce1fa667a9f8a2c1330b23c2f2e66f4106da3c063a83d",
   "entries": [
     {
