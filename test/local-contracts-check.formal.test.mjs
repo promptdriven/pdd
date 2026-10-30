@@ -109,9 +109,10 @@ test('formal E: all 54 ownership, mapping, presence and unused-schema configurat
     },expected,diagnostic);
   }
 });
-test('formal F: all 12 definite/unavailable precedence configurations', async () => {
+test('formal F: 11 active definite/unavailable configurations; one superseded', async () => {
   const states=[['{"type":"integer"}','0',0],['{"type":"integer"}','null',4],['{"type":"string","pattern":"[]"}','"A"',5]];
   for (const [schema,value,state] of states) for (let extra=0;extra<4;extra++) {
+    if (state===0 && extra===2) continue; // Lead 13:59: one superseded configuration; frozen replacement covers skip/pass.
     const files={
       'contracts/world.md':table([['owner','A']]),
       'contracts/seed-world.json':`{"item":${value}}`,

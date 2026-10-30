@@ -85,7 +85,8 @@ test('native effect observers detect calibrated writes, history, programs and di
   } finally { observed.restore(); fs.rmSync(folder, {recursive: true, force: true}); }
 });
 
-for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, async () => {
+const superseded = new Set(['writer-list','legacy-table-check','unknown-json-role','empty-container-branch','definite-problem-wins-unavailable']);
+for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, {skip:superseded.has(vector.id)?'Lead 13:59 superseded; frozen local-contract-layouts replacement':false}, async () => {
   const sandbox = fs.mkdtempSync(join(tmpdir(), 'pdd-local-contract-'));
   const cwd = join(sandbox, 'repo'), state = join(sandbox, 'state');
   fs.mkdirSync(cwd); fs.mkdirSync(state);

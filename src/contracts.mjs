@@ -13,13 +13,13 @@ const finite = error => String(error.message ?? error).replace(/[\r\n\x00-\x1f\x
 const snapshotMap = references => new Map(references.map(ref=>[`${ref.kind}:${ref.target}`,ref.value_json]));
 
 export function runContracts({words = [],options = {},cwd = process.cwd()} = {}, {env = process.env,stdout = process.stdout,stderr = process.stderr} = {}) {
-  if (words.length>1 || words.length===1 && words[0]!=='sync' || Object.keys(options).some(key=>!['--write','--check'].includes(key)) || options['--check']!==undefined && (options['--check']!==true || words.length>0 || options['--write']!==undefined) || options['--write']!==undefined && (words[0]!=='sync' || options['--write']!==true)) {
+  if (options['--json']!==undefined && (options['--json']!==true || options['--check']!==true) || words.length>1 || words.length===1 && words[0]!=='sync' || Object.keys(options).some(key=>!['--write','--check','--json'].includes(key)) || options['--check']!==undefined && (options['--check']!==true || words.length>0 || options['--write']!==undefined) || options['--write']!==undefined && (words[0]!=='sync' || options['--write']!==true)) {
     line(stderr,'Use pdd contracts or pdd contracts sync [--write].'); return 2;
   }
   const git=spawnSync('git',['rev-parse','--show-toplevel'],{cwd,encoding:'utf8'});
   if (git.status!==0 || !git.stdout.trim()) { line(stderr,'pdd contracts works in a Git repository.'); return 2; }
   const root=git.stdout.trim();
-  if (options['--check'] === true) return checkContracts(root,{stdout,stderr});
+  if (options['--check'] === true) return checkContracts(root,{stdout,stderr,json:options['--json']===true});
   try {
     const visible=new Set(gitFiles(root)), files=sourceFilePort(root,visible);
     const warnings = [];
@@ -135,9 +135,9 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
 }
 
 // --check has no dependency on saved Check history or capture/upload state.
-function checkContracts(root,{stdout,stderr}) {
-  const problems = [], unavailable = [];
-  const report = (file,record,field,rule,unknown = false) => (unknown ? unavailable : problems).push(`${file}: ${record} ${field}: ${unknown ? 'validation unavailable: ' : ''}${rule}`);
+function checkContracts(root,{stdout,stderr,json = false}) {
+  const diagnostics = [], skipped = new Set();
+  const report = (file,record,field,message,unknown = false,provenance = {}) => diagnostics.push({file,record,field,kind:unknown?'unavailable':'problem',message,...provenance});
   const isUnavailable = error => error.localContractUnavailable === true || error.exitCode === 5 || typeof error.code === 'string' && !error.code.startsWith('contract-') && error.code !== 'seed-invalid';
   let checkedRecords = 0, checkedValues = 0;
   try {
@@ -202,8 +202,9 @@ function checkContracts(root,{stdout,stderr}) {
         for (const ref of expanded.references) if (ref.kind === 'seed') seeds.add(ref.target.split('#')[0]);
       } catch (error) { report(seedPath,'world','',finite(error),isUnavailable(error)); }
     }
-    const selected = new Map(), rows = new Map();
-    const select = (target,file,field,record = target) => {
+    const selected = new Map(), rows = new Map(), authorities = new Set();
+    let tableKind;
+    const select = (target,file,field,record = target, authority = true) => {
       try {
         const expanded = expand({path:file,text:JSON.stringify({$contract:target}),format:'json-schema'});
         const references = expanded.references.filter(ref => ref.kind === 'contract');
@@ -218,7 +219,8 @@ function checkContracts(root,{stdout,stderr}) {
         });
         const canonical = outer?.target;
         if (!canonical) throw new Error('selected schema could not be resolved');
-        selected.set(canonical,{file,field,record,expanded:expanded.text});
+        selected.set(canonical,{file:canonical.split('#')[0],field,record:canonical,expanded:expanded.text});
+        if (authority) authorities.add(canonical);
         uses.push(...expanded.references);
         return canonical;
       } catch (error) { report(file,record,field,finite(error),isUnavailable(error)); return null; }
@@ -232,49 +234,61 @@ function checkContracts(root,{stdout,stderr}) {
         const marker = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i]);
         if (marker) { if (!fence) fence=marker[1][0]; else if (fence===marker[1][0]) fence=null; continue; }
         if (fence || !lines[i].includes('|')) continue;
-        const cells = line => line.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(unquote);
+        const cells = line => line.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(cell => cell.trim());
         const headings = cells(lines[i]);
-        if (!headings.includes('Key') || !headings.includes('Writer') || !/^\s*\|?\s*:?-+/.test(lines[i+1] ?? '')) continue;
+        if ((!headings.includes('Key') && !headings.includes('Path')) || !headings.includes('Writer') || !/^\s*\|?\s*:?-+/.test(lines[i+1] ?? '')) continue;
         table = {headings,values:[]};
         for (i+=2;i<lines.length && lines[i].trim().includes('|');i++) table.values.push(cells(lines[i]));
         break;
       }
       if (!table) report(worldPath,'world','','missing Key/Writer ownership table');
       else {
-        if (!table.headings.includes('Schema')) report(worldPath,'world','Schema','missing explicit Schema column');
+        tableKind = table.headings.includes('Key') ? 'Key' : 'Path';
         for (const cells of table.values) {
           const get = name => cells[table.headings.indexOf(name)] ?? '';
-          const key = get('Key'), writer = get('Writer'), target = get('Schema');
-          if (!key) { report(worldPath,'world','Key','missing key'); continue; }
-          if (!writer || writer.includes(',')) report(worldPath,key,'Writer','declare exactly one nonblank writer');
-          if (!target) { report(worldPath,key,'Schema','missing explicit schema mapping'); continue; }
-          const canonical = select(target,worldPath,'Schema',target);
-          if (!canonical) continue;
-          const old = rows.get(key);
-          if (old && old.writer !== writer) report(worldPath,key,'Writer','conflicting writers');
-          if (old && old.canonical !== canonical) report(worldPath,key,'Schema','conflicting schema mappings');
-          if (!old) rows.set(key,{writer,canonical});
+          const raw = get(tableKind), writer = unquote(get('Writer')), target = unquote(get('Schema'));
+          const quoted = [...raw.matchAll(/`([^`]*)`/g)].map(match => match[1]);
+          const keys = tableKind === 'Path' && quoted.length ? quoted : [unquote(raw)];
+          for (const key of keys) {
+            if (!key) { report(worldPath,'world',tableKind,'missing key/path'); continue; }
+            if (!writer) report(worldPath,key,'Writer','declare one nonblank writer');
+            const canonical = target ? select(target,worldPath,'Schema',target) : null;
+            const old = rows.get(key);
+            if (old && old.writer !== writer) report(worldPath,key,'Writer','conflicting writers');
+            if (old?.canonical && canonical && old.canonical !== canonical) report(worldPath,key,'Schema','conflicting schema mappings');
+            if (!old) rows.set(key,{writer,canonical});
+            else if (!old.canonical && canonical) old.canonical = canonical;
+          }
         }
       }
     }
     // Explicit consumer selections establish schema roles, including empty leaves.
-    for (const ref of uses) if (ref.kind === 'contract' && !selected.has(ref.target)) selected.set(ref.target,{file:ref.target.split('#')[0],field:'',record:ref.target,expanded:ref.value_json});
+    for (const ref of uses) if (ref.kind === 'contract') {
+      authorities.add(ref.target);
+      if (!selected.has(ref.target)) selected.set(ref.target,{file:ref.target.split('#')[0],field:'',record:ref.target,expanded:ref.value_json});
+    }
     const markers = new Set([...schemaKeywordNames(),'$contract']);
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && jsonNumberText(value) === null;
     const escape = key => key.replace(/~/g,'~0').replace(/\//g,'~1');
     for (const source of sources) if (source.path.endsWith('.json') && !seeds.has(source.path)) {
       let document;
       try { document=parseJsonValue(source.text); } catch { report(source.path,`${source.path}#`,'','invalid JSON'); continue; }
-      const walk = (value,pointer) => {
-        const target = `${source.path}#${pointer}`;
-        if (selected.has(target)) return;
-        if (object(value) && Object.keys(value).some(key => markers.has(key))) { select(target,source.path,''); return; }
-        if (!object(value) || !Object.keys(value).length) { report(source.path,`${source.path}#`,pointer,'schema/data role cannot be established',true); return; }
-        for (const [key,child] of Object.entries(value)) walk(child,`${pointer}/${escape(key)}`);
+      const leaves = [];
+      const classify = (value,pointer) => {
+        if (!object(value) || !Object.keys(value).length) return false;
+        if (Object.keys(value).some(key => markers.has(key))) { leaves.push(pointer); return true; }
+        if (Object.hasOwn(value,'resources') || Object.hasOwn(value,'simulation')) return false;
+        return Object.entries(value).every(([key,child]) => classify(child,`${pointer}/${escape(key)}`));
       };
-      walk(document,'');
+      if (classify(document,'')) {
+        for (const pointer of leaves) {
+          const target = `${source.path}#${pointer}`;
+          if (!selected.has(target)) select(target,source.path,'',target,pointer === '');
+          else if (pointer === '') authorities.add(target);
+        }
+      } else if (![...selected.keys()].some(target => target.split('#')[0] === source.path)) skipped.add(source.path);
     }
-    const catalogSources = new Map(sources.filter(source => !seeds.has(source.path)).map(source => [source.path,source]));
+    const catalogSources = new Map(sources.filter(source => !seeds.has(source.path) && !skipped.has(source.path)).map(source => [source.path,source]));
     for (const target of new Set([...selected.keys(),...uses.filter(ref => ref.kind === 'contract').map(ref => ref.target)])) {
       const path = target.split('#')[0];
       if (catalogSources.has(path) || seeds.has(path)) continue;
@@ -285,27 +299,40 @@ function checkContracts(root,{stdout,stderr}) {
     for (const warning of catalog.warnings) report(warning.split(':')[0],warning.split(':')[0],'',warning);
     for (const record of catalog.records) {
       if (seeds.has(record.path)) continue;
-      if (record.path.endsWith('.md') && !selected.has(record.target)) selected.set(record.target,{file:record.path,field:'',record:record.target,expanded:record.value_json});
+      if (record.path.endsWith('.md')) {
+        authorities.add(record.target);
+        if (!selected.has(record.target)) select(record.target,record.path,'');
+      }
     }
     const schemas = new Map();
     for (const [target,source] of selected) {
       if (seeds.has(target.split('#')[0])) continue;
       try {
         const result = validateContract({schema_json:source.expanded});
-        schemas.set(target,source.expanded); checkedRecords++;
+        checkedRecords++;
+        if (!result.schema_problems.length && !result.unproved.length) schemas.set(target,source.expanded);
         for (const item of result.schema_problems) report(source.file,source.record,item.pointer,item.rule);
         for (const item of result.unproved) report(source.file,source.record,item.pointer,item.rule,true);
       } catch (error) { report(source.file,source.record,source.field,finite(error)); }
     }
-    const compared = compareCopies(prompts,catalog.records);
-    for (const match of compared.matches) if (match.kind === 'near') for (const difference of match.differences) report(match.path,match.target,difference.split(':')[0],difference);
+    const compared = compareCopies(prompts,catalog.records.filter(record => authorities.has(record.target)));
+    for (const match of compared.matches) if (match.kind === 'near') for (const difference of match.differences) report(match.path,match.target,difference.split(':')[0],difference,false,{source_pointer:match.source_pointer,target:match.target});
     for (const warning of compared.warnings) report(warning.split(' ')[0],warning,'',warning,true);
     if (hasWorld && hasSeed) {
       try {
-        for (const [key,value] of Object.entries(seedWorld ?? {})) {
-          const row = rows.get(key), pointer = `/${escape(key)}`;
-          if (!row) { report(seedPath,key,pointer,'present seed key has no schema and writer declaration'); continue; }
-          const schema_json = schemas.get(row.canonical); if (!schema_json) continue;
+        if (tableKind === 'Key') for (const key of Object.keys(seedWorld ?? {})) {
+          if (!rows.has(key)) report(seedPath,key,`/${escape(key)}`,'present seed key has no writer declaration');
+        }
+        for (const [key,row] of rows) {
+          const tokens = tableKind === 'Path' ? key.slice(1).split('/').map(token => token.replace(/~1/g,'/').replace(/~0/g,'~')) : [key];
+          let value = seedWorld, present = true;
+          for (const token of tokens) {
+            if (value === null || typeof value !== 'object' || !Object.hasOwn(value,token)) { present = false; break; }
+            value = value[token];
+          }
+          const schema_json = schemas.get(row.canonical);
+          if (!present || !schema_json) continue;
+          const pointer = tableKind === 'Path' ? key : `/${escape(key)}`;
           const result = validateContract({schema_json,value_json:stringifyJsonValue(value)}); checkedValues++;
           for (const item of result.value_problems) report(seedPath,key,`${pointer}${item.pointer}`,item.rule);
           for (const item of result.unproved) report(seedPath,key,`${pointer}${item.pointer}`,item.rule,true);
@@ -313,9 +340,29 @@ function checkContracts(root,{stdout,stderr}) {
       } catch (error) { report(seedPath,'world','',finite(error)); }
     }
   } catch (error) { report('contracts/','local contracts','',finite(error),true); }
-  for (const text of [...problems,...unavailable]) line(stderr,text);
-  if (problems.length) return 4;
-  if (unavailable.length) return 5;
-  line(stdout,`Checked ${checkedRecords} records and ${checkedValues} world values.`);
-  return 0;
+  const fields = ['file','record','field','kind','source_pointer','target','message'];
+  const grouped = new Map();
+  for (const item of diagnostics) {
+    const identity=JSON.stringify(fields.filter(key=>key!=='message').map(key=>item[key] ?? ''));
+    const old=grouped.get(identity);
+    if (!old) grouped.set(identity,{...item});
+    else if (!old.message.includes(item.message)) old.message=finite(`${old.message}; ${item.message}`);
+  }
+  const unique=[...grouped.values()];
+  unique.sort((a,b) => { for (const key of fields) { const left=a[key] ?? '', right=b[key] ?? ''; if (left!==right) return left<right?-1:1; } return 0; });
+  const exit_code = unique.some(item => item.kind==='problem') ? 4 : unique.length ? 5 : 0;
+  const skipped_files = [...skipped].sort();
+  if (json) line(stdout,JSON.stringify({exit_code,checked_records:checkedRecords,checked_world_values:checkedValues,skipped_files,diagnostics:unique}));
+  else {
+    const presentations = new Map();
+    for (const item of unique) {
+      const identity=JSON.stringify([item.file,item.record,item.field,item.kind,item.target,item.message]);
+      if (!presentations.has(identity)) presentations.set(identity,{...item,pointers:[]});
+      if (item.source_pointer!==undefined) presentations.get(identity).pointers.push(item.source_pointer);
+    }
+    for (const item of presentations.values()) line(stderr,`${item.file}: ${item.record} ${item.field}: ${item.kind==='unavailable'?'validation unavailable: ':''}${item.message}${item.pointers.length?` [sources ${item.pointers.join(', ')}]`:''}${item.target!==undefined?` [target ${item.target}]`:''}`);
+    if (skipped_files.length) line(stdout,`Skipped ${skipped_files.length} files that are not schemas: ${skipped_files.join(', ')}`);
+    line(stdout,`Checked ${checkedRecords} records and ${checkedValues} world values.`);
+  }
+  return exit_code;
 }
