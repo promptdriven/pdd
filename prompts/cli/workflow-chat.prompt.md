@@ -54,7 +54,7 @@ Close only this verified area tab, retaining peer tabs and both workspaces. Reco
 <details>
 <summary>Recovery and rollback by durable phase</summary>
 
-`restartChat` also accepts an optional `pending` saved envelope in its existing object input. Reconcile custody from that record and fresh inventories, never from a new identity invented on retry. Use one native ownership/observation path for initial replacement and recovery; keep only checks needed for the observed phase.
+`restartChat` also accepts an optional `pending` saved envelope in its existing object input. Reconcile custody from that record and fresh inventories, never from a new identity invented on retry. Its area/original identify the recovery target even when legitimate workflow progress has advanced run.area; inspect and reconcile that recorded chat, never substitute the newer current chat. Use one native ownership/observation path for initial replacement and recovery; keep only checks needed for the observed phase.
 
 - `intent`: no close was dispatched. If the original is still owned and usable, roll back to it, retain the archive, and finish this invocation without closing it. Otherwise retain a retryable attempt until inspection can establish ownership.
 - `closeRequested`: close may have happened. If the exact original remains owned and usable, roll back without reissuing close. If its tab/pane are absent, distinguish a saved acknowledged close from a lost acknowledgement. The former may continue prelaunch; for the latter inspect the saved original native session/agent as well as inventories, and establish that it cannot still be running before continuing. Unavailable or inconclusive inspection refuses retryably; mere tab absence is insufficient.
