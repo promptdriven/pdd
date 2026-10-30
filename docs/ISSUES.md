@@ -6,7 +6,7 @@ For a bug in your own project, use the `pdd-bug` skill. For access to the runtim
 
 **Agent:** do the steps in order. Get each fact from a command or from the person. Never invent a fact. When you do not know a fact, ask the person.
 
-## 1. Check that it is pdd v2
+## 1. Check the pdd version
 
 ```sh
 pdd --version
@@ -14,11 +14,11 @@ pdd --version
 
 | It prints | What to do |
 |---|---|
-| `0.1.` and a number, for example `0.1.10` | This is pdd v2. Go to step 2. |
-| `pdd, version 0.0.` and a number, for example `pdd, version 0.0.310` | This is the Python pdd (v1). v1 is retired. Do not file an issue. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
-| `command not found` | pdd is not installed. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
+| `0.1.` and a number, for example `0.1.10` | Go to step 2. |
+| `pdd, version 0.0.` and a number, for example `pdd, version 0.0.310` | This is the Python pdd (0.0.x). It is retired. Do not file an issue. Tell the person to install pdd with the steps in [Install](../README.md#install). |
+| `command not found` | pdd is not installed. Tell the person to install pdd with the steps in [Install](../README.md#install). |
 
-If the person installed pdd v2 and `pdd --version` prints `pdd, version 0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
+If the person installed pdd 0.1.10 or newer and `pdd --version` prints `pdd, version 0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
 
 If the version is older than the version in [Install](../README.md#install), update pdd first with the steps in Install. Then run the failing command again. Report the problem only if it stays.
 

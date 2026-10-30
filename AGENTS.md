@@ -1,4 +1,4 @@
-# Working on PDD Alpha
+# Working on PDD
 
 Before you write or change a Story or a prompt, read the full [Prompting guide](docs/prompting-guide.md) in this conversation. Follow its method for module ownership, public behavior, what must not change, required dependencies and the edge cases that matter. A link or a Story template is not enough. If you lose the context, read the guide again before you write.
 

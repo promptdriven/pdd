@@ -1,4 +1,4 @@
-# PDD Alpha documentation
+# PDD documentation
 
 Start with the [README](../README.md).
 

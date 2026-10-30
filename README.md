@@ -1,8 +1,8 @@
-# PDD v2
+# PDD
 
 ## What PDD is
 
-This is PDD version 2. In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD runtime runs the prompts with an AI that acts as the code, so you can check and try the program before any code exists. Then your agent writes the code from the approved prompts.
+In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD runtime runs the prompts with an AI that acts as the code, so you can check and try the program before any code exists. Then your agent writes the code from the approved prompts.
 
 ```mermaid
 flowchart LR

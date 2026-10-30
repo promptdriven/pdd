@@ -1,6 +1,6 @@
-# Local PDD Alpha command boundary
+# Local PDD command boundary
 
-PDD Alpha supplies a guide and recipes for the user's existing coding-agent conversation. Keep `pdd` as the command name. Provide local discovery without hosted-service commands or private dependencies.
+PDD supplies a guide and recipes for the user's existing coding-agent conversation. Keep `pdd` as the command name. Provide local discovery without hosted-service commands or private dependencies.
 
 The local command surface includes help (root and known local command help), `--version`, `workflow list [--json]`, `completion bash|zsh` and `setup`. There is no `session` command and no `workflow feature|bug|small-change` chat launcher: people open Codex or Claude as usual and call a PDD skill by name: `$pdd-feature` in Codex, `/pdd-feature` in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting). Unknown or excluded commands, including with help flags, refuse clearly with exit2 before effects. Do not look up installed service adapters, forward arbitrary argv, import private dependencies, implement authentication, make PDD service calls, change accounts or install services. The read-only `workflow view ISSUE` route uses saved local records and local Git/file reads only, with no chat, approval or network effects. The workflow runner routes (run, done, approve, changes, cancel, status, open) may use ordinary authenticated Git/GitHub tools and Herdr through the distinct runner. Expose only supported local command declarations and validators.
 
