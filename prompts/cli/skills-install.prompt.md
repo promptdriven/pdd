@@ -1,6 +1,6 @@
 # Find or install the PDD skills for each agent
 
-Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES` (`pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature`), `setupSkills({packageRoot, cwd, home, claudeConfigDir})` and `findSkills` (same arguments). Only [pdd setup](pdd-cli.prompt.md) calls `setupSkills`. No other command writes skills. `pdd --version` calls `findSkills`: it does step 2 and the stale check below with no writes, and returns `{agent, found, stale}` for each agent, Codex first.
+Own `src/skills-install.mjs`. Export `PDD_SKILL_NAMES` (`pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`), `setupSkills({packageRoot, cwd, home, claudeConfigDir})` and `findSkills` (same arguments). Only [pdd setup](pdd-cli.prompt.md) calls `setupSkills`. No other command writes skills. `pdd --version` calls `findSkills`: it does step 2 and the stale check below with no writes, and returns `{agent, found, stale}` for each agent, Codex first.
 
 The PDD skills ship in `<packageRoot>/skills/<name>/`. People often install them with `npx skills add`, which copies or symlinks them into the project or the user folder. pdd setup must not add a second copy then. It copies the skills only when an agent cannot find them.
 
@@ -16,8 +16,8 @@ Claude started with `CLAUDE_CONFIG_DIR` reads `<CLAUDE_CONFIG_DIR>/skills` and n
 ## What setupSkills does, for each agent
 
 1. Update: in the user folder, replace each PDD skill folder that carries the pdd marker and is older or changed (see the table below).
-2. Find: the first read folder where all five `<folder>/<name>/SKILL.md` files exist. A symlinked skill folder counts.
-3. If no read folder has all five skills, copy each skill that is missing from the user folder.
+2. Find: the first read folder where all six `<folder>/<name>/SKILL.md` files exist. A symlinked skill folder counts.
+3. If no read folder has all six skills, copy each skill that is missing from the user folder.
 
 Return one result per agent, Codex first: `{agent, root, found, stale, installed, updated}`. `root` is the user folder, `found` is the found read folder or null, and `installed` and `updated` are the absolute folders that were copied. `stale` says how the found skills compare with the package (0.1.6 tester: setup said "found" for npx skills copies older than pdd): `'older'` when every found skill that is not current is older: a pdd marker with an older version, or (without a marker) files that are not the package's and a version line that is older or missing. `'differs'` when one differs in another way (a folder without a marker whose files, hashed like the digest, are not the package's and whose version line is the package version; a marker of the same version with another digest; a marker that is not valid JSON), else null (the same files, a newer marker or version line, or unreadable). Compare the files first, so a version line that a release forgot to change never warns about current files. setupSkills never changes a found folder that it does not own. A failure in one agent does not stop the other: put `error` in that agent's result instead of throwing. It never writes into the person's repo.
 

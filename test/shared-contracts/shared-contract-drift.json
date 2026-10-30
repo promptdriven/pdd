@@ -1,0 +1,167 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/shared-contract-drift.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Explicit lint advises when a copy with at least three fields differs from a shared record with at least four fields by constraints or one extra or missing field."
+    },
+    {
+      "id": "AC2",
+      "text": "Changing a nested constraint is visible even when the field names stay the same."
+    },
+    {
+      "id": "AC3",
+      "text": "Equal copies and schemas differing by two fields produce no drift advice."
+    },
+    {
+      "id": "AC4",
+      "text": "Ambiguous matches warn without choosing a record."
+    },
+    {
+      "id": "AC5",
+      "text": "Drift advice leaves the server lint result and exit status unchanged."
+    },
+    {
+      "id": "AC6",
+      "text": "Empty, one-field and two-field inline schemas are skipped; an equal three-field record can match exactly, but a differing three-field record gives no near advice."
+    },
+    {
+      "id": "AC7",
+      "text": "Reordering required fields or enum alternatives gives no drift advice; changing the order inside literal array values still does."
+    }
+  ],
+  "cases": [
+    {
+      "id": "field-distance",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "synthetic canonical properties name,run_id,kind,active; copies name,kind,active (3), all four (4) with changed name constraint, and all four plus age (5)",
+      "required_observation": "all three advise with consumer, canonical target and exact difference; empty/one/two-field schemas stay untouched"
+    },
+    {
+      "id": "nested",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "Use four eligible synthetic fields count,name,kind,active with identical fillers; same fields; nested count.minimum is 0 in copy and 1 in record",
+      "required_observation": "advice identifies nested minimum difference"
+    },
+    {
+      "id": "limits",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "semantic equal with different key order/title; field symmetric difference 2; literal $contract in default",
+      "required_observation": "no drift advice for any of these"
+    },
+    {
+      "id": "ambiguity",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "two different records equally near the inline copy",
+      "required_observation": "ambiguous warning; no arbitrary selected reference"
+    },
+    {
+      "id": "advice-only",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "fake server lint passes then refuses in separate runs; drift advice in both",
+      "required_observation": "exit 0 then 4 follows server result; same upload/request semantics; no checks or expected-value writes"
+    },
+    {
+      "id": "equal-number-spellings",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "Use four eligible synthetic fields count,name,kind,active with identical fillers; one record and inline copies with identical fields and constraints except nested count.minimum uses 1, 1.0 or 1e0; repeat with 0, -0, 0.0 and 0e0",
+      "required_observation": "each copy selects the unique record as an exact match with no differences or drift advice"
+    },
+    {
+      "id": "distinct-large-numbers",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "Use four eligible synthetic fields count,name,kind,active with identical fillers; same fields; nested count.minimum is the exact JSON token 9007199254740993 in copy and 9007199254740992 in the only record",
+      "required_observation": "near match and drift advice identify the nested minimum difference with both exact values; no exact match despite binary rounding"
+    },
+    {
+      "id": "equivalent-number-ambiguity",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "Use four eligible synthetic fields count,name,kind,active with identical fillers; two records with different canonical targets and identical fields and constraints except nested count.minimum uses 1 and 1.0; inline copy uses 1e0",
+      "required_observation": "both records are semantically exact candidates; ambiguous warning and no selected match or arbitrary reference"
+    },
+    {
+      "id": "small-copy-boundaries",
+      "criteria": [
+        "AC6"
+      ],
+      "given": {
+        "canonical_fields": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "copies": [
+          [],
+          [
+            "a"
+          ],
+          [
+            "a",
+            "b"
+          ],
+          [
+            "a",
+            "b",
+            "c"
+          ],
+          [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e"
+          ]
+        ]
+      },
+      "required_observation": "first three skipped entirely; with otherwise equal constraints, three-field missing copy is near, equal four-field copy is exact, five-field extra copy is near; canonical three with equal three-field copy matches exact, differing constraint or missing/extra field never near-matches"
+    },
+    {
+      "id": "schema-set-order",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "four-field record required [name,run_id,kind,active], enum [open,closed]; copy reverses required and enum only",
+      "required_observation": "exact match, no differences or advice"
+    },
+    {
+      "id": "literal-array-order",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "four-field object schema whose array-typed property has enum alternatives [[1,2],[3,4]]; reordered alternatives are equal, [2,1] replacing [1,2] differs; repeat ordered arrays in default/examples/const including literal objects named required and enum",
+      "required_observation": "only outer schema required/enum order is ignored; every changed literal array order produces a constraint difference"
+    },
+    {
+      "id": "order-multiplicity",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "four-field synthetic valid canonical schema; copy duplicates one required name or enum alternative instead of merely reordering; separately reorder the same duplicate multiset on both sides",
+      "required_observation": "comparison ignores order only; changed multiplicity differs, same multiplicities compare equally; preflight retains its independent invalid-schema handling"
+    }
+  ]
+}

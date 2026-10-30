@@ -16,6 +16,8 @@ The package ships five skills in `skills/` (pdd-prompting, pdd-setup, pdd-small-
 
 Workflow execution uses `pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]` and the runner routes done, approve, changes, cancel, status and open. The [runner](workflow-runner.prompt.md) owns run records, area chats, person approval and real GitHub PR effects. The CLI parses and dispatches. No user-supplied native-argument passthrough, hosted engine or auth/provider gate.
 
+The explicit local `workflow prove ISSUE --test COMMAND --expect TEXT` route may execute only the supplied proof command through [old-code proof](workflow-prove.prompt.md), which is required generation/runtime/verification context for this exception. Reading notes or replay evidence never executes supplied commands. Prove reads no gh token, calls no PDD runtime and performs no publication or workflow approval.
+
 ## PDD runtime
 
 This is the one exception to the no-service rules above. `pdd check`, `pdd try` and the [Try MCP](try-mcp.prompt.md) tools served by `pdd mcp` call the PDD runtime, with the user's gh token ([runtime client](runtime-client.prompt.md)). The token comes from `gh auth token` and stays in memory: never in files, logs, argv, URLs or error text. They send the repo's Git-visible files (with secret names refused) and keep run state outside the repo. No other command calls a hosted service or reads a token; MCP reads credentials only when a tool needs runtime access. The runtime address is one setting: `PDD_RUNTIME_URL`, else one default constant in the runtime client.

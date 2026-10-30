@@ -1,9 +1,9 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 538c5f40ed59f7061e094a071f97d8b7a5bf31d1e180dbe6a3b3b777adc56dc4).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 1f93e4f681994a86c9adc9e02e6e3ac75a8d170633d72ce017fe41752847399c).
 import { createHash } from 'node:crypto';
 import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
-export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature']);
+export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product']);
 const MARKER = '.pdd-skill.json';
 
 const relativeFiles = (dir, prefix = '') => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
@@ -73,7 +73,7 @@ function foundState(dir, version, sum) {
 
 const hasSkill = (folder, name) => { try { return statSync(join(folder, name, 'SKILL.md')).isFile(); } catch { return false; } };
 
-// The first read folder with all five skills (a symlinked skill folder, from npx skills add, counts) and how it compares.
+// The first read folder with all bundled skills (a symlinked skill folder, from npx skills add, counts) and how it compares.
 function findIn(read, skills, version) {
   const found = read.find(folder => skills.every(({ name }) => hasSkill(folder, name))) ?? null;
   // Found skills that are not this package's: setup never touches them, but says so (0.1.6 tester).

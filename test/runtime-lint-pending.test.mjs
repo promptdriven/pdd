@@ -11,6 +11,7 @@ async function pending(t, mode = 'check') {
   let clock, attempts = 0, reply = 'running';
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.method === 'POST') {
+      if (entry.command === 'check' && reply === 'passed') return { status: 200, json: f.check(entry.request.requestId) };
       assert.equal(entry.command, 'lint', 'a check or Try cannot pass a pending lint');
       if (++attempts === 1) {
         clock.now += 20_000;
@@ -75,18 +76,17 @@ test('LINT-PENDING: read changes a pending lint into a reached refusal without s
   assert.equal(r.fake.posts.length, 2);
 });
 
-test('LINT-PENDING: late passing lint leaves the unsent check not-run, never a pass', async t => {
+test('LINT-PENDING: late passing lint continues the original held check', async t => {
   const r = await pending(t);
   const batch = JSON.parse(r.ports.stdout.text).batch;
   r.setReply('passed');
   const next = await read(r, batch);
-  assert.equal(next.code, 5);
-  assert.equal(next.json.rows[0].state, 'not_run');
-  assert.equal(next.json.rows[0].calls, 0);
-  assert.match(next.json.rows[0].reason.message, /lint finished/i);
-  assert.doesNotMatch(JSON.stringify(next.json), /lint result is unknown|Lint is still/);
-  assert.equal(next.clock.uuids, 0);
-  assert.equal(r.fake.posts.length, 2);
+  assert.equal(next.code, 0);
+  assert.equal(next.json.rows[0].state, 'passed');
+  assert.equal(next.json.rows[0].calls, 1);
+  assert.equal(new Set(r.fake.posts.filter(post => post.command === 'check').map(post => post.request.requestId)).size, 1);
+  assert.equal(r.fake.posts.length, 3);
+  assert.equal(r.fake.posts.at(-1).command, 'check');
 });
 
 test('LINT-PENDING: an older already-read terminal lint repairs stale unknown wording from saved bytes', async t => {

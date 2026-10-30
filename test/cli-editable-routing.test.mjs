@@ -21,7 +21,7 @@ test('a free safe NAME reaches startRun; the areas module decides whether that w
  const project=temp(t);
  const real=await import('../src/workflow-runner.mjs');
  const answer=await real.startRun({name:'my-team-workflow',issue:'1',agent:'codex',cwd:project,packageRoot:join(import.meta.dirname,'..')},{env:{HOME:project},execFile:()=>assert.fail('No git or gh before the workflow exists')});
- assert.equal(answer.exitCode,1);assert.match(answer.message,/Workflows: bug, feature, small-change/);
+ assert.equal(answer.exitCode,1);assert.match(answer.message,/Workflows: bug, feature, product, small-change/);
 });
 
 test('workflow list reads the bundled areas once and refuses a broken package without fallback',async t=>{
@@ -29,7 +29,7 @@ test('workflow list reads the bundled areas once and refuses a broken package wi
  const home=temp(t);
  assert.equal(await runPdd(['workflow','list','--json'],{packageRoot:join(import.meta.dirname,'..'),cwd:'/project',env:{HOME:home},stdout,stderr,workflowRunner:{startRun:()=>assert.fail('No start')}}),0);
  const listed=JSON.parse(stdout.text);
- assert.deepEqual(listed.workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(listed.default,null);
+ assert.deepEqual(listed.workflows.map(w=>w.name),['bug','feature','product','small-change']);assert.equal(listed.default,null);
  assert.deepEqual(listed.workflows.find(w=>w.name==='small-change').areas.map(a=>[a.name,a.gate]),[['plan','approve'],['build','pr']]);
  const broken=temp(t);mkdirSync(join(broken,'skills/pdd-bug'),{recursive:true});writeFileSync(join(broken,'skills/pdd-bug/workflow.json'),'{"version":1}');
  const errors=capture();assert.equal(await runPdd(['workflow','list'],{packageRoot:broken,env:{HOME:home},stdout:capture(),stderr:errors}),1);assert.ok(errors.text.trim());

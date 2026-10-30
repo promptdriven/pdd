@@ -13,31 +13,33 @@ function capacity(f, id, { calls = 0, code = 'check-queue-timeout', dispatch = '
 }
 async function run(setup, fake, words = ['place-order'], options = { '--json': true }, extra = {}) {
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
+  if (setup.clockNow) clock.now = setup.clockNow;
   const code = await runCheck({ words, options, cwd: setup.repo }, ports);
+  setup.clockNow = clock.now;
   return { code, clock, out: ports.stdout.text, err: ports.stderr.text, json: options['--json'] && ports.stdout.text ? JSON.parse(ports.stdout.text) : null };
 }
 const checkPosts = fake => fake.posts.filter(p => p.command === 'check');
 const saved = (setup, batch) => JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8'));
 
-test('CAPACITY1: confirmed zero-execution capacity is retried three times, then busy, never a test failure', async t => {
+test('CAPACITY1: confirmed zero-execution capacity is retried until the wait ends, then busy, never a test failure', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (e, f) => e.command === 'check' ? { status: 200, json: capacity(f, e.request.requestId) } : f.normal(e));
   const result = await run(setup, fake);
   assert.equal(result.code, 5, result.err + result.out);
-  assert.equal(checkPosts(fake).length, 3);
-  assert.equal(new Set(checkPosts(fake).map(p => p.request.requestId)).size, 3);
+  assert.ok(checkPosts(fake).length > 3);
+  assert.equal(new Set(checkPosts(fake).map(p => p.request.requestId)).size, checkPosts(fake).length);
   assert.equal(result.json.rows[0].state, 'not_run');
   assert.equal(result.json.rows[0].busy, true); assert.equal(result.json.rows[0].can_retry, true);
   assert.equal(result.json.rows[0].calls, 0); assert.equal(result.json.rows[0].checks, null);
   assert.match(result.json.summary_line, /: busy/); assert.doesNotMatch(result.out + result.err, /Fix what|fix the test|✗/);
   assert.match(result.err, /Server busy/); assert.match(result.err, /pdd check --retry/);
-  assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, 3);
+  assert.equal(saved(setup, result.json.batch).rows[0].request_ids.length, checkPosts(fake).length);
   const before = fake.posts.length;
   const read = await run(setup, fake, [result.json.batch], { '--read': true, '--json': true });
   assert.equal(read.code, 5); assert.equal(read.json.rows[0].busy, true); assert.equal(fake.posts.length, before);
 });
 
-test('CAPACITY2: 17 tests use five active slots, adapt to a one-worker queue, and preserve all IDs', async t => {
+test('CAPACITY2: 17 tests use four active slots, adapt to a one-worker queue, and preserve all IDs', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file));
     rmSync(file); rmSync(join(repo, 'tests/unknown-item.json'));
@@ -63,9 +65,9 @@ test('CAPACITY2: 17 tests use five active slots, adapt to a one-worker queue, an
   const start = Date.parse('2026-10-27T16:27:47Z');
   const result = await run(setup, fake, [], { '--json': true, '--timeout': '15' }, { now: () => start + now, sleep: async ms => { now += ms; } });
   assert.equal(result.code, 0, result.err + result.out); assert.equal(result.json.rows.length, 17);
-  assert.equal(peak, 5); assert.equal(checkPosts(fake).length, 21);
+  assert.equal(peak, 4); assert.equal(checkPosts(fake).length, 20);
   assert.ok(result.json.rows.every(r => r.state === 'passed'));
-  assert.equal(new Set(checkPosts(fake).map(p => p.request.requestId)).size, 21);
+  assert.equal(new Set(checkPosts(fake).map(p => p.request.requestId)).size, checkPosts(fake).length);
   assert.ok(fake.posts.every(p => p.tar.equals(fake.posts[0].tar)));
   assert.match(result.err, /Still running:/);
 });
@@ -119,7 +121,7 @@ test('CAPACITY6: explicit recovery retries only busy rows, keeps passes/caps/his
   const after = saved(setup, first.json.batch);
   assert.equal(after.created_at, old.created_at);
   assert.deepEqual(after.rows.find(r => r.test.endsWith('unknown-item.json')).request_ids, old.rows.find(r => r.test.endsWith('unknown-item.json')).request_ids);
-  assert.equal(after.rows.find(r => r.test.endsWith('place-order.json')).request_ids.length, 4);
+  assert.equal(after.rows.find(r => r.test.endsWith('place-order.json')).request_ids.length, old.rows.find(r => r.test.endsWith('place-order.json')).request_ids.length + 1);
   assert.deepEqual(parseArgv(['check', '--retry', first.json.batch]).options['--retry'], first.json.batch);
 
   recover = false;
@@ -178,16 +180,16 @@ test('CAPACITY9: explicit recovery preserves a running job and a completed job w
     original.rows.find(r => r.test === path).request_ids);
 });
 
-test('CAPACITY10: unknown dispatched jobs still occupy five slots; held rows stay unposted', async t => {
+test('CAPACITY10: unknown dispatched jobs still occupy four slots; held rows stay unposted', async t => {
   const setup = harbor(t, repo => {
     const bytes = readFileSync(join(repo, 'tests/place-order.json'));
     for (let i = 0; i < 8; i++) writeFileSync(join(repo, `tests/extra-${i}.json`), bytes);
   });
   const fake = await fakeRuntime(t, (e, f) => e.method === 'GET' ? { status: 200, json: { ...f.check(e.url.split('/').at(-1)), requestId: 'wrong' } } : f.normal(e));
   const result = await run(setup, fake, []);
-  assert.equal(result.code, 3); assert.equal(checkPosts(fake).length, 5);
-  assert.equal(result.json.rows.filter(r => r.state === 'unknown').length, 5);
-  assert.equal(result.json.rows.filter(r => r.state === 'not_run' && r.calls === 0 && !r.request_id).length, 5);
+  assert.equal(result.code, 3); assert.equal(checkPosts(fake).length, 4);
+  assert.equal(result.json.rows.filter(r => r.state === 'unknown').length, 4);
+  assert.equal(result.json.rows.filter(r => r.state === 'not_run' && r.calls === 0 && !r.request_id).length, 6);
 });
 
 test('CAPACITY11: explicit recovery honors saved admission Retry-After across invocations', async t => {
