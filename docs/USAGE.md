@@ -301,16 +301,16 @@ For a page or a screen, the chat recommends `visual`. It writes the app map, so 
 
 ### 6.7 The PRs and the merge
 
-`small-change` makes one PR with the change and its tests. Its body says `Closes #42`.
+`small-change` makes one PR with the change and its tests. Its body says `Refs #42` when an authorized `Not fixed yet:` warning is present; otherwise it says `Closes #42`.
 
 `feature` and `bug` make up to two PRs:
 
 | PR | What it holds | When |
 |---|---|---|
-| PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Part of #42` |
-| PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
+| PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Part of #42` |
+| PR 2 | The code | Only when you ask for it. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Closes #42`, and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
 
-`pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"`
+In verify after the last commit, run `pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"` for each new or changed regression test. Its `Old-code proof:` line names the actual command and old/new results. Authorized defect, proof, warning and independent review lines appear above replay status on both PRs; code PRs also show the machine proof.
 
 **Try before PR 1.** After the prompt PR area, the chat shows one `Runtime check` line for each Story, with its report link, and the Try links. Try it. Then approve, or ask for changes. pdd opens PR 1 only after you approve. When there is nothing to try, the chat asks you only to approve.
 

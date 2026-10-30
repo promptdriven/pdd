@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 87d5dea5c4742eed923ffb61d1eb4be8ba0b8db50f3d86874437580df57bb5c3).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: ec9edeaafaef8eb49d0de29a2f86857e3838df729f71737bf2f28753b9361c40).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,7 +22,8 @@ function phaseRecord(result, expect) {
     stdoutTail: lines(result.stdout).slice(-20), stderrTail: lines(result.stderr).slice(-20), expectedFound: result.stdout.includes(expect) || result.stderr.includes(expect), error: diagnostic(result.error), setupError: diagnostic(result.setupError), observedError: observedError(result.stdout, result.stderr) };
 }
 export function classifyProof(record) {
-  if (record.setupError || record.cleanupError || record.base.error || record.head.error || record.base.setupError || record.head.setupError) return 'setup-error';
+  if (record.setupError || record.cleanupError || record.base.error || record.head.error || record.base.setupError || record.head.setupError || [126,127].includes(record.base.exitCode) || [126,127].includes(record.head.exitCode)) return 'setup-error';
+  if (record.interruptSignal) return 'signalled';
   if (!record.paths.length) return 'no-changed-tests';
   if (record.base.timedOut) return 'base-timeout';
   if (record.head.timedOut) return 'head-timeout';
@@ -32,18 +33,39 @@ export function classifyProof(record) {
   if (record.base.exitCode === 0) return 'old-passes';
   return record.base.expectedFound ? 'proved' : 'wrong-reason';
 }
+function safeValue(value) {
+  let content = JSON.stringify(String(value)).slice(1,-1).replace(/[\u007f-\u009f\u2028\u2029]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+  let fenceLength = 1;
+  for (const run of content.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, run[0].length + 1);
+  const fence = '`'.repeat(fenceLength);
+  const padding = content.startsWith('`') || content.endsWith('`') || content.startsWith(' ') && content.endsWith(' ') && content.trim() ? ' ' : '';
+  return fence+padding+content+padding+fence;
+}
+function actualTail(record) {
+  const nonzero = phase => phase.exitCode !== null && phase.exitCode !== 0;
+  const phase = record.outcome === 'head-fails' ? record.head : [record.base,record.head].find(p=>p.setupError || p.error || [126,127].includes(p.exitCode)) ?? [record.base,record.head].find(nonzero);
+  if (!phase) return '';
+  const source = phase.stderrTail.some(s=>s.trim()) ? phase.stderrTail : phase.stdoutTail;
+  return [...source.filter(s=>s.trim()).slice(-3).join('\n')].slice(-240).join('');
+}
 export function formatProof(record) {
-  const paths = record.paths.slice(0, 3).map(path => JSON.stringify(path)).join(', ') + (record.paths.length > 3 ? ` (+${record.paths.length - 3} more)` : '');
-  if (record.outcome === 'proved') return `Old-code proof: ✓ tests ${paths} fail on the old code with ${JSON.stringify(record.expect)} and pass on the new code.`;
-  if (record.outcome === 'old-passes') return `Old-code proof: ✗ tests ${paths} pass on the old code too. It does not show the bug.`;
-  if (record.outcome === 'wrong-reason') return `Old-code proof: ✗ tests ${paths} fail on the old code, but not with ${JSON.stringify(record.expect)} (got ${JSON.stringify(record.base.observedError)}).`;
-  return `Old-code proof: ✗ ${record.outcome}.`;
+  const command=safeValue(record.test), expected=safeValue(record.expect), base=safeValue(record.base.exitCode ?? 'none'), head=safeValue(record.head.exitCode ?? 'none');
+  if(record.outcome==='proved') return `Old-code proof: ✓ ${command}: old-code exit ${base}; output contains ${expected}; new-code exit ${head}.`;
+  let cause;
+  if(record.outcome==='wrong-reason')cause=record.base.observedError;
+  else if(record.outcome==='head-fails')cause=record.head.observedError;
+  else if(record.outcome==='setup-error')cause=record.setupError || record.cleanupError || [record.base,record.head].flatMap(p=>[p.setupError,p.error]).find(Boolean) || 'setup failed';
+  else if(record.outcome==='signalled' && record.interruptSignal)cause=`parent ${record.interruptSignal}`;
+  else {const phase=record.outcome==='head-timeout' || record.outcome==='output-limit' && !record.base.outputLimited || record.outcome==='signalled' && !record.base.signal ? record.head : record.base;cause=phase.exitCode!==null || phase.signal || phase.timedOut || phase.outputLimited ? phase.observedError : record.outcome;}
+  const tail=['head-fails','setup-error'].includes(record.outcome)?actualTail(record):'';
+  return `Old-code proof: ✗ ${record.outcome}; command ${command}; old-code exit ${base}; new-code exit ${head}; expected ${expected}; cause ${safeValue(cause)}${tail?`; tail ${safeValue(tail)}`:''}.`;
 }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const phaseKeys = Object.keys(emptyPhase());
 export function validateProofRecord(record) {
-  if (!exactKeys(record, ['v','origin','runId','baseSha','headSha','test','expect','paths','base','head','outcome','cleanupError','setupError']) || record.v !== 1 || record.origin !== 'pdd.workflow-prove.v1') return false;
+  if (!exactKeys(record, ['v','origin','runId','baseSha','headSha','test','expect','paths','base','head','outcome','cleanupError','setupError','interruptSignal']) || record.v !== 2 || record.origin !== 'pdd.workflow-prove.v2') return false;
+  if (!['','SIGINT','SIGTERM','SIGHUP'].includes(record.interruptSignal)) return false;
   if (!['runId','baseSha','headSha','test','expect','outcome','cleanupError','setupError'].every(key => typeof record[key] === 'string') || !record.runId || !record.test.trim() || !record.expect.trim()) return false;
   if (!Array.isArray(record.paths) || record.paths.some(path => typeof path !== 'string' || !safePath(path)) || new Set(record.paths).size !== record.paths.length) return false;
   for (const phase of [record.base, record.head]) {
@@ -56,7 +78,7 @@ export function validateProofRecord(record) {
     }
   }
   if (record.outcome !== classifyProof(record)) return false;
-  if (!['setup-error','no-changed-tests'].includes(record.outcome) && (record.base.exitCode === null && !record.base.signal && !record.base.timedOut && !record.base.outputLimited || record.head.exitCode === null && !record.head.signal && !record.head.timedOut && !record.head.outputLimited)) return false;
+  if (!record.interruptSignal && !['setup-error','no-changed-tests'].includes(record.outcome) && (record.base.exitCode === null && !record.base.signal && !record.base.timedOut && !record.base.outputLimited || record.head.exitCode === null && !record.head.signal && !record.head.timedOut && !record.head.outputLimited)) return false;
   if (record.outcome === 'no-changed-tests' && [record.base, record.head].some(phase => phaseKeys.some(key => JSON.stringify(phase[key]) !== JSON.stringify(emptyPhase()[key])))) return false;
   return true;
 }
@@ -79,13 +101,16 @@ const git = async (root, args, encoding = 'utf8') => (await execFile('git', args
 async function readRun({ ref, cwd }) {
   const result = await resolveRun(ref, { cwd });
   if (!result.run) return { run: null, error: diagnostic(result.error) };
-  const { runId, runDir, root, baseSha } = result.run; return { run: { runId, runDir, root, baseSha }, error: '' };
+  const { runId, runDir, root, baseSha, baseBranch } = result.run; return { run: { runId, runDir, root, baseSha, baseBranch }, error: '' };
 }
-async function snapshot({root, baseSha}) {
-  const snapshot = { headSha: '', baseAvailable: false, headAvailable: false, files: [], error: '' };
+async function snapshot({root, baseBranch}) {
+  const snapshot = { baseSha: '', headSha: '', baseAvailable: false, headAvailable: false, files: [], error: '' };
   try {
+    await recoverStale(root);
+    await git(root,['check-ref-format',`refs/heads/${baseBranch}`]);
+    await git(root,['fetch','origin',`refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]);
     snapshot.headSha = (await git(root, ['rev-parse','--verify','HEAD^{commit}'])).trim(); snapshot.headAvailable = true;
-    await git(root, ['cat-file','-e', `${baseSha}^{commit}`]); snapshot.baseAvailable = true;
+    const baseSha = (await git(root,['merge-base',snapshot.headSha,`refs/remotes/origin/${baseBranch}`])).trim(); snapshot.baseSha=baseSha; snapshot.baseAvailable = true;
     const buffer = await git(root, ['diff','--raw','-z','--no-abbrev','-M',baseSha,snapshot.headSha,'--'], null);
     const value = buffer.toString('utf8'); if (!Buffer.from(value).equals(buffer)) throw Error('Git inventory path encoding unavailable.');
     const fields = value.split('\0');
@@ -98,9 +123,24 @@ async function snapshot({root, baseSha}) {
   } catch (error) { snapshot.error = diagnostic(error); }
   return {snapshot};
 }
+const ownerIdentity = pid => {try {return readFileSync(`/proc/${pid}/stat`,'utf8').split(') ').at(-1).split(' ')[19];}catch{return '';}};
+const ownerAlive = row => {try {process.kill(row.pid,0);return !row.identity || ownerIdentity(row.pid)===row.identity;}catch(error){return error.code!=='ESRCH';}};
+async function ledgerDir(root) {const common=(await git(root,['rev-parse','--path-format=absolute','--git-common-dir'])).trim();const directory=join(realpathSync(common),'pdd','proof-worktrees');mkdirSync(directory,{recursive:true});return directory;}
+async function recoverStale(root) {
+ const directory=await ledgerDir(root), common=dirname(dirname(directory));
+ for(const name of readdirSync(directory)) {if(!/^[0-9a-f]+\.json$/.test(name))continue;const path=join(directory,name);let row;try{if(!lstatSync(path).isFile())continue;row=JSON.parse(readFileSync(path,'utf8'));}catch{continue;}
+  if(row.origin!=='pdd.proof-worktree.v1'||row.common!==common||!Number.isInteger(row.pid)||row.pid<=0||typeof row.worktree!=='string'||!isAbsolute(row.worktree)||ownerAlive(row))continue;
+  // The ledger token and exact registered path establish ownership, never a directory-name prefix.
+  const registered=(await git(root,['worktree','list','--porcelain','-z'])).split('\0').includes(`worktree ${row.worktree}`);
+  if(registered)await git(root,['worktree','remove','--force',row.worktree]);
+  else if(existsSync(row.worktree))continue;
+  rmSync(path,{force:true});
+ }
+}
+const ownedWorktrees=new Map();
 async function createWorktree({root,commit,phase}) {
   let worktree = '';
-  try { worktree = mkdtempSync(join(tmpdir(), `pdd-proof-${phase}-`)); await git(root,['worktree','add','--detach',worktree,commit]); return {worktree,error:''}; }
+  try { worktree = mkdtempSync(join(tmpdir(), `pdd-proof-${phase}-`)); const directory=await ledgerDir(root), path=join(directory,`${randomBytes(16).toString('hex')}.json`);writeFileSync(path,JSON.stringify({origin:'pdd.proof-worktree.v1',common:dirname(dirname(directory)),pid:process.pid,identity:ownerIdentity(process.pid),worktree}),{flag:'wx',mode:0o600});ownedWorktrees.set(worktree,path);await git(root,['worktree','add','--detach',worktree,commit]); return {worktree,error:''}; }
   catch(error) { return {worktree,error:diagnostic(error)}; }
 }
 function checkedParents(worktree, path) {
@@ -130,14 +170,16 @@ function groupAlive(pid) {
   }
   try {process.kill(-pid,0);return true;} catch{return false;}
 }
-async function runProcess({command,cwd,timeoutMs,killGraceMs,outputLimitBytes}) {
+async function runProcess({command,cwd,timeoutMs,killGraceMs,outputLimitBytes}, abortSignal) {
   const result={exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:'',setupError:''};
   return await new Promise(resolveResult => {
     let child, bytes=0, closed=false, exited=false, stopping=false, hardTimer, timer, interval;
     const buffers={stdout:[],stderr:[]};
     const signalGroup=signal=>{try {process.kill(-child.pid,signal);}catch{}};
-    const finish=()=>{if(!closed || child?.pid && groupAlive(child.pid))return;clearTimeout(timer);clearTimeout(hardTimer);clearInterval(interval);result.stdout=Buffer.concat(buffers.stdout).toString('utf8');result.stderr=Buffer.concat(buffers.stderr).toString('utf8');result.setupError=diagnostic(setupDiagnostic(result.stderr) ?? setupDiagnostic(result.stdout) ?? '');resolveResult({result});};
+    const finish=()=>{if(!closed || child?.pid && groupAlive(child.pid))return;clearTimeout(timer);clearTimeout(hardTimer);clearInterval(interval);abortSignal?.removeEventListener('abort',stop);result.stdout=Buffer.concat(buffers.stdout).toString('utf8');result.stderr=Buffer.concat(buffers.stderr).toString('utf8');if(result.exitCode!==null && result.exitCode!==0)result.setupError=diagnostic(setupDiagnostic(result.stderr) ?? setupDiagnostic(result.stdout) ?? ([126,127].includes(result.exitCode)?`Command exited ${result.exitCode}.`:''));resolveResult({result});};
     const stop=()=>{if(stopping)return;stopping=true;signalGroup('SIGTERM');hardTimer=setTimeout(()=>{signalGroup('SIGKILL');},killGraceMs);};
+    abortSignal?.addEventListener('abort',stop,{once:true});
+    if(abortSignal?.aborted){closed=true;result.error='Parent interrupted before spawn.';finish();return;}
     const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
     try { child=spawn(command,{cwd,env,shell:true,detached:true,stdio:['ignore','pipe','pipe']}); }
     catch(error){result.error=diagnostic(error);result.setupError=result.error;closed=true;finish();return;}
@@ -152,8 +194,7 @@ async function runProcess({command,cwd,timeoutMs,killGraceMs,outputLimitBytes}) 
 }
 async function cleanup({root,worktrees}) {
   const errors=[];
-  for(const worktree of worktrees) {try {await git(root,['worktree','remove','--force',worktree]);} catch(error) {errors.push(diagnostic(error));} finally {try {rmSync(worktree,{recursive:true,force:true});}catch(error){errors.push(diagnostic(error));}}}
-  try {await git(root,['worktree','prune']);}catch(error){errors.push(diagnostic(error));}
+  for(const worktree of worktrees) {try {await git(root,['worktree','remove','--force',worktree]);} catch(error) {errors.push(diagnostic(error));} finally {try {rmSync(worktree,{recursive:true,force:true});const ledger=ownedWorktrees.get(worktree);if(ledger){rmSync(ledger,{force:true});ownedWorktrees.delete(worktree);}}catch(error){errors.push(diagnostic(error));}}}
   return {error:errors.join('; ')};
 }
 async function saveProof({runDir,record}) {
@@ -165,23 +206,32 @@ const defaults={readRun,snapshot,createWorktree,overlay,runProcess,cleanup,saveP
 export async function proveRun({ref,test,expect,cwd},ports={}) {
   if(typeof test!=='string'||!test.trim()||typeof expect!=='string'||!expect.trim())return {exitCode:2,message:'pdd workflow prove requires nonblank --test and --expect.'};
   const p={...defaults,...ports};let run;
-  try {const result=await p.readRun({ref,cwd});if(result.error || !result.run)throw Error('Run unavailable.');run=result.run;}catch{return {exitCode:1,message:'Old-code proof: ✗ setup-error (run unavailable).'};}
-  const record={v:1,origin:'pdd.workflow-prove.v1',runId:run.runId,baseSha:run.baseSha,headSha:'',test,expect,paths:[],base:emptyPhase(),head:emptyPhase(),outcome:'setup-error',cleanupError:'',setupError:''}, worktrees=[];
+  const controller=new AbortController();let interruptSignal='';
+  const handlers=new Map(['SIGINT','SIGTERM','SIGHUP'].map(signal=>[signal,()=>{if(!interruptSignal){interruptSignal=signal;controller.abort();}}]));
+  for(const [signal,handler] of handlers)process.on(signal,handler);
+  const interruptExit=()=>({SIGINT:130,SIGTERM:143,SIGHUP:129}[interruptSignal]);
   try {
-    const {snapshot:s}=await p.snapshot({root:run.root,baseSha:run.baseSha});record.headSha=s.headSha;
-    if(s.error || !s.baseAvailable || !s.headAvailable)throw Error(s.error || 'Committed snapshots unavailable.');
-    record.paths=selectFiles(s.files);
-    if(record.paths.length) {
-      for(const [phase,commit] of [['base',run.baseSha],['head',record.headSha]]) {const created=await p.createWorktree({root:run.root,commit,phase});if(created.worktree)worktrees.push(created.worktree);if(created.error || !created.worktree)throw Error(created.error || 'Worktree unavailable.');}
-      const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);
-      for(const [index,phase] of ['base','head'].entries()) {
-        let response;try {response=await p.runProcess({command:test,cwd:worktrees[index],timeoutMs:120000,killGraceMs:2000,outputLimitBytes:1048576});}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
-        record[phase]=phaseRecord(response.result,expect);record.setupError ||= record[phase].error || record[phase].setupError;
+    try {const result=await p.readRun({ref,cwd});if(result.error || !result.run)throw Error('Run unavailable.');run=result.run;}catch{return {exitCode:interruptExit()??1,message:'Old-code proof: ✗ setup-error (run unavailable).'};}
+  const record={v:2,origin:'pdd.workflow-prove.v2',runId:run.runId,baseSha:'',headSha:'',test,expect,paths:[],base:emptyPhase(),head:emptyPhase(),outcome:'setup-error',cleanupError:'',setupError:'',interruptSignal:''}, worktrees=[];
+    try {
+      const {snapshot:s}=await p.snapshot({root:run.root,baseBranch:run.baseBranch});record.headSha=s.headSha;record.baseSha=s.baseSha;
+      if(s.error || !s.baseAvailable || !s.headAvailable)throw Error(s.error || 'Committed snapshots unavailable.');
+      record.paths=selectFiles(s.files);
+      if(record.paths.length && !interruptSignal) {
+        for(const [phase,commit] of [['base',record.baseSha],['head',record.headSha]]) {if(interruptSignal)break;const created=await p.createWorktree({root:run.root,commit,phase});if(created.worktree)worktrees.push(created.worktree);if(created.error || !created.worktree)throw Error(created.error || 'Worktree unavailable.');}
+        if(!interruptSignal){const copied=await p.overlay({root:run.root,headSha:record.headSha,worktree:worktrees[0],paths:record.paths});if(copied.error)throw Error(copied.error);}
+        for(const [index,phase] of ['base','head'].entries()) {
+          if(interruptSignal)break;
+          let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:120000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
+          record[phase]=phaseRecord(response.result,expect);record.setupError ||= record[phase].error || record[phase].setupError;
+        }
       }
-    }
-  }catch(error){record.setupError ||= diagnostic(error);}
-  finally {if(worktrees.length)try {record.cleanupError=diagnostic((await p.cleanup({root:run.root,worktrees})).error);}catch(error){record.cleanupError=diagnostic(error);}}
-  record.outcome=classifyProof(record);
-  try {if((await p.saveProof({runDir:run.runDir,record})).error)throw Error('Save failed.');}catch{return {exitCode:1,message:'Old-code proof: ✗ setup-error (could not save result).'};}
-  return {exitCode:record.outcome==='proved'?0:1,message:formatProof(record)};
+    }catch(error){record.setupError ||= diagnostic(error);}
+    finally {if(worktrees.length)try {record.cleanupError=diagnostic((await p.cleanup({root:run.root,worktrees})).error);}catch(error){record.cleanupError=diagnostic(error);}}
+    record.interruptSignal=interruptSignal;record.outcome=classifyProof(record);
+    try {if((await p.saveProof({runDir:run.runDir,record})).error)throw Error('Save failed.');}catch{return {exitCode:interruptExit()??1,message:'Old-code proof: ✗ setup-error (could not save result).'};}
+    // A signal arriving while saving still owns the native exit; keep its durable fact current.
+    if(record.interruptSignal!==interruptSignal){record.interruptSignal=interruptSignal;record.outcome=classifyProof(record);try{await p.saveProof({runDir:run.runDir,record});}catch{}}
+    return {exitCode:interruptExit()??(record.outcome==='proved'?0:1),message:formatProof(record)};
+  } finally {for(const [signal,handler] of handlers)process.removeListener(signal,handler);}
 }

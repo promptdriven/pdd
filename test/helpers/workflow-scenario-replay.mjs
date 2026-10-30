@@ -26,7 +26,9 @@ export async function replayScenario(name, { output } = {}) {
           assert.ok(row, `${name}/${step.step_id}: no callback fixture for ${binding} ${JSON.stringify(input)}`);
           reply = clone(pointer(row, rule.item_value_pointer));
         } else if (rule.action === 'fixture.lookup') {
-          const index = (pointer(world, rule.world_pointer) ?? 0) + 1; set(world, rule.world_pointer, index);
+          const current = pointer(world, rule.world_pointer);
+          const index = Array.isArray(current) ? current.push(clone(input)) : (current ?? 0) + 1;
+          if (!Array.isArray(current)) set(world, rule.world_pointer, index);
           const row = rule.cases.find(row => row.call_index === index);
           assert.ok(row, `${binding} call ${index} not declared`); assert.deepEqual(input, row.args, `${binding} exact forwarding`); reply = clone(row.result);
         } else if (rule.action === 'port.write') {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0af99a20ba2d89157e000d0b88b3174d41b03a88fccc13abd6586ee79c21c26b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 932efe2aaeed364beba47ddafb4c033ff545e94db19ebbab47e15fd9c98aaed3).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -520,12 +520,12 @@ function verifyFit(text, room, env, description = false) {
 
 const withoutForgedMachineLines = text => String(text ?? '').split('\n').filter(line => !/^(?:Old-code proof:|Tests vs base:)/.test(line)).join('\n');
 async function publicationEvidence(run, area, p) {
-  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, number: run.number,
+  const saved = { runId: run.runId, runDir: run.runDir, root: run.root, baseSha: run.baseSha, baseBranch:run.baseBranch, workflow:run.workflow, number: run.number,
     steps: run.areas.flatMap(item => item.steps).map(step => ({ step, summary: run.done[step]?.summary ?? '' })) };
   return preparePrEvidence({ run: saved, isCode: prLabel(run, area) !== 'PR 1' }, {
-    currentHead: async ({ root }) => {
-      try { return { headSha: await git(p, root, 'rev-parse', '--verify', 'HEAD^{commit}'), error: '' }; }
-      catch { return { headSha: '', error: 'Current Git head unavailable.' }; }
+    currentHead: async ({ root, baseBranch }) => {
+      try { await git(p,root,'check-ref-format',`refs/heads/${baseBranch}`);await git(p,root,'fetch','origin',`refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`);const headSha=await git(p,root,'rev-parse','--verify','HEAD^{commit}');return {headSha,baseSha:await git(p,root,'merge-base',headSha,`refs/remotes/origin/${baseBranch}`),error:''}; }
+      catch { return { headSha: '', baseSha:'', error: 'Current Git head unavailable.' }; }
     }
   });
 }
@@ -582,7 +582,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const top = [...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const preparedLines = evidence.lines.map(line => hideLocalPaths(redactTry(line), run));
-  const body = (text, lifted) => hideLocalPaths([...prefix, ...lifted, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = (text, lifted) => hideLocalPaths([...lifted, ...prefix, ...top, ...(prefix.length || lifted.length || top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const lifted = evidenceFit(preparedLines, Math.max(0, BODY_BUDGET - 200 - (verify === null ? 0 : 1000) - characters(body(null, []))), env);
