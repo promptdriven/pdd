@@ -14,4 +14,4 @@ A changed test count cannot stand in for comparing assertion lines. Associate as
 
 ## Review status
 
-Revised draft for review, not checked or approved. All four original synthetic cases and expected checks remain unchanged; historical passes apply to the prior approved contract. New cap boundary, unchanged tie ordering and a 2,000-line case finishing in under two seconds require native proof in the code area. A model's prompt-runtime duration proves no native timing bound. Real Git enumeration and publication remain separate native obligations.
+The reviewed contract is approved following the fresh scoped check: all four original synthetic cases passed all 11 checks (receipt in PLAN.md). Their inputs and expected checks remain unchanged. New cap boundary, unchanged tie ordering and a 2,000-line case finishing in under two seconds require native proof in the code area. A model's prompt-runtime duration proves no native timing bound. Real Git enumeration and publication remain separate native obligations.
