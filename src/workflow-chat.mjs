@@ -383,12 +383,11 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       await save('createRequested');await allocate();await save('prepared');
     } else if(record.phase==='createRequested') {
       if(!record.recovery?.allocationLabel || !Array.isArray(record.recovery.tabIdsBefore)) throw uncertain();
-      const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
       const unexplained=unexplainedAllocation();
       if(!unexplained.length) {await save('createRequested');await allocate();}
       else {
-        const matching=added.filter(row=>row.label===record.recovery.allocationLabel);
-        if(matching.length!==1) throw uncertain();
+        const matching=unexplained.filter(row=>row.label===record.recovery.allocationLabel);
+        if(unexplained.length!==1 || matching.length!==1) throw uncertain();
         const rows=panes.filter(row=>row.tab_id===matching[0].tab_id);
         if(rows.length!==1||rows[0].cwd!==run.root||rows[0].workspace_id!==original.workspaceId) throw invalid();
         record.replacement={area:record.area,agent,tabId:matching[0].tab_id,paneId:rows[0].pane_id,terminalId:rows[0].terminal_id,workspaceId:original.workspaceId,repoWorkspaceId:original.repoWorkspaceId,label:original.label,startedAt:now(),session:agent==='claude'?{agent,id:uuid()}:null,configDir,messageFile:join(run.runDir,`${record.area}-restart-${record.id}-start.md`)};
