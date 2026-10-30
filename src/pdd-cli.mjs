@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: dcf80ff95fe3f5bdf3d88e6ac3d8fabf8acc6d40d2848e6df30e0824516afcac).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: aedbb2b3dfd811725c7435e518df7228cb33729c28be3b9b778a96869b9baab8).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer } = {}) {
+  stdin = process.stdin, confirm, mcpServer, runtimeSlots } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -119,6 +119,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       return code;
     }
+    case 'runtime-jobs':
+      try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
+      catch (error) { line(stderr, `Local runtime jobs could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {

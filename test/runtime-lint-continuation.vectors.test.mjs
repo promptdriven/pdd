@@ -259,7 +259,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
   const next = await recovery(r, batch, true);
   assert.equal(paid(r).length, 1, 'independent authorized busy row must POST despite refused held proof');
   assert.equal(next.code, 5, 'the held row remains not run beside the passing retry');
-  assert.equal(next.clock.uuids, 1, 'only the busy row receives a new ID');
+  assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the busy row receives a new request ID');
   assert.equal(next.json.batch, batch); assert.equal(next.json.source_sha256, s.doc.source_sha256);
   const post = paid(r)[0], id = post.request.requestId;
   assert.equal(post.request.scenario, busy.test); assert.equal(post.request.max_calls, busy.max_calls);

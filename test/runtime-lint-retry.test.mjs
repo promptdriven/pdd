@@ -37,12 +37,12 @@ for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} retries a co
   assert.equal(r.fake.posts.filter(p=>p.command==='try').length,mode==='try'?1:0);
 });
 
-for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} exhausts three busy attempts as not-run, never unknown`,async t=>{
+for(const mode of ['check','lint','try']) test(`LINT-RETRY: ${mode} waits through busy attempts until its deadline as not-run, never unknown`,async t=>{
   const r=await invoke(t,mode,(e,f)=>({status:200,json:queuedOut(f,e.request.requestId)}));
   assert.equal(r.code,5,r.ports.stderr.text+r.ports.stdout.text);
   if(mode==='check') assert.equal(JSON.parse(r.ports.stdout.text).rows[0].calls,0,'confirmed busy lint leaves a positively unsent zero-call check');
-  assert.equal(r.fake.posts.length,3);assert.ok(r.fake.posts.every(p=>p.command==='lint'));
-  assert.equal(new Set(r.fake.posts.map(p=>p.request.requestId)).size,3);
+  assert.ok(r.fake.posts.length>3);assert.ok(r.fake.posts.every(p=>p.command==='lint'));
+  assert.equal(new Set(r.fake.posts.map(p=>p.request.requestId)).size,r.fake.posts.length);
   assert.match(r.ports.stderr.text+r.ports.stdout.text,/server.*busy/i);
   assert.match(r.ports.stderr.text+r.ports.stdout.text,/same.*command.*later/i);
   assert.doesNotMatch(r.ports.stderr.text+r.ports.stdout.text,/lint result is unknown|"state":"unknown"|Fix the prompt/i);

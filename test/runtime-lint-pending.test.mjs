@@ -84,7 +84,7 @@ test('LINT-PENDING: late passing lint continues the original held check', async 
   assert.equal(next.code, 0);
   assert.equal(next.json.rows[0].state, 'passed');
   assert.equal(next.json.rows[0].calls, 1);
-  assert.equal(next.clock.uuids, 1);
+  assert.equal(new Set(r.fake.posts.filter(post => post.command === 'check').map(post => post.request.requestId)).size, 1);
   assert.equal(r.fake.posts.length, 3);
   assert.equal(r.fake.posts.at(-1).command, 'check');
 });

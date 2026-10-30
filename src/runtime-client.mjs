@@ -1,4 +1,5 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b1a8e400407f8d92b5939ac07a2b001e999a6e3fe838b7c23cdb42ad553279fc).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c6672385bb051688c30dece7f47f5b295b67379dad67c0f40478121d5f336c21).
+import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -61,7 +62,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, slotFiles: ports.slotFiles, isAlive: ports.isAlive, pid: ports.pid, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -238,18 +239,113 @@ function capacityDelay(refusal, headers) {
   const seconds = refusal.details?.retry_after;
   return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(300, Math.max(1, seconds)) : 5) * 1000;
 }
+function safeAdmission(reply) {
+  const json = reply.json, report = json?.result?.report;
+  return !(json?.usage && Object.hasOwn(json.usage, 'calls') && json.usage.calls !== 0)
+    && json?.accounting_complete !== false && json?.usage?.accounting_complete !== false && report?.accounting_complete !== false
+    && !(report && Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0) && !report?.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length));
+}
 function checkCapacity(answer) {
   const report = answer?.result?.report;
   if (answer?.command !== 'check' || answer.state !== 'refused' || answer.usage?.calls !== 0 || report?.dispatch !== 'not_started'
-    || report.provider_calls > 0 || report.accounting_complete === false || answer.usage?.accounting_complete === false
+    || Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0 || report.accounting_complete === false || answer.usage?.accounting_complete === false
     || report.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length))) return null;
   return [report.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].map(item => capacityDelay(item)).find(wait => wait !== null) ?? null;
+}
+function accumulatedCalls(context, row) {
+  const calls = row.request_ids.map(id => {
+    const answer = context.store.read(join(context.folder, `${id}.json`));
+    if (answer) return answer.usage?.calls;
+    const admission = context.store.read(join(context.folder, `${id}.admission.json`));
+    return admission?.dispatch === 'not_started' && safeAdmission({ json: admission }) ? 0 : 'unknown';
+  });
+  return calls.every(value => typeof value === 'number' && Number.isFinite(value)) ? calls.reduce((a, b) => a + b, 0) : 'unknown';
 }
 function markBusy(context, row, wait) {
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
     checks: null, criteria: null, all_checks: [], failed_checks: [], why: null,
     retry_at: context.reading && Number.isFinite(row.retry_at) ? row.retry_at : context.ports.now() + wait, note: { code: 'check-busy', message: 'The runtime is busy. No checks ran for this attempt. Retry this batch later.' } });
+  if (row.restart_used) row.calls = accumulatedCalls(context, row);
   if (!context.reading) context.checkWindow = 1;
+}
+
+const restarted = answer => answer?.command === 'check' && answer.state === 'unknown' && [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].some(item => item?.code === 'service-restarted');
+const confirmedEnd = answer => ['passed', 'failed', 'refused', 'not_run'].includes(answer?.state) || restarted(answer);
+function localLimit(context) {
+  if (context.localLimit) return context.localLimit;
+  const raw = context.ports.env.PDD_MAX_JOBS;
+  const value = raw === undefined ? 4 : Number(raw);
+  if (raw !== undefined && (!/^[1-9][0-9]*$/.test(String(raw)) || !Number.isSafeInteger(value)))
+    line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using 4.');
+  return context.localLimit = Number.isSafeInteger(value) && value > 0 && (raw === undefined || /^[1-9][0-9]*$/.test(String(raw))) ? value : 4;
+}
+function slotPorts(context) {
+  const { ports } = context;
+  return { ...(ports.slotFiles ? { files: ports.slotFiles } : {}), ...(ports.isAlive ? { isAlive: ports.isAlive } : {}), ...(ports.pid ? { pid: ports.pid } : {}),
+    deadline: context.deadline, now: ports.now, randomUUID: ports.randomUUID, sleep: ms => ports.sleep(ms, context.signal), interrupted: () => context.interrupted || !!context.stopped || !!context.sendError,
+    say: message => line(ports.stderr, message), readRun: async id => {
+      const { jobs } = await listRuntimeJobs({ stateDir: context.store.dir, origin: context.origin }, { files: ports.slotFiles });
+      const owner = jobs.find(row => row.request_ids.includes(id));
+      if (!owner) return 'unknown';
+      const reply = await context.runtime.get(id, Math.max(1, Math.min(GET_MS, context.deadline - ports.now()))), answer = reply.json;
+      if (reply.status !== 200 || !sameJob(answer, id, owner.kind)) return 'unknown';
+      return confirmedEnd(answer) ? 'ended' : ['queued', 'running'].includes(answer.state) ? 'running' : 'unknown';
+    } };
+}
+async function finishReservation(context, target, answer) {
+  if (target?.reservation && confirmedEnd(answer)) {
+    await releaseRuntimeSlot(target.reservation, { ended: true }, slotPorts(context));
+    target.reservation = null;
+  }
+}
+function queueProgress(context, answer) {
+  const q = answer?.queue;
+  if (answer?.state === 'queued' && [q?.ahead, q?.slots_in_use, q?.slots].every(value => Number.isSafeInteger(value) && value >= 0)) {
+    const message = `Queued on the runtime: ${q.ahead} ahead, ${q.slots_in_use} of ${q.slots} slots busy. Your test is fine.`;
+    context.queueLines ??= new Map();
+    if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
+  }
+}
+function maintenanceNotice(context, verdict, reply) {
+  const details = reply.json?.error?.details ?? reply.json?.maintenance ?? {};
+  const until = Date.parse(details.until);
+  if (Number.isFinite(until) && until > context.ports.now()) verdict.wait = Math.max(verdict.wait, until - context.ports.now());
+  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${new Date(until).toISOString()}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
+}
+async function waitBudget(context, wait, deadline = context.deadline) {
+  if (context.interrupted || context.ports.now() >= deadline) return false;
+  await context.ports.sleep(Math.max(0, Math.min(wait, deadline - context.ports.now())), context.signal);
+  return !context.interrupted && context.ports.now() < deadline;
+}
+async function capacityReady(context, deadline) {
+  while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
+    const reply = await context.runtime.send('/v1/capacity', { method: 'GET' }, Math.max(1, Math.min(GET_MS, deadline - context.ports.now())));
+    const blocked = blockingAnswer(reply);
+    const stop = blocked || (reply.status === 401 ? AUTH_TEXT : gateText(reply) ? 'The runtime opens soon.' : null);
+    if (stop) { context.stopped = { code: 'blocked', message: stop }; throw new Stop(5, stop); }
+    if (reply.status === 404) return true;
+    if (reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) {
+      const maintenance = reply.json.maintenance, until = Date.parse(maintenance?.until);
+      if (!Number.isFinite(until) || until <= context.ports.now()) return true;
+      const when = new Date(until).toISOString();
+      line(context.ports.stderr, `The runtime is in maintenance until ${when} (${cleanText(maintenance.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
+      if (!await waitBudget(context, until - context.ports.now(), deadline)) return false;
+    } else {
+      if (reply.unreachable) throw new Stop(5, reply.unreachable);
+      line(context.ports.stderr, 'Waiting to read runtime capacity; no new job was sent.');
+      if (!await waitBudget(context, retryAfter(reply.headers), deadline)) return false;
+    }
+  }
+  return false;
+}
+async function admission(context, kind, target, deadline = context.deadline) {
+  const reservation = await acquireRuntimeSlot({ stateDir: context.store.dir, origin: context.origin, limit: localLimit(context), kind,
+    deadline: Number.isFinite(deadline) ? deadline : null }, slotPorts(context));
+  if (!reservation) return false;
+  target.reservation = reservation;
+  let ready = false;
+  try { ready = await capacityReady(context, deadline); return ready && !context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline; }
+  finally { if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context)); target.reservation = null; } }
 }
 
 // One answer to a POST, as the row table of the spec.
@@ -259,8 +355,12 @@ function judgePost(reply, id, command, secrets) {
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'stop', note: { code: 'blocked', message: stopLine }, blocked: true };
   const error = isObject(reply.json?.error) ? reply.json.error : null;
-  if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null) return { kind: 'busy', wait: lintQueueWait(error) };
-  if (command === 'check' && [429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started') {
+  if ([429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && !safeAdmission(reply))
+    return { kind: 'unknown', why: 'The admission receipt has uncertain execution accounting.' };
+  if (reply.status === 503 && error?.code === 'maintenance' && reply.json?.dispatch === 'not_started' && safeAdmission(reply))
+    return { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json, maintenance: true };
+  if (command === 'lint' && reply.status === 503 && error?.code === 'lint-queue-full' && lintQueueWait(error) !== null && safeAdmission(reply)) return { kind: 'busy', wait: capacityDelay(error, reply.headers), admission: reply.json };
+  if (['check', 'try'].includes(command) && [429, 503].includes(reply.status) && reply.json?.dispatch === 'not_started' && safeAdmission(reply)) {
     const wait = capacityDelay(error, reply.headers);
     if (wait !== null) return { kind: 'busy', wait, admission: reply.json };
   }
@@ -269,7 +369,7 @@ function judgePost(reply, id, command, secrets) {
     return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   }
   if (reply.status === 429) {
-    return error?.code === 'server-full' && reply.json?.dispatch === 'not_started' ? { kind: 'busy', wait: retryAfter(reply.headers) }
+    return error?.code === 'server-full' && reply.json?.dispatch === 'not_started' && safeAdmission(reply) ? { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json }
       : { kind: 'not_run', note: note('The runtime is busy. Try again later.') };
   }
   if (gateText(reply)) return { kind: 'stop', note: { code: null, message: 'The runtime opens soon.' } };
@@ -394,6 +494,7 @@ function applyAnswer(row, answer, context) {
     next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : null,
     engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
+  if (row.restart_used) row.calls = accumulatedCalls(context, row);
   const wait = checkCapacity(answer);
   if (wait !== null) markBusy(context, row, wait);
   else { row.busy = false; row.can_retry = false; row.note = null; }
@@ -429,6 +530,7 @@ function batchRecord(context) {
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
+      reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
       engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
@@ -439,6 +541,7 @@ function claimPath(context, row, attempt = 0) {
   return join(context.folder, `${key}.${attempt}.dispatch.json`);
 }
 function adoptClaims(context, row) {
+  if (statOrNull(claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json'))) row.restart_used = true;
   for (let attempt = 0; ; attempt++) {
     const path = claimPath(context, row, attempt);
     if (!statOrNull(path)) {
@@ -451,6 +554,8 @@ function adoptClaims(context, row) {
       row.dispatchIncomplete = true;
       break;
     }
+    if (claim.restart) row.restart_used = true;
+    if (claim.reservation && !row.admitting) row.reservation = claim.reservation;
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
       Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true });
@@ -471,36 +576,68 @@ function saveAnswer(context, id, json) { if (isObject(json)) context.store.write
 
 async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
-  if (context.interrupted) return { kind: 'not_sent' };
+  const target = row ?? context.lint;
+  if (context.interrupted || context.stopped || context.sendError) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+  const registered = await recordRuntimeRequest(target.reservation, id, slotPorts(context));
+  if (registered === false) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
+  if (context.interrupted || context.stopped || context.sendError || context.ports.now() >= context.deadline) { await finishReservation(context, target, { state: 'not_run' }); return { kind: 'not_sent' }; }
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
+  if (row) { if (!row.request_ids.includes(id)) row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
+  if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   if (verdict.admission) context.store.write(join(context.folder, `${id}.admission.json`), verdict.admission);
+  if (verdict.answer) { queueProgress(context, verdict.answer); await finishReservation(context, target, verdict.answer); }
+  else if (['busy', 'not_run', 'stop', 'refused', 'not_sent'].includes(verdict.kind)) await finishReservation(context, target, { state: 'not_run' });
   return verdict;
 }
 
 // POST one check and fold the answer into its row.
 async function sendCheck(context, row) {
+  row.admitting = true;
+  try { await sendCheckAttempt(context, row); } finally { row.admitting = false; }
+}
+async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
+  const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
+  if (!await admission(context, 'check', row)) return;
+  adoptClaims(context, row);
+  if (row.request_ids.length !== attempt || !['ready', 'waiting'].includes(row.state) || context.interrupted || context.ports.now() >= context.deadline) {
+    await finishReservation(context, row, { state: 'not_run' }); return;
+  }
+  if (row.restart_pending) {
+    const restartPath = claimPath(context, row).replace(/\.0\.dispatch\.json$/, '.restart.json');
+    let claim;
+    try { claim = openSync(restartPath, 'wx', 0o600); }
+    catch (error) {
+      await finishReservation(context, row, { state: 'not_run' });
+      if (error.code !== 'EEXIST') throw error;
+      row.restart_pending = false; adoptClaims(context, row); row.state = 'unknown'; return;
+    }
+    try { writeSync(claim, JSON.stringify({ used: true })); } finally { closeSync(claim); }
+    row.restart_used = true; row.restart_pending = false;
+    line(context.ports.stderr, 'The runtime restarted during this check. pdd sends it again (1 of 1).');
+  }
   // Acquire by original row and attempt, before allocating the UUID. Never remove a claim:
   // an interruption between claim and POST leaves dispatch uncertain, never replayable.
-  const path = claimPath(context, row, row.request_ids.length);
+  const path = claimPath(context, row, attempt);
   let fd;
   try { fd = openSync(path, 'wx', 0o600); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
+    await finishReservation(context, row, { state: 'not_run' });
     adoptClaims(context, row);
     if (row.dispatchIncomplete) Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', final: true,
       why: 'An interrupted dispatch claim has no recoverable ID. No replacement check was sent.' });
     return;
   }
   let id;
-  try { id = context.ports.randomUUID(); writeSync(fd, JSON.stringify({ id })); }
+  try { id = context.ports.randomUUID(); writeSync(fd, JSON.stringify({ id, reservation: row.reservation, restart: !!row.restart_used })); }
   finally { closeSync(fd); }
-  if (context.interrupted) {
+  if (context.interrupted || context.ports.now() >= context.deadline) {
+    await finishReservation(context, row, { state: 'not_run' });
     adoptClaims(context, row);
     return;
   }
@@ -509,7 +646,7 @@ async function sendCheck(context, row) {
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
-  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
+  if (verdict.kind === 'not_sent') Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
   else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
   else if (verdict.kind === 'busy') markBusy(context, row, verdict.wait);
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
@@ -528,7 +665,7 @@ async function readRow(context, row) {
   // A network problem while reading says so once; pdd keeps reading the same IDs.
   if (verdict.kind === 'again' && verdict.why && !context.readTrouble) line(context.ports.stderr, `pdd cannot read the results right now (${verdict.why}). It keeps trying.`);
   if (verdict.kind !== 'again') context.readTrouble = false; else if (verdict.why) context.readTrouble = true;
-  if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
+  if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); queueProgress(context, verdict.answer); await finishReservation(context, row, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
   else if (verdict.kind === 'auth') context.readStop = AUTH_TEXT;
   else if (verdict.kind === 'blocked') context.readStop = verdict.message;
@@ -550,7 +687,7 @@ function progressLine(rows, ms) {
 function lintQueueWait(refusal) {
   if (!['lint-queue-timeout', 'lint-queue-full'].includes(refusal?.code) || refusal.details?.retryable !== true) return null;
   const seconds = refusal.details.retry_after;
-  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(30, Math.max(1, seconds)) : 5) * 1000;
+  return (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? Math.min(300, Math.max(1, seconds)) : 5) * 1000;
 }
 
 function pendingLintMessage(context, answer) {
@@ -565,20 +702,20 @@ const waitWord = (answer, read) => read?.kind === 'again' ? `waiting for an answ
 
 async function runLint(context, complete = false) {
   const agent = context.agentLimit ?? !context.ports.interactive;
-  const lintEnd = Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
+  const lintEnd = context.batch ? context.deadline : Math.min(context.deadline, agent ? context.startedAt + AGENT_WAIT_MIN * 60_000 : Infinity);
   let attempts = 0;
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
   const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `The server stayed busy after ${attempts} lint attempts. No checks ran. Run the same pdd command again later.` } });
   const pause = async wait => {
-    if (context.interrupted || attempts >= 3 || context.ports.now() + wait >= lintEnd) return false;
+    if (context.interrupted || context.ports.now() >= lintEnd) return false;
     line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
-    await context.ports.sleep(wait, context.signal);
-    return !context.interrupted && context.ports.now() < lintEnd;
+    return waitBudget(context, wait, lintEnd);
   };
   for (;;) {
     if (context.interrupted) return { kind: 'not_run', note: { code: null, message: 'Stopped before sending.' } };
     if (context.ports.now() >= lintEnd) return busy();
+    if (!await admission(context, 'lint', context.lint, lintEnd)) return busy();
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
     context.lint.request_ids.push(request.requestId); attempts++;
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())));
@@ -593,13 +730,13 @@ async function runLint(context, complete = false) {
       await context.ports.sleep(Math.min(context.ports.pollMs, Math.max(0, readEnd - context.ports.now())), context.signal);
       if (context.interrupted || context.ports.now() >= readEnd) break;
       const read = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, readEnd - context.ports.now()))), id, 'lint');
-      if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); }
+      if (read.kind === 'state') { answer = read.answer; saveAnswer(context, id, answer); queueProgress(context, answer); await finishReservation(context, context.lint, answer); }
       else if (read.kind === 'unknown') { lost = true; break; }
       else if (read.kind === 'blocked') throw new Stop(5, read.message);
       else if (read.kind === 'auth' || read.kind === 'gate') return { kind: 'stop', note: { code: null, message: read.kind === 'auth' ? AUTH_TEXT : 'The runtime opens soon.' } };
       if (!['passed', 'failed', 'refused', 'unknown'].includes(answer?.state)) tick(`Still checking the files: ${waitWord(answer, read)}`);
     }
-    if (!lost && answer?.state === 'refused') {
+    if (!lost && answer?.state === 'refused' && safeAdmission({ json: answer })) {
       const refusals = [answer.result?.report?.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])];
       const wait = refusals.map(lintQueueWait).find(value => value !== null);
       if (wait !== undefined) { if (await pause(wait)) continue; return busy(); }
@@ -647,18 +784,26 @@ async function checkBatch(context, rows) {
 
 async function runScheduledChecks(context, rows, toSend) {
   const { ports } = context;
-  context.checkWindow ??= 5;
+  context.checkWindow ??= localLimit(context);
   for (const row of toSend) row.attempts = 0;
+  const pendingSends = new Map();
   let waitingShown = -1, shownAt = ports.now();
   const sentAt = shownAt;
   const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? context.deadline : context.deadline);
+  try {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
     const active = rows.filter(occupiesSlot).length;
-    const eligible = toSend.filter(row => ['ready', 'waiting'].includes(row.state) && (row.attempts ?? 0) < 3
+    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
       && (!row.retry_at || ports.now() >= row.retry_at));
     if (!context.stopped && ports.now() < context.deadline && active < context.checkWindow) {
-      await Promise.all(eligible.slice(0, context.checkWindow - active).map(row => sendCheck(context, row)));
+      for (const row of eligible.slice(0, Math.max(0, context.checkWindow - active - pendingSends.size))) {
+        const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => pendingSends.delete(row));
+        pendingSends.set(row, pending);
+      }
+      // Admission can wait while previously dispatched rows continue to be read.
+      if (!active && pendingSends.size) await Promise.race(pendingSends.values());
+      else await new Promise(done => setImmediate(done));
       saveBatch(context);
     }
     if (context.blocked && !rows.some(isOpen)) throw new Stop(5, context.blocked);
@@ -667,21 +812,27 @@ async function runScheduledChecks(context, rows, toSend) {
       if (waiting.length) line(ports.stderr, `Server busy: ${rows.filter(isOpen).length} checks running, ${waiting.length} waiting for a free slot.`);
       waitingShown = waiting.length;
     }
-    for (const row of waiting.filter(row => row.attempts >= 3)) row.state = 'not_run';
+    if (context.sendError) throw context.sendError;
+    await recoverRestarts(context);
     const pending = toSend.some(row => ['ready', 'waiting'].includes(row.state));
     if (pending && active >= context.checkWindow && !rows.some(readable)) break;
-    if ((!pending || context.stopped || ports.now() >= context.deadline) && !rows.some(readable)) break;
+    if ((!pending || context.stopped || ports.now() >= context.deadline) && !rows.some(readable) && !pendingSends.size) break;
     if (ports.now() - shownAt >= PROGRESS_MS) { shownAt = ports.now(); line(ports.stderr, progressLine(rows, shownAt - sentAt)); }
     const end = Math.max(context.deadline, ...rows.filter(row => row.lost).map(row => row.read_until ?? 0));
     await ports.sleep(Math.max(0, Math.min(ports.pollMs, end - ports.now())), context.signal);
     if (context.interrupted) break;
     await eachLimited(rows.filter(readable), MAX_READS, row => readRow(context, row));
+    await recoverRestarts(context);
+    for (const row of rows.filter(row => row.state === 'ready' && row.restart_used)) if (!toSend.includes(row)) toSend.push(row);
     saveBatch(context);
   }
+  } catch (error) { context.sendError ??= error; throw error; }
+  finally { await Promise.all(pendingSends.values()); }
+  if (context.sendError) throw context.sendError;
   const stoppedEarly = context.interrupted || !!context.readStop;
   context.timedOut = !stoppedEarly && ports.now() >= context.deadline && rows.some(isOpen);
   for (const row of toSend) {
-    if (['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: 0, busy: true, can_retry: true,
+    if (['ready', 'waiting'].includes(row.state)) Object.assign(row, { state: 'not_run', calls: row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0, busy: true, can_retry: true,
       phase: row.request_ids.length ? 'server' : 'local', note: { code: 'check-busy', message: row.request_ids.length
         ? 'The runtime stayed busy. No checks ran for this attempt. Retry this batch later.' : 'Held locally; this check was not sent. Retry this batch later.' } });
     if (row.state === 'unknown' && row.lost) row.why ??= stoppedEarly ? 'pdd stopped before it could read this run.'
@@ -844,6 +995,7 @@ async function readUnsentLint(context, rows) {
     answer = read.kind === 'state' ? read.answer : null;
     if (answer) saveAnswer(context, id, answer);
   }
+  if (answer) await finishReservation(context, lint, answer);
   const unknown = () => {
     Object.assign(lint, { state: answer?.state ?? 'unknown', pending: false, unknown: true });
     context.lintUnknown = true;
@@ -949,6 +1101,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
+  runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   const rows = saved.rows.map(row => ({ ...row, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
@@ -982,15 +1135,37 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     }
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     const answer = store.read(join(context.folder, `${id}.json`));
-    if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
+    if (answer && confirmedEnd(answer) && sameJob(answer, id, 'check')) { await finishReservation(context, row, answer); applyAnswer(row, answer, context); return; }
     if (['queued', 'running', 'unknown'].includes(row.state)) {
       row.lost = true;
       await readRow(context, row);
       if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
     } else if (answer) applyAnswer(row, answer, context);
   });
+  const replacements = await recoverRestarts(context);
+  if (replacements.length) await runScheduledChecks(context, rows, replacements);
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
+}
+
+async function recoverRestarts(context) {
+  const eligible = context.rows.filter(row => {
+    adoptClaims(context, row);
+    const id = row.request_ids.at(-1), answer = id && context.store.read(join(context.folder, `${id}.json`));
+    return !row.restart_used && sameJob(answer, id, 'check') && restarted(answer);
+  });
+  if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
+  const capture = captureSource(context.root, { tests: context.rows.map(row => row.test), appMap: null });
+  if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
+  context.capture = capture;
+  const selected = [];
+  for (const row of eligible) {
+    if (context.interrupted || context.ports.now() >= context.deadline || !validSavedCheck(row)) continue;
+    Object.assign(row, { state: 'ready', lost: false, final: false, eligible: true, retry_at: null, restart_pending: true });
+    selected.push(row);
+  }
+  if (selected.length) context.reading = false;
+  return selected;
 }
 
 async function runRetry(context, name, options) {
@@ -1202,11 +1377,12 @@ function oneTest(found, words, root) {
 }
 
 async function readUntil(context, id, command, isDone, ms, label) {
-  const end = context.ports.now() + ms, tick = progressTicker(context.ports.stderr, context.ports.now);
+  const end = Math.min(context.deadline ?? Infinity, context.ports.now() + ms), tick = progressTicker(context.ports.stderr, context.ports.now);
   let last = null;
   for (;;) {
-    const read = judgeGet(await context.runtime.get(id), id, command);
-    if (read.kind === 'state') { last = read.answer; context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
+    if (context.interrupted || context.ports.now() >= end) return { answer: last, open: true };
+    const read = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, end - context.ports.now()))), id, command);
+    if (read.kind === 'state') { last = read.answer; queueProgress(context, last); context.store.write(join(context.store.folder('tries'), `${id}.json`), last); if (isDone(last)) return { answer: last }; }
     else if (read.kind === 'unknown') return { unknownWhy: read.why };
     else if (read.kind === 'auth') throw new Stop(5, AUTH_TEXT);
     else if (read.kind === 'blocked') throw new Stop(5, read.message);
@@ -1325,6 +1501,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (read.kind === 'gate') throw new Stop(5, 'The runtime opens soon.');
       if (read.unreachable) throw new Stop(5, read.unreachable);
       let answer = read.kind === 'state' ? read.answer : null, link = tryLink(answer, origin);
+      if (answer) await finishReservation(context, record, answer);
       const live = answer?.state === 'passed' && LIVE_SESSION.has(answer.result?.session?.state);
       if (requestedBudget !== null && !options['--new'] && !live) throw new Stop(3, 'This Try is not confirmed open. Its budget was not changed. Read the same Try again later; use --new only to replace it deliberately.');
       if (requestedBudget !== null && !options['--new'] && (!Number.isSafeInteger(answer?.result?.session?.max_calls) || answer.result.session.max_calls < 1)) throw new Stop(3, 'The runtime did not confirm this Try’s current budget. No budget change or reopen was sent.');
@@ -1371,23 +1548,44 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       if (options['--cli'] || options['--serve']) throw new Stop(125, row.refusals?.map(r => r.message || r.code).join('; ') || 'The Story did not pass lint.');
       return printTryProblem(context, row);
     }
-    const request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
-      tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
-    store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
-    store.posted(context.folder, request.requestId);
-    line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
-    const reply = await context.runtime.post('/v1/try', request, capture.tar), verdict = judgePost(reply, request.requestId, 'try', context.secrets);
-    if (verdict.answer) store.write(join(context.folder, `${request.requestId}.json`), verdict.answer);
-    if (verdict.kind !== 'accepted') {
-      if (verdict.kind !== 'unknown') { delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
-      if (reply.status === 429) throw new Stop(5, cleanText(reply.json?.error?.message, context.secrets) || 'Too many Try links are open. Stop one with pdd try --stop');
-      if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
-      if (verdict.blocked) throw new Stop(5, verdict.note.message);
-      if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
-      throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
+    let request, verdict, reply, done;
+    const setup = { request_ids: [], reservation: null };
+    for (;;) {
+      if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, 'The runtime stayed busy until the Try setup wait ended. No new Try was sent.');
+      request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
+        tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
+      setup.request_ids.push(request.requestId);
+      const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
+      if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
+      if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
+      store.posted(context.folder, request.requestId);
+      line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
+      reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
+      verdict = judgePost(reply, request.requestId, 'try', context.secrets);
+      if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
+      if (verdict.answer) { store.write(join(context.folder, `${request.requestId}.json`), verdict.answer); queueProgress(context, verdict.answer); await finishReservation(context, setup, verdict.answer); }
+      if (verdict.admission) store.write(join(context.folder, `${request.requestId}.admission.json`), verdict.admission);
+      if (verdict.kind === 'busy') {
+        await finishReservation(context, setup, { state: 'not_run' });
+        line(ports.stderr, verdict.maintenance ? 'The runtime is in maintenance. pdd waits, then continues.' : 'The runtime is busy. Waiting to start your Try…');
+        if (await waitBudget(context, verdict.wait)) continue;
+        delete repoState.tries[test.path]; store.saveRepo(root, repoState);
+        throw new Stop(context.interrupted ? 3 : 5, 'The runtime stayed busy until the Try setup wait ended.');
+      }
+      if (verdict.kind !== 'accepted') {
+        if (verdict.kind !== 'unknown') { await finishReservation(context, setup, { state: 'not_run' }); delete repoState.tries[test.path]; store.saveRepo(root, repoState); }
+        if (reply.status === 429) throw new Stop(5, cleanText(reply.json?.error?.message, context.secrets) || 'Too many Try links are open. Stop one with pdd try --stop');
+        if (verdict.kind === 'refused') return trySetupRefused(context, test, appMap, [{ ...reply.json.error, ...verdict.refusal }], null);
+        if (verdict.blocked) throw new Stop(5, verdict.note.message);
+        if (verdict.kind === 'not_run' || verdict.kind === 'stop') throw new Stop(5, `${verdict.note.message}${verdict.note.code ? ` (${verdict.note.code})` : ''}`);
+        throw new Stop(3, `The Try setup result is unknown. Run pdd try ${test.story} again later: it reads this Try first and sends nothing new while it runs.`);
+      }
+      done = ENDED.has(verdict.answer.state) ? { answer: verdict.answer }
+        : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS, 'Still starting your Try');
+      if (done.answer) await finishReservation(context, setup, done.answer);
+      break;
     }
-    const done = ENDED.has(verdict.answer.state) ? { answer: verdict.answer }
-      : await readUntil(context, request.requestId, 'try', answer => ENDED.has(answer.state), TRY_MS, 'Still starting your Try');
     const link = tryLink(done.answer, origin);
     if (link) {
       const cap = done.answer?.result?.session?.max_calls;

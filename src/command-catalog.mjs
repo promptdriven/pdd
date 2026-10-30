@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: ce3defc1b4f7df3e20fcd8a6873b55b0b5d006cf8ac783a91e328aed94bcb279).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 38e54878fb2a738e13d7f1f979b972325522e18b583dcfc99ea2b77779d4f52a).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -66,6 +66,8 @@ const routes = [
       form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
+  { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
+    forms: [form('pdd jobs', 'List active and waiting runtime jobs on this machine without contacting the runtime.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],

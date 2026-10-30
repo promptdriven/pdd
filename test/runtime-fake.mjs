@@ -32,6 +32,10 @@ const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCen
 export async function fakeRuntime(t, answer) {
   const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
   const server = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/capacity') {
+      const reply = fake.capacity ? await fake.capacity({ method: req.method, url: req.url, headers: req.headers }, fake) : { status: 404, json: { error: { code: 'not-found' } } };
+      res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers }); res.end(JSON.stringify(reply.json)); return;
+    }
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks), entry = { method: req.method, url: req.url, headers: req.headers };
