@@ -13,7 +13,8 @@ five-minute setup allowance and 90-second agent default. Waiting, retries and
 lint all use the same time allowance.
 
 If the server stays busy, pdd says that no checks ran and asks you to run the same
-command again later. Check and lint exit with code 5; Try exits with code 125.
+command again later. Check and lint exit with code 5; Try's `--cli` and `--serve`
+wrappers exit with code 125.
 No AI check or Try starts before lint passes. Lint uses no AI calls.
 
 If a reply is lost, pdd reads the original request instead of sending it again.
