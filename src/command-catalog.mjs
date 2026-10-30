@@ -85,7 +85,7 @@ const routes = [
   { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
     forms: [form('pdd jobs', 'List active and waiting interpreter jobs on this machine without contacting the interpreter.')] },
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [{name:'--check',kind:'flag'},{name:'--json',kind:'flag'}],
-    forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.'), form('pdd contracts --check [--json]', 'Check local shared schemas, agreement and seed-world values; no runtime calls.')] },
+    forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.'), form('pdd contracts --check [--json]', 'Check local shared schemas, agreement and seed-world values; no PDD interpreter calls.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
     forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
