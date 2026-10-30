@@ -247,9 +247,11 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
     if (!lock || typeof lock.handle !== 'string' || !lock.handle) invalid('Invalid product state lock.');
     try {
       const latest = decode(await p.readProductState(scope));
+      const commitTime = search ? (await p.now()).milliseconds : time;
+      if (!Number.isFinite(commitTime)) invalid('Invalid product clock.');
       if (remove) latest.bindings = latest.bindings.filter(row => row.run !== remove.run || row.issue !== remove.issue);
       if (upsert) latest.bindings = [...latest.bindings.filter(row => row.run !== upsert.run), upsert];
-      if (search && (!Number.isFinite(latest.search?.at) || latest.search.at > time || !Array.isArray(latest.search.items)
+      if (search && (!Number.isFinite(latest.search?.at) || latest.search.at > commitTime || !Array.isArray(latest.search.items)
           || latest.search.items.length > 1000 || !latest.search.items.every(rawIssue) || search.at > latest.search.at)) latest.search = search;
       delete latest[migration];
       await p.writeProductState({ ...scope, json: JSON.stringify(latest) }); state = latest;

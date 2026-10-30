@@ -40,6 +40,30 @@ function saved(f, bindings, search) {
   f.ports.writeProductState = async input => { json = input.json; return {}; };
   return () => JSON.parse(json);
 }
+
+test('a delayed search preserves the newer complete cache committed by another command', async t => {
+  const f = setup(t), state = saved(f, []);
+  let clock = 100000, release, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  f.ports.now = async () => ({ milliseconds: clock });
+  f.ports.issuePage = async () => { entered(); await gate; return { items: [], total_count: 0, incomplete_results: false }; };
+  const older = productStatus({ cwd: f.cwd }, f.ports);
+  await waiting;
+  clock = 100001;
+  await productStatus({ cwd: f.cwd }, { ...f.ports, issuePage: async () => ({ items: [], total_count: 0, incomplete_results: false }) });
+  assert.deepEqual(state().search, { at: 100001, items: [] });
+  release(); await older;
+  assert.deepEqual(state().search, { at: 100001, items: [] }, 'older search cannot overwrite the newer complete snapshot');
+});
+
+test('a genuinely future-dated cache is replaced by the complete current search', async t => {
+  const f = setup(t), state = saved(f, [], { at: 900000, items: [issue('phone-1', 80)] });
+  f.ports.now = async () => ({ milliseconds: 100001 });
+  await productStatus({ cwd: f.cwd }, f.ports);
+  assert.deepEqual(state().search, { at: 100001, items: [] });
+  assert.equal(f.s.searches.length, 1);
+});
 for (const mode of ['404', 'wrong-marker', 'untrusted', 'transport', 'malformed', 'actor-unavailable']) {
   test(`saved ${mode} issue isolates only its own run`, async t => {
     const f = setup(t), state = saved(f, [{ run: 'phone-1', issue: 80 }]);
