@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 36e51fa12a749e0de42d6238ebf6fa9536da5063d6455f248f78bc673932b811).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 64fb2c51fe779ced663106c8509cea15abad58b87344f97e3d91d7779e0ec7eb).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1341,16 +1341,19 @@ function printSourceLint(context, lint) {
   if (lint.refusal) context.lint.refusal = lint.refusal;
   if (lint.note) context.lint.note = lint.note;
   saveBatch(context);
-  const summary = `No tests yet. Source lint ${state}. 0 AI calls. No checks were sent.`;
+  const warningCount = (context.warnings ?? []).length + problems.filter(problem => problem.severity === 'warning').length;
+  const outcome = state === 'passed' && warningCount ? `passed with ${warningCount} warning${warningCount === 1 ? '' : 's'}` : state;
+  const summary = `No tests yet. Source lint ${outcome}. 0 AI calls. No checks were sent.`;
   const result = { batch: context.batch, repo: context.root, source_sha256: capture.sha256, exit_code: exitCode,
     lint_state: state, summary_line: summary, coverage: context.coverage, problems, rows: [], warnings: context.warnings ?? [] };
   if (context.folder) context.store.write(join(context.folder, 'summary.json'), result);
   if (lint.note?.message) line(ports.stderr, cleanText(lint.note.message, secrets));
   if (context.json) line(ports.stdout, JSON.stringify(result));
   else {
+    for (const warning of context.warnings ?? []) line(ports.stderr, warning);
     for (const problem of problems) line(ports.stdout, [problem.code, problem.path, problem.section, problem.pointer, problem.message].filter(Boolean).join('  '));
-    line(ports.stdout, summary);
     line(ports.stdout, coverageText(context.coverage));
+    line(ports.stdout, summary);
   }
   if (exitCode === 3) line(ports.stderr, `Read the result later with: pdd check --read ${context.batch}`);
   return exitCode;
@@ -1389,7 +1392,7 @@ function presentSourceCandidate(root, path) {
 
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
-  const sourceFiles = !found.tests.length && !normalized.length ? gitFiles(root).filter(path =>
+  const sourceFiles = !found.tests.length && !normalized.length && !whyNoTests(root, found.visible).length ? gitFiles(root).filter(path =>
     (path === 'product/map.md' || path === 'product/plan.md' || /^contracts\/.*\.(?:md|json)$/.test(path)
       || path.endsWith('.prompt.md') || /^prompts\/(?:.*\/)?seed\.json$/.test(path)) && presentSourceCandidate(root, path)) : [];
   const sourceOnly = sourceFiles.length > 0;
@@ -1453,7 +1456,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
   context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
-  if (!context.json) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
+  if (!context.json && !sourceOnly) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
@@ -1757,6 +1760,7 @@ async function runRetry(context, name, options) {
   const timeout = options['--timeout'] === undefined ? AGENT_WAIT_MIN : Number(options['--timeout']);
   context.deadline = ports.now() + timeout * 60_000;
   const rows = await runRead(context, name, true, options);
+  if (context.sourceOnly) { line(ports.stderr, 'There is nothing to retry: this saved batch contains only source lint.'); return rows; }
   if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
   const capture = context.ports.captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');

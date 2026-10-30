@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6f6c423d3ecf597840a53569291b158d5cd784e93237abe521b9ad152f768fbe).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 830e9864a47f74ec42df69dccfe1fbc6135c6646619775622f90fdbfabdbf912).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
@@ -60,7 +60,7 @@ const routes = [
       form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
-      form('pdd check --lint [STORY...] [--json] [--timeout MIN]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
+      form('pdd check --lint [STORY...] [--json] [--timeout MIN]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies when tests exist; with no tests, candidate hints or Story operand, lint existing source. Sends no checks.'),
       form('pdd check --lint --local [STORY...] [--json]', 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.'),
       form('pdd check --screen URL --drawing PATH [--json]', 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI/runtime calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
