@@ -424,35 +424,99 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
 
 // Wrong: pdd gives up on a slow check after 10 min, or waits in silence.
 test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row ends and prints one progress line every 30 s', async t => {
+  const observeProgress = made => {
+    const observed = { sentAt: null, lines: [] }, write = made.ports.stderr.write.bind(made.ports.stderr);
+    made.ports.stderr.write = value => {
+      for (const text of String(value).split('\n')) {
+        if (/^Lint passed\. Sent \d+ checks? at /.test(text)) observed.sentAt = made.clock.now;
+        if (text.startsWith('Still running:')) observed.lines.push({ at: made.clock.now, text });
+      }
+      return write(value);
+    };
+    return observed;
+  };
+  const assertCadence = observed => {
+    assert.equal(typeof observed.sentAt, 'number', 'capture when checks were sent');
+    let previous = observed.sentAt;
+    for (const line of observed.lines) {
+      const gap = line.at - previous;
+      assert.ok(gap >= 30_000 && gap <= 32_000, `${gap}ms: progress every 30s within one 2s poll`);
+      previous = line.at;
+    }
+  };
+  const parseProgress = line => {
+    const match = /^Still running: (\d+) of (\d+) (Stories|Story) done · (\d+) AI calls? so far · \d+ (?:s|min)$/.exec(line.text);
+    assert.ok(match, line.text);
+    return { done: Number(match[1]), total: Number(match[2]), noun: match[3], calls: Number(match[4]) };
+  };
   const setup = harbor(t), sent = new Map();
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
   let clock;
   const fake = await fakeRuntime(t, (entry, f) => {
-    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario });
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario, reads: [] });
     if (entry.method !== 'GET') return f.normal(entry);
-    const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
+    const id = entry.url.split('/').at(-1), { at, test, reads } = sent.get(id);
+    reads.push(clock.now);
     return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
   });
   const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
   clock = made.clock;
+  const observed = observeProgress(made);
   const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
   const err = made.ports.stderr.text, out = made.ports.stdout.text;
   assert.equal(code, 0, err + out);
-  const progress = err.split('\n').filter(text => text.startsWith('Still running'));
-  assert.equal(progress.length, 49, progress.join('\n'));
-  assert.equal(progress[0], 'Still running: 0 of 2 Stories done · 2 AI calls so far · 30 s');
-  assert.equal(progress[7], 'Still running: 1 of 2 Stories done · 2 AI calls so far · 4 min');
-  assert.equal(progress.at(-1), 'Still running: 1 of 2 Stories done · 2 AI calls so far · 24 min');
-  // Polite: one GET for each open row every 2 s, the same as with a limit.
-  assert.equal(fake.gets.length, 30 + 750);
+  assert.ok(observed.lines.length >= 2, 'long-running checks repeatedly report progress');
+  assertCadence(observed);
+  const progress = observed.lines.map(parseProgress);
+  assert.equal(progress[0].done, 0);
+  assert.ok(progress.some(line => line.done === 1), 'the shorter Story finishes while the other remains open');
+  let previousDone = 0, previousCalls = 0;
+  const readableAt = Math.max(...[...sent.values()].map(row => row.reads[0]));
+  for (const [index, line] of progress.entries()) {
+    assert.equal(line.total, 2); assert.equal(line.noun, 'Stories');
+    assert.ok(line.done >= previousDone && line.done <= 1, 'done counts are monotone while a Story remains open');
+    assert.ok(line.calls >= previousCalls && line.calls <= 2, 'known calls are monotone and exclude unknown usage');
+    const at = observed.lines[index].at;
+    assert.ok(line.done <= [...sent.values()].filter(row => at - row.at >= endsAfter[row.test]).length, 'no Story is reported done before its end threshold');
+    if (at > readableAt) assert.equal(line.calls, 2, 'both read rows each report one known call');
+    previousDone = line.done; previousCalls = line.calls;
+  }
+  assert.equal(progress.at(-1).calls, 2);
+  const endedAt = Math.max(...[...sent.values()].map(row => row.reads.at(-1)));
+  assert.ok(observed.lines.at(-1).at <= endedAt, 'progress stops when every row ends');
+  assert.ok(endedAt - observed.lines.at(-1).at <= 32_000, 'progress continues until the final polling interval');
+  // A POST acknowledgement can arrive after the fake clock's first polling tick.
+  // Once both rows are readable, each open row must be read every 2 s.
+  for (const row of sent.values()) {
+    const steadyReads = row.reads.filter(at => at >= readableAt);
+    assert.ok(steadyReads.length >= 2, `${row.test}: repeated reads of the original request`);
+    for (let index = 1; index < steadyReads.length; index++)
+      assert.equal(steadyReads[index] - steadyReads[index - 1], 2000, `${row.test}: read cadence`);
+    assert.ok(row.reads.at(-1) - row.at >= endsAfter[row.test], `${row.test}: waits until completion`);
+  }
+  assert.deepEqual([...new Set(fake.gets.map(get => get.url))].sort(), [...sent.keys()].map(id => `/v1/runs/${id}`).sort());
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.scenario).sort(), Object.keys(endsAfter).sort());
   assert.equal(fake.posts.length, 3);
   assert.doesNotMatch(out, /STILL RUNNING/);
   assert.match(out, /^2 of 2 stories passed\./m);
-  const one = await check(harbor(t), await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry)),
-    ['place-order'], { '--timeout': '1' }, { interactive: true });
-  assert.equal(one.code, 3);
-  assert.deepEqual(one.err.split('\n').filter(text => text.startsWith('Still running')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
-    `Still running. Read the results later with: pdd check --read ${one.batch}`]);
+  const oneSetup = harbor(t), oneFake = await fakeRuntime(t, (entry, f) => entry.method === 'GET'
+    ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'running') } : f.normal(entry));
+  const oneMade = portsFor({ HOME: oneSetup.home, PDD_RUNTIME_URL: oneFake.origin, PDD_STATE_DIR: oneSetup.state }, { interactive: true });
+  const oneObserved = observeProgress(oneMade);
+  const oneCode = await runCheck({ words: ['place-order'], options: { '--timeout': '1' }, cwd: oneSetup.repo }, oneMade.ports);
+  assert.equal(oneCode, 3);
+  assert.ok(oneObserved.lines.length >= 1, 'a waiting single Story reports progress');
+  assertCadence(oneObserved);
+  for (const line of oneObserved.lines) assert.deepEqual(parseProgress(line), { done: 0, total: 1, noun: 'Story', calls: 1 });
+  const oneBatch = /pdd check --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(oneMade.ports.stderr.text)?.[1];
+  assert.ok(oneBatch);
+  assert.ok(oneMade.ports.stderr.text.includes(`Still running. Read the results later with: pdd check --read ${oneBatch}`));
+  assert.match(oneMade.ports.stdout.text, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
+  assert.equal(oneFake.posts.filter(post => post.command === 'check').length, 1);
+  assert.equal(oneFake.posts.length, 2);
+  const oneId = oneFake.posts.find(post => post.command === 'check').request.requestId;
+  assert.ok(oneFake.gets.length > 0);
+  assert.ok(oneFake.gets.every(get => get.url === `/v1/runs/${oneId}`), 'the running row is read without resending');
 });
 
 // Wrong: with no time limit Ctrl-C loses the batch, or a waiting check is said to have hit a timeout.
@@ -473,7 +537,13 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   assert.equal(code, 3, out);
   assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
   assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
-  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: The runtime stayed busy\. No checks ran for this attempt\. Retry this batch later\. \(check-busy\)$/m);
+  const stopped = /^NOT RUN {2}Refuse an item[^:]*: (.+) \(check-busy\)$/m.exec(out)?.[1];
+  const submitted = fake.posts.findLast(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json');
+  assert.match(stopped, /^Stopped\./);
+  assert.match(stopped, /submitted/i);
+  assert.ok(stopped.includes(submitted.request.requestId), 'identify the submitted request whose outcome was confirmed');
+  assert.match(stopped, /confirmed.*(?:not start|unstarted|no (?:checks|work) ran)/i);
+  assert.doesNotMatch(stopped, /wait ended|stayed busy|Stopped before sending/i);
   assert.equal(made.ports.stderr.text.split('\n').filter(text => text.startsWith('Still running')).length, 23);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8')).timeout_min, null);
   done = true;

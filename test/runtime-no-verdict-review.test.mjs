@@ -130,7 +130,9 @@ test('REVIEW busy retry to lost response or fresh refusal never inherits retry a
       return f.normal(e);
     });
     const result = await run(setup, fake);
-    assert.equal(posts, mode === 'busy' ? 3 : 2); assert.equal(result.json.rows[0].next_step, null);
+    if (mode === 'busy') assert.ok(posts > 3 && posts <= 10, '90-second busy uploads are bounded by minimum backoff, without an attempt ceiling');
+    else assert.equal(posts, 2);
+    assert.equal(result.json.rows[0].next_step, null);
     const text = await run(setup, fake, { '--read': result.json.batch });
     assert.doesNotMatch(text.text, /STALE RETRY/);
     if (mode === 'busy') { assert.equal(result.code, 5); assert.match(text.text, /The runtime is busy\. No checks ran for this attempt\./); }

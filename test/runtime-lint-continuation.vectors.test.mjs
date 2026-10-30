@@ -356,7 +356,7 @@ for (const retry of [false, true]) test(`CONTINUATION repair1: completed receipt
   const next = await recovery(r, batch, retry);
   assert.equal(next.code, 3); assert.equal(next.clock.now - START, 90000);
   assert.equal(paid(r).length, 1, 'only the held row gets a first POST');
-  assert.equal(next.clock.uuids, 1); assert.equal(paid(r)[0].request.scenario, s.doc.rows[0].test);
+  assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the held row receives a new request ID'); assert.equal(paid(r)[0].request.scenario, s.doc.rows[0].test);
   assert.equal(paid(r)[0].request.max_calls, 6);
   const prior = next.json.rows.find(row => row.test === completed.test);
   assert.equal(prior.request_id, id); assert.equal(prior.state, 'passed');
@@ -412,7 +412,7 @@ for (const legacy of [false, true]) for (const cap of [1, 1000]) test(`CONTINUAT
   const s = saved(r, batch); if (legacy) delete s.doc.intent;
   s.doc.rows[0].max_calls = cap; writeFileSync(s.path, JSON.stringify(s.doc));
   const next = await recovery(r, batch);
-  assert.equal(next.code, 0); assert.equal(next.clock.uuids, 1); assert.equal(paid(r).length, 1);
+  assert.equal(next.code, 0); assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the held row receives a new request ID'); assert.equal(paid(r).length, 1);
   assert.equal(paid(r)[0].request.max_calls, cap); assert.equal(saved(r, batch).doc.rows[0].max_calls, cap);
 });
 
@@ -426,7 +426,7 @@ for (const legacy of [false, true]) test(`CONTINUATION repair1: missing ${legacy
   writeFileSync(s.path, JSON.stringify(s.doc));
   const next = await recovery(r, batch, true);
   assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, busy.test);
-  assert.equal(paid(r)[0].request.max_calls, 6); assert.equal(next.clock.uuids, 1);
+  assert.equal(paid(r)[0].request.max_calls, 6); assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the busy row receives a new request ID');
   assert.equal(next.code, 5); assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:/);
   assert.equal(next.json.rows.find(row => row.test === held.test).request_id, null);
   assert.equal(next.json.rows.find(row => row.test === busy.test).state, 'passed');
@@ -493,7 +493,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
   const next = await recovery(r, batch, true);
   assert.equal(paid(r).length, 1, 'independent authorized busy row must POST despite refused held proof');
   assert.equal(next.code, 5, 'the held row remains not run beside the passing retry');
-  assert.equal(next.clock.uuids, 1, 'only the busy row receives a new ID');
+  assert.equal(new Set(paid(r).map(post => post.request.requestId)).size, 1, 'only the busy row receives a new request ID');
   assert.equal(next.json.batch, batch); assert.equal(next.json.source_sha256, s.doc.source_sha256);
   const post = paid(r)[0], id = post.request.requestId;
   assert.equal(post.request.scenario, busy.test); assert.equal(post.request.max_calls, busy.max_calls);

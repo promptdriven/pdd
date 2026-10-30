@@ -1,0 +1,83 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-local-queue.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Each waiting job keeps one ticket in oldest-first order for the next free local slot."
+    },
+    {
+      "id": "AC2",
+      "text": "While I wait, pdd reports the local busy count, limit and number ahead of me."
+    },
+    {
+      "id": "AC3",
+      "text": "Interruption or the caller deadline removes my waiting ticket without submitting its job."
+    },
+    {
+      "id": "AC4",
+      "text": "A waiting ticket or claim abandoned for 60 seconds cannot block my turn when its process ID has been reused."
+    },
+    {
+      "id": "AC5",
+      "text": "Only the first waiting ticket competes for a free slot; twelve contenders with three slots make progress without a contention stall."
+    }
+  ],
+  "cases": [
+    {
+      "id": "fifo",
+      "given": "tickets created at 10,20,30; one slot frees",
+      "required_observation": "10 acquires, then 20, then 30; one ticket each"
+    },
+    {
+      "id": "equal-time",
+      "given": "two tickets share timestamp; reversed directory enumeration",
+      "required_observation": "stable ID tie order"
+    },
+    {
+      "id": "progress",
+      "given": "4 occupied slots, limit 4, two older live tickets",
+      "required_observation": "stderr reports 4 busy/of 4 and 2 ahead; JSON stdout stays valid"
+    },
+    {
+      "id": "dead-waiter",
+      "given": "oldest PID dead; later live waiter",
+      "required_observation": "dead waiting ticket removed; next live ticket eligible"
+    },
+    {
+      "id": "stop",
+      "given": "deadline/interrupt before claim and before POST",
+      "required_observation": "ticket removed, zero new sends"
+    },
+    {
+      "id": "reused-pid-waiter-and-claim",
+      "given": "oldest ticket, separately abandoned claim, has file refresh age 59999 then 60000 ms and a PID now belonging to an unrelated long-lived process",
+      "required_observation": "fresh case still owns its place/claim; at 60000 ms stale ownership is removed safely and next live waiter can acquire; no successor claim is deleted"
+    },
+    {
+      "id": "head-only-jitter",
+      "given": "three ordered tickets, occupied limit, claim contention and injected random values 0 and just below 1",
+      "required_observation": "only current head attempts acquisition claim; followers wait longer; repeated failures retain original ticket/time; retry delays are positive, bounded, varied by jitter and clipped to deadline"
+    },
+    {
+      "id": "twelve-contenders",
+      "given": "12 separate native processes launched together, shared limit 3, each briefly holds its slot; a generous watchdog detects a contention stall",
+      "required_observation": "all 12 finish, measured peak active <=3, no busy failures or duplicated tickets; verify progress and order without a small elapsed-time performance target"
+    },
+    {
+      "id": "two-live-waiters-wallclock-jump",
+      "given": "one active owner holds the only slot; two live waiters have distinct original started_at values, separately equal times with stable ID tie order; both waiting refresh times become more than 60 seconds old before either next heartbeat and each can reclaim the other ticket; the active owner then releases within the caller waits",
+      "required_observation": "both live waiters recover their own missing waiting ticket with original ID/started_at, continue in original oldest-first/ID tie order and acquire once each; peak active <=1, no duplicate tickets or stranded timeout; after release no owned ticket, claim or refresh timer remains; use real separate processes for the race and a generous watchdog, without a new latency bound"
+    },
+    {
+      "id": "missing-ticket-refresh-and-identity",
+      "given": "ongoing waiter ticket disappears before inspection, separately just before its heartbeat observes absence; restoration encounters an existing record at the same path in a separate case",
+      "required_observation": "a missing waiting ticket is exclusively restored with the same ID/started_at and refresh resumes even after an absent-file heartbeat stopped; an existing record is never overwritten or duplicated, and no active reservation or claim is resurrected; other owners retain ordinary freshness rules"
+    },
+    {
+      "id": "missing-ticket-stop-and-paid-lease",
+      "given": "waiting ticket disappears, then interruption or caller deadline occurs before restoration/admission; separately another owner has a stale active record with a dispatched running or unknown job younger than 30 minutes",
+      "required_observation": "ended wait returns without acquisition or dispatch, does not restore its ticket and leaves no owned refresh work; recovery of waiting tickets never releases the other owner uncertain paid-job lease or infers completion"
+    }
+  ]
+}
