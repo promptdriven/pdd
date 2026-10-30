@@ -112,6 +112,48 @@ Missing stat reports absence; missing read refuses exit 4. Reuse the capture
 reader's safe snapshots without selecting payload, creating an archive or writing
 files. Capture additionally checks its attempt's observations and retries.
 
+<a id="scoped-strict-source-access"></a>
+<details>
+<summary>Required interface reference: scoped strict source access</summary>
+
+For native callers with a stricter boundary, `src/runtime-preflight.mjs` exports
+module function `createStrictSourceAccess(root)`. `root` is the repository-root
+path string. It returns an object with these synchronous bound methods:
+
+- `sourceFilePort(visible = new Set(gitFiles(root)))` takes Git-visible
+  repository-relative paths as a Set and returns the existing
+  `{stat({path}), read({path})}` adapter with the reply shapes above.
+- `findTests({files = gitFiles(root)} = {})` takes Git-visible repository-relative
+  paths as an array and returns the existing `{visible, tests, stories, warnings}`
+  discovery result. `visible` is a Set; tests retain `path`, parsed `doc` or parse
+  `error` and Story metadata; warnings are strings.
+- `captureSource(options = {})` takes the existing
+  `{tests, appMap, attempts, prepareSource}` capture options and defaults. It
+  returns the existing capture result, including tar, SHA, file/byte totals,
+  references, Story footprints, warnings, raw prompt hashes and source bytes.
+
+Each method uses the bound root and preserves its corresponding module function's
+results, error types/codes, limits and snapshot/retry obligations. The capability
+adds a no-follow constraint: refuse a symlink at the requested path or any
+ancestor before reading its contents, including a link otherwise safe for source
+upload. All other path/privacy/visibility rules remain this module's authority.
+Apply the constraint to every read and stat performed by these methods or their
+returned ports: discovery and Story-title fallbacks, selection and root metadata
+(including bindings), payload, preparation, reference expansion, and sibling
+footprints. Nested helpers must retain the same constraint; privately wrapping
+only the returned file port is insufficient. Discovery skips/warnings and
+unavailable unselected footprints retain their existing isolation semantics;
+required inputs retain their refusals. Never inspect or reject unrelated source
+merely because a Git-visible link exists elsewhere.
+
+The constraint is confined to the returned capability and its operations. No
+ambient mutable mode, repository-wide link rejection, or CLI option is added.
+Existing module functions and their signatures/defaults remain unchanged and
+continue to use the source-reading policy. The [contracts owner](contracts.prompt.md)
+decides when its command requires this capability; that link is navigation-only.
+
+</details>
+
 Retain original authored paths. Effective upload bytes determine byte limits,
 tar contents and source SHA; no-reference captures keep exactly the prior bytes
 and tar. For reference-only reads, unused contracts and unused records in a
