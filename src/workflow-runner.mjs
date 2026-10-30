@@ -578,7 +578,7 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
-  const prefix = [...replay, ...failing];
+  const prefix = [...failing, ...replay];
   const top = [...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
   if (evidence.lines.some(line => line.includes('pdd-workflow:'))) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
   const preparedLines = evidence.lines.map(line => hideLocalPaths(redactTry(line), run));
