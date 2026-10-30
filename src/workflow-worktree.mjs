@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: 42289e9deb49cdcc4401346a782254e8eea34717292e24a63e6d1607dcfc1baf).
+// Generated from prompts/cli/workflow-worktree.prompt.md (sha256: c8d8e29521d8060d1a0b559c65d537516ec82fb544542161e0424ffe5ebd6c25).
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
@@ -16,6 +16,8 @@ const sameRepo = (a, b) => a.toLowerCase() === b.toLowerCase();
 const result = (state, message, assignment = null) => ({ state, assignment, message });
 const fail = () => { throw new Error('workflow_worktree_identity_unavailable'); };
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+class BareInDotGitError extends Error {}
 
 function commands(ports) {
   const run = ports.execFile ?? ((file, args, { cwd }) => execute(file, args,
@@ -157,6 +159,9 @@ async function verifiedPrimary(ctx, c) {
     const gitDir = (await c.git(anchor, ['rev-parse', '--absolute-git-dir'])).trim();
     const commonDir = (await c.git(anchor, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
     const repository = originRepo((await c.git(anchor, ['remote', 'get-url', 'origin'])).trim());
+    if (primary.bare === true && bare === 'true' && gitDir === join(anchor, '.git')
+      && commonDir === gitDir && commonDir === ctx.commonDir && sameRepo(repository, ctx.repository)
+      && (await c.git(anchor, ['config', '--bool', '--get', 'core.bare'])).trim() === 'true') throw new BareInDotGitError();
     if (bare !== 'true' || gitDir !== anchor || commonDir !== anchor || anchor !== ctx.commonDir
       || !sameRepo(repository, ctx.repository)) fail();
   } else {
@@ -260,9 +265,11 @@ export async function allocateIssueWorktree(input, ports = {}) {
     try { await c.git(ctx.sourceRoot, ['worktree', 'add', '-b', a.branch, a.worktreePath, a.baseSha]); }
     catch { /* A lost or rejected reply cannot justify a second add. Verify this same physical identity. */ }
     return await reconcile(ctx, a, c);
-  } catch {
+  } catch (error) {
     return result('recovery_required', saved
       ? 'Allocation is unconfirmed. Preserve the saved run and inspect its exact intended path; never repeat add or delete work.'
+      : error instanceof BareInDotGitError
+        ? 'pdd does not support a bare repository stored in .git with linked worktrees. Make an independent normal clone and run the workflow there. No allocation record or issue claim was saved. No new worktree is confirmed.'
       : 'Cannot establish repository or allocation metadata identity. No allocation record or issue claim was saved. No new worktree is confirmed.');
   }
 }
