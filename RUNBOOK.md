@@ -519,7 +519,7 @@ Agents replay the approved prompt-space cases against the real code. Runtime che
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
-In verify after the last commit, for each new or changed regression test run `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` and keep its result; fresh worktrees have no installed dependencies, so include any required installation in the command.
+In verify after the last commit, run one `pdd workflow prove <run> --test "<command>" --expect "<Defect: text>"` command that covers all new or changed tests; its line goes on the PR. Fresh worktrees have no installed dependencies, so include any required installation in the command.
 
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks

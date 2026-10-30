@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: ec9edeaafaef8eb49d0de29a2f86857e3838df729f71737bf2f28753b9361c40).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 4cdd79111e2c52146c7f9b9df8d719c8e4ed69c225a27832a993e51da9394503).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -33,8 +33,9 @@ export function classifyProof(record) {
   if (record.base.exitCode === 0) return 'old-passes';
   return record.base.expectedFound ? 'proved' : 'wrong-reason';
 }
-function safeValue(value) {
-  let content = JSON.stringify(String(value)).slice(1,-1).replace(/[\u007f-\u009f\u2028\u2029]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
+function safeValue(value, command = false) {
+  const text = String(value);
+  let content = (command ? text.replace(/[\x00-\x1f]/g, char => JSON.stringify(char).slice(1,-1)) : JSON.stringify(text).slice(1,-1)).replace(/[\u007f-\u009f\u2028\u2029]/g, char => '\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
   let fenceLength = 1;
   for (const run of content.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, run[0].length + 1);
   const fence = '`'.repeat(fenceLength);
@@ -46,10 +47,15 @@ function actualTail(record) {
   const phase = record.outcome === 'head-fails' ? record.head : [record.base,record.head].find(p=>p.setupError || p.error || [126,127].includes(p.exitCode)) ?? [record.base,record.head].find(nonzero);
   if (!phase) return '';
   const source = phase.stderrTail.some(s=>s.trim()) ? phase.stderrTail : phase.stdoutTail;
-  return [...source.filter(s=>s.trim()).slice(-3).join('\n')].slice(-240).join('');
+  const nonblank = source.filter(s=>s.trim());
+  const summary = /^(?:# (?:tests|suites|pass|fail|cancelled|skipped|todo) [0-9]+|# duration_ms [0-9]+(?:\.[0-9]+)?|[0-9]+\.\.[0-9]+)$/;
+  let end = nonblank.length;
+  while (end > 0 && summary.test(nonblank[end-1].trim())) end--;
+  const selected = end > 0 && end < nonblank.length ? nonblank.slice(0,end) : nonblank;
+  return [...selected.slice(-3).join('\n')].slice(-240).join('');
 }
 export function formatProof(record) {
-  const command=safeValue(record.test), expected=safeValue(record.expect), base=safeValue(record.base.exitCode ?? 'none'), head=safeValue(record.head.exitCode ?? 'none');
+  const command=safeValue(record.test, true), expected=safeValue(record.expect), base=safeValue(record.base.exitCode ?? 'none'), head=safeValue(record.head.exitCode ?? 'none');
   if(record.outcome==='proved') return `Old-code proof: ✓ ${command}: old-code exit ${base}; output contains ${expected}; new-code exit ${head}.`;
   let cause;
   if(record.outcome==='wrong-reason')cause=record.base.observedError;
@@ -140,7 +146,7 @@ async function recoverStale(root) {
 const ownedWorktrees=new Map();
 async function createWorktree({root,commit,phase}) {
   let worktree = '';
-  try { worktree = mkdtempSync(join(tmpdir(), `pdd-proof-${phase}-`)); const directory=await ledgerDir(root), path=join(directory,`${randomBytes(16).toString('hex')}.json`);writeFileSync(path,JSON.stringify({origin:'pdd.proof-worktree.v1',common:dirname(dirname(directory)),pid:process.pid,identity:ownerIdentity(process.pid),worktree}),{flag:'wx',mode:0o600});ownedWorktrees.set(worktree,path);await git(root,['worktree','add','--detach',worktree,commit]); return {worktree,error:''}; }
+  try { worktree = realpathSync(mkdtempSync(join(tmpdir(), `pdd-proof-${phase}-`))); const directory=await ledgerDir(root), path=join(directory,`${randomBytes(16).toString('hex')}.json`);writeFileSync(path,JSON.stringify({origin:'pdd.proof-worktree.v1',common:dirname(dirname(directory)),pid:process.pid,identity:ownerIdentity(process.pid),worktree}),{flag:'wx',mode:0o600});ownedWorktrees.set(worktree,path);await git(root,['worktree','add','--detach',worktree,commit]); return {worktree,error:''}; }
   catch(error) { return {worktree,error:diagnostic(error)}; }
 }
 function checkedParents(worktree, path) {
