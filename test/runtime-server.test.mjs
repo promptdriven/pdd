@@ -369,9 +369,10 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
   let clock;
   const fake = await fakeRuntime(t, (entry, f) => {
-    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario });
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario, reads: [] });
     if (entry.method !== 'GET') return f.normal(entry);
-    const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
+    const id = entry.url.split('/').at(-1), { at, test, reads } = sent.get(id);
+    reads.push(clock.now);
     return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
   });
   const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
@@ -384,8 +385,18 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   assert.equal(progress[0], 'Still running: 0 of 2 Stories done · 2 AI calls so far · 30 s');
   assert.equal(progress[7], 'Still running: 1 of 2 Stories done · 2 AI calls so far · 4 min');
   assert.equal(progress.at(-1), 'Still running: 1 of 2 Stories done · 2 AI calls so far · 24 min');
-  // Polite: one GET for each open row every 2 s, the same as with a limit.
-  assert.equal(fake.gets.length, 30 + 750);
+  // A POST acknowledgement can arrive after the fake clock's first polling tick.
+  // Once both rows are readable, each open row must be read every 2 s.
+  const readableAt = Math.max(...[...sent.values()].map(row => row.reads[0]));
+  for (const row of sent.values()) {
+    const steadyReads = row.reads.filter(at => at >= readableAt);
+    assert.ok(steadyReads.length >= 2, `${row.test}: repeated reads of the original request`);
+    for (let index = 1; index < steadyReads.length; index++)
+      assert.equal(steadyReads[index] - steadyReads[index - 1], 2000, `${row.test}: read cadence`);
+    assert.ok(row.reads.at(-1) - row.at >= endsAfter[row.test], `${row.test}: waits until completion`);
+  }
+  assert.deepEqual([...new Set(fake.gets.map(get => get.url))].sort(), [...sent.keys()].map(id => `/v1/runs/${id}`).sort());
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.scenario).sort(), Object.keys(endsAfter).sort());
   assert.equal(fake.posts.length, 3);
   assert.doesNotMatch(out, /STILL RUNNING/);
   assert.match(out, /^2 of 2 stories passed\./m);
