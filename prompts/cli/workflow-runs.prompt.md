@@ -41,3 +41,10 @@ C3 view: `stage` (current step, or `approve` at a gate, or `merge` after the las
 ```
 
 </details>
+## Selection
+
+- `gitContext(cwd, ports)` returns `{toplevel, commonDir}` (real paths) or null.
+- `runForWorktree(cwd, ports)` returns the run whose `root` is the current worktree.
+- `resolveRun(ref, {cwd}, ports)` returns `{run}` or `{error}`. `N` looks in the current repository, worktrees included. Outside a repository it uses the index; when several repositories have issue N, it asks for `owner/repo#N`. `owner/repo#N` and issue URLs pick that repository. Without ref: the run of the current worktree, else the only run of this repository that waits for a person, else the only active run; otherwise list the choices.
+- `listRuns({cwd}, ports)` returns the runs of the current repository, or all indexed runs outside a repository.
+- `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories from the run index (`<stateDir>/runs.json`) and the Herdr layout registry (`<stateDir>/herdr-layout/registry.json`, its `repositories[].commonDir`), then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. A repository or file that is gone or unreadable is skipped without an error.
