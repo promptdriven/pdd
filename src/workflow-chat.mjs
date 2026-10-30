@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 50e86a2f8424aca097866fc40061c1d5e269a20799add9848f4d37dfd3a77dbf).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: a1f1dd5fad8041c9093f4bf81641dd82cae4ed15d86ea0df9582566289fd1948).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { statSync, writeFileSync } from 'node:fs';
+import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -88,7 +88,7 @@ export async function startChat({ run, area, message }, ports = {}) {
   const sessionId = run.agent === 'claude' ? randomUUID() : null;
   const configDir = expandHome(run.configDir !== undefined ? run.configDir : env[homeVariable(run.agent)], env);
   const startedAt = now();
-  const chat = { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
+  const chat = { area, agent: run.agent, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId,
     label: `${run.repo.split('/')[1]}#${run.number} ${run.workflow} › ${area}`, startedAt, session: sessionId ? { agent: 'claude', id: sessionId } : null, configDir, messageFile };
   try { await herdr(['pane', 'run', layout.paneId, chatCommand({ agent: run.agent, cwd: run.root, messageFile, sessionId, configDir })]); }
   catch (error) {
@@ -180,4 +180,69 @@ export async function closeChats(run, ports = {}) {
     } catch (error) { warnings.push(`warning: the run workspace "${run.repo.split('/')[1]}#${run.number} ${run.workflow}" stays open in Herdr (${error.code ?? 'error'}).`); }
   }
   return { warnings };
+}
+
+
+// Replacement effects are authorized only by durable, awaited caller checkpoints.
+export async function restartChat({ run, chat, message }, ports = {}) {
+  if (typeof ports.checkpoint !== 'function') throw problem('checkpoint_required', 'Replacement requires durable checkpoints.');
+  const herdr = herdrCommand(ports), env = ports.env ?? process.env;
+  const fs = { readFileSync, writeFileSync, mkdirSync, ...ports.fs };
+  const uuid = ports.randomUUID ?? randomUUID, now = ports.now ?? Date.now;
+  const invalid = () => problem('chat_identity_changed', 'The saved chat ownership cannot be confirmed. Inspect its workspace, tab and pane.');
+  const inventory = async (kind, workspace) => {
+    const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
+    const rows = reply?.result?.[`${kind}s`];
+    if (reply?.result?.type !== `${kind}_list` || !Array.isArray(rows) || rows.some(row => !row || typeof row[`${kind}_id`] !== 'string' || !row[`${kind}_id`]) || new Set(rows.map(row => row[`${kind}_id`])).size !== rows.length) throw invalid();
+    if (kind !== 'workspace' && rows.some(row => typeof row.workspace_id !== 'string' || !row.workspace_id || kind === 'pane' && ['tab_id', 'terminal_id', 'cwd'].some(key => typeof row[key] !== 'string' || !row[key]))) throw invalid();
+    return rows;
+  };
+  const session = /[\\/]sessions[\\/]([^\\/]+)[\\/][^\\/]+$/.exec(String(env.HERDR_SOCKET_PATH ?? ''))?.[1];
+  if ((env.HERDR_ENV === '1' || env.HERDR_SOCKET_PATH) && (!session || !env.HERDR_PANE_ID)) throw problem('caller_pane_unknown', 'Use another terminal with a known Herdr session and pane.');
+  if (session === PDD_HERDR_SESSION && env.HERDR_PANE_ID === chat.paneId) throw problem('own_chat', 'Use another terminal to replace this chat.');
+  return withHerdrLayoutLock(async () => {
+    const workspace = (await inventory('workspace')).find(row => row.workspace_id === chat.workspaceId);
+    if (!workspace || workspace.worktree?.checkout_path !== run.root || workspace.worktree?.repo_key !== run.commonDir || workspace.worktree?.is_linked_worktree !== true) throw invalid();
+    const tabs = await inventory('tab', chat.workspaceId), panes = await inventory('pane', chat.workspaceId);
+    const tab = tabs.find(row => row.tab_id === chat.tabId), owned = panes.filter(row => row.tab_id === chat.tabId);
+    if (!tab || tab.workspace_id !== chat.workspaceId || owned.length !== 1 || owned[0].pane_id !== chat.paneId || owned[0].workspace_id !== chat.workspaceId || owned[0].cwd !== run.root || (chat.terminalId && owned[0].terminal_id !== chat.terminalId)) throw invalid();
+    let observed;
+    try { observed = (await herdr(['agent', 'get', chat.paneId])).result?.agent; if (!observed || observed.agent !== (chat.agent ?? run.agent) || observed.pane_id !== chat.paneId) throw invalid(); }
+    catch (error) { if (error.code !== 'agent_not_found' || chat.startUnconfirmed) throw error; }
+    const nativeId = observed?.agent_session?.kind === 'id' && validSessionId(observed.agent_session.value) ? observed.agent_session.value : null;
+    if (chat.startUnconfirmed && !observed) throw problem('chat_start_unconfirmed', 'Inspect the same saved agent before replacing it.');
+    if (chat.startUnconfirmed && nativeId && validSessionId(chat.session?.id) && nativeId !== chat.session.id) throw invalid();
+    const id = uuid(), at = now(), archive = join(run.runDir, 'abandoned-chats', `${id}-start.md`);
+    if (!validSessionId(id) || !Number.isSafeInteger(at) || at < 0) throw problem('invalid_replacement_identity');
+    const original = { ...chat, ...(nativeId ? { session: { agent: chat.agent ?? run.agent, id: nativeId } } : {}), originalMessageFile: chat.messageFile, messageFile: archive };
+    const bytes = fs.readFileSync(chat.messageFile);
+    fs.mkdirSync(join(run.runDir, 'abandoned-chats'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(archive, bytes, { flag: 'wx', mode: 0o600 });
+    const messageFile = join(run.runDir, `${chat.area}-restart-${id}-start.md`);
+    fs.writeFileSync(messageFile, message, { flag: 'wx', mode: 0o600 });
+    let replacement;
+    const checkpoint = async phase => ports.checkpoint(JSON.parse(JSON.stringify({ id, area: chat.area, phase, at, original, ...(replacement ? { replacement } : {}) })));
+    await checkpoint('intent');
+    await checkpoint('closeRequested');
+    const closed = await herdr(['tab', 'close', chat.tabId]);
+    if (closed?.result?.type !== 'ok') throw problem('chat_close_unconfirmed', 'The tab close reply was not confirmed. Inspect the saved replacement attempt.');
+    const remainingTabs = await inventory('tab', chat.workspaceId), remainingPanes = await inventory('pane', chat.workspaceId);
+    if (remainingTabs.some(row => row.tab_id === chat.tabId) || remainingPanes.some(row => row.pane_id === chat.paneId || row.tab_id === chat.tabId)) throw problem('chat_close_unconfirmed', 'The selected tab or pane still exists.');
+    await checkpoint('closed');
+    await checkpoint('createRequested');
+    // The existing layout verifies its registry and workspace; this call does not reacquire its lock.
+    const layout = await openHerdrRunLayout({ repository: run.repo, issueNumber: run.number, runId: run.runId, workflowName: run.workflow, stageId: chat.area, sourceRoot: run.sourceRoot, cwd: run.root, commonDir: run.commonDir },
+      { command: herdr, checkpoint: async () => {}, directory: ports.layoutDirectory, ...(ports.execFile ? { execFile: ports.execFile } : {}) });
+    const configDir = expandHome(run.configDir !== undefined ? run.configDir : chat.configDir, env);
+    const agent = chat.agent ?? run.agent, sessionId = agent === 'claude' ? uuid() : null;
+    replacement = { area: chat.area, agent, tabId: layout.tabId, paneId: layout.paneId, terminalId: layout.terminalId, workspaceId: layout.workspaceId, repoWorkspaceId: layout.repoWorkspaceId, label: chat.label, startedAt: now(), session: sessionId ? { agent, id: sessionId } : null, configDir, messageFile };
+    await checkpoint('prepared');
+    replacement.startUnconfirmed = true;
+    await checkpoint('launchRequested');
+    try { await herdr(['pane', 'run', replacement.paneId, chatCommand({ agent, cwd: run.root, messageFile, sessionId, configDir })]); }
+    catch (error) { error.chat = { ...replacement }; throw error; }
+    delete replacement.startUnconfirmed;
+    await checkpoint('launched');
+    return replacement;
+  }, { directory: ports.layoutDirectory });
 }

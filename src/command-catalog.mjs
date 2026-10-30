@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6f6c423d3ecf597840a53569291b158d5cd784e93237abe521b9ad152f768fbe).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5b9b97de5128ab697264f827093b7968b610147eeb9a8c9645f6cc2d048c848d).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
@@ -40,8 +40,8 @@ const routes = [
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Try links; never start or resume a chat.')] },
   { id: 'workflow.open', prefix: ['workflow', 'open'], local: 'workflow-open',
-    operands: [{name:'issue',type:'issue'}], options: [],
-    forms: [form('pdd workflow open ISSUE', 'Focus or attach the current area chat; resume it if its session ended.')] },
+    operands: [{name:'issue',type:'issue'}, {name:'area',type:'workflow-name',optional:true}], options: [{name:'--new',kind:'flag'}],
+    forms: [form('pdd workflow open ISSUE [AREA] [--new]', 'Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals.')] },
   { id: 'help', prefix: ['help'], local: 'help', operands: [], options: [], forms: [
     form('pdd', 'Show local alpha commands.'), form('pdd --help', 'Show local alpha commands.'),
     form('pdd -h', 'Show local alpha commands.'), form('pdd help', 'Show local alpha commands.') ] },
