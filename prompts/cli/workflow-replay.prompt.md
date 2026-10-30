@@ -28,17 +28,23 @@ error, world and calls. Preserve every original identity; do not substitute gene
 `adoptReplayCorpus` is a module function selecting an existing corpus for the runner.
 It reads a declaration and independently resolved source through the injected
 `readAdoptionSnapshot({root,declarationPath})` port (`adoption.read` at runtime), once.
-A missing/malformed declaration may make the port throw; catch it as unavailable.
+A missing/malformed declaration may make the port throw; catch it as unavailable, retaining one useful cleaned single-line cause.
 The port does read-only local Git/filesystem work, never gh, Herdr, approval or models.
 It captures current files from the runner's selected base at startup and the run
 worktree thereafter. Port failures become `blocked/unavailable`, never an empty corpus.
+Native temporary views use realpath-resolved scratch directories, including under a
+symlinked TMPDIR. Resolve the declaration parent directory with realpath before
+reading; allow symlink ancestors but still refuse a final symlink or hardlink.
+Use `git cat-file --batch` for immutable blob reads rather than per-file processes.
 
 A declaration is version `pdd.replay-adoption.v1`, with `repository` (canonical
 owner/repo), `commit` (full immutable commit ID), nonempty unique repo-relative
-`prompts` (entry prompt paths), and `approval {kind:"external-human-assertion",
+`prompts` (entry prompt paths), nonempty unique canonical repo-relative `scenarios`
+(at most 200 paths, the asserted complete inventory), and `approval {kind:"external-human-assertion",
 reference, asserted_by}` (both nonblank, at most 1000 characters). The assertion
 explicitly covers this repository, commit, named prompts, all their required context,
-and **every** scenario in that repository snapshot. A string saying "approved",
+and every scenario in this declared inventory. The assertion defines scope; it does
+not prove that unrelated repository scenarios were reviewed. A string saying "approved",
 a commit message, a runtime receipt or ordinary agent prose is insufficient.
 
 Trust boundary: pdd verifies the declaration's structure, source identity and exact
@@ -51,13 +57,16 @@ Never invent a new authorization or make the artifact's presence prove human app
 <summary>Authoritative inventory, byte identity and port snapshot</summary>
 
 The approved source is the declaration's commit resolved locally in the same
-repository. Enumerate its **entire tracked tree**, with exact NUL-delimited paths.
-Parse every JSON candidate and include every `prompt-runtime.program-scenario.v1`
-file; unreadable/unclassifiable candidates fail closed. No caller subset, roots,
-file list or new directory scan defines the approved corpus scope. Enumerate the
-current whole repository too, including Git-visible untracked files. Require the
-same nonempty scenario path set; missing, extra and duplicate rows block adoption.
-This deliberately requires approval covering the whole repository corpus.
+repository. Select exactly the declaration's scenario paths from the approved commit
+and current source. Both selected row sets must exactly equal the declared list:
+empty, missing, duplicate, subset and extra rows block. Derive bytes and original
+check identities from the immutable commit, never declaration digest claims.
+Unrelated scenarios outside the declared scope, including repository test fixtures,
+do not participate and cannot block adoption. The runner's changed-scenario guard
+still independently blocks new code-stage vectors absent from the frozen anchor.
+Require `approved_commit_ancestor:true`: the native port checks the approved commit
+is an ancestor of the selected base at startup and allocated/current HEAD thereafter.
+A resolved but unrelated commit returns `blocked/unrelated-commit`, even with equal bytes.
 
 Seed required context with the union of declaration prompts and every original
 scenario step entry_path, each scenario story_path and its explicit scenario context.
@@ -71,19 +80,31 @@ the declaration. The port computes digests from independently read raw files/blo
 Original scenarios must pass `pinReplayVectors` validation and bounds; retain the
 complete original step/check identities, with exact equality against current rows.
 Reuse the original-path safety and size limits. Declaration is a regular single-link
-file of at most 64 KiB, with no symlink ancestors; bound reads before parsing.
+file of at most 64 KiB; apply the resolved-parent rule above and bound reads before parsing.
 A dirty current prompt/dependency/scenario cannot reuse authorization from the commit.
 
 The port returns `snapshot`: `available`, resolved `repository`, `commit`, the parsed
 `declaration`, its computed raw `declaration_sha256`, `approved_vectors`, `current_vectors`, `approved_context`, and
-`current_context`. Vector rows contain `path`, computed raw `sha256`, and `checks`
+`current_context`, `approved_commit_ancestor` (boolean), and `cause` (string, empty
+on success). Vector rows contain `path`, computed raw `sha256`, and `checks`
 (the ordered original check identity tuples encoded as JSON strings). Context rows
 contain `path` and computed raw `sha256`. These are independently enumerated facts,
 never accepted as user-supplied CLI claims. The port checks raw-file safety, scenario
 structure/bounds and dependency closure completeness before `available:true`.
+The strict Runtime `snapshot` has no declaration bytes or undeclared properties.
+The private native reader returns `{snapshot, internal:{declarationBytes}}`. The
+helper unwraps snapshot for decision logic and, when supplied, calls native-only
+`ports.onNativeDeclaration(bytes)` once with the bounded raw declaration bytes.
+The runner supplies this callback to capture bytes for freezing. No private reader
+export is required. The injected `readAdoptionSnapshot` port supplies snapshot facts;
+its Runtime `adoption.read` transport reply is exactly `{snapshot}`. The capture
+callback is native metadata transport, not a Runtime resource or approval effect.
+Do not add internal bytes to the helper's public result, Runtime snapshot or user evidence.
 At runtime the supplied fake models this native port, not actual Git or byte hashing.
+Clean native causes to one finite line (at most 1000 characters), removing private
+absolute paths, credentials and Try URLs; keep a useful operation/cause explanation.
 
-Validate declaration version/types, nonempty unique prompt paths and assertion
+Validate declaration version/types, nonempty unique prompt and scenario paths and assertion
 fields; malformed declarations block as invalid-approval. Require 64 lowercase hex
 SHA256 values and unique context paths as well as unique vector paths; malformed
 snapshot facts block as unavailable. Compare declaration repository/commit to resolved source first; foreign identity
@@ -92,8 +113,11 @@ returns `blocked/foreign-source`. Missing/invalid assertion returns
 `blocked/inventory-mismatch`; unequal bytes or check identities return
 `blocked/content-mismatch`. Successful selection returns `adopted`, empty reason,
 sorted scenario `paths` and provenance `{repository,commit,reference,asserted_by,
-trust:"external-assertion-unverified",declaration_sha256,prompts}`. Blocked selection returns no paths and
-empty provenance strings and prompts (the trust label stays explicit). Do not throw through startup.
+trust:"external-assertion-unverified",declaration_sha256,prompts,scenarios}`. Blocked selection returns no paths, a cleaned `cause` (empty when none), and
+retains structurally valid available adoption provenance, including declared scope,
+without implying acceptance. Unavailable/invalid provenance fields use empty strings
+or lists; the trust label stays explicit. Successful selection has empty `cause`.
+Do not throw through startup.
 
 </details>
 
@@ -159,6 +183,9 @@ flowchart TD
 An invalid proved formal control is blocked. Record exact derived counts, public operation totals/executed,
 mutation outcome and formal type/scope/reason. Retain explicit assertion/formal failure lines even alongside
 blocked/not_replayed; real failures do not prevent publication. Hash the bounded manifest bytes for provenance.
+For adopted runs, retain structured adoption provenance even when replay is blocked.
+The PR replay section displays "Anchor adopted from REPO@COMMIT; approval reference R
+by A; external-assertion-unverified", using cleaned recorded values.
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, vector hashes, public execution totals, semantic control and typed
 formal result. Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
@@ -179,8 +206,8 @@ let an agent's free-form PASS summary replace this status.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "2b05028ee5f8ab28417f57e1223ceef7e8b0cfc41d2fb55b62e317dc36a1879b",
+  "status": "draft",
+  "prose_sha256": "a0c545df8f33e4ba83dda0fc1906ea0b7a0437c28117ce80758942e3024e8457",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
@@ -245,6 +272,12 @@ let an agent's free-form PASS summary replace this status.
                 "items": {
                   "type": "string"
                 }
+              },
+              "scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             },
             "required": [
@@ -254,16 +287,21 @@ let an agent's free-form PASS summary replace this status.
               "asserted_by",
               "trust",
               "declaration_sha256",
-              "prompts"
+              "prompts",
+              "scenarios"
             ],
             "additionalProperties": false
+          },
+          "cause": {
+            "type": "string"
           }
         },
         "required": [
           "outcome",
           "reason",
           "paths",
-          "provenance"
+          "provenance",
+          "cause"
         ],
         "additionalProperties": false
       },
@@ -348,6 +386,15 @@ let an agent's free-form PASS summary replace this status.
                           "asserted_by"
                         ],
                         "additionalProperties": false
+                      },
+                      "scenarios": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "maxItems": 200,
+                        "uniqueItems": true
                       }
                     },
                     "required": [
@@ -355,7 +402,8 @@ let an agent's free-form PASS summary replace this status.
                       "repository",
                       "commit",
                       "prompts",
-                      "approval"
+                      "approval",
+                      "scenarios"
                     ],
                     "additionalProperties": false
                   },
@@ -451,6 +499,12 @@ let an agent's free-form PASS summary replace this status.
                   },
                   "declaration_sha256": {
                     "type": "string"
+                  },
+                  "approved_commit_ancestor": {
+                    "type": "boolean"
+                  },
+                  "cause": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -462,7 +516,9 @@ let an agent's free-form PASS summary replace this status.
                   "current_vectors",
                   "approved_context",
                   "current_context",
-                  "declaration_sha256"
+                  "declaration_sha256",
+                  "approved_commit_ancestor",
+                  "cause"
                 ],
                 "additionalProperties": false
               }
