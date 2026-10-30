@@ -130,3 +130,24 @@ for(const recovery of [{closeAcknowledged:'true'},{resumeRequested:1},{allocatio
  const before=readFileSync(path,'utf8'),count=f.herdr.calls.length;
  assert.equal((await open(f,{newSession:true})).exitCode,1);assert.equal(readFileSync(path,'utf8'),before);assert.equal(f.herdr.calls.length,count);
 });
+
+test('lost allocation recovers its unique attempt after public progress creates a peer tab',async t=>{
+ const f=await fixture(t);assert.equal((await f.run()).exitCode,0);
+ const run=f.record(),original=run.chats.at(-1),healthy=f.ports.herdr;
+ assert.equal((await runner.stepDone({step:'scope',summary:'Plan prepared',cwd:run.root},f.agentPorts())).exitCode,0);
+ f.ports.herdr=async args=>{const reply=await healthy(args);if(args[0]==='tab'&&args[1]==='create')throw Object.assign(Error('lost create reply'),{code:'lost'});return reply;};
+ assert.equal((await open(f,{newSession:true})).exitCode,1);
+ const pending=attempt(f);assert.equal(pending.phase,'createRequested');
+ f.ports.herdr=healthy;f.tick();
+ const advanced=await runner.approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(advanced.exitCode,0,advanced.message);
+ const before=f.record(),current=before.chats.find(chat=>chat.area==='build');assert.ok(current);
+ const creates=f.herdr.calls.filter(args=>args[0]==='tab'&&args[1]==='create').length;
+ const recovered=await open(f,{newSession:true});assert.equal(recovered.exitCode,0,recovered.message);
+ const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chatReplacement.phase,'launched');
+ assert.equal(after.area,before.area);assert.deepEqual(after.gate,before.gate);assert.deepEqual(after.done,before.done);assert.deepEqual(after.approvals,before.approvals);
+ assert.deepEqual(after.chats.find(chat=>chat.area==='build'),current);
+ assert.equal(after.abandonedChats.length,1);assert.equal(after.abandonedChats[0].paneId,original.paneId);
+ assert.equal(after.chats.filter(chat=>chat.area==='scope').length,1);
+ assert.equal(f.herdr.calls.filter(args=>args[0]==='tab'&&args[1]==='create').length,creates);
+ assert.equal(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run'&&args[2]===after.chatReplacement.replacement.paneId).length,1);
+});
