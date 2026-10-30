@@ -80,7 +80,9 @@ export function gitFiles(root) {
 }
 
 const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
-const readText = (root, path) => readFileSync(join(root, path), 'utf8');
+// Auxiliary Story/title reads obey the same JSON inspection boundary as discovery.
+const readText = (root, path) => path.endsWith('.json')
+  ? discoveryBytes(root, path).toString('utf8') : readFileSync(join(root, path), 'utf8');
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
@@ -155,11 +157,17 @@ function prefixIdentity(text) {
   return identity;
 }
 
+function discoveryStat(root, path) {
+  try { return statOf(join(root, path)); }
+  catch (error) { throw new PreflightError(4, `${path}: unreadable discovery file (${error.code || error.message}).`); }
+}
+
 // Snapshot a bounded regular-file read. Validate parents and the open descriptor
 // both before and after reading, so replacement or growth cannot expand the read.
-function discoveryBytes(root, path, stat) {
+function discoveryBytes(root, path, stat = discoveryStat(root, path)) {
   let fd;
   try {
+    if (!stat) throw unstableSource;
     if (!stat.isFile() || !sameStat(stat, inspectParentsAndStat(root, path)))
       throw new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
     fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -185,9 +193,7 @@ function discoveryBytes(root, path, stat) {
 export function findTests({ root, files = gitFiles(root) }) {
   const visible = new Set(), tests = [], stories = [], jsonTitles = new Map();
   for (const path of files) {
-    let stat;
-    try { stat = statOf(join(root, path)); }
-    catch (error) { throw new PreflightError(4, `${path}: unreadable discovery file (${error.code || error.message}).`); }
+    const stat = discoveryStat(root, path);
     if (!stat) continue;
     if (path.endsWith('.json')) {
       // Discovery does not grant payload eligibility to nonregular entries.
@@ -537,22 +543,20 @@ function validNumericReview(row) {
     && !!row.reason.trim() && row.reason.length <= 1000 && !/[\r\n]/.test(row.reason);
 }
 function numericReviews(root, found, warnings) {
-  const path = join(root, REVIEW_FILE), stat = statOf(path);
-  if (!stat) return [];
   const ignore = () => { warnings.push(`Warning: ${REVIEW_FILE} is invalid, unreadable or not a Git-visible regular file; its numeric reviews are ignored.`); return []; };
-  if (!found.visible.has(REVIEW_FILE) || !stat.isFile() || stat.isSymbolicLink() || stat.size > 16n * 1024n) return ignore();
-  let fd;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const actual = fstatSync(fd);
-    if (!actual.isFile() || actual.size > 16 * 1024) return ignore();
-    const source = readFileSync(fd,'utf8');
-    if (Buffer.byteLength(source) > 16 * 1024) return ignore();
+    const stat = discoveryStat(root, REVIEW_FILE);
+    if (!stat) return [];
+    if (!found.visible.has(REVIEW_FILE) || !stat.isFile() || stat.size > 16n * 1024n) return ignore();
+    const source = discoveryBytes(root, REVIEW_FILE, stat).toString('utf8');
     const data = JSON.parse(source);
     if (!isObject(data) || Object.keys(data).length !== 2 || data.schema_version !== 'pdd.numeric-reviews.v1'
       || !Array.isArray(data.reviews) || data.reviews.length > 100 || !data.reviews.every(validNumericReview)) return ignore();
     return data.reviews;
-  } catch { return ignore(); } finally { if (fd !== undefined) closeSync(fd); }
+  } catch (error) {
+    if (error instanceof PreflightError && error.exitCode === 5) throw error;
+    return ignore();
+  }
 }
 const quantityWords = text => String(text ?? '').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z]+/).filter(Boolean);
 const aggregateWords = new Set(['total','combined','cumulative','aggregate','sum','cap','limit','budget']);
@@ -714,7 +718,7 @@ export function preflight({ root, found, selected }) {
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
     const refused = checkTest(root, found, test, prompts);
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(discoveryBytes(root, test.path)) : null, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
@@ -1080,12 +1084,11 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
 export function whyNoTests(root, visible) {
   const files = [...visible].sort(), why = [];
   for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
+    const stat = discoveryStat(root, path);
+    if (!stat?.isFile() || stat.size > BigInt(LIMITS.test)) continue;
+    const text = discoveryBytes(root, path, stat).toString('utf8');
     let doc = null;
-    try {
-      const stat = statOf(join(root, path));
-      if (!stat?.isFile() || stat.size > BigInt(LIMITS.test)) continue;
-      doc = JSON.parse(discoveryBytes(root, path, stat).toString('utf8'));
-    } catch { doc = null; }
+    try { doc = JSON.parse(text); } catch { /* Malformed JSON still gets authoring guidance. */ }
     if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
   }
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
