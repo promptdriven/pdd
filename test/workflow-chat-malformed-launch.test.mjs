@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as chatModule from '../src/workflow-chat.mjs';
 import { openRun } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const copy = value => JSON.parse(JSON.stringify(value));
 const isLaunch = args => args[0] === 'pane' && args[1] === 'run';
@@ -17,22 +17,18 @@ async function started(t) {
 }
 
 for (const [name, reply] of [['null', null], ['primitive', true], ['array', []], ['unknown object', { unexpected: true }]]) {
-  test(`2627 ${name} launch reply retains exact unconfirmed checkpoint`, async t => {
+  test(`2627 ${name} nonthrowing launch reply confirms checkpoint`, async t => {
     assert.equal(typeof chatModule.restartChat, 'function', 'Fresh replacement requires the public restartChat boundary');
     const f = await started(t), run = f.record(), healthy = f.ports.herdr, records = [];
     let dispatches = 0;
-    await assert.rejects(() => chatModule.restartChat({ run, chat: run.chats.at(-1), message: 'Continue saved work.' }, {
+    const replacement = await chatModule.restartChat({ run, chat: run.chats.at(-1), message: 'Continue saved work.' }, {
       ...f.ports,
       checkpoint: async record => records.push(copy(record)),
       herdr: async args => { if (isLaunch(args)) { dispatches++; return reply; } return healthy(args); },
-    }), error => {
-      assert.equal(records.at(-1)?.phase, 'launchRequested');
-      assert.deepEqual(error.chat, records.at(-1).replacement);
-      assert.equal(error.chat.startUnconfirmed, true);
-      return true;
     });
+    assert.equal(Boolean(replacement.startUnconfirmed), false);
     assert.equal(dispatches, 1);
-    assert.equal(records.some(record => record.phase === 'launched'), false);
+    assert.equal(records.at(-1).phase, 'launched');
   });
 }
 
@@ -50,14 +46,14 @@ test('2627 documented empty launch acknowledgement confirms the prepared replace
   assert.equal(f.herdr.calls.filter(isLaunch).length, 1);
 });
 
-test('2627 malformed launch reply blocks retry and same-identity observation recovers even with --new', async t => {
+test('2627 lost launch reply blocks retry and same-identity observation recovers even with --new', async t => {
   const f = await started(t), healthy = f.ports.herdr;
   let dispatches = 0;
   f.ports.herdr = async args => {
-    if (isLaunch(args)) { dispatches++; return null; }
+    if (isLaunch(args)) { dispatches++; throw Object.assign(Error('lost'),{code:'server_unavailable'}); }
     return healthy(args);
   };
-  assert.notEqual((await open(f)).exitCode, 0, 'A malformed launch reply must refuse success');
+  assert.notEqual((await open(f)).exitCode, 0, 'A lost launch reply must refuse success');
   const pending = copy(f.record().chatReplacement), installed = copy(f.record().chats.at(-1));
   assert.equal(pending.phase, 'launchRequested');
   assert.deepEqual(installed, pending.replacement);

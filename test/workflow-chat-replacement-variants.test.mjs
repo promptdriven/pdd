@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { openRun, stepDone, approveRun } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const open = (f, input = {}) => openRun({ ref: '17', cwd: f.source, packageRoot, ...input }, f.ports);
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');

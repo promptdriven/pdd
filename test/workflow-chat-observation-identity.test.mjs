@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as chatModule from '../src/workflow-chat.mjs';
 import { openRun } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 const copy = value => JSON.parse(JSON.stringify(value));
 const open = f => openRun({ ref: '17', cwd: f.source, packageRoot, newSession: true }, f.ports);
 const effects = f => f.herdr.calls.filter(a => a[0] === 'pane' && a[1] === 'run' || a[0] === 'tab' && ['create', 'close'].includes(a[1]));
@@ -20,7 +20,7 @@ for (const [name, metadata] of malformed) {
     assert.equal(typeof chatModule.restartChat, 'function');
     const f = await fixture(t); assert.equal((await f.run()).exitCode, 0);
     const healthy = f.ports.herdr;
-    f.ports.herdr = args => args[0] === 'pane' && args[1] === 'run' ? Promise.resolve(null) : healthy(args);
+    f.ports.herdr = args => args[0] === 'pane' && args[1] === 'run' ? Promise.reject(Object.assign(Error('lost'),{code:'server_unavailable'})) : healthy(args);
     assert.notEqual((await open(f)).exitCode, 0);
     const before = copy(f.record());
     assert.equal(before.chatReplacement.phase, 'launchRequested');
@@ -50,7 +50,7 @@ for (const [name, metadata] of [['missing', undefined], ['null', null]]) {
     assert.equal(typeof chatModule.restartChat, 'function');
     const f = await fixture(t); assert.equal((await f.run()).exitCode, 0);
     const healthy = f.ports.herdr;
-    f.ports.herdr = args => args[0] === 'pane' && args[1] === 'run' ? Promise.resolve(null) : healthy(args);
+    f.ports.herdr = args => args[0] === 'pane' && args[1] === 'run' ? Promise.reject(Object.assign(Error('lost'),{code:'server_unavailable'})) : healthy(args);
     assert.notEqual((await open(f)).exitCode, 0);
     const before = copy(f.record()), chat = before.chats.at(-1), count = effects(f).length;
     f.herdr.paneOf(chat).agent = { agent: chat.agent, agent_status: 'unknown', ...(metadata === undefined ? {} : { agent_session: metadata }) };

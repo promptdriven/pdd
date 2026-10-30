@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { openRun } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 const open = (f, input = {}) => openRun({ ref: '17', cwd: f.source, packageRoot, ...input }, f.ports);
 const launches = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
 test('2627 ordinary missing-tab recovery saves terminal custody for a later replacement', async t => {

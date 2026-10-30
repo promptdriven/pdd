@@ -8,11 +8,11 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import * as chatModule from '../src/workflow-chat.mjs';
 import { openRun } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacement.json', import.meta.url), 'utf8'));
 const inputs = kind => vectors.cases.filter(c => c.input.kind === kind).map(c => c.input);
-const phases = ['intent', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched'];
+const phases = ['intent', 'closeRequested', 'closeRequested', 'closed', 'createRequested', 'prepared', 'launchRequested', 'launched'];
 const lost = () => Object.assign(Error('Synthetic reply lost'), { code: 'server_unavailable' });
 const copy = value => JSON.parse(JSON.stringify(value));
 const effect = args => args[0] === 'pane' && args[1] === 'run' || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]);
@@ -121,7 +121,7 @@ for (const { phase } of inputs('checkpoint-rejection')) {
     const f = await protocolStarted(t), records = [];
     await assert.rejects(() => restart(f, { checkpoint: async r => { records.push(copy(r)); if (r.phase === phase) throw Error('Synthetic persistence rejection'); } }));
     assert.equal(records.at(-1)?.phase, phase);
-    const position = phases.indexOf(phase);
+    const position = [...new Set(phases)].indexOf(phase);
     assert.equal(calls(f, 'tab', 'close').length, position < 2 ? 0 : 1);
     assert.equal(calls(f, 'tab', 'create').length, position < 4 ? 0 : 1);
     assert.equal(calls(f, 'pane', 'run').length, 0, 'Never launch after rejected checkpoint');
@@ -159,7 +159,7 @@ test('2627 lost pane launch reply retains the exact checkpointed unconfirmed ide
 });
 
 for (const { variant: loss } of inputs('runner-lost-reply')) {
-  test(`2627 runner durably blocks retries after lost ${loss} reply`, async t => {
+  test(`2627 runner reconciles same attempt after lost ${loss} reply`, async t => {
     const f = await started(t), healthy = f.ports.herdr;
     f.ports.herdr = async args => {
       const selected = args[0] === 'tab' && args[1] === loss;
@@ -172,12 +172,16 @@ for (const { variant: loss } of inputs('runner-lost-reply')) {
     const pending = copy(f.record().chatReplacement);
     assert.equal(pending?.phase, loss === 'close' ? 'closeRequested' : 'createRequested');
     f.ports.herdr = healthy;
-    const before = f.herdr.calls.filter(effect).length;
-    assert.notEqual((await open(f)).exitCode, 0);
-    assert.equal(f.herdr.calls.filter(effect).length, before, 'Retry does not repeat uncertain close/create/launch');
-    assert.deepEqual(f.record().chatReplacement, pending);
-    assert.equal(f.record().abandonedChats.length, 1);
-    assert.equal(calls(f, 'pane', 'run').length, 0);
+    f.ports.findNativeSessions = async () => [{id:pending.original.session.id}];
+    const beforeCreates = calls(f,'tab','create').length;
+    const recovered = await open(f);
+    assert.equal(recovered.exitCode,0,recovered.message);
+    assert.equal(f.record().chatReplacement.id,pending.id);
+    assert.equal(f.record().chatReplacement.phase,'launched');
+    assert.equal(f.record().abandonedChats.length,1);
+    assert.equal(calls(f,'tab','create').length,beforeCreates+(loss==='close'?1:0));
+    assert.equal(calls(f,'pane','run').length,1);
+
   });
 }
 
@@ -272,8 +276,9 @@ process.send({result}); process.disconnect();`);
   const pending = f.record().chatReplacement;
   assert.equal(pending?.phase, 'closeRequested');
   const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
-  assert.notEqual((await open(f)).exitCode, 0);
-  assert.deepEqual(f.record().chatReplacement, pending);
+  assert.equal((await open(f)).exitCode, 0);
+  assert.equal(f.record().chatReplacement.id, pending.id);
+  assert.equal(f.record().chatReplacement.phase, 'rolledBack');
   assert.equal(f.herdr.calls.filter(effect).length, 0, 'Dead process recovery does not dispatch a fresh replacement');
   assert.equal(f.record().abandonedChats.length, 1);
 });

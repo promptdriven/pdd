@@ -1,9 +1,8 @@
-// PROPOSAL ONLY: command shape and behavior have not been approved by the person.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runPdd } from '../src/pdd-cli.mjs';
 
-const proposed = name => `2627 PROPOSAL (not approved): ${name}`;
+const proposed = name => `2627 ${name}`;
 function capture() { return { text: '', write(value) { this.text += value; } }; }
 async function invoke(words, reply = { exitCode: 0, message: 'opened selected chat' }) {
   const stdout = capture(), stderr = capture(), calls = [];

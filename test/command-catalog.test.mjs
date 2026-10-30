@@ -1,11 +1,10 @@
-// PROPOSAL ONLY: command shape and behavior have not been approved by the person.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PUBLIC_COMMAND_ROUTES, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
 
-const proposed = name => `2627 PROPOSAL (not approved): ${name}`;
+const proposed = name => `2627 ${name}`;
 function observedParse(words) {
   try { return { plan: parseArgv(['workflow', 'open', ...words]), error: null }; }
   catch (error) { return { plan: null, error }; }

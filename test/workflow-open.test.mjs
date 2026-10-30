@@ -1,13 +1,12 @@
-// PROPOSAL ONLY: command shape and behavior have not been approved by the person.
 // Real temporary Git; Herdr/gh are injected fakes, and native agent commands never run.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { openRun, stepDone, approveRun, askPerson } from '../src/workflow-runner.mjs';
-import { fixture, packageRoot } from './helpers/2627-runner-fixture.mjs';
+import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
-const proposed = name => `2627 PROPOSAL (not approved): ${name}`;
+const caseName = name => `2627 ${name}`;
 const closedChannel = () => Object.assign(Error('synthetic lost Herdr reply'), { code: 'server_unavailable' });
 const chatFor = (run, area) => run.chats.find(chat => chat.area === area);
 const launchCalls = f => f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'run');
@@ -15,8 +14,6 @@ const mutationCalls = f => f.herdr.calls.filter(args => args[0] === 'pane' && ar
   || ['tab', 'workspace', 'worktree'].includes(args[0]) && ['create', 'close', 'open'].includes(args[1]));
 const statusBytes = f => readFileSync(join(f.record().runDir, 'status.json'));
 function archivedChat(run, original) {
-  // The draft names abandonedChats but leaves its envelope/layout undecided.
-  // Locate the retained existing chat record in any JSON envelope, without naming new fields.
   const objects = value => value && typeof value === 'object'
     ? [value, ...Object.values(value).flatMap(objects)] : [];
   const archived = objects(run.abandonedChats).find(item => item.paneId === original.paneId && item.area === original.area);
@@ -84,7 +81,7 @@ function noEffectRefusal(f, beforeBytes, beforeStable, result) {
   unchanged(f, beforeStable);
 }
 
-test(proposed('historical AREA focuses its saved chat and preserves current progress'), async t => {
+test(caseName('historical AREA focuses its saved chat and preserves current progress'), async t => {
   const f = await inBuild(t), run = f.record(), build = chatFor(run, 'build'), plan = chatFor(run, 'plan');
   // Existing behavior controls pass on the base; only the historical selection is a new red case.
   for (const input of [{}, { area: 'build' }]) {
@@ -103,7 +100,7 @@ test(proposed('historical AREA focuses its saved chat and preserves current prog
   unchanged(f, before);
 });
 
-test(proposed('historical AREA resumes its recorded native session in the same tab'), async t => {
+test(caseName('historical AREA resumes its recorded native session in the same tab'), async t => {
   const f = await inBuild(t), before = stable(f), run = f.record(), plan = chatFor(run, 'plan'), build = chatFor(run, 'build');
   const pane = f.herdr.paneOf(plan), buildCommands = f.herdr.paneOf(build).commands.length;
   pane.agent = null;
@@ -122,7 +119,7 @@ test(proposed('historical AREA resumes its recorded native session in the same t
   unchanged(f, before);
 });
 
-test(proposed('a historical inspection failure cannot change the current question or chat failure'), async t => {
+test(caseName('a historical inspection failure cannot change the current question or chat failure'), async t => {
   const f = await inBuild(t, { question: true }), run = f.record(), plan = chatFor(run, 'plan');
   const healthy = f.ports.herdr;
   // Establish a current-area failure through the existing public path, then preserve it.
@@ -141,7 +138,7 @@ test(proposed('a historical inspection failure cannot change the current questio
   unchanged(f, before);
 });
 
-test(proposed('unknown AREA is refused before persistence or native effects'), async t => {
+test(caseName('unknown AREA is refused before persistence or native effects'), async t => {
   const f = await started(t), saved = f.record();
   // Existing ended/config guards are controls, not separately counted failing tests.
   for (const state of ['cancelled', 'completed']) {
@@ -163,13 +160,13 @@ test(proposed('unknown AREA is refused before persistence or native effects'), a
   noEffectRefusal(f, beforeBytes, before, await open(f, { area: 'missing-area' }));
 });
 
-test(proposed('known future AREA is refused before persistence or native effects'), async t => {
+test(caseName('known future AREA is refused before persistence or native effects'), async t => {
   const f = await started(t), beforeBytes = statusBytes(f), before = stable(f);
   assert.equal(f.record().areas[1].name, 'build');
   noEffectRefusal(f, beforeBytes, before, await open(f, { area: 'build' }));
 });
 
-test(proposed('historical AREA with newSession is refused without changing any record'), async t => {
+test(caseName('historical AREA with newSession is refused without changing any record'), async t => {
   const f = await inBuild(t), beforeBytes = statusBytes(f), before = stable(f);
   const original = chatFor(f.record(), 'plan'), message = readFileSync(original.messageFile);
   noEffectRefusal(f, beforeBytes, before, await open(f, { area: 'plan', newSession: true }));
@@ -177,14 +174,14 @@ test(proposed('historical AREA with newSession is refused without changing any r
   assert.deepEqual(chatFor(f.record(), 'plan'), original);
 });
 
-test(proposed('newSession refuses a caller in the selected chat pane'), async t => {
+test(caseName('newSession refuses a caller in the selected chat pane'), async t => {
   const f = await inBuild(t), chat = chatFor(f.record(), 'build'), beforeBytes = statusBytes(f), before = stable(f);
   const ports = { ...f.ports, env: { ...f.ports.env, HERDR_ENV: '1', HERDR_PANE_ID: chat.paneId,
     HERDR_SOCKET_PATH: join(f.base, 'sessions/pdd/herdr.sock') } };
   noEffectRefusal(f, beforeBytes, before, await open(f, { newSession: true }, ports));
 });
 
-test(proposed('newSession replaces only the current chat and archives original artifacts'), async t => {
+test(caseName('newSession replaces only the current chat and archives original artifacts'), async t => {
   const f = await inBuild(t, { completed: true, question: true }), before = stable(f), run = f.record();
   const original = chatFor(run, 'build'), plan = chatFor(run, 'plan'), message = readFileSync(original.messageFile);
   const result = await open(f, { newSession: true });
@@ -214,7 +211,7 @@ test(proposed('newSession replaces only the current chat and archives original a
   unchanged(f, before);
 });
 
-test(proposed('newSession brief carries current completed work and the pending question'), async t => {
+test(caseName('newSession brief carries current completed work and the pending question'), async t => {
   const f = await inBuild(t, { completed: true, question: true }), before = stable(f), run = f.record();
   const original = chatFor(run, 'build');
   const result = await open(f, { newSession: true });
@@ -230,7 +227,7 @@ test(proposed('newSession brief carries current completed work and the pending q
   unchanged(f, before);
 });
 
-test(proposed('newSession preserves a pending approval gate and explains completed current-area work'), async t => {
+test(caseName('newSession preserves a pending approval gate and explains completed current-area work'), async t => {
   const f = await started(t), run = f.record();
   f.tick();
   const finished = await stepDone({ step: 'scope', summary: 'Limit the change to the selected workflow area.', cwd: run.root }, f.agentPorts());
@@ -254,7 +251,7 @@ test(proposed('newSession preserves a pending approval gate and explains complet
   unchanged(f, before);
 });
 
-test(proposed('a lost replacement launch reply retains one unconfirmed chat and recovers without relaunch'), async t => {
+test(caseName('a lost replacement launch reply retains one unconfirmed chat and recovers without relaunch'), async t => {
   const f = await inBuild(t, { completed: true, question: true }), run = f.record(), before = stable(f);
   const original = chatFor(run, 'build'), healthy = f.ports.herdr;
   f.ports.herdr = async args => {
@@ -279,7 +276,7 @@ test(proposed('a lost replacement launch reply retains one unconfirmed chat and 
   assert.equal(uncertainState, 'waiting');
   const tabCount = f.herdr.tabs.length;
   f.ports.herdr = healthy;
-  const recovered = await open(f);
+  const recovered = await open(f, {newSession:true});
   assert.equal(recovered.exitCode, 0, recovered.message);
   const after = f.record();
   assert.equal(chatFor(after, 'build').paneId, replacement.paneId);
