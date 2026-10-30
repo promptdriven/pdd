@@ -168,8 +168,19 @@ function discoveryBytes(root, path, stat = discoveryStat(root, path)) {
   let fd;
   try {
     if (!stat) throw unstableSource;
-    if (!stat.isFile() || !sameStat(stat, inspectParentsAndStat(root, path)))
-      throw new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
+    const unsafe = () => new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
+    if (!stat.isFile()) throw unsafe();
+    // A missing entry after an observed regular file is a change. Keep unsafe
+    // ancestors distinct: the shared capture helper returns null for both.
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = statOf(join(root, ...parts.slice(0, i)));
+      if (!parent) throw unstableSource;
+      if (!parent.isDirectory()) throw unsafe();
+    }
+    const before = statOf(join(root, path));
+    if (before && !before.isFile()) throw unsafe();
+    if (!sameStat(stat, before)) throw unstableSource;
     fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     if (!sameStat(stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
     const length = Number(stat.size) > LIMITS.test ? PREFIX_BYTES : Number(stat.size);
