@@ -183,6 +183,12 @@ Validate selected references before sign-in or upload, including explicit lint,
 without adding local engine validation to explicit lint. Missing references send
 nothing. Unused contracts are not added to the selected upload.
 
+Surface capture-provided advisory warnings, including causes under preflight's
+[unavailable-footprint rule](runtime-preflight.prompt.md#source-capture), in Check,
+explicit remote lint, Try and file preview through each mode's existing text and
+JSON warning conventions. Preserve JSON stdout; add no public field, refusal or
+gate, and do not change selected results or exit status for these advisories.
+
 Only explicit remote `pdd check --lint` additionally compares selected prompt
 schemas with the current local contract catalog, reading it with preflight
 safe-file rules. Catalog-only reads do not extend the upload selection. Use the reference module's
@@ -209,6 +215,11 @@ its submitted capture, individually for each Story, even in a multi-Story batch.
 Advance the baseline only for an actual evaluated Check, never a refusal before
 execution, pending/not-run/unknown receipt, standalone lint, Try or file preview.
 Use the latest actual Check for that Story, retaining its real pass/fail result.
+Persist unavailable submitted footprint or reference provenance honestly with its
+cause; never mark a partial snapshot complete. A latest evaluated failed Check or
+Check with unavailable snapshots must not be hidden by returning an older passed
+or complete baseline. Keep earlier complete evidence on disk; the latest Check's
+unavailable evidence remains unavailable.
 Reading a receipt later can establish that original Check, never substitute the
 current files for its submitted snapshots. Missing legacy snapshots remain
 unavailable until a new actual Check. Do not use unrelated rows' dependencies or
@@ -291,6 +302,10 @@ pdd reports each slow upload, lint and Try setup step. Use the [progress helpers
 - HTTP 401: `The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The runtime answered HTTP 500: <message>.`
 
 ## Dependencies
+
+- [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
+  verification context for source capture, advisory warnings and Story footprint
+  availability.
 
 - [References](contract-refs.prompt.md): required generation and verification
   context for canonical provenance and explicit-lint copy comparison.
