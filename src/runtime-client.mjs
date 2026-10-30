@@ -3,7 +3,7 @@ import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -429,6 +429,9 @@ function batchRecord(context) {
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
+      checks: row.checks ?? null, criteria: row.criteria ?? null, calls: row.calls ?? 'unknown',
+      failed_checks: row.failed_checks ?? [], all_checks: row.all_checks ?? [], who: row.who ?? null,
+      requested_model: row.requested_model ?? null, server_seconds: row.server_seconds ?? null, time_limit: row.time_limit ?? null, provider: row.provider ?? null,
       engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
@@ -439,7 +442,7 @@ async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
@@ -841,25 +844,29 @@ async function runRead(context, batchWord, quiet = false) {
     if (row.request_ids.length) row.state = 'unknown';
     else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
-  const reads = rows.filter(row => row.request_ids?.length && row.phase === 'server' && ['queued', 'running', 'unknown'].includes(row.state)).length;
+  const reads = rows.filter(row => {
+    const id = row.request_ids?.at(-1);
+    if (!id || store.read(join(context.folder, `${id}.admission.json`))?.dispatch === 'not_started') return false;
+    const answer = store.read(join(context.folder, `${id}.json`));
+    return !answer || !['passed', 'failed', 'refused'].includes(answer.state) || !sameJob(answer, id, 'check');
+  }).length;
   if (reads && !quiet) line(ports.stderr, `Reading ${reads} result${reads === 1 ? '' : 's'} from the PDD runtime…`);
   await readUnsentLint(context, rows);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
-    if (!id || row.phase !== 'server') return;
+    if (!id) return;
+    row.phase = 'server';
     const admission = store.read(join(context.folder, `${id}.admission.json`));
     if (admission?.dispatch === 'not_started') {
       const wait = capacityDelay(admission.error);
       if (wait !== null) { markBusy(context, row, wait); return; }
     }
-    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
     const answer = store.read(join(context.folder, `${id}.json`));
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
-    if (['queued', 'running', 'unknown'].includes(row.state)) {
-      row.lost = true;
-      await readRow(context, row);
-      if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
-    } else if (answer) applyAnswer(row, answer, context);
+    Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
+    if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
+    await readRow(context, row);
+    if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
@@ -879,7 +886,7 @@ async function runRetry(context, name, options) {
   Object.assign(context, { capture, reading: false, timeoutMin: timeout });
   for (const row of selected) row.state = row.retry_at > ports.now() ? 'waiting' : 'ready';
   if (selected.length) line(ports.stderr, `Retrying ${selected.length} unstarted check${selected.length === 1 ? '' : 's'}…`);
-  if (selected.length) await runScheduledChecks(context, rows, selected);
+  await runScheduledChecks(context, rows, selected);
   saveBatch(context);
   return printResult(context, rows);
 }
@@ -894,6 +901,26 @@ async function runRequest(context, id) {
   if (read.kind === 'state') applyAnswer(row, read.answer, context);
   else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
   return printResult(context, [row], { recovery: `pdd check --request '${id}'` });
+}
+
+// Refresh only caches owned by this exact repository, runtime and signed-in account.
+function refreshCheckBatches(context, identity, origin, id, answer) {
+  const { store, root } = context, batches = join(store.dir, 'batches');
+  let names;
+  try { names = readdirSync(batches); } catch { return; }
+  for (const name of names.filter(name => BATCH.test(name))) {
+    const folder = join(batches, name), path = join(folder, 'batch.json'), saved = store.read(path);
+    if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
+      || String(saved.user_id) !== String(identity.userId)) continue;
+    const matching = saved.rows?.filter(row => row.request_ids?.includes(id)) ?? [];
+    if (!matching.length) continue;
+    store.write(join(folder, `${id}.json`), answer);
+    for (const row of matching) if (row.request_ids.at(-1) === id) {
+      row.phase = 'server';
+      applyAnswer(row, answer, { ...context, origin, reading: true, visible: findTests({ root }).visible });
+    }
+    store.write(path, saved);
+  }
 }
 
 // A read is observation only; it does not replay the call or settle backend accounting.
@@ -914,6 +941,7 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     applyAnswer(row, answer, context);
+    refreshCheckBatches(context, identity, origin, id, answer);
     return printResult(context, [row], { recovery: `pdd check --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
