@@ -1,7 +1,7 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 74beeaa55a7b775e3015a5080161262eff6b5f6190651680c4ffe2b89309fe31).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ef4ad2782f976b43bb64794b50fc0d5bd8f67cc20b6a8e1be27f4e96a2b70770).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -1092,25 +1092,107 @@ export async function changeRun({ ref, text, cwd }, ports) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
-  const run = found.run, area = run.areas[run.area], chat = currentChat(run);
+  let run = found.run;
+  const area = run.areas[run.area], chat = currentChat(run);
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
-  // After pdd workflow ask the text is the person's answer; otherwise it is a change request.
-  const request = oneLine(text), answer = Boolean(openQuestion(run));
-  if (request && !answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. To approve, run: pdd workflow approve ${run.number}\nNothing was sent to the chat.` };
+  const request = String(text ?? ''), normalized = oneLine(request), answer = Boolean(openQuestion(run));
+  if (normalized && !answer && run.gate && looksLikeApproval(normalized)) return { exitCode: 2, message: `This looks like an approval. To approve, run: pdd workflow approve ${run.number}\nNothing was sent to the chat.` };
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
-  if (!request) return fail('Write the change request after the issue number.');
-  const sent = await sendToChat(chat, answer ? `${ANSWER_PREFIX}: ${request} Go on with the step.`
-    : `${CHANGE_PREFIX}: ${request} Revise in this chat, run done again for the step you changed, then show the result and ask again.`, p);
-  if (!sent.ok) return fail(sent.code === 'agent_not_found' ? `The ${area.name} chat is not running. Open it with "pdd workflow open ${run.number}", then type the text there.`
-    : sent.code === 'agent_blocked' ? `The ${area.name} chat shows a question dialog, and pdd cannot type into it. Answer it in the chat: pdd workflow open ${run.number}`
-    : `pdd could not send the text to the ${area.name} chat (${sent.code}). Open it: pdd workflow open ${run.number}`);
-  const now = p.now();
-  run.changes.push({ stage: area.name, round: run.changes.filter(change => change.stage === area.name).length + 1, text: request, at: now, ...(answer ? { answer: true } : {}) });
-  if (answer) { run.question = null; if (!run.gate) run.state = 'running'; }
-  else if (run.gate) { run.gate.at = now; run.question = null; }
-  writeRun(run, p);
-  return done(answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
-    : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
+  if (!normalized) return fail('Write the change request after the issue number.');
+  const kind = answer ? 'answer' : 'change', sameTarget = entry => entry.area === area.name && entry.paneId === chat.paneId;
+  const latest = () => readRun(run.runDir);
+  const targetCurrent = saved => saved && !ended(saved) && saved.areas[saved.area]?.name === area.name && currentChat(saved)?.paneId === chat.paneId;
+  const retry = `Retry: pdd workflow changes ${run.number} ${shell(request)}`;
+  const kept = `Your exact request is kept. ${retry}`;
+  const failure = sent => {
+    if (sent.uncertain) return fail(`Submission to the original ${area.name} chat is uncertain (${sent.code}). Inspect the original chat: pdd workflow open ${run.number}. The request is kept; pdd will not automatically resend it or later requests for this chat.`);
+    if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept} Inspect the original chat before retrying.`);
+    if (sent.code === 'chat_still_starting') return fail(`The ${area.name} chat is still starting. ${kept} Wait briefly, then retry; open it if needed: pdd workflow open ${run.number}`);
+    if (sent.code === 'agent_blocked') return fail(`The ${area.name} chat shows a question dialog. Answer it in the chat: pdd workflow open ${run.number}. ${kept}`);
+    return fail(`pdd could not send the text to the ${area.name} chat (${sent.code}). Open it: pdd workflow open ${run.number}. ${kept}`);
+  };
+  const journalLock = join(run.runDir, '.delivery-journal.lock');
+  const withJournal = action => {
+    const fd = openSync(journalLock, 'wx', 0o600);
+    try { return action(); }
+    finally { closeSync(fd); unlinkSync(journalLock); }
+  };
+  try {
+    withJournal(() => {
+      run = latest();
+      if (!run) throw Error('Saved run unavailable');
+      run.deliveryRequests ??= [];
+      if (!run.deliveryRequests.some(entry => sameTarget(entry) && ['pending', 'uncertain'].includes(entry.state) && entry.kind === kind && entry.text === request)) {
+        run.deliveryRequests.push({ id: randomUUID(), text: request, kind, area: area.name, paneId: chat.paneId, state: 'pending', at: p.now(),
+          question: run.question ?? null, gate: run.gate ?? null });
+      }
+      writeRun(run, p);
+    });
+  } catch { return fail(`Could not save your exact request; it was not sent. Repair the run folder and retry: ${retry}`); }
+  // Serialize dispatch across CLI processes, while overlapping callers can still retain their text.
+  const lock = join(run.runDir, `.delivery-${createHash('sha256').update(`${area.name}\0${chat.paneId}`).digest('hex')}.lock`);
+  const claim = () => {
+    const fd = openSync(lock, 'wx', 0o600);
+    try { writeFileSync(fd, String(process.pid)); } finally { closeSync(fd); }
+  };
+  try { claim(); }
+  catch {
+    return fail(`Delivery to the original ${area.name} chat is in progress or its claim needs inspection. Open it: pdd workflow open ${run.number}. ${kept}`);
+  }
+  try {
+    const queue = run.deliveryRequests.filter(entry => sameTarget(entry) && entry.state !== 'delivered');
+    for (const accepted of queue) {
+      run = latest();
+      if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
+      const entry = run.deliveryRequests?.find(item => item.id === accepted.id);
+      if (entry?.state === 'delivered') continue;
+      if (!entry || entry.state === 'uncertain' || entry.inFlight) {
+        return failure({ code: entry?.code ?? 'acknowledgement_unknown', uncertain: true });
+      }
+      const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
+        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.`;
+      let custodyFailed = false;
+      const sent = await sendToChat(chat, message, { ...p, beforeSubmit: () => {
+        try { return withJournal(() => {
+          const current = latest();
+          if (!targetCurrent(current)) return false;
+          const intent = current.deliveryRequests?.find(item => item.id === entry.id);
+          if (!intent) return false;
+          // A lost final save must leave durable uncertainty, never an automatically replayable request.
+          intent.inFlight = true;
+          writeRun(current, p); return true;
+        }); } catch { custodyFailed = true; return false; }
+      } });
+      if (custodyFailed) return fail(`Could not save submission intent; your request was not sent. ${kept}`);
+      let result;
+      try { result = withJournal(() => {
+        run = latest();
+        if (!run) return fail('Could not read the saved request after submission. Inspect the original chat before retrying; delivery may be uncertain.');
+        const saved = run.deliveryRequests?.find(item => item.id === entry.id);
+        if (!saved) return fail('Could not find the saved request after submission. Inspect the original chat before retrying; delivery may be uncertain.');
+        if (!sent.ok) {
+          delete saved.inFlight;
+          saved.state = sent.uncertain ? 'uncertain' : 'pending'; saved.code = sent.code;
+          try { writeRun(run, p); }
+          catch { return fail('Could not save the delivery result. Inspect the original chat before retrying; delivery may be uncertain.'); }
+          return failure(sent);
+        }
+        const now = p.now(); delete saved.inFlight; saved.state = 'delivered'; saved.deliveredAt = now; delete saved.code;
+        run.changes.push({ stage: entry.area, round: run.changes.filter(change => change.stage === entry.area).length + 1, text: entry.text, at: now, ...(entry.kind === 'answer' ? { answer: true } : {}) });
+        const sameQuestion = JSON.stringify(run.question ?? null) === JSON.stringify(entry.question);
+        const sameGate = JSON.stringify(run.gate ?? null) === JSON.stringify(entry.gate);
+        if (targetCurrent(run)) {
+          if (sameQuestion) run.question = null;
+          if (entry.kind === 'answer') { if (!run.gate && !run.question) run.state = 'running'; }
+          else if (sameGate && run.gate) run.gate.at = now;
+        }
+        writeRun(run, p);
+      }); } catch { return fail('Could not save the submission acknowledgement. Inspect the original chat before retrying; delivery may be uncertain.'); }
+      if (result) return result;
+    }
+    return done(answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
+      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
+  } finally { try { unlinkSync(lock); } catch { /* Retained claims require inspection, never duplicate dispatch. */ } }
 }
 
 export async function cancelRun({ ref, cwd }, ports) {
