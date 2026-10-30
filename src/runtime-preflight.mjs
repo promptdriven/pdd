@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 607812bf0787395ceaa2fb3f253a0d1f62e7412ddae3e04e4bd2f6a90eb85bda).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -793,7 +793,7 @@ function markdownLinks(text, definitions, imagesOnly = false) {
   return paths;
 }
 
-// Only section detection uses this mask; capture and dependency/image parsing keep original bytes.
+// Discovery sees prose only; preserve offsets and newlines without changing captured bytes.
 function markdownSectionText(text) {
   const tokens = /^ {0,3}(`{3,}|~{3,})[^\r\n]*|`+|<!--/gm, parts = [];
   let copied = 0;
@@ -841,27 +841,33 @@ function markdownSectionTitle(text) {
 }
 
 function markdownContext(text) {
-  const prose = text.replace(INTERFACE, ''), definitions = new Map();
-  for (const match of prose.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
+  const prose = text.replace(INTERFACE, ''), markdown = markdownSectionText(prose), definitions = new Map();
+  for (const match of markdown.matchAll(/^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm)) {
     const id = match[1].trim().replace(/\s+/g, ' ').toLowerCase();
     if (!definitions.has(id)) definitions.set(id, match[2] ?? match[3]);
   }
-  const heading = /^##[ \t]+Dependencies[ \t]*\r?$/im.exec(prose);
+  const heading = /^##[ \t]+Dependencies[ \t]*\r?$/im.exec(markdown);
   const rest = heading ? prose.slice(heading.index + heading[0].length) : '';
-  const end = /^#{1,2}[ \t]+/m.exec(rest);
+  const maskedRest = heading ? markdown.slice(heading.index + heading[0].length) : '';
+  const end = /^#{1,2}[ \t]+/m.exec(maskedRest);
   let dependencies = end ? rest.slice(0, end.index) : rest;
+  let maskedDependencies = end ? maskedRest.slice(0, end.index) : maskedRest;
   // Legacy prompts use collapsible rule/reference sections instead of Markdown headings.
   // Keep collapsible dependency context; only an explicitly named new section ends it.
-  for (const match of markdownSectionText(dependencies).matchAll(/^ {0,3}<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/gim)) {
+  for (const match of maskedDependencies.matchAll(/^ {0,3}<details\b[^>]*>\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/gim)) {
     const title = markdownSectionTitle(match[1]);
     if (title !== null && /^(?:(?:required )?(?:module )?rules|(?:required )?interface reference|decision path)(?:\s*:|$)/i.test(title)) {
       dependencies = dependencies.slice(0, match.index);
+      maskedDependencies = maskedDependencies.slice(0, match.index);
       break;
     }
   }
-  const paths = [...markdownLinks(dependencies, definitions), ...markdownLinks(prose, definitions, true)];
+  const paths = [...markdownLinks(maskedDependencies, definitions), ...markdownLinks(markdown, definitions, true)];
   // A bare filename is shorthand for a dependency item, not every code span in its description.
   for (const match of dependencies.matchAll(/^ {0,3}(?:[-+*]|[0-9]+[.)])[ \t]+`([^`\n]+)`(?=[ \t:]|$)/gm)) {
+    // The list marker must be prose, even though this shorthand's path is a code span.
+    const prefix = match[0].slice(0, match[0].indexOf('`'));
+    if (!maskedDependencies.startsWith(prefix, match.index)) continue;
     const path = match[1];
     const externalOrCode = /^[~/%$]/.test(path) || /[\s\\:$%~<>*?|[\]{}()]/.test(path);
     const fileName = /\.[A-Za-z][A-Za-z0-9_-]*$/.test(posix.basename(path));
