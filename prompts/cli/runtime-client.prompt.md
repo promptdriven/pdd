@@ -23,7 +23,7 @@ The default `gh` port likewise ignores stdin and captures stdout and stderr; it 
 
 ## `pdd check`
 
-Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. Before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test, 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
+Modes: `--fill-hash` takes no other option or STORY and makes no network call. `--files [STORY...] [--app-map PATH]` prints the exact selected upload manifest, each file size and total bytes, with no network or sign-in. Normalize STORY paths as for a check. Except for [source-only lint](#lint-before-tests-exist), use the same selection as Check, lint and Try: the selected tests and their dependency closure, optional includes and the chosen app map, as owned by [source capture](runtime-preflight.prompt.md#source-capture). Check, lint and the default file preview do not use an app map. `--app-map` is accepted on Check only with `--files`, to preview the map used by a Try (including a default Try map named explicitly). Keep original test paths for Try seeds and saved cases. `--lint [STORY...] [--json] [--timeout MIN]` runs local SVG layout advice, then the server's lint, `POST /v1/lint` (0 AI calls), on the captured files, sets `complete: true` in its lint request, and sends no checks. Only explicit `--lint` requests complete diagnostics; the preliminary lint before Check or Try retains its existing request without `complete`. For selected-test lint, before batch creation, holding any row for lint, capture or sign-in, apply only the selected entry/called prompts’ `/limits` admission problems from [runtime preflight](runtime-preflight.prompt.md), keeping its reason code, prompt path, field and fix hint. Inspect the reached interfaces independently of P1–P10 refusal precedence, so an unrelated bad Story/schema/hash does not hide a rejected limit. If any limits are refused, return exit 4 with no authentication lookup or upload; report affected rows as refused and other selected rows as not run, with no batch. Deduplicate problems by code, prompt path and pointer in text and JSON, while retaining every selected row and its own refusal state even when rows reach the same prompt. Text gives the reason/fix, one line per selected test in the server lint format (`refused: <codes>` or `not run`), and says no files were sent; JSON retains the lint response keys with lint_state refused, problems, rows and zero calls. Apart from this limits gate and the SVG advisory, locally it runs only discovery and the privacy and capture checks (secret names, links, size and file limits); all other local-copy engine problems remain server-lint owned. It prints every problem the server reports, all at once (each `refused_prompts` entry: code, path, section, message; and each reached prompt that is not approved or a current draft, with the plain hints), one line per selected test (`passes lint` or `refused: <codes>`), and `Lint: N of M tests pass. 0 AI calls. No checks were sent.`. Exit 0 only when lint finished and passed for every selected test (or the source-only selection below), 4 on lint refusals, 5 for not run, not invited or update required, and 3 while queued/running or unknown. A pending explicit lint retains its batch and prints its GET-only read command; sends no checks or Try. `--json` gives `{batch, repo, exit_code, lint_state, summary_line, problems, rows, warnings}`. Normal `pdd check` keeps its local preflight for now. `--read [BATCH|CALL_ID] [--json] [--timeout MIN]` reads saved batch results (and may dispatch original held checks under saved-lint continuation below) or an owner-scoped call by UUID. Hidden `--request UUID` reads one run with GET only. A wrong mix is exit 2.
 
 ### Hash filling
 
@@ -39,7 +39,67 @@ Ordinary `--lint` runs the same advisory on its selected captured prompts before
 
 For explicit complete lint, print every canonical diagnostic from `result.problems` (or the kept report's problems on older servers), preserving file, section, severity, JSON pointer and plain reason/fix. Merge legacy `program.refused_prompts` without duplicating the same code/file/section. A selected test's confirmed `result.tests` refusal also refuses that row, including Story/criterion mismatches even when prompt admission passed. Unselected tests or diagnostics remain visible without overriding selected rows. Preserve unknown and transport rules; complete lint is zero AI calls, never a check.
 
-For lint-only JSON, `lint_state` summarizes the selected tests after the same reached-prompt judgment as their rows and exit code: `passed` when every selected row passes (exit 0), otherwise `refused` (exit 4). Never substitute the raw overall server job state for this selected result. Keep every returned diagnostic in `problems`, including an unselected dependency refusal; reporting it does not silently change a passing selected row. Unknown/not-run/transport handling stays as specified below.
+For lint-only JSON with selected tests, `lint_state` summarizes the selected tests after the same reached-prompt judgment as their rows and exit code: `passed` when every selected row passes (exit 0), otherwise `refused` (exit 4). Never substitute the raw overall server job state for this selected result. Keep every returned diagnostic in `problems`, including an unselected dependency refusal; reporting it does not silently change a passing selected row. Unknown/not-run/transport handling stays as specified below.
+
+### Lint before tests exist
+
+Unqualified remote `pdd check --lint` can inspect existing source before the first
+Story test is written. This exception applies only with no Story operands and
+zero discovered program-scenario tests; `--json` and `--timeout` keep their normal
+meaning. Select the existing Git-visible `product/map.md`, `product/plan.md`,
+recursive `contracts/` Markdown and JSON files, every `*.prompt.md` wherever it
+lives, and files named exactly `seed.json` beneath `prompts/`. Do not create a
+Story, test, prompt or seed to make lint run. An empty eligible selection keeps
+the ordinary No tests found diagnostic and exit 2. Explicit Story selection,
+normal Check, Try, file previews and local SVG-only lint retain their contracts.
+
+```mermaid
+flowchart TD
+    T{Discovered tests?} -->|Yes| R[Use selected test lint]
+    T -->|No| W{Story operands?}
+    W -->|Yes| E[Selection error: exit 2]
+    W -->|No| S{Eligible source exists?}
+    S -->|No| N[No tests found: exit 2]
+    S -->|Yes| C[Capture source and run complete lint]
+    C -->|Confirmed pass| P[Source pass: no tests yet]
+    C -->|Lint refusal or error diagnostic| F[Refused: exit 4]
+    C -->|Pending or uncertain| U[Read saved lint: exit 3]
+```
+
+Use preflight's module function `captureSource` with `tests: []`, `appMap: null`
+and the selected paths as `sourceFiles`; the same includes, dependency/reference
+closure, privacy, limits and snapshot rules apply. Shared contract interpretation
+remains with [references](contract-refs.prompt.md); raw contract JSON is catalog
+input, not a new scenario or a new local schema-validation gate. Retain catalog
+and SVG advice at its existing warning severity. Before authentication or upload,
+apply the existing Runtime `/limits` admission to every captured prompt and its
+called prompts, even though there is no test entry. Safe capture may establish
+this source-only closure first; it does not bypass local limits refusal.
+
+Send the existing `POST /v1/lint` request with `complete: true` and the canonical
+captured tar/hash, under the same admission and transport rules. Add no wire flag
+or endpoint. Successful source-only lint requires a matching confirmed terminal
+passed lint and its usable program report, no global refusal/error diagnostic,
+and accepted current-draft/approved admission for the selected prompts. Empty
+prompt/test lists are valid for a plan-only source archive. A confirmed failed or
+refused lint, error diagnostic or selected prompt refusal exits 4 even with no
+rows; warning-only diagnostics do not refuse. A missing/incompatible report,
+wrong identity, lost reply or unknown outcome cannot establish success. Existing
+privacy/size refusals, service/access errors and pending outcomes keep their real
+nonzero exits; zero rows never override them. Select eligible existing Git names
+without dropping a symlink/nonregular candidate before capture can refuse it;
+retain the existing deleted-tracked-file skip.
+
+Keep `rows: []` in JSON, with the actual `lint_state`, `problems`, `warnings` and
+exit code: `passed`/`refused` for confirmed lint judgments, `queued`/`running`
+while pending, `unknown` for uncertainty and `not_run` for work that did not run. The source-lint summary includes "No tests yet", "0 AI calls" and
+"No checks were sent"; a confirmed refusal is labeled refused. Its remaining
+wording is free. These summaries describe source lint, never validated Stories
+or passing tests.
+Save ordinary lint-only intent and source identity. Pending source-only lint
+prints its batch read command; `--read` obtains only that saved lint's result,
+retains source-only state/summary and empty rows, and never dispatches a Check or
+Try. Existing owner/origin, ID, transport and uncertainty rules still apply.
 
 Order:
 1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).

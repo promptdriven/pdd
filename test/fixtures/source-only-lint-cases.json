@@ -1,0 +1,918 @@
+{
+  "schema_version": "pdd.native-source-lint-cases.v1",
+  "story_path": "user_stories/lint-before-tests.md",
+  "synthetic": true,
+  "boundary": "src/runtime-client.mjs#runCheck",
+  "default_input": {
+    "words": [],
+    "options": {
+      "--lint": true,
+      "--json": true
+    }
+  },
+  "fixture_sources": {
+    "coffee-plan": {
+      "copy_public_tree": "examples/coffee-pickup",
+      "include": [
+        "product/map.md",
+        "product/plan.md",
+        "contracts/phone-server.md",
+        "contracts/server-barista.md",
+        "contracts/world.md",
+        "contracts/seed-world.json"
+      ]
+    },
+    "loose-prompt": {
+      "files": {
+        "echo.prompt.md": "# Plan-stage prompt\n\nReturn the supplied value unchanged.\n\n## Dependencies\n\n[Shared note](docs/rules.md)\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"ef86754c46881f70c75909792bfc8ae98156b1681f735f8e7b3941488283735c\",\"entries\":[{\"operation\":\"echo\",\"input_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"result_schema\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false},\"errors\":[]}],\"calls\":[],\"resources\":[],\"limits\":{\"max_steps\":1,\"max_model_calls\":1},\"conventions\":[]}\n```\n</details>\n",
+        "docs/rules.md": "# Rules\n\nA synthetic dependency.\n",
+        "package.json": "{\"name\":\"synthetic\"}",
+        "notes/private-note.md": "Unrelated synthetic note.\n"
+      }
+    },
+    "part-seed": {
+      "files": {
+        "prompts/server/seed.json": "{\"orders\":[]}",
+        "prompts/server/other.json": "{\"unrelated\":true}",
+        "prompts/server/test.seed.json": "{\"unrelated\":true}"
+      }
+    },
+    "include": {
+      "files": {
+        "product/plan.md": "# Synthetic plan\n",
+        "pdd-source.json": "{\"include\":[\"docs/extra.md\"]}",
+        "docs/extra.md": "# Extra\n\n## Dependencies\n\n[Nested](nested.md)\n",
+        "docs/nested.md": "# Nested\n"
+      }
+    },
+    "reference": {
+      "base": "loose-prompt",
+      "replace_input_schema": {
+        "$contract": "contracts/record.md#request"
+      },
+      "files": {
+        "contracts/record.md": "# Shared\n\n### request\n```json\n{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}\n```\n"
+      }
+    },
+    "empty": {
+      "files": {}
+    },
+    "unrelated": {
+      "files": {
+        "README.md": "# Synthetic repository\n",
+        "package.json": "{\"name\":\"synthetic\"}"
+      }
+    },
+    "symlink-ancestor": {
+      "tracked_before_symlink": {
+        "contracts/record.md": "# Synthetic tracked record\n"
+      },
+      "outside_files": {
+        "record.md": "# Synthetic outside record\n"
+      },
+      "replace_after_tracking": {
+        "remove_directory": "contracts",
+        "symlink": {
+          "path": "contracts",
+          "target": "outside-directory"
+        }
+      }
+    },
+    "harbor": {
+      "copy_public_tree": "test/fixtures/harbor"
+    }
+  },
+  "default_reply": {
+    "kind": "canonical-fake-lint",
+    "state": "passed",
+    "program": true,
+    "prompts": "actual captured prompt paths with accepted current-draft/approved admission; empty for plan-only input",
+    "usage_calls": 0
+  },
+  "cases": [
+    {
+      "case": "coffee-plan-before-features",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "fixture": "coffee-plan",
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "archive_paths": [
+          "contracts/phone-server.md",
+          "contracts/seed-world.json",
+          "contracts/server-barista.md",
+          "contracts/world.md",
+          "product/map.md",
+          "product/plan.md"
+        ],
+        "authored_files_unchanged": true,
+        "generated_scenarios": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "prompt-outside-prompts-folder",
+      "criteria": [
+        "AC2"
+      ],
+      "fixture": "loose-prompt",
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "archive_paths": [
+          "docs/rules.md",
+          "echo.prompt.md"
+        ],
+        "excluded_paths": [
+          "package.json",
+          "notes/private-note.md"
+        ],
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "part-seed-alone",
+      "criteria": [
+        "AC2"
+      ],
+      "fixture": "part-seed",
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "archive_paths": [
+          "prompts/server/seed.json"
+        ],
+        "excluded_paths": [
+          "prompts/server/other.json",
+          "prompts/server/test.seed.json"
+        ],
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "include-and-required-context",
+      "criteria": [
+        "AC2"
+      ],
+      "fixture": "include",
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "archive_paths": [
+          "docs/extra.md",
+          "docs/nested.md",
+          "product/plan.md"
+        ],
+        "excluded_paths": [
+          "pdd-source.json"
+        ],
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "prompt-reference-expanded-in-upload",
+      "criteria": [
+        "AC2"
+      ],
+      "fixture": "reference",
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "archive_paths": [
+          "contracts/record.md",
+          "docs/rules.md",
+          "echo.prompt.md"
+        ],
+        "expanded_prompt_contains": "\"type\":\"object\"",
+        "expanded_prompt_excludes": "\"$contract\"",
+        "authored_prompt_unchanged": true,
+        "reference_target": "contracts/record.md#request",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "terminal-refused-no-prompt-rows",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "refused",
+        "program": true,
+        "refusals": [
+          {
+            "code": "contract-invalid",
+            "message": "Synthetic contract refusal."
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "problem_code": "contract-invalid",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "terminal-failed-zero-rows",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "failed",
+        "program": true
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "passed-envelope-global-error",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "passed",
+        "program": true,
+        "problems": [
+          {
+            "code": "schema-invalid",
+            "file": "contracts/phone-server.md",
+            "severity": "error",
+            "reason": "Synthetic schema refusal."
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "problem_code": "schema-invalid",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "passed-envelope-refused-prompt",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "loose-prompt",
+      "reply": {
+        "state": "passed",
+        "program": true,
+        "refused_prompts": [
+          {
+            "code": "interface-stale",
+            "path": "echo.prompt.md",
+            "message": "Synthetic stale prompt."
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "problem_code": "interface-stale",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "http-422-refusal",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "http_status": 422,
+        "error": {
+          "code": "invalid-source",
+          "message": "Synthetic source refusal."
+        }
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "problem_code": "invalid-source",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "canonical-warning-keeps-pass",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "passed",
+        "program": true,
+        "problems": [
+          {
+            "code": "catalog-advice",
+            "file": "contracts/world.md",
+            "severity": "warning",
+            "reason": "Synthetic advice."
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "problem_code": "catalog-advice",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "catalog-warning-is-advisory",
+      "criteria": [
+        "AC2",
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "extra_files": {
+        "contracts/descriptive.md": "# Notes\n\n### Duplicate\n```json\n{}\n```\n\n### Duplicate\n```json\n{}\n```\n"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "complete": true,
+        "calls": 0,
+        "warning_contains": "ambiguous",
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "pending-then-saved-get-only",
+      "criteria": [
+        "AC3",
+        "AC4"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "initial_state": "queued",
+        "read_state": "passed",
+        "program": true
+      },
+      "action": "lint-then-read-saved-batch",
+      "expected": {
+        "first_exit_code": 3,
+        "first_lint_state": "queued",
+        "first_rows": [],
+        "first_read_hint": true,
+        "read_exit_code": 0,
+        "read_lint_state": "passed",
+        "read_rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "same_lint_id": true,
+        "read_posts": 0,
+        "read_gets_minimum": 1,
+        "read_summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "pending-then-saved-refusal",
+      "criteria": [
+        "AC3",
+        "AC4"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "initial_state": "queued",
+        "read_state": "refused",
+        "program": true,
+        "refusals": [
+          {
+            "code": "contract-invalid",
+            "message": "Synthetic later refusal."
+          }
+        ]
+      },
+      "action": "lint-then-read-saved-batch",
+      "expected": {
+        "first_exit_code": 3,
+        "read_exit_code": 4,
+        "read_lint_state": "refused",
+        "read_rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "read_posts": 0,
+        "problem_code": "contract-invalid",
+        "read_summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "refused"
+        ]
+      }
+    },
+    {
+      "case": "unknown-never-success",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "unknown"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "unknown",
+        "rows": [],
+        "check_posts": 0,
+        "try_posts": 0
+      }
+    },
+    {
+      "case": "passed-without-program-is-unknown",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "state": "passed",
+        "program": false
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "unknown",
+        "rows": [],
+        "check_posts": 0,
+        "try_posts": 0
+      }
+    },
+    {
+      "case": "not-invited-zero-rows",
+      "criteria": [
+        "AC3"
+      ],
+      "fixture": "coffee-plan",
+      "reply": {
+        "http_status": 403,
+        "error": {
+          "code": "not-invited",
+          "message": "Synthetic access refusal."
+        },
+        "login": "synthetic-user"
+      },
+      "expected": {
+        "exit_code": 5,
+        "check_posts": 0,
+        "try_posts": 0,
+        "diagnostic_contains": "not on the PDD runtime invite list"
+      }
+    },
+    {
+      "case": "runtime-limits-without-test-entry",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "loose-prompt",
+      "prompt_limits": {
+        "max_steps": 0,
+        "max_model_calls": 1
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "problem_code": "invalid-limits",
+        "pointer": "/limits/max_steps",
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "check_posts": 0,
+        "try_posts": 0
+      }
+    },
+    {
+      "case": "required-secret-refused-before-auth",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "include",
+      "extra_files": {
+        "pdd-source.json": "{\"include\":[\"contracts/credentials.json\"]}",
+        "contracts/credentials.json": "{\"synthetic\":true}"
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "credentials.json"
+      }
+    },
+    {
+      "case": "selected-symlink-refused",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "coffee-plan",
+      "symlink": {
+        "path": "contracts/link.md",
+        "target": "../outside.md"
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "contracts/link.md"
+      }
+    },
+    {
+      "case": "selected-symlink-ancestor-refused",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "symlink-ancestor",
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "contracts"
+      }
+    },
+    {
+      "case": "raw-source-byte-limit-before-read",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "coffee-plan",
+      "sparse_file": {
+        "path": "contracts/huge.json",
+        "size": 10485761
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "read_oversized_file": false,
+        "diagnostic_contains": "huge.json"
+      }
+    },
+    {
+      "case": "missing-required-dependency",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "loose-prompt",
+      "remove_files": [
+        "docs/rules.md"
+      ],
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "docs/rules.md"
+      }
+    },
+    {
+      "case": "capture-race-exhaustion",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "loose-prompt",
+      "boundary": "src/runtime-preflight.mjs#captureSource",
+      "selection": {
+        "tests": [],
+        "sourceFiles": [
+          "echo.prompt.md"
+        ]
+      },
+      "change_after_each_read": "docs/rules.md",
+      "expected": {
+        "exit_code": 5,
+        "attempts": 3,
+        "capture_returned": false
+      }
+    },
+    {
+      "case": "empty-repository-keeps-no-tests",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "empty",
+      "expected": {
+        "exit_code": 2,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "No tests found"
+      }
+    },
+    {
+      "case": "unrelated-files-do-not-enable-lint",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "unrelated",
+      "expected": {
+        "exit_code": 2,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "No tests found"
+      }
+    },
+    {
+      "case": "explicit-unknown-story-keeps-error",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "coffee-plan",
+      "words": [
+        "missing-story"
+      ],
+      "expected": {
+        "exit_code": 2,
+        "auth_lookups": 0,
+        "lint_posts": 0
+      }
+    },
+    {
+      "case": "normal-check-keeps-no-tests",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "coffee-plan",
+      "options": {},
+      "expected": {
+        "exit_code": 2,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "check_posts": 0,
+        "diagnostic_contains": "No tests found"
+      }
+    },
+    {
+      "case": "try-keeps-no-tests",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "coffee-plan",
+      "boundary": "src/runtime-client.mjs#runTry",
+      "options": {},
+      "expected": {
+        "exit_code": 2,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "try_posts": 0,
+        "diagnostic_contains": "No tests found"
+      }
+    },
+    {
+      "case": "local-svg-mode-remains-local",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "loose-prompt",
+      "options": {
+        "--lint": true,
+        "--local": true,
+        "--json": true
+      },
+      "expected": {
+        "exit_code": 0,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "check_posts": 0,
+        "try_posts": 0,
+        "summary_contains": "SVG layout lint:"
+      }
+    },
+    {
+      "case": "existing-tests-keep-selection",
+      "criteria": [
+        "AC6"
+      ],
+      "fixture": "harbor",
+      "extra_files": {
+        "product/plan.md": "# Unrelated synthetic plan\n",
+        "contracts/unrelated.md": "# Unrelated synthetic contract\n"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows_count": 2,
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "excluded_paths": [
+          "product/plan.md",
+          "contracts/unrelated.md"
+        ],
+        "summary_contains": [
+          "2 of 2",
+          "0 AI calls",
+          "No checks were sent"
+        ]
+      }
+    },
+    {
+      "case": "explicit-source-selection-shares-archive",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "fixture": "loose-prompt",
+      "boundary": "src/runtime-preflight.mjs#captureSource",
+      "selection": {
+        "tests": [],
+        "sourceFiles": [
+          "echo.prompt.md",
+          "docs/rules.md",
+          "echo.prompt.md"
+        ],
+        "appMap": null
+      },
+      "expected": {
+        "archive_paths": [
+          "docs/rules.md",
+          "echo.prompt.md"
+        ],
+        "duplicate_paths": 0,
+        "story_footprints": 0,
+        "deterministic_sha": true,
+        "authored_files_unchanged": true
+      }
+    },
+    {
+      "case": "selected-file-count-limit",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "empty",
+      "generated_files": {
+        "prefix": "contracts/record-",
+        "suffix": ".md",
+        "count": 10001,
+        "content": "# Synthetic record\n"
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "10000"
+      }
+    },
+    {
+      "case": "selected-total-byte-limit",
+      "criteria": [
+        "AC5"
+      ],
+      "fixture": "empty",
+      "generated_files": {
+        "prefix": "contracts/record-",
+        "suffix": ".md",
+        "count": 2,
+        "size": 6000000,
+        "content_prefix": "# Synthetic record\n"
+      },
+      "expected": {
+        "exit_code": 4,
+        "auth_lookups": 0,
+        "lint_posts": 0,
+        "diagnostic_contains": "too big"
+      }
+    }
+  ],
+  "evidence_scope": "Native cases use real runCheck/runTry/captureSource and synthetic canonical Runtime receipts. They are not program-scenario tests, Runtime replay or evidence that a real server accepts an archive without tests. No live Runtime call is authorized.",
+  "assertion_bindings": {
+    "json": "exit_code, lint_state, rows, problems and summary_line assert the public JSON output; no extra response fields are required.",
+    "transport": "lint_posts/check_posts/try_posts, complete, same_lint_id/read_posts/read_gets_minimum and auth_lookups assert observed injected/public boundaries.",
+    "source": "archive_paths/excluded_paths/expanded_prompt_* assert the real capture/tar; authored-file assertions compare before/after bytes.",
+    "calls": "Known Runtime receipt usage is zero, matching the summary; this is not a new top-level CLI JSON field.",
+    "diagnostics": "problem_code checks a returned diagnostic code; pointer checks its existing section/pointer location; diagnostic/warning substrings need not fix unowned full wording.",
+    "setup": "Materialize public fixture bytes and synthetic files before Git tracking. Apply replace_after_tracking only after the listed tracked_before_symlink files have been added to Git. Fixture variants changing prompt interfaces retain current draft prose hashes without changing expected outcomes."
+  }
+}
