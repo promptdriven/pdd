@@ -2,7 +2,7 @@
 name: pdd-product
 description: Use when a person wants to build a whole product from one sentence and needs a story map, parts, shared contracts and a plan of feature runs.
 metadata:
-  pdd-skills: 0.1.11
+  pdd-skills: 0.1.12
 ---
 
 # PDD product
