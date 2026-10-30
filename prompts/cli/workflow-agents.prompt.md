@@ -30,7 +30,7 @@ A native missing-executable ENOENT result is missing. Any other launch/transport
 ```json
 {
   "status": "draft",
-  "prose_sha256": "",
+  "prose_sha256": "d5bb173f1234f16ff9559afdc031335e9ad48bfd4e88e4aa8b3157a777279f6e",
   "entries": [{
     "operation": "chooseWorkflowAgent",
     "input_schema": {
