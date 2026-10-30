@@ -28,15 +28,15 @@ Read the [file formats](../skills/pdd-product/references/files.md) for the map,
 plan tables and contract records. `product/map.md` lists parts, Stories, journeys
 and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
-Each world-table row has one writer. A Schema target can describe the whole
+Each world-table row names its runtime writer or initial-only seed provenance. A Schema target can describe the whole
 value, for example `contracts/world.md#orders` for an array. When omitted, a
 unique declared record designated by a schema link, exact inline-code identifier
 or whole plain Key/What it holds cell supplies its schema. Prose words, path
 components and Writer/Readers labels do not select records. Without a unique
 selection, the check reports unchecked declarations. Leading slash Key or Path cells are
-exact JSON Pointers. Key namespace declarations such as `/kv/shop` cover the
-root seed container without assigning a writer to its parents. A declared key
-may be absent initially; uncovered top-level seed keys need declarations.
+exact JSON Pointers. Parent and child ownership are independent. A declared key
+may be absent initially; present seed branches without a row produce one warning
+naming their paths, without inferring writers or schemas.
 The coffee example adds illustrative world schemas alongside its table; these
 are authored shared shapes, not a proof of how a running part writes data.
 
@@ -102,9 +102,11 @@ Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product simulation to test the path across parts. Status tracks journeys
 separately from each part's Stories.
 
-World ownership tables accept Key or Path. Writer cells split on commas,
-standalone `and` or `/`; repeated identical actors coalesce and multiple actors
-fail. JSON contract members validate beside metadata; files with no schemas
+World ownership tables accept Key or Path. The
+[writer rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values)
+separate initialization from runtime writers and resource qualifiers, preserve
+hyphenated names, and recognize comma, `and`, `/`, `&` and `;` actor lists.
+Repeated runtime actors coalesce; multiple runtime actors fail. JSON contract members validate beside metadata; files with no schemas
 are skipped in one named summary. Copy drift compares declared authorities,
 while incidental nested copies cannot hide it. Same-field-set disagreements
 between valid declared records warn without refusing the plan. Use

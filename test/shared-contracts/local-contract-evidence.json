@@ -1007,18 +1007,19 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 4,
+        "exit_code": 0,
         "checked_records": 1,
         "checked_world_values": 1,
-        "diagnostics": [
+        "diagnostics": [],
+        "warnings": [
           {
+            "kind": "world-writer-missing",
             "file": "contracts/seed-world.json",
-            "record": "extra",
-            "field": "/extra",
-            "kind": "problem"
+            "world_keys": [
+              "/extra"
+            ]
           }
         ],
-        "warnings": [],
         "skipped_files": [],
         "source_bytes_unchanged": true,
         "source_modes_unchanged": true,
