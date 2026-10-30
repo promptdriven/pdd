@@ -65,7 +65,7 @@ Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Hel
 
 Remote lint uses the Check caller wait, including --timeout; no separate120second cap. Read help explains that a saved normal Check held for lint may safely continue its original checks; other reads remain GET-only. Runtime-client owns the continuation safeguards and finite recovery wait.
 
-Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting runtime jobs on this machine without contacting the runtime. Root help and shell completion include jobs. The [slots helper](runtime-slots.prompt.md) owns listing; this route does not authenticate or import the runtime client.
+Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting interpreter jobs on this machine without contacting the interpreter. Root help and shell completion include jobs. The [slots helper](runtime-slots.prompt.md) owns listing; this route does not authenticate or import the runtime client.
 
 ## Shared contract routes
 
