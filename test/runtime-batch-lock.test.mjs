@@ -150,3 +150,21 @@ test('2675: native lock permits independent batches and interrupted wait cannot 
   releaseOther(); release();
   const again = await client.acquireRuntimeBatchLock(folder); again();
 });
+
+
+test('2675: ownership refusal uses the retry budget, sends nothing and preserves saved data', async t => {
+  const r = await fixture(t), batch = readFileSync(r.file), summary = readFileSync(join(r.folder, 'summary.json'));
+  const before = r.fake.posts.length; let attempts = 0;
+  const result = await r.run({ '--retry': r.batch, '--timeout': '0.0001' }, [], {
+    acquireBatchLock: async (folder, { timeoutMs }) => { attempts++; assert.equal(folder, r.folder); assert.equal(timeoutMs, 6); throw Object.assign(new Error('busy'), { code: 'BATCH_LOCK_BUSY' }); }
+  });
+  assert.equal(attempts, 1); assert.equal(result.code, 3); assert.match(result.err, /another command|using batch/i); assert.match(result.err, new RegExp(`pdd check --read ${r.batch}`));
+  assert.equal(r.fake.posts.length, before); assert.deepEqual(readFileSync(r.file), batch); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary);
+});
+
+test('2675: UUID receipt read bypasses batch ownership and leaves its projection unchanged', async t => {
+  const r = await fixture(t), id = checks(r.fake)[0].request.requestId, bytes = readFileSync(r.file);
+  let calls = 0;
+  const result = await r.run({ '--read': true }, [id], { acquireBatchLock: async () => { calls++; throw new Error('must not lock UUID read'); } });
+  assert.equal(calls, 0); passed(result); assert.deepEqual(readFileSync(r.file), bytes);
+});
