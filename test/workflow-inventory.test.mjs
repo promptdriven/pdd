@@ -46,16 +46,18 @@ test('native JS, Python and Go candidates count cases and report only introduced
   f.write('tests/a.ts',`test('kept', {skip: true}, t => {\nt.skip('later');\nt.todo('pending');\n});\ntest.skip('old', () => {});\nit.todo('new');\n`);
   f.write('test_keep.py','@pytest.mark.skipif(False)\n@pytest.mark.xfail\nasync def test_kept():\n    assert True\n');f.write('x_test.go','func TestKept(t *testing.T) {\nt.Skip("outside convention")\n}\n');const headSha=f.commit();
   const report=await collectTestInventory({cwd:f.root,baseSha,headSha});assert.equal(report.available,true);
-  for(const marker of ['skip&#58; true','t.skip','t.todo','it.todo','@pytest.mark.skipif','@pytest.mark.xfail'])assert.ok(report.text.includes(marker),marker);
+  for(const marker of ['skip&#58; true','t.skip','t.todo','it.todo','&#64;pytest.mark.skipif','&#64;pytest.mark.xfail'])assert.ok(report.text.includes(marker),marker);
   assert.ok(!report.text.includes("test.skip('old'"));assert.ok(!report.text.includes('t.Skip'));
   assert.ok(report.text.includes('"x_test.go" 1 → 1 tests. Removed: none.'));
 });
 
 test('native failed Git reads, binary/non-UTF8 blobs and exceeded blob limits are unavailable',async t=>{
   const {collectTestInventory}=await inventoryModule(),f=repo(t);f.write('test/a.js',declaration('first'));const baseSha=f.commit();
-  for(const bytes of [Buffer.from([0,1,2]),Buffer.from([0xff,0xfe]),Buffer.alloc(1024*1024+1,65)]){
+  for(const [bytes,reason] of [[Buffer.from([0,1,2]),'binary candidate blob'],[Buffer.from([0xff,0xfe]),'non-UTF-8 candidate blob'],[Buffer.alloc(1024*1024+1,65),'candidate blob exceeds 1 MiB']]){
     f.write('test/a.js',bytes);const headSha=f.commit(),report=await collectTestInventory({cwd:f.root,baseSha,headSha});
-    assert.equal(report.available,false);assert.match(report.text,/Tests vs base: unavailable/);assert.ok(!report.text.includes('none.'));
+    assert.equal(report.available,true);
+    for(const category of ['Tests vs base:', 'Changed assertions in kept tests:', 'New skips:'])assert.ok(report.text.includes(`${category} \"test/a.js\" unavailable (\"${reason}\").`));
+    assert.ok(!report.text.includes('none.'));
   }
   const missing=await collectTestInventory({cwd:f.root,baseSha,headSha:'f'.repeat(40)});assert.equal(missing.available,false);assert.equal(missing.reason,'snapshot unavailable');
   const outside=await collectTestInventory({cwd:join(f.root,'absent'),baseSha,headSha:baseSha});assert.equal(outside.available,false);

@@ -1,14 +1,15 @@
-// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: 5f42aebeedccdd6e344550f7f5190e7e61d4d5e67d583ed2f4f81272172971fd).
+// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: c165ecc598ca0e5609a0005d1b14316fb2234c7c56f2931566c05ce3d8a16c3c).
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const exec = promisify(callbackExec);
 const MAX_FILES = 1000, MAX_BLOB = 1024 * 1024, MAX_BYTES = 16 * MAX_BLOB, BUDGET = 12000;
+const BLOB_REASONS = ['candidate blob exceeds 1 MiB', 'binary candidate blob', 'non-UTF-8 candidate blob'];
 const DISCLAIMER = 'Static inventory only; tests were not run.';
 const sha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const size = value => [...value].length;
 const quoted = value => JSON.stringify(value).replace(/[\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
-  .replace(/[&<>`|:]/g, c => `&#${c.charCodeAt(0)};`);
+  .replace(/[&<>`|:@#]/g, c => `&#${c.charCodeAt(0)};`);
 const unavailable = reason => {
   const text = `Tests vs base: unavailable (${quoted(reason)}).\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\n${DISCLAIMER}\n`;
   return { available: false, reason, text, details: text };
@@ -44,6 +45,13 @@ function literal(source) {
   }
   return null;
 }
+function stringSkip(options) {
+  for (const match of options.matchAll(/\bskip\s*:\s*/g)) {
+    const source = options.slice(match.index + match[0].length), value = literal(source);
+    if (value?.name && /^\s*[,}]/.test(source.slice(value.end))) return true;
+  }
+  return false;
+}
 function cases(source, lang) {
   if (!lang) return [];
   const lines = source.split('\n'), found = [], occurrences = new Map();
@@ -51,7 +59,7 @@ function cases(source, lang) {
     const line = lines[at]; if (comment(line,lang)) continue;
     const indent = /^\s*/.exec(line)[0]; let name, end = at, tail = '', declaration;
     if (lang === 'js') {
-      declaration = /^(\s*)(?:test|it)(?:\.(?:only|skip|todo))?\s*\(\s*/.exec(line);
+      declaration = /^(\s*)(?:(?:test|it)(?:\.(?:only|skip|todo))?|xit|describe(?:\.skip)?)\s*\(\s*/.exec(line);
       if (!declaration) continue;
       const parsed = literal(line.slice(declaration[0].length)); if (!parsed) continue;
       tail = line.slice(declaration[0].length + parsed.end);
@@ -70,9 +78,11 @@ function cases(source, lang) {
         if (lang === 'go' ? /^}/.test(lines[i]) : lines[i].trim() && !comment(lines[i],lang) && /^\s*/.exec(lines[i])[0].length <= indent.length) { end = lang === 'go' ? i : i - 1; break; }
       }
     }
-    const occurrence = (occurrences.get(name) ?? 0) + 1; occurrences.set(name,occurrence);
+    const suite = lang === 'js' && /^\s*describe\b/.test(line);
+    const identity = JSON.stringify([suite,name]);
+    const occurrence = (occurrences.get(identity) ?? 0) + 1; occurrences.set(identity,occurrence);
     const body = lang === 'js' ? tail.match(/(?:=>|function\b[^{}]*\{)(.*)/)?.[1] ?? '' : line;
-    const entry = { name, occurrence, at, end, body, options: tail.split(/=>|function\b/)[0], assertions: [], markers: [] };
+    const entry = { name, occurrence, suite, at, end, body, options: tail.split(/=>|function\b/)[0], assertions: [], markers: [] };
     if (lang === 'py') for (let i = at - 1; i >= 0 && /^\s*@/.test(lines[i]); i--) {
       if (/^\s*@pytest\.mark\.(?:skip|skipif|xfail)\b/.test(lines[i])) entry.markers.unshift(lines[i]);
     }
@@ -80,36 +90,34 @@ function cases(source, lang) {
   }
   for (let at = 0; at < lines.length; at++) {
     const line = lines[at]; if (comment(line,lang)) continue;
-    const owner = found.findLast(entry => entry.at <= at && entry.end >= at); if (!owner) continue;
+    const owner = found.findLast(entry => !entry.suite && entry.at <= at && entry.end >= at);
+    const suite = found.find(entry => entry.suite && entry.at === at);
+    if (suite && /^\s*describe\.skip\s*\(/.test(line)) suite.markers.push(line);
+    if (!owner) continue;
     const content = lang === 'js' && at === owner.at ? owner.body : line;
     if (/\b(?:assert|expect)\b/.test(content)) owner.assertions.push(line);
-    if (lang === 'js' && ((at === owner.at && (/^\s*(?:test|it)\.(?:skip|todo)\s*\(/.test(line) || /\b(?:skip|todo)\s*:\s*true\b/.test(owner.options))) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
+    if (lang === 'js' && ((at === owner.at && (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit)\s*\(/.test(line) || /\b(?:skip|todo)\s*:\s*true\b/.test(owner.options) || stringSkip(owner.options))) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
+    if (lang === 'py' && /\bpytest\.skip\s*\(/.test(content)) owner.markers.push(line);
   }
   return found;
 }
 const key = entry => JSON.stringify([entry.name,entry.occurrence]);
 const label = entry => `${quoted(entry.name)}${entry.occurrence > 1 ? ` [${entry.occurrence}]` : ''}`;
-// Find the earliest old/new pair among maximum-length common subsequences.
-// Rows retain only length and first-match identity, bounding auxiliary memory.
+// One bounded suffix table, then earliest old/new matches for each LCS suffix.
 function common(a,b) {
-  const matches=[];let oldAt=0,newAt=0;
-  while(oldAt<a.length && newAt<b.length) {
-    if(a[oldAt]===b[newAt]) {matches.push([oldAt++,newAt++]);continue;}
-    const width=b.length-newAt,stride=b.length+1;
-    let lengths=new Uint32Array(width+1),first=new Float64Array(width+1).fill(Infinity);
-    for(let i=a.length-1;i>=oldAt;i--) {
-      const next=new Uint32Array(width+1),pairs=new Float64Array(width+1).fill(Infinity);
-      for(let j=width-1;j>=0;j--) {
-        if(a[i]===b[newAt+j]) {next[j]=lengths[j+1]+1;pairs[j]=i*stride+newAt+j;}
-        else if(lengths[j]>next[j+1]) {next[j]=lengths[j];pairs[j]=first[j];}
-        else if(lengths[j]<next[j+1]) {next[j]=next[j+1];pairs[j]=pairs[j+1];}
-        else {next[j]=lengths[j];pairs[j]=Math.min(first[j],pairs[j+1]);}
+  if (!a.length || !b.length) return [];
+  const width=b.length+1, table=new Uint32Array((a.length+1)*width);
+  for(let i=a.length-1;i>=0;i--) for(let j=b.length-1;j>=0;j--) {
+    table[i*width+j]=a[i]===b[j]?1+table[(i+1)*width+j+1]:Math.max(table[(i+1)*width+j],table[i*width+j+1]);
+  }
+  const matches=[];let oldAt=0,newAt=0,left=table[0];
+  while(left) {
+    let matched=false;
+    for(let i=oldAt;i<a.length&&!matched;i++) for(let j=newAt;j<b.length;j++) {
+      if(a[i]===b[j] && table[(i+1)*width+j+1]===left-1) {
+        matches.push([i,j]);oldAt=i+1;newAt=j+1;left--;matched=true;break;
       }
-      lengths=next;first=pairs;
     }
-    if(!lengths[0])break;
-    oldAt=Math.floor(first[0]/stride);newAt=first[0]%stride;
-    matches.push([oldAt++,newAt++]);
   }
   return matches;
 }
@@ -138,25 +146,43 @@ function bounded(summaries,detailLines,details) {
 }
 export function analyzeTestChanges({files}) {
   if(!Array.isArray(files))return unavailable('snapshot unavailable');
-  if(files.length>MAX_FILES)return unavailable('inventory limit exceeded');
   let bytes=0;const counts=[],summaries=[],assertions=[],skips=[];
   const selected=[];
   for(const file of files){
     if(!file || !['oldPath','newPath','before','after'].every(k=>typeof file[k]==='string'))return unavailable('snapshot unavailable');
     const oldLang=language(file.oldPath),newLang=language(file.newPath);if(!oldLang&&!newLang)continue;
-    for(const [lang,source] of [[oldLang,file.before],[newLang,file.after]])if(lang){const n=Buffer.byteLength(source);bytes+=n;if(n>MAX_BLOB||bytes>MAX_BYTES)return unavailable('inventory limit exceeded');if(source.includes('\0')||/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u.test(source))return unavailable('snapshot unavailable');}
-    selected.push({...file,oldLang,newLang});
+    if(selected.length===MAX_FILES)return unavailable('inventory limit exceeded');
+    let reason=file.unavailableReason, pairBytes=0;
+    if(reason!==undefined&&!BLOB_REASONS.includes(reason))return unavailable('snapshot unavailable');
+    if(!reason)for(const [lang,source] of [[oldLang,file.before],[newLang,file.after]])if(lang){
+      const n=Buffer.byteLength(source);pairBytes+=n;
+      if(n>MAX_BLOB)reason=BLOB_REASONS[0];
+      else if(source.includes('\0'))reason=BLOB_REASONS[1];
+      else if(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u.test(source))reason=BLOB_REASONS[2];
+      if(reason)break;
+    }
+    if(!reason){bytes+=pairBytes;if(bytes>MAX_BYTES)return unavailable('inventory limit exceeded');}
+    selected.push({...file,oldLang,newLang,unavailableReason:reason});
   }
   selected.sort((a,b)=>(a.newPath||a.oldPath)<(b.newPath||b.oldPath)?-1:(a.newPath||a.oldPath)>(b.newPath||b.oldPath)?1:0);
   for(const file of selected){
-    const before=cases(file.before,file.oldLang),after=cases(file.after,file.newLang),oldMap=new Map(before.map(c=>[key(c),c])),newMap=new Map(after.map(c=>[key(c),c]));
-    const removed=before.filter(c=>!newMap.has(key(c))),path=file.oldPath&&file.newPath&&file.oldPath!==file.newPath?`${quoted(file.oldPath)} → ${quoted(file.newPath)}`:quoted(file.newPath||file.oldPath);
+    const path=file.oldPath&&file.newPath&&file.oldPath!==file.newPath?`${quoted(file.oldPath)} → ${quoted(file.newPath)}`:quoted(file.newPath||file.oldPath);
+    if(file.unavailableReason){
+      const suffix=`${path} unavailable (${quoted(file.unavailableReason)}).`;
+      counts.push(`Tests vs base: ${suffix}`);summaries.push(counts.at(-1));
+      assertions.push(`Changed assertions in kept tests: ${suffix}`);skips.push(`New skips: ${suffix}`);continue;
+    }
+    const oldCases=cases(file.before,file.oldLang),newCases=cases(file.after,file.newLang);
+    const before=oldCases.filter(c=>!c.suite),after=newCases.filter(c=>!c.suite);
+    const oldMap=new Map(oldCases.map(c=>[JSON.stringify([c.suite,key(c)]),c])),newMap=new Map(after.map(c=>[key(c),c]));
+    const removed=before.filter(c=>!newMap.has(key(c)));
     const prefix=`Tests vs base: ${path} ${before.length} → ${after.length} tests. Removed: `;
     counts.push(prefix+(removed.length?`${removed.length} (${removed.map(label).join(', ')}).`:'none.'));
     summaries.push(prefix+(removed.length?`${removed.length}.`:'none.'));
-    for(const current of after){const previous=oldMap.get(key(current));
-      if(previous)for(const [oldLine,newLine] of assertionChanges(previous.assertions,current.assertions)) assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} ${oldLine===null?'(added)':quoted(oldLine)} → ${newLine===null?'(removed)':quoted(newLine)}.`);
-      for(const line of introduced(previous?.markers??[],current.markers))skips.push(`New skips: ${path} ${label(current)} ${quoted(line)}.`);
+    for(const current of newCases){const previous=oldMap.get(JSON.stringify([current.suite,key(current)]));
+      if(previous&&!current.suite&&previous.assertions.length*current.assertions.length>1000000)assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} unavailable ("too many assertion lines to compare").`);
+      else if(previous&&!current.suite)for(const [oldLine,newLine] of assertionChanges(previous.assertions,current.assertions)) assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} ${oldLine===null?'(added)':quoted(oldLine)} → ${newLine===null?'(removed)':quoted(newLine)}.`);
+      for(const line of introduced(previous?.markers??[],current.markers))skips.push(`New skips: ${path} ${current.suite?'suite ':''}${label(current)} ${quoted(line)}.`);
     }
   }
   if(!counts.length){counts.push('Tests vs base: none.');summaries.push(counts[0]);}
@@ -185,17 +211,22 @@ export async function readGitTestSnapshot(input,ports={}) {
     if(raw&&!raw.endsWith('\0'))throw Error('Invalid records');
     const fields=raw?raw.slice(0,-1).split('\0'):[],records=[];
     for(let i=0;i<fields.length;){const status=fields[i++];if(!/^(?:[AMDT]|R\d+)$/.test(status))throw Error('Invalid status');const first=fields[i++],second=status.startsWith('R')?fields[i++]:first;if(!first||!second)throw Error('Invalid paths');records.push({oldPath:status==='A'?'':first,newPath:status==='D'?'':second});}
-    if(records.length>MAX_FILES)return {available:false,reason:'inventory limit exceeded',files:[]};
+    const candidates=records.filter(record=>language(record.oldPath)||language(record.newPath));
+    if(candidates.length>MAX_FILES)return {available:false,reason:'inventory limit exceeded',files:[]};
     let bytes=0;const files=[];
-    for(const record of records){if(!language(record.oldPath)&&!language(record.newPath))continue;
-      const file={...record,before:'',after:''};
+    for(const record of candidates){
+      const file={...record,before:'',after:''};let pairBytes=0;
       for(const [path,commit,side] of [[record.oldPath,input.baseSha,'before'],[record.newPath,input.headSha,'after']])if(path&&language(path)){
         const object=`${commit}:${path}`,length=Number((await command(['cat-file','-s',object])).toString('ascii').trim());
-        if(!Number.isSafeInteger(length)||length<0)throw Error('Invalid blob size');bytes+=length;
-        if(length>MAX_BLOB||bytes>MAX_BYTES)return {available:false,reason:'inventory limit exceeded',files:[]};
-        const blob=await command(['cat-file','blob',object]);if(blob.length!==length||blob.includes(0))throw Error('Invalid blob');
-        file[side]=new TextDecoder('utf-8',{fatal:true}).decode(blob);
+        if(!Number.isSafeInteger(length)||length<0)throw Error('Invalid blob size');pairBytes+=length;
+        if(length>MAX_BLOB){file.unavailableReason=BLOB_REASONS[0];break;}
+        const blob=await command(['cat-file','blob',object]);if(blob.length!==length)throw Error('Invalid blob');
+        if(blob.includes(0)){file.unavailableReason=BLOB_REASONS[1];break;}
+        try{file[side]=new TextDecoder('utf-8',{fatal:true}).decode(blob);}
+        catch{file.unavailableReason=BLOB_REASONS[2];break;}
       }
+      if(file.unavailableReason){file.before='';file.after='';}
+      else {bytes+=pairBytes;if(bytes>MAX_BYTES)return {available:false,reason:'inventory limit exceeded',files:[]};}
       files.push(file);
     }
     return {available:true,reason:'',files};

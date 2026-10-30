@@ -14,7 +14,7 @@ const words = (alphabet, limit) => {
   return out;
 };
 const quote = value => {
-  const entities = { '&': '&#38;', '<': '&#60;', '>': '&#62;', '`': '&#96;', '|': '&#124;', ':': '&#58;' };
+  const entities = { '&': '&#38;', '<': '&#60;', '>': '&#62;', '`': '&#96;', '|': '&#124;', ':': '&#58;', '@': '&#64;', '#': '&#35;' };
   return [...JSON.stringify(value)].map(char => entities[char] ??
     (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(char)
       ? `\\u${char.codePointAt(0).toString(16).padStart(4, '0')}` : char)).join('');
@@ -152,7 +152,7 @@ test('formal bounded Story laws: occurrence identity, exact assertion LCS, skip 
 
   // Every individual hostile character below, plus the combined string,
   // appears as a path, case name and changed assertion operand. Identity is raw.
-  const hostile = ['&', '<', '>', '`', '|', ':', '\t', '\n', '\r', '\b', '\f', '\u0001', '\u001b', '\u061c', '\u200e', '\u200f',
+  const hostile = ['&', '<', '>', '`', '|', ':', '@', '#', '\t', '\n', '\r', '\b', '\f', '\u0001', '\u001b', '\u061c', '\u200e', '\u200f',
     ...Array.from({ length: 5 }, (_, i) => String.fromCodePoint(0x202a + i)),
     ...Array.from({ length: 4 }, (_, i) => String.fromCodePoint(0x2066 + i))];
   for (const value of [...hostile, hostile.join('')]) {
