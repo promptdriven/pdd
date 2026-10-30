@@ -105,6 +105,12 @@
       "criterion_id": "AC6",
       "given": "Separately a lost POST reply, wrong-ID/command receipt, unknown/positive calls, evaluated checks, incomplete accounting and expired/unverifiable evidence; capacity later shows a free slot or 60000 ms passes.",
       "required_observation": "No capacity replacement or fresh request ID regardless of elapsed time/free capacity. Recover accepted/uncertain submissions by their original IDs under existing lifecycle, retain unknown/known accounting and paid leases, and preserve the separately authorized restart exception without broadening it."
+    },
+    {
+      "id": "legacy-busy-timing-anchor",
+      "criterion_id": "AC5",
+      "given": "An older saved authoritative complete zero-call confirmed-unstarted busy receipt has no new minimum/capacity timestamps. At first batch read at time 20000 ms it has a shorter valid saved retry_at; repeat with a longer saved retry_at of 95000 ms. A later retry at 40000 ms observes usable full occupancy; repeat read/retry after that. Separately use a never-posted held row with passed lint and no busy proof.",
+      "required_observation": "The first new-format batch operation saves minimum at least 30000 ms (or 95000 ms when that saved wait is longer) and capacity bound 80000 ms. Later read/retry preserves those anchors without another 60 second restart; full occupancy may release ordinary guarded dispatch at 80000 ms, but the longer-wait variant cannot dispatch before 95000 ms. No timestamp is guessed from sent_at, no ID/usage/eligibility is invented, and UUID-only reads do not rewrite the batch. The never-posted held row keeps existing first-send eligibility without a busy cooldown."
     }
   ]
 }
