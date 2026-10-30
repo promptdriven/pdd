@@ -135,8 +135,10 @@ Do not expand schemas into authored source during ordinary reads.
 
 Each reference has `consumer` (original input path), `source_pointer` (the authored
 schema slot or `/initial_world`), `target` (canonical identity), `kind`
-(`contract` or `seed`) and `value_json` (compact, recursively sorted JSON of that
-target after nested expansion, before this consumer's annotations or set).
+(`contract` or `seed`) and `value_json` (compact JSON of that target after nested
+expansion, before this consumer's annotations or set). Recursively sort object
+keys only; preserve array element order at every length, including 11 or more,
+and leave number tokens and literal values unchanged.
 Include transitive targets under the originating source pointer. Deduplicate by
 consumer/pointer/target/kind and sort by those fields. This is a content snapshot,
 not an approval hash or a pin that prevents changes. A no-reference result has
@@ -212,7 +214,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "6836f85bf17e3c0a9c57c712b3c4659fbb06198f4290d464caf150de4ba5f541",
+  "status": "draft", "prose_sha256": "55e1e084a72fd80fc4a15c153b9c35e569fa37d3b46542c1a550b11eee9a1544",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

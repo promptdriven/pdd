@@ -21,6 +21,10 @@
     {
       "id": "AC5",
       "text": "Literal step inputs and expected values containing reference-like keys stay literal."
+    },
+    {
+      "id": "AC6",
+      "text": "Lists in my shared world keep their order in both the effective world and its saved reference snapshot, including lists with 12 items."
     }
   ],
   "initial_world": {
@@ -31,6 +35,10 @@
       },
       "contracts/literal-world.json": {
         "content": "{\"__proto__\":{\"kept\":true},\"constructor\":{\"kept\":false},\"large\":9007199254740993}",
+        "is_symlink": false
+      },
+      "contracts/sequence-world.json": {
+        "content": "{\"sequence\":[0,1,2,3,4,5,6,7,8,9,10,11],\"nested\":[[0,1,2,3,4,5,6,7,8,9,10,11]]}",
         "is_symlink": false
       }
     }
@@ -280,6 +288,33 @@
       ],
       "model": "gpt-6.1-sol",
       "expected_error": "seed-invalid"
+    },
+    {
+      "step_id": "ordered-world-and-reference-snapshot",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/sequence.json",
+        "text": "{\"initial_world\":{\"$seed\":\"contracts/sequence-world.json\"}}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"initial_world\":{\"sequence\":[0,1,2,3,4,5,6,7,8,9,10,11],\"nested\":[[0,1,2,3,4,5,6,7,8,9,10,11]]}}"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/references/0/value_json",
+          "op": "equals",
+          "value": "{\"nested\":[[0,1,2,3,4,5,6,7,8,9,10,11]],\"sequence\":[0,1,2,3,4,5,6,7,8,9,10,11]}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
     }
   ]
 }

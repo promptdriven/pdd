@@ -7,6 +7,7 @@
 3. Overlapping overrides apply in written order, including replacement of the whole world.
 4. An override with a missing parent or array index is refused.
 5. Literal step inputs and expected values containing reference-like keys stay literal.
+6. Lists in my shared world keep their order in both the effective world and its saved reference snapshot, including lists with 12 items.
 
 ## Rules to check
 
