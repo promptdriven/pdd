@@ -1,8 +1,8 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 19648c04b8859023bd8ae0af69520fd2151d06de195c76900231c8b9af545757).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, join, posix } from 'node:path';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
+import { basename, join, posix, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expandSource } from './contract-refs.mjs';
 
@@ -92,12 +92,20 @@ const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.sl
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
   const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
+  let linkedFiles;
   for (const path of files) {
-    const stat = statOf(join(root, path));
+    let stat = statOf(join(root, path)), linked = false;
+    if (stat?.isSymbolicLink()) {
+      linkedFiles ??= sourceFilePort(root, new Set(files));
+      try {
+        const info = linkedFiles.stat({path});
+        stat = { isFile: () => info.exists, size: BigInt(info.size) }; linked = true;
+      } catch { continue; } // Unrelated unsafe links do not select or refuse source.
+    }
     if (!stat?.isFile()) continue;
     visible.add(path);
     if (path.endsWith('.json') && stat.size <= LIMITS.test) {
-      const text = readText(root, path);
+      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
       if (!text.includes('prompt-runtime.program-scenario')) continue;
       let doc;
       try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
@@ -105,7 +113,7 @@ export function findTests({ root, files = gitFiles(root) }) {
     } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
       // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
       if (stat.size > LIMITS.bytes) { discoveryWarnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
-      const text = readText(root, path);
+      const text = linked ? linkedFiles.read({path}).content : readText(root, path);
       if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
   }
@@ -1009,24 +1017,90 @@ function sourceLimit(files) {
 function snapshotReader(root, diskVisible, beforeRead = () => {}) {
   const snapshots = new Map();
   let unstable = false;
-  function inspectRaw(path, from, allowMissing = false) {
-    path = sourcePath(path, from);
-    if (snapshots.has(path)) return snapshots.get(path);
-    if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
-    const parts = path.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
-      if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
-      if (stat && !stat.isDirectory()) throw sourceProblem(from, path, `has a non-directory ancestor (${parent}).`);
-    }
+  root = realpathSync(root);
+  const observations = new Map();
+  const changed = () => { unstable = true; throw unstableSource; };
+  function observe(path) {
     const stat = statOf(join(root, path));
-    if (stat?.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
-    if (stat && !stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
-    if (stat && !diskVisible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
-    if (!stat && !allowMissing) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
-    const file = { path, stat, size: Number(stat?.size ?? 0) };
-    snapshots.set(path, file);
-    return file;
+    let link = null;
+    if (stat?.isSymbolicLink()) {
+      try { link = readlinkSync(join(root, path)); }
+      catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) changed(); throw error; }
+    }
+    const prior = observations.get(path);
+    if (prior && (!(stat === null && prior.stat === null) && !sameStat(stat, prior.stat) || link !== prior.link)) changed();
+    observations.set(path, { stat, link });
+    return { stat, link };
+  }
+  function stable(paths = observations.keys()) {
+    for (const path of paths) {
+      const before = observations.get(path);
+      const after = statOf(join(root, path));
+      if (before.stat === null ? after !== null : !sameStat(before.stat, after)) return false;
+      if (before.link !== null) {
+        try { if (readlinkSync(join(root, path)) !== before.link) return false; }
+        catch (error) { if (['ENOENT', 'EINVAL', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+      }
+    }
+    return true;
+  }
+  observe('');
+  function inspectRaw(path, from, allowMissing = false, noLinks = false) {
+    path = sourcePath(path, from);
+    if (snapshots.has(path)) {
+      const file = snapshots.get(path);
+      if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
+      return file;
+    }
+    let pending = path.split('/'), resolved = [], lastLink = null, linkedVisible = false;
+    const seen = new Set(), observed = new Set(['']);
+    const refuse = reason => {
+      throw sourceProblem(from, path, lastLink ? `: link ${lastLink.path} -> ${lastLink.link}: ${reason}` : `: ${reason}`);
+    };
+    // Resolve components individually: an ancestor link must be checked before any
+    // descendant is inspected. No host lookup follows an unchecked link.
+    while (pending.length) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (!resolved.length) refuse('resolution is outside the repository.');
+        resolved.pop(); continue;
+      }
+      resolved.push(part);
+      const current = resolved.join('/');
+      observed.add(current);
+      const { stat, link } = observe(current);
+      if (link !== null) {
+        lastLink = { path: current, link };
+        linkedVisible ||= diskVisible.has(current);
+        if (noLinks) refuse('symbolic links are not allowed for prepared output.');
+        if (isSecretPath(path) || isSecretPath(current)) refuse('the name looks like a secret. pdd never sends it.');
+        const state = `${current}\0${pending.join('/')}`;
+        if (seen.has(state) || seen.size >= 40) refuse('symbolic link loop.');
+        seen.add(state);
+        resolved.pop();
+        if (isAbsolute(link)) {
+          if (!link.startsWith(`${root}/`)) refuse('resolution is outside the repository.');
+          const local = link.slice(root.length + 1);
+          resolved = []; pending = [...local.split('/'), ...pending];
+        } else pending = [...link.split('/'), ...pending];
+        continue;
+      }
+      if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.');
+      if (!stat) {
+        if (lastLink) refuse('broken link: target does not exist.');
+        if (!allowMissing) refuse('is not a Git-visible file on disk. Restore it or correct the declared dependency.');
+        const file = { path, stat: null, size: 0, observed }; snapshots.set(path, file); return file;
+      }
+      if (pending.length && !stat.isDirectory()) refuse(`non-directory ancestor (${current}).`);
+      if (!pending.length) {
+        if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.');
+        if (!diskVisible.has(current) || (!diskVisible.has(path) && !linkedVisible)) refuse('target is not a Git-visible file. Add it to Git or correct the declared dependency.');
+        const file = { path, stat, size: Number(stat.size), observed, ...(lastLink ? { target: current } : {}) };
+        snapshots.set(path, file); return file;
+      }
+    }
+    refuse('a folder or other non-regular file.');
   }
   function bytes(file) {
     if (file.bytes) return file.bytes;
@@ -1034,9 +1108,11 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
     beforeRead(file);
     let fd;
     try {
-      fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      fd = openSync(join(root, file.target ?? file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) { unstable = true; throw unstableSource; }
+      if (!stable(file.observed)) changed();
       file.bytes = readFileSync(fd);
+      if (!stable(file.observed)) changed();
       if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) { unstable = true; throw unstableSource; }
       return file.bytes;
     } catch (error) {
@@ -1044,7 +1120,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
       throw error;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return { inspectRaw, bytes, snapshots, get unstable() { return unstable; } };
+  return { inspectRaw, bytes, snapshots, stable, get unstable() { return unstable; } };
 }
 
 export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
@@ -1150,7 +1226,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         const path = sourcePath(output.path, 'prepareSource');
         if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
         for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
-        inspectRaw(path, 'prepareSource', true);
+        inspectRaw(path, 'prepareSource', true, true);
         const content = Buffer.from(output.bytes), file = { path, bytes: content, size: content.length };
         overlay.set(path, file);
         visible.add(path);
@@ -1260,10 +1336,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
-      const after = inspectParentsAndStat(root, file.path);
-      return file.stat === null ? after === null : sameStat(file.stat, after);
-    });
+    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && reader.stable();
     if (!same) return null;
     const stories = new Map();
     for (const path of selected) {
@@ -1284,21 +1357,12 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (failures.length) return {story_path:story.story_path,tests:story.tests.sort(),unavailable:failures};
       return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
-    return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
+    return { tar, sha256: sha256(tar), files: files.map(({ path, size, target }) => ({ path, size, ...(target ? { target } : {}) })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
       warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_prompt_hashes:rawPromptHashes,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
-}
-
-function inspectParentsAndStat(root, path) {
-  const parts = path.split('/');
-  for (let i = 1; i < parts.length; i++) {
-    const parent = statOf(join(root, ...parts.slice(0, i)));
-    if (parent && !parent.isDirectory()) return unstableSource;
-  }
-  return statOf(join(root, path));
 }
 
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 5046ecaf4b465b17f76f09c1edbb456d170d98d5d8050667eedcb26feff24469).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e1e3d84a9fa00abec95446ca569ae4692558daaf4266242ed0db5622fcb71cd4).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1171,7 +1171,7 @@ function runFiles(cwd, words, options, ports) {
   const capture = ports.captureSource(root, { tests, appMap });
   for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
-  for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
+  for (const file of capture.files) line(ports.stdout, `  ${(file.path + (file.target ? ` -> ${file.target}` : '')).padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
   line(ports.stderr, coverageText(coverage));
   return 0;

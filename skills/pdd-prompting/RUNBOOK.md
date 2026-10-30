@@ -91,7 +91,7 @@ For extra source, put an include list in the repository root's `pdd-source.json`
 This file contains only `include`, an array of repository-relative file paths, not globs or directories. These files
 are added to the test and dependency selection. Included Markdown and prompts also have their dependencies followed.
 The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
-Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
+Source links, including folder ancestors, are accepted when their entire resolution stays inside the repository and ends at a Git-visible regular file. They upload the target bytes under the authored path; `pdd test --files` shows `path -> target`. Secret names on authored paths or targets, outside targets, broken links and loops are refused. See the [source capture authority](https://github.com/promptdriven/pdd/blob/alpha/prompts/cli/runtime-preflight.prompt.md#source-capture).
 
 ## 3. Schema rules
 

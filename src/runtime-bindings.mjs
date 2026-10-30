@@ -1,7 +1,7 @@
 // Generated from prompts/cli/runtime-bindings.prompt.md (sha256: 5b44de22d54982cc69e3bb046c106a1b1b908e37ea32ef66e3db988f2c465d81).
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { PreflightError, readPrompt, isSecretPath } from './runtime-preflight.mjs';
+import { PreflightError, readPrompt, isSecretPath, sourceFilePort } from './runtime-preflight.mjs';
 
 export function bindingCoverage({ root, found, selected }) {
   const unavailable = { available: false, bound: null, total: null, modules: [] };
@@ -19,9 +19,9 @@ export function bindingCoverage({ root, found, selected }) {
     return path;
   };
   try { lstatSync(join(root, 'pdd-bindings.json')); } catch (error) { if (error.code === 'ENOENT') return unavailable; throw error; }
-  regular('pdd-bindings.json');
-  if (lstatSync(join(root, 'pdd-bindings.json')).size > 65536) fail('inventory', 'exceeds 64 KiB');
-  let inventory; try { inventory = JSON.parse(readFileSync(join(root, 'pdd-bindings.json'), 'utf8')); } catch { fail('inventory', 'invalid JSON'); }
+  const files = sourceFilePort(root);
+  if (files.stat({path:'pdd-bindings.json'}).size > 65536) fail('inventory', 'exceeds 64 KiB');
+  let inventory; try { inventory = JSON.parse(files.read({path:'pdd-bindings.json'}).content); } catch { fail('inventory', 'invalid JSON'); }
   const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const keys = (v, names) => object(v) && Object.keys(v).length === names.length && names.every(k => Object.hasOwn(v, k));
   if (!keys(inventory, ['schema_version', 'modules']) || inventory.schema_version !== 'pdd.bindings.v1' || !Array.isArray(inventory.modules)) fail('inventory', 'expected schema_version pdd.bindings.v1 and modules array only');
