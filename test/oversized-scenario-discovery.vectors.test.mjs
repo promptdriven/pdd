@@ -6,13 +6,13 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { findTests, selectTests, captureSource, preflight, proseSha256, LIMITS } from '../src/runtime-preflight.mjs';
+import { findTests, selectTests, captureSource, preflight, proseSha256, whyNoTests, LIMITS } from '../src/runtime-preflight.mjs';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { portsFor } from './runtime-fake.mjs';
 
 // Native replay of the approved Story's concrete case plans. The Runtime anchor
 // is empty (#2548); these finite fixtures do not claim executable Runtime replay.
-const CAP = 1_048_576, INSPECTION = 10_485_760;
+const CAP = 1_048_576, INSPECTION = 10_485_760, PREFIX = 65_536;
 const CLI = new URL('../bin/pdd.mjs', import.meta.url).pathname;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const write = (root, path, text) => { fs.mkdirSync(join(root, path, '..'), { recursive: true }); fs.writeFileSync(join(root, path), text); };
@@ -47,12 +47,14 @@ function materialize(root, path, bytes) {
   assert.equal(hash(disk), hash(bytes));
 }
 function aliases(name) { return [[], [name], [`user_stories/${name}.md`], [`tests/${name}.json`], [`./tests/${name}.json`]]; }
-function limit(error, path, size, uncertain = false) {
+function limit(error, path, size) {
   assert.equal(error.exitCode, 4);
   assert.ok(error.message.includes(path), error.message);
   assert.ok(error.message.includes(String(size)), error.message);
   assert.match(error.message, /1048576/);
-  if (uncertain) assert.match(error.message, /10485760.*|inspection budget/);
+  assert.match(error.message, /PDD test/);
+  assert.match(error.message, /split it into smaller test files/);
+  assert.doesNotMatch(error.message, /uncertain|inspection budget/i);
   return true;
 }
 function offline(root) {
@@ -88,6 +90,7 @@ test('AC2/3: mixed default and explicit oversize selection stop check/Try and ac
       const { ports, effects } = offline(root);
       assert.equal(await run({ cwd: root, words, options: {} }, ports), 4, ports.stderr.text);
       assert.match(ports.stderr.text, /1048577.*1048576/);
+      assert.match(ports.stderr.text, /PDD test.*split it into smaller test files/);
       assert.deepEqual(effects, { auth: 0, network: 0 });
       assert.doesNotMatch(ports.stdout.text, /Stories:.*pass|files,/);
     }
@@ -99,6 +102,7 @@ test('AC2/3: mixed default and explicit oversize selection stop check/Try and ac
   for (const args of [['check', '--files'], ['check', '--files', 'oversized'], ['try', path]]) {
     const child = spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, HOME: join(root, '..', 'home'), PDD_RUNTIME_URL: 'http://127.0.0.1:9' } });
     assert.equal(child.status, 4, child.stderr); assert.match(child.stderr, /1048577.*1048576/);
+    assert.match(child.stderr, /PDD test.*split it into smaller test files/);
     assert.doesNotMatch(child.stderr, /Unknown story|sign in/);
   }
   assert.throws(() => captureSource(root, { tests: [path] }), error => limit(error, path, CAP + 1));
@@ -117,23 +121,29 @@ test('AC4: accepted one-MiB ASCII input and multibyte strings use actual seriali
   }
 });
 
-test('AC5/6: full-document top-level late/duplicate identity wins and data markers are ignored', t => {
+test('AC1/5/6: normal full-document identity and oversized prefix identity use their respective last values', t => {
   const { root } = fixture(t);
-  const pad = 'A'.repeat(CAP + 100);
-  const cases = [
-    ['late', `{"data":"${pad}","schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/late.md"}`, 'late'],
-    ['last-scenario', `{"schema_version":"data","story_path":"user_stories/old.md","data":"${pad}","schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/new.md"}`, 'new'],
-    ['last-data', `{"schema_version":"prompt-runtime.program-scenario.v1","data":"${pad}","schema_version":"data"}`, null],
-    ['last-story', `{"schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/old.md","data":"${pad}","story_path":"user_stories/new.md"}`, 'new'],
-    ['decoy', JSON.stringify({ data: pad, nested: { schema_version: 'prompt-runtime.program-scenario.v1' }, text: '{"schema_version":"prompt-runtime.program-scenario.v1"}' }), null],
-  ];
-  for (const [name, text, story] of cases) {
-    const path = `data/${name}.json`; materialize(root, path, Buffer.from(text));
-    const found = findTests({ root }), row = found.tests.find(row => row.path === path);
-    if (story) {
-      assert.equal(row.story, story);
-      assert.throws(() => selectTests(found, [story]), error => limit(error, path, Buffer.byteLength(text)));
-    } else assert.equal(row, undefined);
+  const family = 'prompt-runtime.program-scenario.v1';
+  for (const padding of [500, CAP + 100]) {
+    const pad = 'A'.repeat(padding), oversized = padding > CAP;
+    // Expected aliases are from the approved D2 table, before execution.
+    const cases = [
+      ['late', `{"data":"${pad}","schema_version":"${family}","story_path":"user_stories/late.md"}`, oversized ? null : 'late'],
+      ['last-scenario', `{"schema_version":"data","story_path":"user_stories/old.md","data":"${pad}","schema_version":"${family}","story_path":"user_stories/new.md"}`, oversized ? null : 'new'],
+      ['last-data', `{"schema_version":"${family}","data":"${pad}","schema_version":"data"}`, oversized ? 'last-data' : null],
+      ['last-story', `{"schema_version":"${family}","story_path":"user_stories/old.md","data":"${pad}","story_path":"user_stories/new.md"}`, oversized ? 'old' : 'new'],
+      ['decoy', JSON.stringify({ data: pad, nested: { schema_version: family }, text: `{"schema_version":"${family}"}` }), null],
+    ];
+    for (const [name, text, story] of cases) {
+      const path = `data/${name}.json`; materialize(root, path, Buffer.from(text));
+      const found = findTests({ root }), row = found.tests.find(row => row.path === path);
+      if (story) {
+        assert.equal(row.story, story);
+        if (oversized) assert.throws(() => selectTests(found, [story]), error => limit(error, path, Buffer.byteLength(text)));
+        else assert.ok(selectTests(found, [story]).selected.includes(row));
+      } else assert.equal(row, undefined);
+      fs.unlinkSync(join(root, path));
+    }
   }
   assert.deepEqual(selectTests(findTests({ root }), ['absent']).unknown, ['absent']);
 });
@@ -154,33 +164,26 @@ test('AC6: unrelated object data above execution cap can be included under uncha
   assert.equal(await runCheck({ cwd: root, words: [], options: { '--files': true } }, ports), 0, ports.stderr.text);
 });
 
-test('AC7: inspection budget inclusive; partial objects stay uncertain despite early schema or Story', async t => {
+test('AC2/5/7: early declarations above 10 MiB survive unseen duplicates and truncated bodies; hidden aliases stay unknown', async t => {
   const { root } = fixture(t);
-  const object = (size, prefix, suffix) => Buffer.from(prefix + ' '.repeat(size - Buffer.byteLength(prefix + suffix)) + suffix);
-  const exact = object(INSPECTION, '{"data":0,', '"schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/exact.md"}');
-  materialize(root, 'exact.json', exact);
-  assert.equal(findTests({ root }).tests.find(row => row.path === 'exact.json').story, 'exact');
-  fs.unlinkSync(join(root, 'exact.json'));
-  for (const prefix of ['{"data":0,', '{"schema_version":"data",', '{"schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/early.md",']) {
-    const bytes = object(INSPECTION + 1, prefix, '"schema_version":"prompt-runtime.program-scenario.v1","story_path":"user_stories/hidden.md"}');
+  const prefix = '{"schema_version":"prompt-runtime.program-scenario.v9","story_path":"user_stories/early.md","data":"';
+  for (const suffix of ['","schema_version":"ordinary.v1","story_path":"user_stories/hidden.md"}', '']) {
+    const bytes = Buffer.from(prefix + 'A'.repeat(INSPECTION + 1 - Buffer.byteLength(prefix + suffix)) + suffix);
     materialize(root, 'huge.json', bytes);
     const found = findTests({ root }), row = found.tests.find(row => row.path === 'huge.json');
-    assert.ok(row.uncertain); assert.equal(row.storyPath, null);
-    for (const words of [[], ['huge.json'], ['huge'], ['hidden'], ['user_stories/hidden.md']]) assert.throws(() => selectTests(found, words), error => limit(error, 'huge.json', bytes.length, true));
+    assert.equal(row.storyPath, 'user_stories/early.md');
+    assert.equal(row.uncertain, undefined);
+    for (const words of [[], ['huge.json'], ['huge'], ['early'], ['user_stories/early.md']])
+      assert.throws(() => selectTests(found, words), error => limit(error, 'huge.json', bytes.length));
+    for (const words of [['hidden'], ['user_stories/hidden.md'], ['never-authored']]) {
+      assert.deepEqual(selectTests(found, words).unknown, words);
+      const { ports, effects } = offline(root);
+      assert.equal(await runCheck({ cwd: root, words, options: { '--files': true } }, ports), 2, ports.stderr.text);
+      assert.match(ports.stderr.text, /Unknown story/);
+      assert.deepEqual(effects, { auth: 0, network: 0 });
+    }
     assert.equal(selectTests(found, ['normal']).selected.length, 1);
-    const { ports, effects } = offline(root);
-    assert.equal(await runCheck({ cwd: root, words: ['hidden'], options: { '--files': true } }, ports), 4, ports.stderr.text);
-    assert.match(ports.stderr.text, /10485760/); assert.doesNotMatch(ports.stderr.text, /Unknown story/);
-    assert.deepEqual(effects, { auth: 0, network: 0 });
   }
-  fs.unlinkSync(join(root, 'huge.json'));
-  materialize(root, 'array.json', object(INSPECTION + 1, '[', ']'));
-  assert.equal(findTests({ root }).tests.length, 1);
-  const { ports } = offline(root);
-  assert.equal(await runCheck({ cwd: root, words: ['absent'], options: {} }, ports), 2);
-  assert.match(ports.stderr.text, /Unknown story/);
-  materialize(root, 'whitespace.json', Buffer.from(' '.repeat(INSPECTION + 1)));
-  assert.throws(() => selectTests(findTests({ root })), error => limit(error, 'whitespace.json', INSPECTION + 1, true));
 });
 
 test('AC8: synthetic ancestor input, unreadable and unstable snapshots retain bounded safety guards', t => {
@@ -212,7 +215,7 @@ test('AC8: synthetic ancestor input, unreadable and unstable snapshots retain bo
   let readBytes = 0;
   fs.readSync = (...args) => { readBytes += args[3]; return originalRead(...args); }; syncBuiltinESMExports();
   const found = findTests({ root, files: ['huge.json'] });
-  assert.ok(found.tests[0].uncertain); assert.ok(readBytes > 0 && readBytes <= 65_536);
+  assert.deepEqual(found.tests, []); assert.equal(readBytes, PREFIX);
 });
 
 test('AC8: small nonregular JSON is skipped without opening links or FIFOs; selected payloads still refuse', t => {
@@ -292,5 +295,216 @@ test('AC8: inclusive own-metadata nonregular boundary does not relax oversized s
     const found = findTests({ root });
     if (size <= CAP) assert.deepEqual(selectTests(found).selected.map(row => row.path), ['tests/normal.json']);
     else assert.throws(() => selectTests(found), error => error.exitCode === 4 && /unsafe discovery/.test(error.message));
+  }
+});
+
+// These expectations are the D2 contract's lexical table, independent of output.
+const FAMILY = 'prompt-runtime.program-scenario.v1';
+const declaration = `"schema_version":"${FAMILY}"`;
+const oversizedBytes = (prefix, suffix = '', size = CAP + 1) =>
+  Buffer.from(prefix + ' '.repeat(size - Buffer.byteLength(prefix + suffix)) + suffix);
+const atPrefixEnd = (tail, end = PREFIX) => '{' + ' '.repeat(end - 1 - Buffer.byteLength(tail)) + tail;
+
+test('AC5: complete prefix declarations decode escapes and ignore root, string, nested and trailing decoys', t => {
+  const { root } = fixture(t);
+  const cases = [
+    ['escaped', '{"schema_vers\\u0069on":"prompt-runtime.program-\\u0073cenario.v1"}', true],
+    ['not-first', `{"first":1,"nested":[{"text":"\\\"}[,]"}],${declaration}}`, true],
+    ['unsupported', '{"schema_version":"prompt-runtime.program-scenario.v999"}', true],
+    ['truncated-body', `{${declaration},"data":"`, true],
+    ['nested', `{"nested":{${declaration}}}`, false],
+    ['string', JSON.stringify({ text: `\\"},${declaration},"story_path":"fake"` }), false],
+    ['array', `[{${declaration}}]`, false],
+    ['trailing', `{} {${declaration}}`, false],
+    ['ordinary-trailing', `{"schema_version":"ordinary.v1"},{${declaration}}`, false],
+    ['absent', '{"data":1}', false],
+    ['ordinary', '{"schema_version":"ordinary.v1"}', false],
+    ['whitespace', ' ', false],
+    ['literal-root', 'null', false],
+    ['string-root', JSON.stringify(`{${declaration}}`), false],
+  ];
+  for (const [name, prefix, detected] of cases) {
+    const path = `tests/${name}.json`, bytes = oversizedBytes(prefix);
+    materialize(root, path, bytes);
+    const found = findTests({ root });
+    assert.equal(found.tests.some(row => row.path === path), detected, name);
+    if (detected) assert.throws(() => selectTests(found, [path]), error => limit(error, path, bytes.length));
+    else assert.deepEqual(selectTests(found, [path]).unknown, [path], name);
+    fs.unlinkSync(join(root, path));
+  }
+});
+
+test('AC5: last complete schema duplicate wins, including nonstrings; incomplete duplicates retain prior identity', t => {
+  const { root } = fixture(t);
+  const cases = [
+    ['family-ordinary', `{${declaration},"schema_version":"ordinary.v1"}`, false],
+    ['ordinary-family', `{"schema_version":"ordinary.v1",${declaration}}`, true],
+    ...['null', 'false', 'true', '1', '-1.5e2', '[]', '{}', '[{"schema_version":"nested"}]'].flatMap((value, i) => [
+      [`family-nonstring-${i}`, `{${declaration},"schema_version":${value}}`, false],
+      [`nonstring-family-${i}`, `{"schema_version":${value},${declaration}}`, true],
+    ]),
+    ['incomplete-key', `{${declaration},"schema_ver`, true],
+    ['incomplete-string', `{${declaration},"schema_version":"ordinary`, true],
+    ['incomplete-array', `{${declaration},"schema_version":[`, true],
+    ['incomplete-object', `{${declaration},"schema_version":{"nested":`, true],
+    ['incomplete-literal', `{${declaration},"schema_version":fals`, true],
+    ['incomplete-number', `{${declaration},"schema_version":1e`, true],
+  ];
+  for (const [name, prefix, detected] of cases) {
+    const path = 'case.json', bytes = oversizedBytes(prefix);
+    materialize(root, path, bytes);
+    const found = findTests({ root });
+    assert.equal(found.tests.some(row => row.path === path), detected, name);
+    if (detected) assert.throws(() => selectTests(found, ['case']), error => limit(error, path, bytes.length));
+    else assert.deepEqual(selectTests(found, ['case']).unknown, ['case'], name);
+  }
+});
+
+test('AC5: exact 65536-byte token completion, one-byte cuts and scalar delimiters decide only visible values', t => {
+  const { root } = fixture(t);
+  const complete = atPrefixEnd(declaration);
+  assert.equal(Buffer.byteLength(complete), PREFIX);
+  const cases = [
+    ['string-exact', Buffer.from(complete), true],
+    ['string-one-over', Buffer.from('{ ' + complete.slice(1)), false],
+    ['cut-escape', Buffer.from(atPrefixEnd('"schema_version":"prompt-runtime.program-scenario\\u00')), false],
+    ['cut-key', Buffer.from(atPrefixEnd('"schema_vers\\u00')), false],
+    ['cut-utf8', Buffer.from(atPrefixEnd('"schema_version":"prompt-runtime.program-scenario', PREFIX - 1) + 'é'), false],
+    ['prior-cut-utf8', Buffer.from(atPrefixEnd(`${declaration},"schema_version":"`, PREFIX - 1) + 'é'), true],
+    ...['null', 'false', '1', '-1.5e2'].flatMap((value, i) => [
+      [`scalar-no-delimiter-${i}`, Buffer.from(atPrefixEnd(`${declaration},"schema_version":${value}`)), true],
+      [`scalar-delimiter-${i}`, Buffer.from(atPrefixEnd(`${declaration},"schema_version":${value} `)), false],
+    ]),
+    ['container-exact', Buffer.from(atPrefixEnd(`${declaration},"schema_version":[]`)), false],
+    ['container-one-over', Buffer.from(atPrefixEnd(`${declaration},"schema_version":[ `) + ']'), true],
+    ['incomplete-family-retains-ordinary', Buffer.from(atPrefixEnd(`"schema_version":"ordinary.v1",${declaration}`).slice(0, -1) + ' '), false],
+  ];
+  for (const [name, prefix, detected] of cases) {
+    const path = 'boundary.json';
+    // Preserve byte cuts (including half of a UTF-8 sequence), not string length.
+    const bytes = Buffer.concat([prefix, Buffer.alloc(CAP + 1 - prefix.length, 32)]);
+    materialize(root, path, bytes);
+    const found = findTests({ root });
+    assert.equal(found.tests.some(row => row.path === path), detected, name);
+    if (detected) assert.throws(() => selectTests(found, ['boundary']), error => limit(error, path, bytes.length));
+    else assert.deepEqual(selectTests(found, ['boundary']).unknown, ['boundary'], name);
+  }
+});
+
+test('AC3/5/7: Story aliases use only the last complete prefix value independently of schema', t => {
+  const { root } = fixture(t);
+  const storyA = '"story_path":"user_stories/first.md"';
+  const cases = [
+    ['last-string', `${storyA},"story_path":"user_stories/last.md"}`, 'last'],
+    ['escaped-story', '"story_p\\u0061th":"user_stories/esc\\u0061ped.md"}', 'escaped'],
+    ['incomplete-string', `${storyA},"story_path":"user_stories/hidden`, 'first'],
+    ['incomplete-container', `${storyA},"story_path":[`, 'first'],
+    ...['null', 'false', '0', '[]', '{}'].map((value, i) => [`nonstring-${i}`, `${storyA},"story_path":${value}}`, null]),
+    ['no-story', '"data":0}', null],
+  ];
+  for (const [name, tail, expected] of cases) {
+    const path = 'different-basename.json', bytes = oversizedBytes(`{${declaration},${tail}`);
+    materialize(root, path, bytes);
+    const found = findTests({ root }), row = found.tests.find(row => row.path === path);
+    assert.equal(row.storyPath, expected ? `user_stories/${expected}.md` : null, name);
+    for (const words of [[path], ['different-basename'], ...(expected ? [[expected], [`user_stories/${expected}.md`]] : [])])
+      assert.throws(() => selectTests(found, words), error => limit(error, path, bytes.length));
+    for (const word of ['first', 'last', 'escaped', 'hidden', 'never-authored'].filter(word => word !== expected))
+      assert.deepEqual(selectTests(found, [word]).unknown, [word], name);
+    assert.deepEqual(selectTests(found, ['normal']).selected.map(row => row.path), ['tests/normal.json']);
+  }
+});
+
+test('AC6/7: every oversized range silently skips absent or non-PDD identity in normal and no-tests native CLI', t => {
+  const { root, normal } = fixture(t);
+  for (const size of [CAP + 1, INSPECTION + 1]) {
+    for (const [name, prefix, suffix] of [
+      ['absent', '{"data":"', '"}'],
+      ['ordinary', '{"schema_version":"ordinary.v1","data":"', '"}'],
+      ['late', '{"data":"', `",${declaration}}`],
+      ['nested', `{"nested":{${declaration}},"data":"`, '"}'],
+      ['string', '{"text":' + JSON.stringify(`{${declaration}}`) + ',"data":"', '"}'],
+      ['array', '["', `",{${declaration}}]`],
+    ]) {
+      materialize(root, `tests/${name}-${size}.json`, oversizedBytes(prefix, suffix, size));
+    }
+  }
+  const bin = join(root, '..', 'bin'), marker = join(root, '..', 'auth-attempts');
+  fs.mkdirSync(bin);
+  write(bin, 'gh', '#!/bin/sh\nprintf "auth\\n" >> "$PDD_TEST_AUTH_LOG"\nexit 1\n');
+  fs.chmodSync(join(bin, 'gh'), 0o755);
+  const env = { HOME: join(root, '..', 'home'), PATH: `${bin}:/usr/bin:/bin`, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PDD_TEST_AUTH_LOG: marker };
+  const cli = args => {
+    const child = spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: 'utf8', env, timeout: 10000 });
+    assert.equal(child.error, undefined);
+    assert.doesNotMatch(child.stdout + child.stderr, /uncertain|inspection budget|tests\/(?:absent|ordinary|late|nested|string|array)-/i);
+    return child;
+  };
+  for (const words of [[], ['normal']]) {
+    const child = cli(['check', '--files', ...words]);
+    assert.equal(child.status, 0, child.stderr); assert.match(child.stdout, /tests\/normal.json/);
+  }
+  assert.equal(fs.existsSync(marker), false);
+  for (const command of ['check', 'try']) {
+    const child = cli([command]);
+    assert.equal(child.status, 5, child.stderr); assert.match(child.stderr, /gh auth login/);
+  }
+  assert.equal(fs.readFileSync(marker, 'utf8').trim().split('\n').length, 2);
+  for (const args of [['check', 'never-authored'], ['check', '--files', 'never-authored'], ['try', 'never-authored']]) {
+    const child = cli(args); assert.equal(child.status, 2, child.stderr); assert.match(child.stderr, /Unknown story/);
+  }
+  fs.unlinkSync(join(root, normal));
+  write(root, 'tests/small-data.json', '{"data":1}');
+  for (const args of [['check'], ['check', '--files'], ['try']]) {
+    const child = cli(args); assert.equal(child.status, 2, child.stderr);
+    assert.match(child.stderr, /No tests found/);
+    assert.match(child.stderr, /tests\/small-data.json is not a PDD test file/);
+    assert.doesNotMatch(child.stderr, /gh auth|sign in/);
+  }
+  assert.equal(fs.readFileSync(marker, 'utf8').trim().split('\n').length, 2);
+});
+
+test('AC6/8: discovery reads only bytes [0,65536) at cap+1 and above 10 MiB; no-tests guidance never rereads skipped JSON', async t => {
+  const { root, normal } = fixture(t);
+  fs.unlinkSync(join(root, normal));
+  const paths = [];
+  for (const size of [CAP + 1, INSPECTION + 1]) {
+    const path = `tests/large-${size}.json`;
+    materialize(root, path, oversizedBytes('{"data":"', '"}', size)); paths.push(path);
+  }
+  const originalOpen = fs.openSync, originalRead = fs.readSync, originalReadFile = fs.readFileSync;
+  const descriptors = new Map(), reads = new Map();
+  t.after(() => { fs.openSync = originalOpen; fs.readSync = originalRead; fs.readFileSync = originalReadFile; syncBuiltinESMExports(); });
+  fs.openSync = (path, ...args) => {
+    const fd = originalOpen(path, ...args);
+    descriptors.set(fd, paths.find(file => String(path) === join(root, file)));
+    return fd;
+  };
+  fs.readSync = (fd, buffer, offset, length, position) => {
+    const path = descriptors.get(fd);
+    if (path) {
+      assert.ok(position >= 0 && position + length <= PREFIX, `${path}: ${position}+${length}`);
+      reads.set(path, (reads.get(path) ?? 0) + length);
+    }
+    return originalRead(fd, buffer, offset, length, position);
+  };
+  fs.readFileSync = (path, ...args) => {
+    assert.ok(!paths.some(file => String(path) === join(root, file)), `unbounded read: ${path}`);
+    return originalReadFile(path, ...args);
+  };
+  syncBuiltinESMExports();
+  const found = findTests({ root });
+  assert.deepEqual(found.tests, []);
+  for (const path of paths) assert.equal(reads.get(path), PREFIX, path);
+  assert.deepEqual(whyNoTests(root, found.visible), []);
+  for (const path of paths) assert.equal(reads.get(path), PREFIX, `no-tests reread ${path}`);
+  for (const run of [runCheck, runTry]) {
+    reads.clear();
+    const { ports, effects } = offline(root);
+    assert.equal(await run({ cwd: root, words: [], options: {} }, ports), 2, ports.stderr.text);
+    assert.match(ports.stderr.text, /No tests found/);
+    assert.doesNotMatch(ports.stderr.text, /large-|not a PDD test/);
+    assert.deepEqual(effects, { auth: 0, network: 0 });
+    for (const path of paths) assert.equal(reads.get(path), PREFIX, path);
   }
 });

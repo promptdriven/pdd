@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 10b45589b9bfce9b575d2e8c611d8b5cec71dd7157b378264270dcd61ff90236).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a73b0bf878903103691fef3cc20b7c7d00e3e7697256a145919fde04b0b7df50).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readFileSync, writeFileSync } from 'node:fs';
@@ -84,15 +84,76 @@ const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
-const INSPECTION_BYTES = 10_485_760;
+const PREFIX_BYTES = 65_536;
 const scenarioSchema = value => typeof value === 'string' && value.startsWith('prompt-runtime.program-scenario');
-const oversizedMessage = test => `${test.path}: ${test.size} bytes exceeds the ${LIMITS.test}-byte test-file allowance.${test.uncertain ? ` Discovery is uncertain: ${test.uncertain}; the inspection budget is ${INSPECTION_BYTES} bytes.` : ''}`;
+const oversizedMessage = test => `${test.path} is a PDD test but has ${test.size} bytes, over the ${LIMITS.test}-byte test-file allowance: split it into smaller test files.`;
 const requireEligibleTests = tests => {
   const unsafe = tests.find(test => test.discoveryError);
   if (unsafe) throw unsafe.discoveryError;
   const oversized = tests.filter(test => test.size > LIMITS.test);
   if (oversized.length) throw new PreflightError(4, oversized.map(oversizedMessage).join('\n'));
 };
+
+// Read complete values of actual root-object members only. A closed token can
+// establish identity without requiring the rest of the document to be present.
+function prefixIdentity(text) {
+  const identity = {};
+  let index = 0;
+  const whitespace = () => { while (index < text.length && /[ \t\r\n]/.test(text[index])) index++; };
+  const stringEnd = start => {
+    for (let end = start + 1; end < text.length; end++) {
+      if (text[end] === '\\') end++;
+      else if (text[end] === '"') return end + 1;
+    }
+    return null;
+  };
+  const valueEnd = start => {
+    const first = text[start];
+    if (first === '"') return stringEnd(start);
+    if (first === '{' || first === '[') {
+      const closes = [first === '{' ? '}' : ']'];
+      for (let end = start + 1; end < text.length; end++) {
+        const char = text[end];
+        if (char === '"') {
+          const next = stringEnd(end);
+          if (next === null) return null;
+          end = next - 1;
+        } else if (char === '{' || char === '[') closes.push(char === '{' ? '}' : ']');
+        else if (char === '}' || char === ']') {
+          if (char !== closes.pop()) return null;
+          if (!closes.length) return end + 1;
+        }
+      }
+      return null;
+    }
+    // Scalars need a visible delimiter; the end of a prefix is not one.
+    let end = start;
+    while (end < text.length && !/[ \t\r\n,}\]]/.test(text[end])) end++;
+    return end < text.length && end > start ? end : null;
+  };
+  whitespace();
+  if (text[index++] !== '{') return identity;
+  while (index < text.length) {
+    whitespace();
+    if (text[index] !== '"') break;
+    const keyEnd = stringEnd(index);
+    if (keyEnd === null) break;
+    let key, value;
+    try { key = JSON.parse(text.slice(index, keyEnd)); } catch { break; }
+    index = keyEnd;
+    whitespace();
+    if (text[index++] !== ':') break;
+    whitespace();
+    const end = valueEnd(index);
+    if (end === null) break;
+    try { value = JSON.parse(text.slice(index, end)); } catch { break; }
+    if (key === 'schema_version' || key === 'story_path') identity[key] = value;
+    index = end;
+    whitespace();
+    if (text[index++] !== ',') break;
+  }
+  return identity;
+}
 
 // Snapshot a bounded regular-file read. Validate parents and the open descriptor
 // both before and after reading, so replacement or growth cannot expand the read.
@@ -103,7 +164,7 @@ function discoveryBytes(root, path, stat) {
       throw new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
     fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     if (!sameStat(stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
-    const length = Math.min(Number(stat.size), Number(stat.size) > INSPECTION_BYTES ? 65_536 : INSPECTION_BYTES);
+    const length = Number(stat.size) > LIMITS.test ? PREFIX_BYTES : Number(stat.size);
     const bytes = Buffer.alloc(length);
     let offset = 0;
     while (offset < length) {
@@ -138,11 +199,9 @@ export function findTests({ root, files = gitFiles(root) }) {
       const size = Number(stat.size);
       visible.add(path);
       jsonTitles.set(path, titleOf(text));
-      if (size > INSPECTION_BYTES) {
-        // A partial object cannot establish final keys: duplicates may follow.
-        const first = text.match(/[^ \t\r\n]/)?.[0];
-        if (first && '["-0123456789tfn'.includes(first)) continue;
-        tests.push({ path, size, uncertain: 'the bounded prefix cannot establish final top-level schema and Story keys' });
+      if (size > LIMITS.test) {
+        const doc = prefixIdentity(text);
+        if (scenarioSchema(doc.schema_version)) tests.push({ path, size, doc });
         continue;
       }
       let doc;
@@ -187,7 +246,7 @@ export function selectTests(found, words = []) {
     const unsafe = found.tests.find(test => test.discoveryError);
     if (unsafe) throw unsafe.discoveryError;
   }
-  requireEligibleTests([...rows, ...(unknown.length ? found.tests.filter(test => test.uncertain) : [])]);
+  requireEligibleTests(rows);
   return { selected: rows, unknown };
 }
 
@@ -1022,7 +1081,11 @@ export function whyNoTests(root, visible) {
   const files = [...visible].sort(), why = [];
   for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
     let doc = null;
-    try { doc = JSON.parse(readText(root, path)); } catch { doc = null; }
+    try {
+      const stat = statOf(join(root, path));
+      if (!stat?.isFile() || stat.size > BigInt(LIMITS.test)) continue;
+      doc = JSON.parse(discoveryBytes(root, path, stat).toString('utf8'));
+    } catch { doc = null; }
     if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
   }
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
