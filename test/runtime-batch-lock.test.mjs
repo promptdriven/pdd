@@ -22,8 +22,8 @@ async function fixture(t) {
   const setup = harbor(t); let delay = false, held = null;
   const fake = await fakeRuntime(t, async (e, f) => {
     const id = e.request?.requestId ?? e.url.split('/').at(-1);
-    if (e.command === 'lint') return { status: 200, json: f.lint(id) };
     if (held && e.command === held.command) { const current = held; held = null; current.entered.resolve(); await bounded(current.resume.promise, 'held check release'); }
+    if (e.command === 'lint') return { status: 200, json: f.lint(id) };
     if (delay) await pause(40);
     const answer = f.check(id); answer.usage.calls = 4;
     return { status: 200, json: answer };
@@ -433,16 +433,21 @@ test('2675 review: bounded multi-process publication and dead-owner takeover eac
 
 for (const mode of ['check', 'lint']) test(`2675 review: a new ${mode} owns its batch through the whole run`, async t => {
   const r = await fixture(t), gate = r.holdCommand(mode), options = mode === 'lint' ? { '--lint': true } : {};
-  const running = r.run(options, ['place-order']); await bounded(gate.entered.promise, `${mode} dispatch`);
-  const id = r.fake.posts.at(-1).request.requestId;
-  const batch = readdirSync(join(r.setup.state, 'batches')).find(name => {
-    const saved = read(join(r.setup.state, 'batches', name, 'batch.json'));
-    return saved.lint.request_ids.includes(id) || saved.rows.some(row => row.request_ids.includes(id));
-  });
-  assert.ok(batch); const file = join(r.setup.state, 'batches', batch, 'batch.json'), before = readFileSync(file), gets = r.fake.gets.length, posts = r.fake.posts.length;
-  const result = await r.run({ '--read': true }, [batch]); assert.equal(result.code, 3); assert.equal(r.fake.gets.length, gets); assert.equal(r.fake.posts.length, posts); assert.deepEqual(readFileSync(file), before);
-  const owner = read(join(r.setup.state, 'batches', batch, 'batch.lock'));
+  const running = r.run(options, ['place-order']); let before, observed, result, owner, batch, finished;
+  try {
+    await bounded(gate.entered.promise, `${mode} dispatch`);
+    const id = r.fake.posts.at(-1).request.requestId;
+    batch = readdirSync(join(r.setup.state, 'batches')).find(name => {
+      const saved = read(join(r.setup.state, 'batches', name, 'batch.json'));
+      return saved.lint.request_ids.includes(id) || saved.rows.some(row => row.request_ids.includes(id));
+    });
+    assert.ok(batch); const file = join(r.setup.state, 'batches', batch, 'batch.json');
+    before = { bytes: readFileSync(file), gets: r.fake.gets.length, posts: r.fake.posts.length };
+    result = await r.run({ '--read': true }, [batch]);
+    observed = { bytes: readFileSync(file), gets: r.fake.gets.length, posts: r.fake.posts.length };
+    owner = read(join(r.setup.state, 'batches', batch, 'batch.lock'));
+  } finally { gate.resume.resolve(); finished = await bounded(running, `${mode} completion`); }
+  assert.equal(result.code, 3); assert.deepEqual(observed, before);
   assert.ok(result.err.includes(String(owner.pid))); assert.ok(result.err.includes(owner.started_at));
-  gate.resume.resolve(); assert.equal((await bounded(running, `${mode} completion`)).code, 0);
-  assert.equal(existsSync(join(r.setup.state, 'batches', batch, 'batch.lock')), false);
+  assert.equal(finished.code, 0); assert.equal(existsSync(join(r.setup.state, 'batches', batch, 'batch.lock')), false);
 });
