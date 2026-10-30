@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 64fb2c51fe779ced663106c8509cea15abad58b87344f97e3d91d7779e0ec7eb).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6a12cbe9cf157f4c56b07ddd3aeeb73b98ccff4166df423fac7e2340b28933af).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  preflight, readPrompt, selectTests, sourceFilePort, interfaceBlocks, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -898,7 +898,7 @@ function batchRecord(context) {
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
-    contract_snapshots: capture.stories, ...(context.sourceOnly ? { source_only: true } : {}),
+    contract_snapshots: capture.stories, ...(context.sourceOnly ? { source_only: true, ...(context.proseSourcePaths !== undefined ? { prose_source_paths: context.proseSourcePaths } : {}) } : {}),
     rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
@@ -1322,6 +1322,7 @@ function printSourceLint(context, lint) {
   let promptRefused = false;
   if (usable) for (const path of selected) {
     const prompt = admitted.get(path), state = prompt?.admission_state ?? prompt?.state;
+    if (!prompt && !refused.has(path) && context.proseSourcePaths?.includes(path)) continue;
     if (refused.has(path) || !['approved', 'draft'].includes(state)) {
       promptRefused = true;
       if (!problems.some(problem => problem.path === path && problem.severity !== 'warning')) problems.push({
@@ -1400,6 +1401,10 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   context.sourceOnly = sourceOnly;
   context.coverage = bindingCoverage({ root, found, selected });
   let capture = sourceOnly ? ports.captureSource(root, { tests: [], sourceFiles, appMap: null }) : null;
+  if (sourceOnly && Array.isArray(capture.sources)) {
+    context.proseSourcePaths = capture.sources.filter(file => file.path.endsWith('.prompt.md')
+      && !interfaceBlocks(file.bytes.toString('utf8')).length).map(file => file.path);
+  }
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
@@ -1455,7 +1460,8 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
-  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
+  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? []),
+    ...(context.proseSourcePaths ?? []).map(path => `${path} has no Runtime interface yet`)];
   if (!context.json && !sourceOnly) for (const warning of [...svgWarnings,...drift,...(capture.warnings ?? [])]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
@@ -1674,6 +1680,9 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   if (saved.source_only === true && saved.intent === 'lint-only' && saved.rows.length === 0) {
+    const prosePaths = saved.prose_source_paths;
+    if (Array.isArray(prosePaths) && prosePaths.every(path => typeof path === 'string'
+      && path.endsWith('.prompt.md') && saved.files.includes(path)) && new Set(prosePaths).size === prosePaths.length) context.proseSourcePaths = [...prosePaths];
     Object.assign(context, { sourceOnly: true, rows: [], reading: true });
     return readSourceLint(context);
   }

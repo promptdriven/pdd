@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 610f99d76e6e72505cfa05c2f6e8acfa423995adb598b269c8de123a33fee6be).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: dba02f5361fca2a510de0556f05f9a152496f65b10b654c3cb54224b46e518b4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -1189,10 +1189,10 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
 }
 
-// Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.
+// Why a repo has no tests: unfinished JSON under test/tests folders and misnamed prompts.
 export function whyNoTests(root, visible) {
   const files = [...visible].sort(), why = [];
-  for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
+  for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).some(part => part === 'test' || part === 'tests'))) {
     if (Number(statOf(join(root, path))?.size ?? 0) > 1024 * 1024) {
       why.push(`${path} is larger than 1 MiB and was not read as a PDD test file. See RUNBOOK.md §2.`);
       continue;
@@ -1202,9 +1202,6 @@ export function whyNoTests(root, visible) {
     if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
   }
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
-  for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
-    if (!interfaceBlocks(readText(root, path)).length) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
-  }
   return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
 
