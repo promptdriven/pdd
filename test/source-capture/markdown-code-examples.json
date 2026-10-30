@@ -250,6 +250,7 @@
   "repository_cases": [
     {
       "id": "actual-repository-capture",
+      "selected_tests": "all discovered repository PDD scenarios outside test/fixtures/",
       "required_files": [
         "docs/prompting-guide.md",
         "skills/pdd-prompting/guide.md"
@@ -266,7 +267,7 @@
         "--lint": true,
         "--local": true
       },
-      "selected_tests": "all discovered PDD scenario paths",
+      "selected_tests": "all discovered repository PDD scenarios outside test/fixtures/",
       "expected_exit_code": 0,
       "expected_auth_calls": 0,
       "expected_network_calls": 0
