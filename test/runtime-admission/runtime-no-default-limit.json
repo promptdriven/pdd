@@ -1,0 +1,70 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-no-default-limit.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With PDD_MAX_JOBS unset, all 7 selected checks reach the server before any check finishes, without a local-slot wait."
+    },
+    {
+      "id": "AC2",
+      "text": "With PDD_MAX_JOBS=2, at most 2 jobs run at once, including jobs from two local processes sharing the same state folder and runtime host."
+    },
+    {
+      "id": "AC3",
+      "text": "An invalid PDD_MAX_JOBS value prints one warning line per command and imposes no cap."
+    },
+    {
+      "id": "AC4",
+      "text": "A confirmed busy refusal honors Retry-After and existing minimum waits, retries only the unstarted check with a new request ID, reduces the check dispatch window to 1 and never replays accepted work."
+    },
+    {
+      "id": "AC5",
+      "text": "With no cap, remote lint and Try setup proceed past existing active leases and older waiting tickets without a local-slot wait; request records, ownership and uncertain-job evidence remain intact."
+    }
+  ],
+  "cases": [
+    {
+      "id": "seven-before-completion",
+      "criterion_id": "AC1",
+      "given": "7 selected checks; no environment cap; terminal replies held",
+      "required_observation": "All 7 unique check POSTs arrive before any terminal reply, no local-slot notice, durable request IDs match active records."
+    },
+    {
+      "id": "cap-two-shared-processes",
+      "criterion_id": "AC2",
+      "given": "Two actual CLI processes, three selected checks each, one shared state directory, PDD_MAX_JOBS=2",
+      "required_observation": "Peak active jobs is 2; more checks wait until released, all 6 complete once."
+    },
+    {
+      "id": "invalid-no-cap",
+      "criterion_id": "AC3",
+      "given": "Repeat seven-before-completion with PDD_MAX_JOBS=0; also empty, -1, 1.5, text, whitespace, leading zero and unsafe integer",
+      "required_observation": "One warning line per command, no cap or local-slot wait."
+    },
+    {
+      "id": "busy-window-one",
+      "criterion_id": "AC4",
+      "given": "Explicit cap2, accepted first check held, second check confirmed busy with Retry-After7; later selected check held",
+      "required_observation": "No third check or busy retry while first remains accepted; wait >=10s; replacement has new ID, accepted scenario sent once; saved refusal retained."
+    },
+    {
+      "id": "lint-try-no-local-wait",
+      "criterion_id": "AC5",
+      "given": "No cap; seed four fresh active uncertain leases and an older waiting ticket; run explicit lint and Try setup",
+      "required_observation": "Both modes POST without local waiting or foreign record mutation; each new request registered before dispatch."
+    },
+    {
+      "id": "slot-no-cap-evidence",
+      "criterion_id": "AC5",
+      "given": "Omitted/Infinity limit; older live waiting ticket and active leases; register duplicate IDs then release uncertain/ended",
+      "required_observation": "Immediate active reservation without sleep/probe/status; ordered deduplicated IDs and private files; foreign evidence preserved."
+    },
+    {
+      "id": "uncapped-stop-before-dispatch",
+      "criterion_id": "AC5",
+      "given": "Omitted/Infinity limit with already expired deadline or interruption; separately stop at immediate active record creation in explicit lint",
+      "required_observation": "Return null before file effects when already stopped; stop after active creation registers no request and makes no POST, removes own unsent reservation, preserves foreign uncertain evidence."
+    }
+  ]
+}

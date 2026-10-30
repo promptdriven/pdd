@@ -82,3 +82,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Busy Check upload waits
 
 - [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
+
+## Optional local runtime limit (#2704)
+
+- [Send selected jobs without a default limit](runtime-no-default-limit.md) — [native cases](../test/runtime-admission/runtime-no-default-limit.json). Runtime check: NOT REPLAYED; native shared-process admission and dispatch barriers require Node tests.
