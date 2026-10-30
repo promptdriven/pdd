@@ -61,7 +61,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 - A new Try defaults to 400 calls. Both `pdd check --max-calls N` and `pdd try --max-calls N` accept 1 through 1000. Checks default to 12 calls per step, at least 18 and at most 1000. Choose at least three times your worst-case estimate.
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
-- Checks keep at most five submitted, unfinished jobs in flight. Confirmed zero-execution queue refusals mean busy, not a test failure: pdd honors the retry delay, reduces its window and tries at most three times per test within the command wait. `--read` can continue original checks held for pending lint after the saved lint passes, using identical selected source, owner and call ceilings; other reads send no work; `--retry BATCH` recovers only unstarted work with identical source and confirmed lint.
+- Local pdd processes share a runtime job limit (`PDD_MAX_JOBS`, default 4) across repositories and worktrees. Checks, remote lint and Try setup wait fairly for local slots. Confirmed zero-execution capacity refusals wait for Retry-After within the caller deadline, without an attempt-count ceiling. `--read` can continue original checks held for pending lint after the saved lint passes, using identical selected source, owner and call ceilings; other reads send no work except a confirmed one-time restart replacement; `--retry BATCH` recovers only unstarted work with identical source and confirmed lint.
 - Offline-only work uses `pdd check --lint --local`, local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Runtime boundaries](runtime-boundaries.md).
 - Running `pdd try STORY` for a paused Try explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
@@ -101,6 +101,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
 | `pdd --version` | Print the version, `0.1.10`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
+| `pdd jobs` | List active slots and waiting runtime jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or runtime call |
 
 ## Run from a source checkout
 
@@ -114,7 +115,7 @@ npm test
 
 You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-When lint capacity is busy, Check, lint and Try use [bounded lint-slot retries](lint-capacity.md).
+Check, remote lint and Try setup share [local slots and capacity waiting](lint-capacity.md). Local waiting, maintenance and runtime queue time all use the existing caller wait. Try keeps its five-minute setup allowance and 90-second agent lint wait; it adds no timeout flag.
 
 `pdd try [STORY] --cli [--shell] [--max-calls N] [--new]`
 
@@ -137,3 +138,5 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 `pdd check --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted Try CLI commands print this exact recovery command. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.
 
 Remote lint shares the Check caller wait, including `--timeout`, with no separate lint limit. Recovery of a saved lint-held Check has a fresh finite wait (`--timeout`, otherwise 90 seconds), retains the saved runtime origin and dispatches each original check at most once. Standalone lint reads never send checks.
+
+Before a new submission, pdd reads runtime capacity. Announced maintenance prints its end and reason and waits within the same deadline; capacity HTTP 404 permits older runtimes through admission response codes. An accepted queued job retains its ID while progress shows its queue place. Only a confirmed same-ID check ending `unknown` with `service-restarted` gets one automatic replacement; both IDs and usage remain saved. Lost replies and other unknown outcomes stay read-only.

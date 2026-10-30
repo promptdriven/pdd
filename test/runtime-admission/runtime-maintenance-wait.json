@@ -1,0 +1,45 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-maintenance-wait.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Before submission, pdd reads authenticated runtime capacity; a maintenance window reports its end and reason, waits, then rechecks before sending."
+    },
+    {
+      "id": "AC2",
+      "text": "A confirmed unstarted 503 maintenance response gets the same wait; capacity 404 permits compatibility through admission response codes."
+    },
+    {
+      "id": "AC3",
+      "text": "Maintenance waiting shares the caller deadline and stops on interruption; authentication, access and unrelated service errors retain their existing handling."
+    }
+  ],
+  "cases": [
+    {
+      "id": "window",
+      "given": "capacity announces deploy until fixed future time, then clear",
+      "required_observation": "no POST during window; one POST after recheck; print reason/end"
+    },
+    {
+      "id": "direct-admission",
+      "given": "capacity 404, POST 503 maintenance/not_started, Retry-After",
+      "required_observation": "wait, recheck 404, retry safely"
+    },
+    {
+      "id": "old-runtime",
+      "given": "capacity 404 followed by ordinary admission",
+      "required_observation": "proceed; no fabricated aggregate values"
+    },
+    {
+      "id": "stop",
+      "given": "window exceeds agent 90 s, separately interrupt",
+      "required_observation": "no later POST; finite wait and plain progress"
+    },
+    {
+      "id": "other-failure",
+      "given": "401/not-invited/cloud-unavailable/legacy opens-soon separately",
+      "required_observation": "existing immediate gate, no maintenance loop"
+    }
+  ]
+}

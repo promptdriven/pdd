@@ -1,0 +1,49 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-capacity-wait.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "After more than 3 confirmed unstarted capacity refusals, Check, remote lint and Try setup can still finish within their caller wait."
+    },
+    {
+      "id": "AC2",
+      "text": "pdd honors Retry-After between confirmed capacity attempts and stops sending at the caller deadline or interruption."
+    },
+    {
+      "id": "AC3",
+      "text": "An accepted queued job keeps its request ID; pdd reports its supplied queue place and busy slots without resubmitting it."
+    },
+    {
+      "id": "AC4",
+      "text": "Lost replies, mismatched receipts, evaluated checks, positive or unknown calls and incomplete accounting never authorize a capacity retry."
+    }
+  ],
+  "cases": [
+    {
+      "id": "beyond-three",
+      "given": "4 confirmed busy refusals then success, each command kind separately",
+      "required_observation": "5 attempts succeed, same source/options/caps; all IDs retained"
+    },
+    {
+      "id": "delay-deadline",
+      "given": "Retry-After 7 seconds; finite caller budget; interrupt during wait",
+      "required_observation": "no early POST, no POST past deadline/interrupt"
+    },
+    {
+      "id": "queued",
+      "given": "same ID queued with ahead 5/in_use 8/slots 8, then passed",
+      "required_observation": "one POST; progress 5 ahead/8 of 8; GET same ID"
+    },
+    {
+      "id": "no-proof",
+      "given": "lost POST, wrong ID, positive/unknown calls, incomplete accounting separately",
+      "required_observation": "GET-only recovery; zero capacity replacement"
+    },
+    {
+      "id": "defaults",
+      "given": "agent 90 s; terminal Check; Try existing allowance",
+      "required_observation": "agent stops 90 s; terminal Check unlimited; no new Try flag"
+    }
+  ]
+}

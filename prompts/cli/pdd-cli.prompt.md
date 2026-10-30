@@ -12,6 +12,8 @@ one newline. Preserve other commands and their existing dispatch and effects.
 
 ## Dependencies
 
+- [Runtime slots](runtime-slots.prompt.md): required generation/verification context for local jobs dispatch. The existing syntax-only Runtime entry does not bind its native filesystem effects.
+
 - [Argument parser](argument-parser.prompt.md) is required for authoring,
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
@@ -25,6 +27,10 @@ workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HO
 ## Help contract
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Help lists the catalog forms, then says: `Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).` (Codex calls a skill with `$name`, Claude Code with `/name`); `workflow run` starts the first area chat in Herdr session pdd and exits; the person approves each area, and pdd pushes the branch and opens a real PR after the last step; pdd never merges. Help is exit 0 and local, with no runner, network or auth effects.
+
+## Local jobs
+
+For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md), pass the injected env/stdout/stderr to runJobs and return its exit code. Permit an injected slots module for native tests. No repository, gh, fetch, skill discovery, PATH probing or workflow runner is needed. Parsing remains catalog-owned. A listing failure prints one finite cause and returns5.
 
 ## Runtime commands
 
@@ -57,8 +63,8 @@ with external effects is invoked; no runtime resource is needed for that path.
 
 ```json
 {
-  "status": "approved",
-  "prose_sha256": "93c8bdd058a34ce3cc94aa5892120812f42a3969d991d2f95b8907514af9f13b",
+  "status": "draft",
+  "prose_sha256": "515d4fab0cb3817e94fbd63c15525fd90bc44d91507f74f91b47c0acd8dbbf65",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

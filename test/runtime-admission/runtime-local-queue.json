@@ -1,0 +1,45 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-local-queue.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The oldest live waiting job takes the next free local slot, and each waiting job keeps one ticket."
+    },
+    {
+      "id": "AC2",
+      "text": "While I wait, pdd reports the local busy count, limit and number ahead of me."
+    },
+    {
+      "id": "AC3",
+      "text": "Interruption or the caller deadline stops my waiting job without dispatching it or leaving a live waiting ticket."
+    }
+  ],
+  "cases": [
+    {
+      "id": "fifo",
+      "given": "tickets created at 10,20,30; one slot frees",
+      "required_observation": "10 acquires, then 20, then 30; one ticket each"
+    },
+    {
+      "id": "equal-time",
+      "given": "two tickets share timestamp; reversed directory enumeration",
+      "required_observation": "stable ID tie order"
+    },
+    {
+      "id": "progress",
+      "given": "4 occupied slots, limit 4, two older live tickets",
+      "required_observation": "stderr reports 4 busy/of 4 and 2 ahead; JSON stdout stays valid"
+    },
+    {
+      "id": "dead-waiter",
+      "given": "oldest PID dead; later live waiter",
+      "required_observation": "dead waiting ticket removed; next live ticket eligible"
+    },
+    {
+      "id": "stop",
+      "given": "deadline/interrupt before claim and before POST",
+      "required_observation": "ticket removed, zero new sends"
+    }
+  ]
+}
