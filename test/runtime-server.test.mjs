@@ -425,7 +425,13 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   assert.equal(code, 3, out);
   assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
   assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
-  assert.match(out, /^NOT RUN {2}Refuse an item[^:]*: The runtime stayed busy\. No checks ran for this attempt\. Retry this batch later\. \(check-busy\)$/m);
+  const stopped = /^NOT RUN {2}Refuse an item[^:]*: (.+) \(check-busy\)$/m.exec(out)?.[1];
+  const submitted = fake.posts.findLast(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json');
+  assert.match(stopped, /^Stopped\./);
+  assert.match(stopped, /submitted/i);
+  assert.ok(stopped.includes(submitted.request.requestId), 'identify the submitted request whose outcome was confirmed');
+  assert.match(stopped, /confirmed.*(?:not start|unstarted|no (?:checks|work) ran)/i);
+  assert.doesNotMatch(stopped, /wait ended|stayed busy|Stopped before sending/i);
   assert.equal(made.ports.stderr.text.split('\n').filter(text => text.startsWith('Still running')).length, 23);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8')).timeout_min, null);
   done = true;
