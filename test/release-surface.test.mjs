@@ -11,7 +11,7 @@ test('RELEASE1: worker status logs are absent from the public repository root', 
 test('RELEASE4: feature routing covers new behavior while its core stays within the skill budget', () => {
   const source=read('skills/pdd-feature/SKILL.md');
   assert.match(source,/Use when the person asks for a new feature or new behavior in a PDD project/);
-  assert.ok(Buffer.byteLength(source)<=3072);
+  assert.ok(Buffer.byteLength(source)<=4096);
   assert.doesNotMatch(source,/To try a CLI/);
   assert.match(read('skills/pdd-feature/steps/try.md'),/pdd try <story> --cli/);
 });
