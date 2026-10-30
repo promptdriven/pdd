@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c82ba09773ad025bd2a846a08148f9ae2b7e374268543917381f995c7a2d349a).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 33ae451897afe12078988039e8f7324d3296fc4fca9540a0c6c52fe7fe00fdf1).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -687,6 +687,24 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
+  const checked = preflight({root,found,selected});
+  const limitRows = checked.rows.map(row => ({...row, refusals: row.refusals.filter(problem =>
+    ['invalid-limits','invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'))}));
+  if (limitRows.some(row => row.refusals.length)) {
+    const rows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+    const problems = rows.flatMap(row => row.refusals);
+    const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
+    if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
+      coverage:context.coverage,problems,rows,warnings:[...found.warnings,...checked.warnings]}));
+    else {
+      for (const problem of problems) {
+        line(ports.stderr, `${problem.code}  ${problem.message}`);
+        if (problem.hint) line(ports.stderr, problem.hint);
+      }
+      line(ports.stdout,summary);
+    }
+    return 4;
+  }
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   context.warnings = [...svgWarnings, ...found.warnings];
