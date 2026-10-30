@@ -84,7 +84,7 @@ for (const cache of ['missing', 'running', 'wrong-id']) test(`2655: saved passed
   assert.equal(r.fake.posts.length, posts);
 });
 
-test('2655: direct UUID read refreshes matching batch raw receipt and row, keeping unrelated caches', async t => {
+test('2655: direct UUID read refreshes matching raw receipt for lazy batch projection, keeping unrelated caches', async t => {
   const r = await fixture(t), original = read(r.file);
   r.edit(row => Object.assign(row, { phase: 'local', state: 'running' }));
   const raw = join(r.folder, `${r.id}.json`), stale = read(raw); stale.state = 'running'; stale.result = null; write(raw, stale);
@@ -93,12 +93,12 @@ test('2655: direct UUID read refreshes matching batch raw receipt and row, keepi
     const folder = join(r.setup.state, 'batches', `20261027-09274${i}-abcd`); mkdirSync(folder); cpSync(raw, join(folder, `${r.id}.json`));
     write(join(folder, 'batch.json'), { ...original, ...change }); others.push({ folder, bytes: readFileSync(join(folder, 'batch.json'), 'utf8') });
   }
-  const posts = r.fake.posts.length;
+  const posts = r.fake.posts.length, batchBytes = readFileSync(r.file);
   complete(await r.run({ '--read': r.id }));
   assert.equal(r.fake.posts.length, posts);
   for (const other of others) { assert.equal(readFileSync(join(other.folder, 'batch.json'), 'utf8'), other.bytes); assert.equal(read(join(other.folder, `${r.id}.json`)).state, 'running'); }
   assert.equal(read(raw).state, 'passed', 'direct read persists its authoritative raw check receipt');
-  assert.equal(read(r.file).rows[0].state, 'passed');
+  assert.deepEqual(readFileSync(r.file), batchBytes, 'UUID read leaves batch projection byte-identical until batch read');
   const gets = r.fake.gets.length;
   complete(await r.run({ '--read': r.batch }));
   assert.equal(r.fake.gets.length, gets, 'cached terminal receipt needs no GET');
