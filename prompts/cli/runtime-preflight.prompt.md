@@ -215,7 +215,6 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 ## Dependencies
 
-- [Contracts commands](contracts.prompt.md): required generation and verification context for the caller-owned stricter command read/write boundary.
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
   this module's privacy, snapshot and capture rules.
