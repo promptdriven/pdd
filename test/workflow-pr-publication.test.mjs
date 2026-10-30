@@ -70,7 +70,10 @@ test('real publication creates code PR with all known-step labels, current machi
   const body = f.data().prs[0].body;
   const order = ['Not fixed yet:', 'Not checked:', 'Defect: broken value', 'Not caught because:', 'Proof (defect fixed):', 'Proof (gap closed):', 'Old-code proof: ✓', 'Review: reviewed'];
   let previous = -1; for (const label of order) { const at = body.indexOf(label); assert.ok(at > previous, label); previous = at; }
-  assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign|Tests vs base:/);
+  assert.match(body, /Refs #17/); assert.doesNotMatch(body, /Closes #17|forged|Review: foreign/);
+  const inventory = `Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\nTest inventory commits: ${f.run.baseSha.slice(0,7)} → ${f.head.slice(0,7)}.`;
+  const proofAt = body.indexOf('Old-code proof: ✓'), inventoryAt = body.indexOf(inventory), reviewAt = body.indexOf('Review: reviewed');
+  assert.ok(proofAt >= 0 && proofAt < inventoryAt && inventoryAt < reviewAt, 'current machine proof, complete collector inventory, then Review');
   assert.equal((body.match(/pdd-workflow:/g) ?? []).length, 1);
   assert.equal(f.git('ls-remote', 'origin', 'refs/heads/topic').split('\t')[0], f.head);
 });
