@@ -120,7 +120,7 @@ function attachSession() {
   });
 }
 
-// Returns {resumed, attached}; it may change chat.tabId/paneId/session/resumedAt, and the caller saves the run.
+// Returns {resumed, attached}; it may change chat.tabId/paneId/terminalId/session/resumedAt, and the caller saves the run.
 export async function openChat({ run, chat }, ports = {}) {
   const herdr = herdrCommand(ports), env = ports.env ?? process.env, now = ports.now ?? Date.now, configDir = expandHome(chat.configDir, env);
   await ensureServer(herdr, ports);
@@ -133,8 +133,9 @@ export async function openChat({ run, chat }, ports = {}) {
       throw problem('chat_start_unconfirmed', 'The earlier launch was not confirmed and its saved tab is unavailable. Inspect the original Herdr tab and pane before starting another agent.');
     }
     const created = await herdr(['tab', 'create', '--workspace', chat.workspaceId, '--cwd', run.root, '--label', chat.area, '--no-focus']);
-    if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
-    chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id;
+    const terminalId = created.result?.root_pane?.terminal_id;
+    if (!created.result?.tab?.tab_id || !created.result?.root_pane?.pane_id || typeof terminalId !== 'string' || !terminalId) throw problem('herdr_tab_failed', 'Herdr did not make a new tab for the chat.');
+    chat.tabId = created.result.tab.tab_id; chat.paneId = created.result.root_pane.pane_id; chat.terminalId = terminalId;
   }
   const live = await chatSession(chat, ports);
   if (!live.alive && live.code !== 'agent_not_found') throw problem(live.code ?? 'herdr_status_unknown', live.message ?? 'Herdr could not confirm this chat; no native launch or resume was sent.');
