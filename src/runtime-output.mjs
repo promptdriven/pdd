@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 9b271181656773fe190b8374e7a083327ae7f85f62d821c10d28dae5cd8e8dc0).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 77059bc0e79629f38788f3ca0b8921f8fcbe4f0f7c9881420d42efd4042763b7).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -120,6 +120,9 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     where: cleanText(item?.where, secrets) || [item?.file, item?.at].map(part => cleanText(part, secrets)).filter(Boolean).join(' ') || null,
     cause: cleanText(item?.cause, secrets) || null }));
   const usage = answer?.usage ?? {};
+  const incomplete = usage.accounting_complete === false || report?.accounting_complete === false || usage.unknown_calls > 0;
+  const knownCalls = nonNegativeInt(usage.known_calls) ?? nonNegativeInt(usage.calls);
+  const unknownCalls = incomplete ? Math.max(1, nonNegativeInt(usage.unknown_calls) ?? 1) : 0;
   const model = [usage.requested_model, report?.evaluation?.requested_model].find(value => typeof value === 'string' && value && value !== 'unknown');
   const results = Array.isArray(report?.criterion_results) ? report.criterion_results : [];
   const cause = Array.isArray(report?.samples) ? report.samples.map(sample => sample?.refusal?.failure_cause).find(isObjectLike) : null;
@@ -130,7 +133,8 @@ export function projectAnswer(answer, { origin, secrets = [], steps: authoredSte
     state: time_limit ? 'unknown' : answer?.state, time_limit, checks: all.length ? { passed: all.filter(check => check.passed).length, total: all.length } : null,
     criteria: results.length ? { passed: results.filter(item => item?.status === 'passed').length, total: results.length } : null,
     all_checks: all, failed_checks: all.filter(check => !check.passed).map(({ passed, ...check }) => check), refusals,
-    calls: typeof usage.calls === 'number' ? usage.calls : 'unknown', requested_model: model ? cleanText(model, secrets) : null,
+    calls: !incomplete && typeof usage.calls === 'number' ? usage.calls : 'unknown',
+    known_calls: incomplete ? knownCalls : undefined, unknown_calls: unknownCalls, requested_model: model ? cleanText(model, secrets) : null,
     server_seconds: typeof usage.seconds === 'number' ? usage.seconds : null,
     report_url: validLink(answer?.report_url, origin, 'report'), why: result?.why ? cleanText(result.why, secrets) : null,
     who: result?.who ? cleanText(result.who, secrets) : null, next_step: result?.next_step ? cleanText(result.next_step, secrets) : null,
@@ -155,7 +159,7 @@ export function jsonRow(row) {
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
     rerun: row.rerun ?? null,
-    reason: row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
+    reason: ['passed', 'failed'].includes(row.state) ? null : row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
 export function renderJson({ batch = null, repo, sourceSha256 = null, coverage, rows, warnings = [], exitCode, summaryLine: line = summaryLine(rows) }) {
@@ -178,14 +182,17 @@ export function summaryLine(rows, story = null) {
   const criteria = rows.reduce((sum, row) => ({ passed: sum.passed + own(row).passed, total: sum.total + own(row).total }), { passed: 0, total: 0 });
   const checks = rows.reduce((sum, row) => ({ passed: sum.passed + (row.checks?.passed ?? 0), total: sum.total + (row.checks?.total ?? 0) }), { passed: 0, total: 0 });
   const sent = rows.filter(sentRow), known = sent.filter(row => typeof row.calls === 'number' && !OPEN_STATES.has(row.state));
-  const calls = known.reduce((sum, row) => sum + row.calls, 0), unknownCalls = sent.length - known.length;
+  const partial = sent.filter(row => !OPEN_STATES.has(row.state) && typeof row.calls !== 'number');
+  const calls = known.reduce((sum, row) => sum + row.calls, 0) + partial.reduce((sum, row) => sum + (row.known_calls ?? 0), 0);
+  const unknownCalls = sent.reduce((sum, row) => sum + (known.includes(row) ? 0 : row.unknown_calls || 1), 0);
   const rerunCalls = rows.reduce((sum, row) => sum + (Number.isInteger(row.rerun?.calls) && row.rerun.calls > 0 ? row.rerun.calls : 0), 0);
   const others = ['refused', 'not_run', 'unknown', 'queued', 'running'].map(state => [state, rows.filter(row => row.state === state).length])
     .filter(([, number]) => number).map(([state, number]) => `${number} ${RESULT_WORDS[state] ?? state}`);
   // A cross only for a real failure; a check that still runs or has no verdict says so (cli 12b).
-  const bad = rows.some(row => ['failed', 'refused', 'not_run'].includes(row.state) && !row.busy);
-  const mark = rows.length && rows.every(row => row.state === 'passed') ? '✓' : bad ? '✗'
-    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·' : rows.some(row => row.state === 'unknown') ? 'unknown ·' : rows.some(row => row.busy) ? 'busy ·' : 'unknown ·';
+  const mark = rows.some(row => row.state === 'failed') ? '✗'
+    : rows.length && rows.every(row => row.state === 'passed') ? '✓'
+    : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
+    : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
@@ -229,14 +236,18 @@ function checkLines(check, secrets) {
   return [head, ...criterion, ...block('expected', check.expected, expected), ...block('got', check.actual, actual)];
 }
 // With a plain reason (#379): the reason, where and the fix; an AI service failure is not a problem in the test.
-function refusalLines(item) {
+function refusalLines(item, serverNext = false) {
   const lines = item.reason ? [`  ${item.code}: ${item.reason}`, ...(item.where ? [`  Where: ${item.where}`] : []),
-    ...(item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
+    ...(serverNext ? [] : item.cause === 'ai-service' ? ['  Your test is fine. Run it again.'] : item.fix ? [`  Fix: ${item.fix}`] : [])]
     : [`  ${[item.code, item.section, item.message].filter(Boolean).join('  ')}`];
   if (!item.reason && item.engine_message && item.engine_message !== item.code && item.engine_message !== item.message) lines.push(`  engine: ${item.engine_message}`);
-  if (item.hint) lines.push(`  ${item.hint}`);
+  if (item.hint && !serverNext) lines.push(`  ${item.hint}`);
   return lines;
 }
+
+const serverAdvice = (row, secrets = []) => [
+  ...(row.why ? [`  Why: ${cleanText(row.why, secrets)}`] : []),
+  ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])];
 
 const validRerun = item => Number.isInteger(item?.runs) && item.runs >= 2
   && Number.isInteger(item?.failed) && item.failed >= 0 && item.failed <= item.runs;
@@ -261,12 +272,15 @@ function rerunEntries(row, failed) {
   return entries;
 }
 
-function localRefusals(rows) {
+function localRefusals(rows, secrets) {
   const local = rows.filter(row => row.state === 'refused' && !sentRow(row)), out = [];
   if (local.length) {
     out.push('REFUSED before sending (not sent, 0 AI calls)');
-    for (const row of local) for (const item of row.refusals) {
-      out.push(`  ${row.test}${item.step ? `  step ${item.step}` : ''}  ${item.code}`, `  ${item.message}`, ...(item.hint ? [`  ${item.hint}`] : []));
+    for (const row of local) {
+      for (const item of row.refusals) {
+        out.push(`  ${row.test}${item.step ? `  step ${item.step}` : ''}  ${item.code}`, `  ${item.message}`, ...(item.hint && !row.next_step ? [`  ${item.hint}`] : []));
+      }
+      out.push(...serverAdvice(row, secrets));
     }
   }
   return out;
@@ -279,6 +293,19 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
   // One Story: its own line is the result; the overall line comes only with two or more Stories.
   const perStory = storyLines(rows).map(([, text]) => text);
   out.push(...table(rows), ...(perStory.length === 1 ? perStory : [...perStory, summaryLine(rows)]));
+  if ([3, 4, 5].includes(exitCode)) {
+    const failed = new Set(rows.filter(row => row.state === 'failed').map(row => row.story));
+    const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));
+    const other = [...inconclusive].filter(story => !failed.has(story)).length;
+    const overlap = [...inconclusive].filter(story => failed.has(story)).length;
+    if (failed.size && inconclusive.size) {
+      const first = failed.size === 1 ? '1 Story failed its checks.' : `${failed.size} Stories failed their checks.`;
+      const second = other ? other === 1 ? 'Another Story has no verdict' : `${other} other Stories have no verdict`
+        : failed.size === 1 ? 'That Story also has checks with no verdict'
+        : `${overlap} of those Stories also ${overlap === 1 ? 'has' : 'have'} checks with no verdict`;
+      out.push(`${first} ${second}, so the exit code is ${exitCode}.`);
+    }
+  }
   for (const row of rows.filter(row => row.state === 'failed')) {
     const failed = row.failed_checks ?? [], reruns = rerunEntries(row, failed), rerunByStep = new Map(reruns.filter(item => item.key !== null).map(item => [item.key, item.line])), lines = [`FAILED  ${row.title} (${row.test})`];
     for (const check of failed) {
@@ -296,27 +323,29 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     if (!diagnosed && !row.next_step) lines.push('  Next: show this check to the person. A person decides expected values. The agent may propose a change, and never makes it.');
     lines.push(`  Report: ${row.report_url ?? 'none'}`); out.push(...lines);
   }
-  out.push(...localRefusals(rows));
+  out.push(...localRefusals(rows, secrets));
   for (const row of rows.filter(row => row.state === 'refused' && sentRow(row))) {
-    out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(refusalLines), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
+    out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
-    out.push(`NOT RUN  ${row.title} (${row.test}): ${row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`);
+    const message = row.note?.message ?? (row.request_ids?.length ? 'No checks ran for this attempt.' : 'pdd did not send it.');
+    const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd check command to start checks|Try again later)\.?/g, '').trim() : message;
+    out.push(`NOT RUN  ${row.title} (${row.test})${explanation ? `: ${explanation}` : ''}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
     const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
     out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider && !row.time_limit)) {
-    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.why ? [`  ${row.why}`] : []));
+    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...((row.lost || row.final) && row.why ? [`  ${row.why}`, ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])] : serverAdvice(row, secrets)));
   }
   for (const row of rows.filter(row => row.time_limit)) {
-    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, `  ${row.time_limit.fix}`,
+    out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, ...(row.next_step ? [] : [`  ${row.time_limit.fix}`]), ...serverAdvice(row, secrets),
       ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'unknown' && row.provider)) {
     out.push(`UNKNOWN  ${row.title}: ${PROVIDER_TEXT}`, `  ${row.provider.code}${row.provider.detail ? ` (${row.provider.detail})` : ''}${row.report_url ? `  Report: ${row.report_url}` : ''}`,
-      '  To try again, run `pdd check` again (a new request).');
+      ...(row.next_step ? [] : ['  To try again, run `pdd check` again (a new request).']), ...serverAdvice(row, secrets));
   }
   if (details) for (const row of rows.filter(row => row.all_checks?.length)) {
     out.push(`Checks for ${row.title} (${row.test}):`,

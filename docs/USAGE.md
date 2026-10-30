@@ -401,7 +401,7 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 |---|---|---|
 | 0 | passed | Nothing. |
 | 1 | a check failed | Look at the failed check. You decide: change the prompt or the expected value. |
-| 4 | refused | A file breaks a rule and nothing was judged. Fix the file. |
+| 4 | refused | A file rule or the AI service; nothing was judged. Read the reason under the line. |
 | 5 | not run | Sign-in, a busy server, no AI room, a GitHub account that PDD Cloud has not approved, or an old pdd. Read the one line that pdd prints. |
 | 3 | unknown or still running | Run `pdd check --read` later. Never send it again. |
 | 2 | command error | Run `pdd check --help`. |
