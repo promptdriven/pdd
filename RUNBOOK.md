@@ -519,6 +519,8 @@ Agents replay the approved prompt-space cases against the real code. Runtime che
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
+Explicit old-code proof: `pdd workflow prove <run> --test "<command>" --expect "<text>"`.
+
 **Test vectors: the approved cases, run on the real code.**
 - Use `tests/<story>.json` from prompt space as it is. Never edit it in code space. If an expected value looks
   wrong, return to prompt space for the person's approval and start a run with the approved vectors.

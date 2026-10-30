@@ -251,8 +251,8 @@ The areas of the three workflows (you act at the **bold** ones):
 
 | Workflow | Areas and steps |
 |---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal) opens PR 2, **merge** |
+| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
+| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), **try it and approve**, PR 1 opens, **code now or stop?**, code (build, verify, formal, review) opens PR 2, **merge** |
 | `small-change` | plan (scope), **approve**, build (change, verify, formal) opens one PR, **merge** |
 
 `?` marks an optional step. Each area is one chat. The code area of `feature` and `bug` runs only when you ask for it. [workflows.md](workflows.md) tells what each step does.
@@ -309,6 +309,8 @@ For a page or a screen, the chat recommends `visual`. It writes the app map, so 
 |---|---|---|
 | PR 1 | The prompt, the Story and the test cases. Its title ends with "(prompt, Story and tests)", or "(prompt and Story)" when it has no test file | After the prompt PR area. Its body says `Part of #42` |
 | PR 2 | The code | Only when you ask for it. Its body says `Closes #42` and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
+
+`pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"`
 
 **Try before PR 1.** After the prompt PR area, the chat shows one `Runtime check` line for each Story, with its report link, and the Try links. Try it. Then approve, or ask for changes. pdd opens PR 1 only after you approve. When there is nothing to try, the chat asks you only to approve.
 

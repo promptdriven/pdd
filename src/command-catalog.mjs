@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d855d8e07b787d77b16bbd742bf9bd358a271d061888b282be2fadd78f5f5ab4).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -6,6 +6,9 @@ const routes = [
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
     forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+  { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
+    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the saved old code and committed head with a 120-second limit per phase; save a non-gating report.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },

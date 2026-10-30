@@ -105,7 +105,7 @@ The view uses saved local records and local Git/file reads. It works with Herdr 
 
 The check comes first, then the Try. At the story gate, the chat can offer a Try before the check: `pdd try <story>`, or `pdd try <story> --new` when visual made an app map.
 
-After the check and try steps, the chat shows one `Runtime check` line for each Story (✓ or ✗) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
+After the check and try steps, the chat shows one `Runtime check` line for each Story (✓, ✗ or no verdict) with its report link, and the Try links. You try it, then approve or ask for changes. pdd opens PR 1 only after you approve.
 
 The PR 1 body is short:
 
