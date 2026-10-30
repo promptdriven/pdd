@@ -209,8 +209,9 @@ posted or incompletely accounted usage never becomes zero by inference. Saved re
 Each continuation gets a fresh finite wait: --timeout MIN when supplied, otherwise 90 seconds,
 including receipt refresh, source validation and check polling. Allocate the original held
 row's first check ID only after these gates; save it and an exclusive dispatch claim before
-POST. Concurrent/repeated reads or retries must share the claim and never duplicate paid
-POSTs. A saved dispatch claim or uncertain/lost POST is read by the same ID, never replayed,
+POST. Repeated reads or retries share the claim; batch ownership refuses an overlapping
+command with exit 3 and no dispatch. Neither duplicates a paid POST. A saved dispatch claim
+or uncertain/lost POST is read by the same ID, never replayed,
 even after interruption. A completed read/retry only shows existing results. Existing capacity
 recovery rules remain unchanged. Remote --lint and --read allow --timeout (1..120 minutes),
 with no Story words on --read; standalone/local SVG lint combinations remain separate.
