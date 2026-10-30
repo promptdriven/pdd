@@ -13,10 +13,11 @@ I can start a planned run through its existing issue or prepare the issue withou
 
 Use the exact run marker before creating an issue. --no-run must not start work. An unknown run must not mutate GitHub or start a workflow.
 
-Find the issue through a complete bounded marker search, including later pages
+Check a saved local issue binding directly before search. Otherwise find the
+issue through the complete shared bounded marker search, including later pages
 and closed issues. An outsider cannot claim a planned run: accept repository
 owners, members, collaborators or the person running pdd. When trusted duplicates
-exist, choose the oldest and warn. Unavailable search data cannot authorize
+exist, prefer an issue with a local feature run, then choose the oldest and warn. Unavailable search data cannot authorize
 creation. Give the agent an example filename beginning with the Story's map ID.
 Long titles fit GitHub's 256-character limit with a warning and a clear Story
 count or range; the body keeps every full Story ID and text.

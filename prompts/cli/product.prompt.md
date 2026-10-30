@@ -47,29 +47,63 @@ All three commands use the same trusted issue selection below.
 <summary>Find a trusted planned issue without loading the repository history</summary>
 
 Use the [planned-run marker grammar](../../skills/pdd-product/references/files.md#planned-run-identity).
-For each planned run, ask GitHub for repository issues whose bodies contain
-that full planned-run marker, including closed issues, then exact-filter every
-candidate. Do not search the whole product-marker history across other runs. A search may return lexical false positives; phone-1 never
-matches phone-10. Do not download every repository issue/PR and do not accumulate
-all pages in one subprocess output buffer. Read one bounded page at a time,
-requesting only the issue identity/body, author, association, creation time and
-state needed for selection. A page contains at most ten items. Search and
-timeline pagination use the raw ports below; the normal adapters use gh argv
-arrays and an explicit verified repository. No shell is involved.
+Before any search, read local product state and directly look up this run's saved
+issue binding, or an issue named by a local feature record with this exact
+`productMarker`. Validate the actual issue's repository, positive number, exact
+single marker and author trust below. A binding is a lookup hint, never authority.
+An unavailable, malformed or no-longer-valid bound issue is a finite dependency
+error; do not silently create a replacement. The account-lookup exception below
+takes precedence for read commands when unavailable identity alone prevents trust. For start, resolve its target first:
+a valid binding returns/reuses that issue without searching unrelated runs.
 
-Read through the complete relevant search result. A transport failure, malformed
-page, `incomplete_results`, or GitHub's search-result ceiling without proof of a
-complete result is a finite dependency error, never an empty search authorizing
-creation. Pagination and duplicate responses do not create duplicate candidates.
+For unresolved runs, use one shared repository issue-search query for the prefix
+`<!-- pdd-product: run=` across this product's commands, then exact-match the
+planned markers locally, including closed issues. phone-1 never matches phone-10.
+One query may require several pages: read each bounded page separately with at
+most ten items, projecting only issue identity/body, author, association,
+creation time and state. Do not load all repository history or combine pages in
+one subprocess output buffer. Use gh argv arrays and a verified repository.
+
+Read the complete relevant search result. Transport failure, malformed pages,
+`incomplete_results`, or the search ceiling without completeness proof is a
+finite dependency error, never an empty search authorizing creation. Deduplicate
+responses by issue number. Persist only complete raw search snapshots for 60,000
+milliseconds, scoped by repository and canonical product root under Git common
+pdd state. A snapshot is usable only at age 0 through 59,999 milliseconds;
+malformed, future-dated, expired or foreign-scope snapshots are misses. Across
+separate CLI processes status, next and start reuse a valid snapshot. Before
+creating from a cached negative, refresh the shared query once; a query freshly
+completed in this command is already sufficient. Never issue a second fresh
+query in one command. Revalidate a cached selected issue by direct lookup before
+claiming it; cached association/body alone cannot establish trust.
 
 A candidate is trusted only when its `author_association` is OWNER, MEMBER or
 COLLABORATOR, or its `user.login` is the current authenticated person's login.
-Compare GitHub logins case-insensitively. Resolve the current actor only when
-needed for that exception; an unavailable identity cannot be guessed. An
-outsider's marker does not claim the run or cause its issue text to be run.
-When several trusted issues carry the exact marker, use the oldest creation time,
-then the lower issue number for a tie, and warn which issue was selected. Ignore
-untrusted claims with a warning. A closed trusted issue remains eligible.
+Compare logins case-insensitively. Resolve the current actor only for that
+exception, once per command. A failed lookup or malformed/missing/blank login
+memoizes unavailable identity: candidates requiring that exception are untrusted,
+while repository-associated candidates remain eligible. For status/next, a bound
+issue that needs only this unavailable identity exception retains its binding as
+an unverified lookup hint: show its issue number with state `unverified`, warn,
+and continue other runs. Do not read its PRs, count its evidence, mark it done,
+offer it ready, or advance its dependents. For start, the same unverifiable
+binding returns a finite failure without creation or workflow launch. Identity
+lookup failure itself never throws; start fails closed because trust for a
+known binding remains unresolved. Unbound candidates remain untrusted and do
+not prevent the commands from continuing.
+An outsider's marker cannot claim the run or cause its text to be run.
+
+Among trusted exact-marker issues, prefer one with an actual local feature run
+record for that issue number; an explicit foreign `productMarker` vetoes that
+record, while absent markers in legacy records are allowed after issue discovery.
+Never infer a planned-run assignment from branch shape or runId. Within the
+preferred group, or among all trusted issues when none has a local feature run,
+choose oldest creation time then lowest issue number. Warn about trusted
+duplicates and the selected issue, and ignored untrusted claims. Closed trusted
+issues remain eligible. Save the selected run-to-issue binding immediately when
+found and immediately after confirmed creation, before returning --no-run or
+launching a workflow. A state-write failure stops startup and reports the
+already-created issue rather than deleting it or retrying creation.
 
 </details>
 
@@ -85,7 +119,8 @@ repository name, or `isCrossRepository:true`, vetoes membership; a false flag
 cannot override contradicting head metadata. With no contradiction,
 same-repository proof is `isCrossRepository:false` or matching
 `headRepositoryOwner.login` plus `headRepository.name`. Missing proof stays
-unverified with a warning, not silently trusted.
+unverified. Warn about rejected PR provenance only when its body claims this
+run with its exact own-line marker; ordinary references from other runs are quiet.
 
 An otherwise eligible PR belongs to this planned run when its body carries the
 exact product marker on its own line, or its actual head branch equals an own
@@ -134,7 +169,10 @@ person's existing checkout. If no base is available, pass explicit null to the
 shared comparison and warn; do not fall back to the finished run's old files or
 claim a current pass. A base contract/prompt edit can therefore make merged work
 stale while an unchanged base can verify it after the run worktree changes or
-is removed.
+is removed. Status text names each actual local comparison base, for example
+"Compared with your local main. Run `git pull` to see changes merged on GitHub."
+Use the actual branch name, including alpha when appropriate; never imply a fetch
+was performed. Remote-only counts retain their separate from-PR attribution.
 
 A dependency is done only when its eligible final implementation PR is merged.
 A completed workflow, a merged prompt-only PR, a closed issue or a passing check
@@ -163,11 +201,16 @@ shows each warning. Start includes its relevant warnings in its message.
 
 ```mermaid
 flowchart TD
-    R[Named planned run] --> E{Trusted exact marker exists?}
-    E -->|Yes| U[Reuse issue]
-    E -->|No| C[Create one issue]
-    U --> N{Only create issue?}
-    C --> N
+    R[Named planned run] --> B{Saved issue binding?}
+    B -->|Yes| V{Direct issue valid and trusted?}
+    V -->|Yes| U[Reuse issue]
+    V -->|No or unavailable| X[Finite dependency error]
+    B -->|No| E{Trusted exact marker found?}
+    E -->|Yes| U
+    E -->|No after fresh search| C[Create one issue]
+    U --> S[Save issue binding]
+    C --> S
+    S --> N{Only create issue?}
     N -->|Yes| D[Return issue]
     N -->|No| F[Start normal feature run]
 ```
@@ -194,7 +237,7 @@ marker. Pass multiline text as data (a body argument or body file), never shell
 code. Repeated sequential starts reuse the issue, including a closed one; do not
 create another. Concurrent start locking is outside this promise.
 
-After finding/creating the issue, `--no-run` returns it. Otherwise invoke
+After saving the issue binding, `--no-run` returns it. Otherwise invoke
 `startRun({name:'feature', issue:N, agent, cwd, packageRoot})` once. Keep the
 runner's reply and failure visible; a startup failure must not delete the issue.
 Default agent is codex; claude is supported. More than 12 Stories in a planned
@@ -223,12 +266,25 @@ GitHub's changing record envelope.
 
 | Callback | Actual outside observation |
 |---|---|
-| `issuePage({cwd,repository,marker,page,perPage})` | Raw Search response `{items,total_count,incomplete_results}` for repository issues whose bodies match that full planned-run marker, all states. Page is one-based; perPage is ten or less. |
+| `issuePage({cwd,repository,marker,page,perPage})` | Raw Search response `{items,total_count,incomplete_results}` for the shared product marker prefix, all states. Page is one-based; perPage is ten or less. |
+| `issueByNumber({cwd,repository,number})` | Raw issue identity/body, author, association, creation time and state from the requested repository issue endpoint; no selection or trust verdict. |
+| `readProductState({cwd,repository})` | `{json}` containing raw saved JSON text, or null for absent state. |
+| `writeProductState({cwd,repository,json})` | `{}` after atomically replacing that product state with the supplied JSON text. |
+| `now()` | `{milliseconds}`: current Unix epoch milliseconds. |
 | `timelinePage({cwd,repository,issue,page,perPage})` | One raw issue-timeline event array, with the same bounded page size. |
 | `pullRequest({cwd,repository,number})` | Actual PR fields needed for number/URL, body, state/draft, updated time, head branch and same-repository/fork proof. |
 | `currentActor({cwd})` | `{login}` from the authenticated gh account. |
 | `openBaseSource({cwd,baseBranch})` | `{root,handle}`: an existing base checkout or a private read-only local snapshot; root and handle may be null when unavailable. |
 | `closeBaseSource({handle})` | `{}` after releasing only the view owned by that non-null handle. |
+
+State adapters store data beneath the Git common directory, keyed by verified
+repository and canonical product root; they never write product source files.
+The module owns decoding, validation and selection. Its version-1 state contains
+`version:1`, `repository`, `productRoot`, a `bindings` array of `{run,issue}` and
+optional `search:{at,items}` with raw projected issue records. Only correctly
+scoped, well-formed positive-integer bindings are usable. Malformed binding
+state is a finite error before creation, not evidence that no issue exists.
+Missing state is empty. Cache corruption alone invalidates the snapshot.
 
 The base adapter may allocate a private local Git snapshot from an existing
 local ref. It copies no credentials, performs no network fetch and changes no
@@ -243,7 +299,10 @@ Runtime bindings: files.read returns content; runs.list and runs.evidence
 serialize the existing callback reply, with optional comparison_root passed to
 storyEvidence. github.repository binds resolveRepository; github.issuePage,
 github.timelinePage and github.pullRequest serialize their raw callbacks;
-github.currentActor returns login. repository.planOnBase returns present and
+github.currentActor returns its raw reply as json (including malformed replies).
+github.issueByNumber serializes its raw callback reply. productState.read/write
+bind the raw state callbacks, and clock.now binds now; none computes a verdict.
+repository.planOnBase returns present and
 is read only when a need names `plan PR`. repository.openBaseSource and
 repository.closeBaseSource bind the view lifecycle. github.run remains the
 legacy gh read transport through execFile; github.createIssue records the typed
@@ -267,7 +326,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "6ea63d71498a77d878f46118bb7d351dead4a0cc1966cb44dcb9851bf4d05782",
+  "status": "draft", "prose_sha256": "30488fdde3d31c4418da38f8499545a4148481989ae057fd0d6083256a66a0e5",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
@@ -278,9 +337,11 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
   "resources": [
     {"name":"files","kind":"blob","access":"read","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]},
     {"name":"runs","kind":"port","access":"read","operations":[{"name":"list","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"run_json":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["run_json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
-    {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},{"name":"issuePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"marker":{"type":"string"}},"required":["cwd","repository","page","perPage","marker"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"timelinePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"issue":{"type":"integer","minimum":1}},"required":["cwd","repository","page","perPage","issue"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"pullRequest","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"currentActor","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"login":{"type":"string"}},"required":["login"],"additionalProperties":false}}]},
+    {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},{"name":"issuePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"marker":{"type":"string"}},"required":["cwd","repository","page","perPage","marker"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"timelinePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"issue":{"type":"integer","minimum":1}},"required":["cwd","repository","page","perPage","issue"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"pullRequest","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"currentActor","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"issueByNumber","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
     {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}},{"name":"openBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"root":{"oneOf":[{"type":"string"},{"type":"null"}]},"handle":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root","handle"],"additionalProperties":false}},{"name":"closeBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
-    {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]}
+    {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
+    {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
+    {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]}
   ],
   "limits": {"max_steps":20,"max_model_calls":12}, "conventions": []
 }
