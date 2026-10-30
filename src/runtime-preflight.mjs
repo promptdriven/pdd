@@ -793,33 +793,99 @@ function markdownLinks(text, definitions, imagesOnly = false) {
   return paths;
 }
 
+// Consume existing block containers, without treating fence content as new markup.
+// A quote needs its marker on every code line; a list needs its content indent.
+function markdownContainerLine(line, containers) {
+  let matched = 0;
+  for (const indent of containers) {
+    if (indent === '>') {
+      const quote = /^ {0,3}> ?/.exec(line);
+      if (!quote) break;
+      line = line.slice(quote[0].length);
+    } else {
+      const spaces = /^ */.exec(line)[0].length;
+      if (line.trim() && spaces < indent) break;
+      line = line.slice(Math.min(spaces, indent));
+    }
+    matched++;
+  }
+  return { line, matched };
+}
+
 // Discovery sees prose only; preserve offsets and newlines without changing captured bytes.
 function markdownSectionText(text) {
-  const tokens = /^ {0,3}(`{3,}|~{3,})[^\r\n]*|`+|<!--/gm, parts = [];
-  let copied = 0;
-  for (let match; (match = tokens.exec(text));) {
-    let end;
-    if (match[1]) {
-      const fence = match[1];
-      // A backtick fence's info string cannot itself contain a backtick.
-      if (fence[0] === '`' && match[0].trimStart().slice(fence.length).includes('`')) continue;
-      const closing = new RegExp('^ {0,3}' + fence[0] + '{' + fence.length + ',}[ \\t]*\\r?$', 'gm');
-      closing.lastIndex = tokens.lastIndex;
-      const close = closing.exec(text);
-      end = close ? close.index + close[0].length : text.length;
-    } else if (match[0] === '<!--') {
-      const close = text.indexOf('-->', tokens.lastIndex);
-      end = close < 0 ? text.length : close + 3;
-    } else {
-      const closing = new RegExp('(?<!`)`{' + match[0].length + '}(?!`)', 'g');
-      closing.lastIndex = tokens.lastIndex;
-      const close = closing.exec(text);
-      if (!close) continue;
-      end = close.index + close[0].length;
+  const parts = [], inline = /`+|<!--/g;
+  let containers = [], fence = null, copied = 0, protectedEnd = 0, paragraph = false;
+  const mask = (start, end) => {
+    parts.push(text.slice(copied, start), text.slice(start, end).replace(/[^\r\n]/g, ' '));
+    copied = protectedEnd = end;
+  };
+  for (const row of text.matchAll(/[^\r\n]*(?:\r\n|[\r\n]|$)/g)) {
+    if (!row[0]) continue;
+    const original = row[0].replace(/[\r\n]+$/, '');
+    const start = row.index, end = start + original.length;
+    if (start < protectedEnd && end <= protectedEnd) continue;
+    if (start >= protectedEnd) {
+      // Tabs affect Markdown indentation only. This view is never captured.
+      let column = 0;
+      const expanded = original.replace(/[^\t]|\t/g, char => {
+        const width = char === '\t' ? 4 - column % 4 : 1;
+        column += width;
+        return char === '\t' ? ' '.repeat(width) : char;
+      });
+      let { line, matched } = markdownContainerLine(expanded, containers);
+      const thematic = /^ {0,3}(?:(?:\* *){3,}|(?:- *){3,}|(?:_ *){3,})$/;
+      const item = /^ {0,3}([-+*]|[0-9]{1,9}[.)]) +(\S.*)$/.exec(line);
+      const startsBlock = /^ {0,3}(?:>|#{1,6}(?: |$)|`{3,}|~{3,}|<)/.test(line) || thematic.test(line)
+        || (item && (!/^[0-9]/.test(item[1]) || /^1[.)]$/.test(item[1]) || containers[matched] !== '>'));
+      // Lazy paragraph continuation keeps its parent containers available for a
+      // later indented fence. Code itself never permits lazy continuation.
+      const lazy = matched < containers.length && !fence && paragraph && line.trim() && !startsBlock;
+      if (!lazy && matched < containers.length) { fence = null; paragraph = false; }
+      if (!lazy) containers = containers.slice(0, matched);
+      if (fence) {
+        mask(start, end);
+        const close = /^ {0,3}(`{3,}|~{3,}) *$/.exec(line);
+        if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+        continue;
+      }
+      // Start containers only outside code; a list's continuation width belongs
+      // to its item, so a sibling marker or dedent ends an unclosed example.
+      for (; !lazy;) {
+        const quote = /^ {0,3}> ?/.exec(line);
+        if (quote) { containers.push('>'); line = line.slice(quote[0].length); paragraph = false; continue; }
+        const list = /^( {0,3})([-+*]|[0-9]{1,9}[.)])( +|$)/.exec(line);
+        if (!list || thematic.test(line)) break;
+        const rest = line.slice(list[0].length);
+        if (paragraph && (!rest.trim() || (/^[0-9]/.test(list[2]) && !/^1[.)]$/.test(list[2])))) break;
+        const padding = rest.trim() && list[3].length <= 4 ? list[3].length : 1;
+        const indent = list[1].length + list[2].length + padding;
+        containers.push(indent); line = line.slice(indent); paragraph = false;
+      }
+      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (!lazy && opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
+        fence = opening[1]; paragraph = false; mask(start, end); continue;
+      }
+      paragraph = Boolean(line.trim()) && !thematic.test(line)
+        && !/^ {0,3}(?:#{1,6}(?: |$)|=+ *$|<|\[[^\]]+\]:)/.test(line);
     }
-    parts.push(text.slice(copied, match.index), text.slice(match.index, end).replace(/[^\r\n]/g, ' '));
-    copied = end;
-    tokens.lastIndex = end;
+    inline.lastIndex = Math.max(0, protectedEnd - start);
+    for (let match; (match = inline.exec(original));) {
+      const tokenStart = start + match.index, tokenEnd = start + inline.lastIndex;
+      let closeEnd;
+      if (match[0] === '<!--') {
+        const close = text.indexOf('-->', tokenEnd);
+        closeEnd = close < 0 ? text.length : close + 3;
+      } else {
+        const closing = new RegExp('(?<!`)`{' + match[0].length + '}(?!`)', 'g');
+        closing.lastIndex = tokenEnd;
+        const close = closing.exec(text);
+        if (!close) continue;
+        closeEnd = close.index + close[0].length;
+      }
+      mask(tokenStart, closeEnd);
+      inline.lastIndex = closeEnd - start;
+    }
   }
   return parts.join('') + text.slice(copied);
 }
