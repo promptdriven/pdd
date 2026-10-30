@@ -45,7 +45,7 @@ const make = (setup, fake, extra = {}) => portsFor({ HOME: setup.home, PDD_STATE
 const invoke = (setup, made, kind = 'lint', options = {}) => kind === 'try'
   ? runTry({ cwd: setup.repo, words: ['place-order'], options: { '--no-open': true, '--no-wait': true, ...options } }, made.ports)
   : runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, ...(kind === 'lint' ? { '--lint': true } : {}), ...options } }, made.ports);
-const warningCount = made => (made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length;
+const warningCount = made => (made.ports.stderr.text.match(/Warning: interpreter capacity/g) ?? []).length;
 
 test('FOLLOWUP own waiting ticket survives a 61000ms clock jump before heartbeat, preserving order and paid leases', async () => {
   const clock = { now: 100_000 }, mem = memory(clock), timer = timers(clock);

@@ -8,7 +8,7 @@
     },
     {
       "id": "AC2",
-      "text": "Checks, remote lint and Try setup share an explicit PDD_MAX_JOBS=4 local limit across repositories and worktrees."
+      "text": "Tests, remote lint and Simulator setup share an explicit PDD_MAX_JOBS=4 local limit across repositories and worktrees."
     },
     {
       "id": "AC3",
@@ -39,7 +39,7 @@
     },
     {
       "id": "mixed-work",
-      "given": "several repos/worktrees; PDD_MAX_JOBS=4; check batches, lint, Try setup",
+      "given": "several repos/worktrees; PDD_MAX_JOBS=4; test batches, lint, Simulator setup",
       "required_observation": "shared cap 4; no parent reservation deadlock; browser session lifetime takes no slot"
     },
     {

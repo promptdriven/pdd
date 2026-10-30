@@ -8,7 +8,7 @@
     },
     {
       "id": "AC2",
-      "text": "With PDD_MAX_JOBS=2, at most 2 jobs run at once, including jobs from two local processes sharing the same state folder and runtime host."
+      "text": "With PDD_MAX_JOBS=2, at most 2 jobs run at once, including jobs from two local processes sharing the same state folder and interpreter host."
     },
     {
       "id": "AC3",
@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "With no cap, remote lint and Try setup proceed past existing active leases and older waiting tickets without a local-slot wait; request records, ownership and uncertain-job evidence remain intact."
+      "text": "With no cap, remote lint and Simulator setup proceed past existing active leases and older waiting tickets without a local-slot wait; request records, ownership and uncertain-job evidence remain intact."
     },
     {
       "id": "AC6",
@@ -67,7 +67,7 @@
     {
       "id": "lint-try-no-local-wait",
       "criterion_id": "AC5",
-      "given": "No cap; seed four fresh active uncertain leases and an older waiting ticket; run explicit lint and Try setup",
+      "given": "No cap; seed four fresh active uncertain leases and an older waiting ticket; run explicit lint and Simulator setup",
       "required_observation": "Both modes POST without local waiting or foreign record mutation; each new request registered before dispatch."
     },
     {

@@ -1,4 +1,4 @@
-name: PDD Alpha checks
+name: PDD checks
 
 on:
   pull_request:
