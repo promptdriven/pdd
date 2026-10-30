@@ -158,3 +158,38 @@ test('2704: cap two is shared across two real CLI processes', { timeout: 40000 }
   for (const result of results) assert.equal(result.code, 0, result.out + result.err);
   assert.equal((await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs.length, 0);
 });
+
+for (const limit of [undefined, Infinity]) for (const stopped of ['deadline', 'interrupt']) test(`2704: no-cap acquisition ${String(limit)} respects an existing ${stopped}`, async () => {
+  const forbidden = () => assert.fail('ended admission must not touch local records or network');
+  const reservation = await acquireRuntimeSlot({ stateDir: '/not-used', origin: 'http://localhost:453', kind: 'lint', deadline: stopped === 'deadline' ? 100 : 200, ...(limit === undefined ? {} : { limit }) }, {
+    now: () => 100, interrupted: () => stopped === 'interrupt', files: { exclusiveCreate: forbidden, listRecords: forbidden }, readRun: forbidden,
+  });
+  assert.equal(reservation, null);
+});
+
+for (const stopped of ['deadline', 'interrupt']) test(`2704: no-cap active acquisition ${stopped} forbids registration and POST`, async t => {
+  const setup = selected(t, 1), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const made = make(setup, fake), records = new Map(); let triggered = false, registrations = 0;
+  const directory = join(setup.state, 'slots', encodeURIComponent(new URL(fake.origin).host));
+  const prior = { id: 'foreign-paid', state: 'active', pid: 99, kind: 'check', started_at: made.clock.now, request_ids: ['original-paid-id'] };
+  records.set(join(directory, 'foreign-paid.json'), structuredClone(prior));
+  made.ports.isAlive = () => true;
+  made.ports.slotFiles = {
+    listRecords: () => ({ jobs: [...records.values()].filter(row => row.state).map(row => structuredClone(row)) }),
+    exclusiveCreate: (path, row) => {
+      if (records.has(path)) return false; records.set(path, structuredClone(row));
+      if (row.state === 'active') {
+        triggered = true;
+        if (stopped === 'interrupt') made.clock.interrupt(); else made.clock.now += 90000;
+      }
+      return true;
+    },
+    writeAtomic: (path, row) => { if (row.request_ids?.length) registrations++; records.set(path, structuredClone(row)); },
+    modifiedAt: path => records.has(path) ? made.clock.now : null,
+    touch: path => records.has(path), unlink: path => records.delete(path),
+  };
+  const code = await check(setup, made.ports, { '--lint': true });
+  assert.equal(triggered, true, 'synchronize with immediate no-cap active record creation');
+  assert.equal(code, 5); assert.equal(registrations, 0); assert.equal(fake.posts.length, 0);
+  assert.deepEqual([...records.values()].filter(row => row.state), [prior], 'retain foreign uncertain lease and clean unsent own record');
+});

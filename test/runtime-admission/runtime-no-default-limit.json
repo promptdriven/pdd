@@ -59,6 +59,12 @@
       "criterion_id": "AC5",
       "given": "Omitted/Infinity limit; older live waiting ticket and active leases; register duplicate IDs then release uncertain/ended",
       "required_observation": "Immediate active reservation without sleep/probe/status; ordered deduplicated IDs and private files; foreign evidence preserved."
+    },
+    {
+      "id": "uncapped-stop-before-dispatch",
+      "criterion_id": "AC5",
+      "given": "Omitted/Infinity limit with already expired deadline or interruption; separately stop at immediate active record creation in explicit lint",
+      "required_observation": "Return null before file effects when already stopped; stop after active creation registers no request and makes no POST, removes own unsent reservation, preserves foreign uncertain evidence."
     }
   ]
 }
