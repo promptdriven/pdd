@@ -77,12 +77,12 @@ async function harness(t, setup) {
     const id = entry.method === 'POST' ? entry.request.requestId : entry.url.split('/').at(-1);
     return { status: 200, json: receipt(server, id, current, current.paths) };
   });
-  async function invoke(facts, { words = [], options = { '--lint': true, '--json': true }, state } = {}) {
+  async function invoke(facts, { words = [], options = { '--lint': true, '--json': true }, state, ports = {} } = {}) {
     current = facts; capture = undefined; selection = undefined;
     const env = { HOME: setup.home, PDD_STATE_DIR: state ?? join(setup.sandbox, `state-${++serial}`), PDD_RUNTIME_URL: fake.origin };
     const p = portsFor(env, { captureSource(repo, options) {
       selection = options; capture = captureSource(repo, options); return capture;
-    } });
+    }, ...ports });
     const postsBefore = fake.posts.length;
     const code = await runCheck({ cwd: setup.repo, words, options }, p.ports);
     return { code, p, state: env.PDD_STATE_DIR, posts: fake.posts.slice(postsBefore), capture, selection,
@@ -177,7 +177,10 @@ test('SOURCE-LINT bounded saved reads: queued/running crossed with passed/refuse
   let configurations = 0;
   for (const pending of ['queued', 'running']) for (const state of ['passed', 'refused', 'unknown']) {
     const initialFacts = valid({ state: pending });
-    const initial = await invoke(initialFacts, { options: { '--lint': true, '--json': true, '--timeout': 0.0001 } });
+    // Give real HTTP time to confirm pending; only then expire the fake wait budget.
+    const initial = await invoke(initialFacts, {
+      options: { '--lint': true, '--json': true, '--timeout': 1 }, ports: { pollMs: 60_000 },
+    });
     assert.equal(initial.code, 3, initial.output);
     assert.deepEqual(initial.json.rows, []);
     assert.equal(initial.json.lint_state, pending);
