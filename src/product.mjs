@@ -1,8 +1,8 @@
 // Generated from prompts/cli/product.prompt.md.
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -113,23 +113,46 @@ const portsFor = given => {
     return {};
   };
   const locks = new Map();
+  const observedLock = path => ({ stat: lstatSync(path), content: readFileSync(path, 'utf8') });
+  const removeObservedLock = (path, observed) => {
+    try {
+      const current = observedLock(path);
+      if (current.stat.dev === observed.stat.dev && current.stat.ino === observed.stat.ino && current.content === observed.content) unlinkSync(path);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
   p.lockProductState ??= async input => {
     const path = `${await statePath(input)}.lock`, until = Date.now() + 10000;
-    await mkdir(dirname(path), { recursive: true });
-    for (;;) {
-      try {
-        const file = await open(path, 'wx', 0o600), handle = randomUUID();
-        locks.set(handle, { file, path }); return { handle };
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        if (Date.now() >= until) throw Error('Product state is busy; try the command again.');
-        await new Promise(resolve => setTimeout(resolve, 5));
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      for (;;) {
+        try {
+          // Keep native observation and removal together; each claim also has a unique identity.
+          const file = openSync(path, 'wx', 0o600), handle = randomUUID();
+          const content = JSON.stringify({ pid: process.pid, token: handle });
+          try { writeFileSync(file, content); locks.set(handle, { path, stat: fstatSync(file), content }); }
+          finally { closeSync(file); }
+          return { handle };
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          let observed;
+          try { observed = observedLock(path); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+          let owner; try { owner = JSON.parse(observed.content); } catch { /* Legacy lock: use its file age. */ }
+          let dead = false;
+          if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
+            try { process.kill(owner.pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
+          }
+          if (dead || Date.now() - observed.stat.mtimeMs > 30000) { removeObservedLock(path, observed); continue; }
+          if (Date.now() >= until) throw Error('Product state is busy; try the command again.');
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
       }
-    }
+    } catch (error) { throw Error(`Product state lock ${path}: ${error.message}`); }
   };
   p.unlockProductState ??= async ({ handle }) => {
     const lock = locks.get(handle); if (!lock) throw Error('Product state lock is not owned by this command.');
-    try { await lock.file.close(); await rm(lock.path); } finally { locks.delete(handle); }
+    try { removeObservedLock(lock.path, lock); }
+    catch (error) { throw Error(`Product state lock ${lock.path}: ${error.message}`); }
+    finally { locks.delete(handle); }
     return {};
   };
   p.currentActor ??= async ({ cwd }) => parse(await command(p, cwd, 'gh', ['api', 'user', '--jq', '{login}']));
@@ -257,7 +280,13 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
       await p.writeProductState({ ...scope, json: JSON.stringify(latest) }); state = latest;
     } finally { await p.unlockProductState({ handle: lock.handle }); }
   };
+  const repairWarnings = new Map();
   const bind = async (run, number) => {
+    // Retain discarded-hint diagnostics, but a selected valid issue needs no repair.
+    for (const diagnostic of repairWarnings.get(run) ?? []) {
+      const index = warning.indexOf(diagnostic);
+      if (index !== -1) warning[index] = diagnostic.slice(0, diagnostic.indexOf('. Run pdd product start')) + '.';
+    }
     if (!state[migration] && state.bindings.filter(row => row.run === run).length === 1 && state.bindings.some(row => row.run === run && row.issue === number)) return;
     await mutate({ upsert: { run, issue: number } });
   };
@@ -279,7 +308,9 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
   const direct = new Map(), excluded = new Map();
   const excludedFor = run => { if (!excluded.has(run)) excluded.set(run, new Set()); return excluded.get(run); };
   const failure = (run, number, reason, confirmed) => {
-    warning.push(`Warning: Issue #${number} for ${run} is unverified: ${reason}. Run pdd product start ${run} to link it again.`);
+    const diagnostic = `Warning: Issue #${number} for ${run} is unverified: ${reason}. Run pdd product start ${run} to link it again.`;
+    if (!repairWarnings.has(run)) repairWarnings.set(run, []);
+    repairWarnings.get(run).push(diagnostic); warning.push(diagnostic);
     return { issue: { number }, unverified: true, reason, confirmed };
   };
   const inspect = async (run, number) => {
