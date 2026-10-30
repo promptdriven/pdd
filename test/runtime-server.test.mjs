@@ -600,7 +600,7 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
 });
 
 // Wrong: the PR line hides a failure, or --json lacks the line an agent pastes.
-test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
+test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict mark, also as summary_line in --json', async t => {
   const setup = harbor(t);
   const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
     { criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam', actual: 'Sam', passed: true }];
@@ -781,7 +781,13 @@ const PLAIN_REFUSALS = [
 // Wrong: a refused check shows only a code, or calls an AI service failure a problem in the test (round-2 report text, Oct 27).
 test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and fix; ai-service says the test is fine; old answers keep their text', async t => {
   const setup = harbor(t);
-  const refusing = refusals => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], refusals) } : f.normal(entry));
+  // This compatibility case deliberately models the old server without run-level advice.
+  const refusing = refusals => fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'refused', [], refusals);
+    Object.assign(answer.result, { outcome: 'Fail', why: 'Checks failed.', next_step: null });
+    return { status: 200, json: answer };
+  });
   const plain = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order']);
   assert.equal(plain.code, 4, plain.err + plain.out);
   const lines = plain.out.split('\n'), at = lines.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
@@ -891,7 +897,7 @@ test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses
 });
 
 // Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
-test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, until a row really fails', async () => {
+test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
   const { summaryLine } = await import('../src/runtime-output.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);

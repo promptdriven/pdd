@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: 9b271181656773fe190b8374e7a083327ae7f85f62d821c10d28dae5cd8e8dc0).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 3c91225bfa729ba59d0b3f9a07b869edfbe13de0928d92f0c5ae36fbfd307252).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -186,7 +186,7 @@ export function summaryLine(rows, story = null) {
   const mark = rows.some(row => row.state === 'failed') ? '✗'
     : rows.length && rows.every(row => row.state === 'passed') ? '✓'
     : rows.some(row => OPEN_STATES.has(row.state)) ? 'running ·'
-    : rows.length && rows.every(row => row.busy && row.state === 'not_run') ? 'busy ·' : 'no verdict ·';
+    : rows.some(row => row.busy && row.state === 'not_run') && rows.every(row => row.state === 'passed' || (row.busy && row.state === 'not_run')) ? 'busy ·' : 'no verdict ·';
   const rerunShare = rerunCalls ? `${rerunCalls} for reruns` : '';
   const usage = known.length ? `${count(calls, 'AI call')}${rerunShare ? ` (${rerunShare})` : ''}` : rerunShare || count(calls, 'AI call');
   return [`Runtime check${story ? ` (${story})` : ''}${rows.some(row => row.draft) ? ' (DRAFT)' : ''}: ${mark} ${criteria.passed} of ${count(criteria.total, 'criterion').replace(/criterions$/, 'criteria')}`,
@@ -292,7 +292,7 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     const inconclusive = new Set(rows.filter(row => !['passed', 'failed'].includes(row.state)).map(row => row.story));
     const other = [...inconclusive].filter(story => !failed.has(story)).length;
     const overlap = [...inconclusive].filter(story => failed.has(story)).length;
-    if (failed.size) {
+    if (failed.size && inconclusive.size) {
       const first = failed.size === 1 ? '1 Story failed its checks.' : `${failed.size} Stories failed their checks.`;
       const second = other ? other === 1 ? 'Another Story has no verdict' : `${other} other Stories have no verdict`
         : failed.size === 1 ? 'That Story also has checks with no verdict'
@@ -322,14 +322,16 @@ export function renderText({ batch, rows, coverage, warnings = [], details = fal
     out.push(`REFUSED  ${row.title} (${row.test})`, ...row.refusals.flatMap(item => refusalLines(item, !!row.next_step)), ...serverAdvice(row, secrets), ...(row.report_url ? [`  Report: ${row.report_url}`] : []));
   }
   for (const row of rows.filter(row => row.state === 'not_run')) {
-    out.push(`NOT RUN  ${row.title} (${row.test}): ${row.next_step ? row.why ? '' : 'pdd did not send it.' : row.note?.message ?? 'pdd did not send it.'}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
+    const message = row.note?.message ?? (row.request_ids?.length ? 'No checks ran for this attempt.' : 'pdd did not send it.');
+    const explanation = row.next_step ? message.replace(/(?:^|\s)(?:Retry this batch later|Run it again|Run the same command again later|Run a fresh pdd check command to start checks|Try again later)\.?/g, '').trim() : message;
+    out.push(`NOT RUN  ${row.title} (${row.test})${explanation ? `: ${explanation}` : ''}${row.note?.code ? ` (${row.note.code})` : ''}`, ...serverAdvice(row, secrets));
   }
   for (const row of rows.filter(row => OPEN_STATES.has(row.state))) {
     const limit = Number.isInteger(timeoutMin) ? `${timeoutMin} min` : `${Math.round(timeoutMin * 60)} s`;
     out.push(`STILL RUNNING${reading || (!interrupted && !timeoutMin) ? '' : interrupted ? ' when pdd stopped reading' : ` after ${limit}`}: ${row.title}. Do not send it again.`);
   }
   for (const row of rows.filter(row => row.state === 'unknown' && !row.provider && !row.time_limit)) {
-    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...(row.lost && row.why ? [`  ${row.why}`, ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])] : serverAdvice(row, secrets)));
+    out.push(`UNKNOWN  ${row.title}: the run may have executed. Its result is unknown.`, ...((row.lost || row.final) && row.why ? [`  ${row.why}`, ...(row.next_step ? [`  Next: ${cleanText(row.next_step, secrets)}`] : [])] : serverAdvice(row, secrets)));
   }
   for (const row of rows.filter(row => row.time_limit)) {
     out.push(`STOPPED  ${row.title}: ${row.time_limit.message}`, ...(row.next_step ? [] : [`  ${row.time_limit.fix}`]), ...serverAdvice(row, secrets),

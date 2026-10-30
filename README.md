@@ -106,6 +106,8 @@ Reports (anyone with a link can open it):
 | `DRAFT` | A prompt is still a draft. A DRAFT pass is not an approval. |
 | A report link | A page with each step, check and answer. Anyone with the link can open it. It expires after 7 days. |
 
+Checks show `✓` when all passed and `✗` when a check failed. Without a failed check, pending work shows `running`, even beside a refused check. Busy checks show `busy` when the other checks passed or are also busy. Other refused, not-run or unknown checks show `no verdict`. Exit codes use this order: 3, 5, 4, 1, 0. When failed checks sit beside a higher exit code, pdd explains why.
+
 ### 3. Try
 
 `pdd try` lets you use the program by hand. There is no code: the runtime runs the prompts.
@@ -207,8 +209,6 @@ The [CLI reference](docs/cli.md) has every command and option.
 
 The skills and the other commands run on your computer.
 
-Checks show `✓` when all passed, `✗` when a check failed, and `no verdict` for refused, not-run or unknown checks. Running checks keep `running`; a batch with only busy rows keeps `busy`. Exit codes retain their precedence: 3, 5, 4, 1, 0. A mixed batch explains when failed checks accompany a higher exit code.
-
 ## When something goes wrong
 
 | You see | What to do |
@@ -216,7 +216,7 @@ Checks show `✓` when all passed, `✗` when a check failed, and `no verdict` f
 | `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
-| `REFUSED` / `no verdict` (exit code 4) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
+| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
 | `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |
 | `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |

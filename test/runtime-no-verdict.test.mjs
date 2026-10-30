@@ -9,7 +9,7 @@ const row = (state, story = 'one', extra = {}) => ({ state, story, title: story,
 test('NO-VERDICT replay: unchanged Story scenario, every step and criterion', () => {
   const scenario = JSON.parse(readFileSync(new URL('./runtime/check-no-verdict.json', import.meta.url)));
   const seen = new Set();
-  assert.equal(scenario.steps.length, 18);
+  assert.equal(scenario.steps.length, 19);
   for (const step of scenario.steps) {
     assert.equal(step.operation, 'renderJson');
     const result = renderJson(step.input);
@@ -30,7 +30,7 @@ test('NO-VERDICT notices count Stories and preserve failure/open/busy precedence
     assert.match(summaryLine(rows), /: ✗ /);
     assert.match(renderText({ rows: [row('failed'), row(state)], exitCode: code }), /That Story also has checks with no verdict/);
   }
-  assert.match(summaryLine([row('passed'), row('not_run', 'two', { busy: true })]), /: no verdict · /);
+  assert.match(summaryLine([row('passed'), row('not_run', 'two', { busy: true })]), /: busy · /);
   assert.match(summaryLine([row('not_run', 'one', { busy: true })]), /: busy · /);
   assert.match(summaryLine([row('queued'), row('refused')]), /: running · /);
   assert.equal(exitCodeFor([row('unknown'), row('not_run'), row('refused'), row('failed')]), 3);
