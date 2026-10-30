@@ -24,7 +24,7 @@
     },
     {
       "id": "AC6",
-      "text": "Literal defaults and source with no applicable reference keep their exact bytes."
+      "text": "Literal defaults retain their values during expansion; source with no applicable reference keeps its exact bytes."
     },
     {
       "id": "AC7",
@@ -51,6 +51,10 @@
       },
       "contracts/ambiguous.md": {
         "content": "### View Result\n```json\n{\"type\":\"string\"}\n```\n### view-result\n```json\n{\"type\":\"integer\"}\n```\n",
+        "is_symlink": false
+      },
+      "contracts/literals.json": {
+        "content": "{\"__proto__\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]},\"constructor\":{\"type\":\"string\"}}",
         "is_symlink": false
       }
     }
@@ -328,6 +332,41 @@
       ],
       "model": "gpt-6.1-sol",
       "expected_error": "contract-invalid"
+    },
+    {
+      "step_id": "exact-number-and-own-record-key",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"type\":\"object\",\"properties\":{\"amount\":{\"$contract\":\"contracts/literals.json#/__proto__\"},\"literal\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]}},\"required\":[],\"additionalProperties\":false}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"properties\":{\"amount\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"},\"literal\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}},\"required\":[],\"type\":\"object\"}"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "prompts/shop.prompt.md",
+              "source_pointer": "/properties/amount",
+              "target": "contracts/literals.json#/__proto__",
+              "kind": "contract",
+              "value_json": "{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
     }
   ]
 }

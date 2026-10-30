@@ -84,7 +84,7 @@ the same rules, with cycle detection; ordinary nested world values stay literal.
 Clone the seed and every replacement; never mutate files, supplied data or another
 scenario's world. Preserve absent, null, false, 0 and empty containers distinctly.
 
-Each set pointer traverses existing parents. An object's final key may be added;
+Each set pointer traverses existing own members only. An object's final key may be added;
 an array's final index must already exist (no append or `-`). The root pointer
 replaces the entire world, which must remain an object. Apply set entries in their
 written order: a parent/root replacement may precede a child override; a later
@@ -95,8 +95,18 @@ array bounds or set pointers give `seed-invalid`. A missing seed file still give
 
 ## Effective bytes and provenance
 
+Expansion, provenance, cataloging and sync preserve JSON number values and their
+exact number tokens, including `9007199254740993`; never round, coerce to strings
+or reject otherwise valid JSON because of numeric representation. This adds no
+numeric acceptance gate; engine schema acceptance remains preflight's concern.
+Outside applicable schema/world slots, literal business inputs, annotations and
+expected values retain their meaning even when surrounding JSON is normalized.
+Preserve every own JSON key, including `__proto__` and `constructor`, as ordinary
+data during selection, cloning and writes; never change object prototypes.
+
 If expansion changes a JSON document, encode compact JSON with object keys sorted
 lexicographically at every depth, array order preserved, and no final newline.
+This encoding must be lossless under the preservation rules above.
 For a prompt replace only the JSON inside its single Runtime interface fence;
 keep all surrounding bytes. No applicable references means no reserialization.
 Do not expand schemas into authored source during ordinary reads.
@@ -157,7 +167,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "2503f01064aa4357258ac13747cef656e41ae04c16daf465b951b2616ae5ef41",
+  "status": "draft", "prose_sha256": "b9c620e52419848fb8d8216cc2681affb0b169e7ebfdb202057d439a2a85aa2d",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

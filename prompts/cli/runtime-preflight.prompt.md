@@ -64,6 +64,11 @@ Default shared-reference preparation uses the synchronous module function
 public API. `--fill-hash` validates references but writes only its existing draft
 hash string, never an expanded schema/world. Explicit lint prepares references
 without adding local engine-rule validation.
+Preparation preserves existing malformed no-reference consumer handling:
+`readPrompt` still reports `invalid-json`, scenario failures keep their existing
+diagnostics, and explicit lint leaves engine validation server-side. Necessary
+syntax parsing does not turn ordinary malformed consumer source into a contract
+error; malformed selected contract JSON still gives `contract-invalid`.
 
 Capture uses that same resolver for selected prompt/scenario bytes. Every
 contract/seed read uses the capture attempt's safe, snapshot-aware adapter and

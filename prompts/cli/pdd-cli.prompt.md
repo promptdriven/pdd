@@ -66,7 +66,7 @@ with external effects is invoked; no runtime resource is needed for that path.
 
 For `contracts` and `contracts-sync`, dynamically import
 [contract commands](contracts.prompt.md), allowing an injected contracts module
-for native tests. Call runContracts with words [] or ['sync'], parsed options,
+for native tests. Call runContracts with words [] or ['sync'], parsed options unchanged,
 cwd and env/stdout/stderr; return its exit code. Do not do runtime authentication,
 slot admission, skill discovery or PATH probing here. A thrown error prints one
 finite local cause and returns 5. Catalog owns all syntax.
@@ -77,7 +77,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "c3de9d8f9a6d8c042dbc354252bc930451a8e0bab9e52a25f4e9ce23d1c21c0a",
+  "prose_sha256": "20acbc77a2b611ea54248b688b0872afb8880a0be0b17d91a9b05df44f427380",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

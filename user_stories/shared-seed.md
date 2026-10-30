@@ -10,6 +10,6 @@
 
 ## Rules to check
 
-Only an initial_world root can load a seed. Clone before applying set pointers; never rewrite the seed file or expected results. Pointer escapes use ~0 and ~1. Parent traversal must exist; an object final key may be added, an array index must exist. Native tests must prove local validation and uploaded seed bytes agree without changing original scenario paths.
+Only an initial_world root can load a seed. Clone before applying set pointers; never rewrite the seed file or expected results. Pointer escapes use ~0 and ~1. Parent traversal uses existing own members; an object final key may be added, an array index must exist. JSON number text such as 9007199254740993 stays exact in seeds, overrides and literal expected data. __proto__ and constructor remain ordinary own keys. Native tests must prove global object prototypes stay unchanged, and local validation and uploaded seed bytes agree without changing original scenario paths.
 
 Runtime check: expandSource bound with supplied file replies; host-file isolation and native capture require native verification.

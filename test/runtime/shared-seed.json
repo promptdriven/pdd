@@ -28,6 +28,10 @@
       "contracts/seed-world.json": {
         "content": "{\"flags\":{\"a/b~c\":1},\"keep\":null,\"orders\":[{\"done\":true,\"total\":9}]}",
         "is_symlink": false
+      },
+      "contracts/literal-world.json": {
+        "content": "{\"__proto__\":{\"kept\":true},\"constructor\":{\"kept\":false},\"large\":9007199254740993}",
+        "is_symlink": false
       }
     }
   },
@@ -213,6 +217,69 @@
         }
       ],
       "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exact-numbers-and-own-world-keys",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/shop.json",
+        "text": "{\"initial_world\":{\"$seed\":\"contracts/literal-world.json\",\"set\":{\"/__proto__/value\":9007199254740993,\"/constructor/value\":{\"__proto__\":9007199254740993,\"constructor\":false}}},\"steps\":[{\"checks\":[{\"value\":{\"$seed\":\"literal\",\"__proto__\":9007199254740993,\"constructor\":9007199254740993}}],\"input\":{\"$contract\":\"literal\",\"amount\":9007199254740993}}]}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"initial_world\":{\"__proto__\":{\"kept\":true,\"value\":9007199254740993},\"constructor\":{\"kept\":false,\"value\":{\"__proto__\":9007199254740993,\"constructor\":false}},\"large\":9007199254740993},\"steps\":[{\"checks\":[{\"value\":{\"$seed\":\"literal\",\"__proto__\":9007199254740993,\"constructor\":9007199254740993}}],\"input\":{\"$contract\":\"literal\",\"amount\":9007199254740993}}]}"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"initial_world\":{\"__proto__\":{\"kept\":true,\"value\":9007199254740993},\"constructor\":{\"kept\":false,\"value\":{\"__proto__\":9007199254740993,\"constructor\":false}},\"large\":9007199254740993},\"steps\":[{\"checks\":[{\"value\":{\"$seed\":\"literal\",\"__proto__\":9007199254740993,\"constructor\":9007199254740993}}],\"input\":{\"$contract\":\"literal\",\"amount\":9007199254740993}}]}"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "test/shop.json",
+              "source_pointer": "/initial_world",
+              "target": "contracts/literal-world.json#",
+              "kind": "seed",
+              "value_json": "{\"__proto__\":{\"kept\":true},\"constructor\":{\"kept\":false},\"large\":9007199254740993}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "inherited-parent-is-missing",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "test/shop.json",
+        "text": "{\"initial_world\":{\"$seed\":\"contracts/seed-world.json\",\"set\":{\"/constructor/prototype/newValue\":true}}}",
+        "format": "scenario"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "seed-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "seed-invalid"
     }
   ]
 }

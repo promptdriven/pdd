@@ -3,7 +3,7 @@
 Own `src/contracts.mjs`. Module function
 `runContracts({words,options,cwd}, {env,stdout,stderr})` returns an exit code.
 `words: []` lists contracts; `words: ['sync']` previews migration;
-`options.write === true` applies it. Syntax belongs to the command catalog.
+`options['--write'] === true` applies it. Syntax belongs to the command catalog.
 These routes read working files and private local Check history. They never
 authenticate, reserve a runtime slot, upload, lint remotely or call a model.
 
