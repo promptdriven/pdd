@@ -231,6 +231,13 @@ nested types with the same field set; an equal candidate needs no drift warning.
 Prefer a unique exact candidate; otherwise require exactly one candidate. Multiple
 candidates produce advice and no selected match.
 
+Module function `schemaValuesEqual(a,b)` returns Boolean schema equality for
+read-only trees/subvalues from `parseJsonValue`. Forward the existing schema
+comparison `differences(a,b).length === 0`; the semantic comparison rules above
+own its meaning. Apply no copy eligibility or field-count threshold. Do not add
+a second codec, schema matcher or native write effect. The four existing native
+lossless JSON bindings retain their public contracts.
+
 Module function `planSync(sources, matches)` returns `{edits,warnings}`; an edit is
 `{path,before,after}`. Replace selected exact/near inline schemas by `$contract`
 objects, retaining their local title/description. Near conversion deliberately

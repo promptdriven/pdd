@@ -48,20 +48,32 @@ real drift. Seed worlds and resolved `$seed` targets remain data; never search
 business values, annotations or simulation/resource declarations for schemas.
 
 Validate Markdown `###` JSON records, root JSON schemas, explicit `$contract`
-and world-table Schema selections, and leaves of pure schema-map wrappers.
-Use preflight's `schemaKeywordNames()` vocabulary to recognize root schema
-keywords, including forbidden keywords: a selected incomplete object or
-`{"$ref":"x"}` is invalid, not an ignored container. Expand before validating.
-A pure wrapper has only object-map branches ending in recognized schemas;
-`{"defs":{"flag":{"type":"boolean"}}}` validates the leaf. Primitive metadata,
-empty unselected branches and resources/simulation declarations do not qualify.
-Skip unrelated non-schema JSON files with one sorted summary line:
+and world-table Schema selections, and recognized JSON members independently.
+Use preflight's `schemaKeywordNames()` vocabulary, including forbidden structural
+keywords, to recognize schema nodes. Any direct vocabulary keyword except the
+annotation/value-only keys below marks schema intent. Thus `type`, `properties`, `required`,
+`additionalProperties`, `items`, `oneOf`, reference or composition keyword marks
+schema intent even when its value is invalid: `{"type":"objekt"}` and
+`{"$ref":"x"}` must be checked. Expand before validating. Descend through
+object-map containers to find members without requiring their siblings to be
+schemas; primitive metadata and empty unselected branches do not suppress a
+recognized sibling. Once recognized, a schema's children belong to validation,
+not independent discovery.
+
+Annotation/value-only objects (`enum`, `const`, `default`, `examples`, `title`,
+`description`, `format`) are data unless explicitly selected. Never mine their
+payloads, resources, simulation declarations or seed data for schemas. Thus a
+selected integer leaf with unrelated business `enum`/`default` values containing
+schema-looking keys and broken references still validates just the selected leaf.
+An explicit empty selection is checked and invalid; unselected empty data skips.
+Skip files with no recognized or selected schema using one sorted named line:
 `Skipped N files that are not schemas: <comma-separated paths>`.
-Do not report their arbitrary nested values as unavailable schema evidence.
-Explicitly selecting an otherwise skipped leaf still validates that selection.
+A mixed file with a recognized member is not skipped whole. Misspelled-only
+schema keys with no recognized structural marker remain named skips.
 
 Copy authorities are only Markdown records, root JSON schemas and explicitly
-selected `$contract` or Schema targets. Implicit wrapper leaves may validate but
+selected `$contract`, Schema or uniquely inferred row targets. Implicit wrapper
+leaves may validate but
 cannot become copy authorities. Thus `contracts/legacy.json` containing an old
 schema under `copy` cannot hide drift against a declared Markdown record.
 Filter the catalog records supplied to `compareCopies`; preserve ordinary
@@ -70,6 +82,13 @@ object-copy eligibility and near-copy thresholds unchanged. Deduplicate repeated
 drift differences by consumer, schema source pointer, canonical target and
 field/difference while retaining independent locations. Ambiguous declared
 candidates leave agreement unavailable. Exact copies pass; near copies differ.
+
+Independently warn once per unordered pair of valid declared object records with
+the same property-name set but differing shapes, including one- and two-property
+records. Use the reference owner's `schemaValuesEqual` on expanded parsed trees;
+canonical identities distinguish records. Do not impose inline-copy eligibility
+thresholds on this advisory or compare invalid schemas as though valid. A warning
+must neither hide genuine consumer drift nor introduce a refusal.
 
 Use `expandSource` with the existing safe file port for selected schemas and
 applicable prompt/scenario references, including transitive uses; reuse
@@ -92,28 +111,52 @@ exactly one exists, checking the world is incomplete (exit 4, naming the missing
 partner). The seed must expand to an object by the reference owner's seed rules.
 Read the first actual contiguous Markdown table outside fences with `Key` or
 `Path` and `Writer` columns; unrelated tables and prose are not declarations.
-`Schema` is optional, including a blank cell. Check a value's type only where a
-schema target is explicitly declared; never infer one from its name or value.
+`Schema` is optional, including a blank cell.
 
-A Key cell names an exact top-level own seed key, plain or backticked. Every
-present top-level seed key still requires a Key declaration. A Path cell names
-an exact nested path; separately backticked paths enumerated in one cell declare
-separate paths. Commas inside backticks are literal. Ownership of a parent and
-child is independent. Symbolic paths such as `/hosts/<machine_id>` without a
-Schema declare ownership only: do not infer wildcard matching or seed coverage.
-Path tables require no top-level seed coverage.
+Under either Key or Path, a leading `/` means an exact JSON Pointer, plain or
+backticked. Decode `~1` as `/` and `~0` as `~`; reject malformed escapes rather
+than guessing a slash-containing literal key. A bare Key names one exact top-level
+own seed key, represented by its escaped pointer. A Path must begin with `/`.
+Separately backticked paths enumerated in one cell declare separate paths; commas
+inside backticks are literal. Key tables retain top-level seed coverage: a root
+key is covered by its exact declaration or a declaration beneath its namespace
+(for example `/kv/shop` covers the seed container `kv`). This does not give any
+writer ownership of undeclared parents or siblings. An uncovered extra top-level
+seed key is a problem. Path tables require no top-level seed coverage. Parent
+and child ownership remain independent. Symbolic paths such as
+`/hosts/<machine_id>` declare ownership without wildcard matching or guessed
+concrete seed values.
 
-Treat each nonblank Writer cell as one opaque label, including commas in prose.
-The same exact key/path and complete writer label coalesce; different writer
-labels for the same exact key/path are problems. Missing key/path or writer is
-a problem. Distinct explicit schema mappings for the same key/path are problems;
-blank Schema cells supply no conflicting mapping. Do not require product parts.
+Split Writer cells on commas, standalone word `and`, and `/`. Trim actors and
+coalesce identical actor claims for the same exact key/path. Zero or more than
+one unique actor is a Writer problem. Duplicate rows with the same actor coalesce;
+different actors for the same exact path fail. There are no prose or test-data
+exceptions. Missing key/path is a problem. Distinct explicit schema mappings for
+the same key/path are problems; blanks supply no conflicting mapping. Do not
+require product parts.
+
+A nonblank Schema cell takes precedence. Otherwise find known declared records
+linked or named by exact record-name tokens anywhere in the ownership row,
+including What it holds. Known records include valid recognized JSON members as
+well as Markdown and root schemas. Naming or linking one such member uniquely
+selects that member as an authority; this does not promote its unselected siblings
+or every implicit member globally. Resolve links relative to world.md and use canonical
+record identities: repeated mentions of one identity coalesce. Exactly one
+identity selects that record. No candidate or multiple distinct identities leave
+this declaration without a schema. Unknown or unresolved non-Schema row links
+are inference candidates only, not new reference errors. Never guess plural
+aliases, array wrappers, templates or schemas from a value's shape. Explicit
+Schema and `$contract` resolution errors retain their existing definite errors.
+Count unique declared keys/paths without a unique schema, including absent and
+symbolic declarations, and emit one honest warning:
+`N world keys have no schema; their seed values were not checked`.
+Retain sorted key/path names in JSON. This advisory alone does not change exit 0.
 
 A nonblank Schema cell is one plain/backticked repository-root target resolved
 by the reference owner. Validate it even when its key/path is absent in the seed.
 Schema validation diagnostics name the canonical target file and record;
 resolution/selection failures retain their consumer and Schema column.
-For present concrete paths whose declared schemas are valid, validate the corresponding
+For present concrete paths whose explicit or inferred schemas are valid, validate the corresponding
 seed value using exact pointer segments, without coercion or guessed templates.
 Do not attempt redundant value validation under a known-invalid schema.
 Absent values require no seed value check. Preserve null, false, zero and empty
@@ -124,7 +167,7 @@ shape, not actual runtime writes.
 
 `--json` is accepted only with `--check`; other combinations exit 2. Emit one
 JSON object on stdout with `exit_code`, `checked_records`, `checked_world_values`,
-`skipped_files` and `diagnostics`, with no text summary mixed into stdout.
+`skipped_files`, `diagnostics` and `warnings`, with no text summary mixed into stdout.
 Count each canonical schema validation attempted once, including invalid verdicts,
 and each attempted present value validation. Expansion failures do not count as
 completed schema validations. Skipped files are sorted.
@@ -132,6 +175,12 @@ Each diagnostic has `file`, `record`, `field`, `kind` (`problem` or `unavailable
 and a finite `message`. Include `source_pointer` and `target` only when actually
 available. Sort by file, record, field, kind, source_pointer and target, then
 message. Text and JSON carry the same counts, diagnostics and exit result.
+Warnings are separate from problem/unavailable diagnostics and never change the
+exit code. Missing-schema warnings have `kind: "world-schema-missing"`,
+`file: "contracts/world.md"`, sorted `world_keys` and the summary `message`.
+Declared-record warnings have `kind: "declared-record-disagreement"`, sorted
+`records` (two canonical IDs) and a nonempty `message`. Sort warnings by kind,
+then file/record identities. Text prints the same advisory facts once.
 Native I/O and syntax retain their existing exit semantics.
 
 ## Listing and freshness
@@ -207,7 +256,9 @@ local validation or I/O; 2 for invalid syntax or no repository.
   context for record, expansion, comparison and migration rules; its native
   module functions `parseJsonValue`, `stringifyJsonValue`, `jsonNumberText` and
   `jsonValuesEqual` supply lossless read-only JSON inspection when determining
-  roles and passing selected values to validation, without a second codec.
+  roles and passing selected values to validation, without a second codec;
+  its `schemaValuesEqual` supplies existing schema-comparison semantics for
+  declared-record disagreement, without copy-candidate eligibility thresholds.
 - [Preflight](runtime-preflight.prompt.md): required generation and verification
   context for Git discovery and safe native reads; native module functions
   `schemaKeywordNames` and `validateContract` supply role vocabulary and the
