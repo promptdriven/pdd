@@ -61,3 +61,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 9. [Keep an uncertain run link](product-unresolved-link.md): retain unresolved hints without blocking other runs.
 10. [Reuse my run link in another checkout](product-worktree-links.md): reuse compatible legacy state across worktrees.
 11. [Keep my other saved run links](product-state-updates.md): preserve other bindings during coordinated updates.
+
+## Runtime interruption and recovery
+
+- [Keep a truthful interruption message during recovery](runtime-interruption-recovery.md) — [native cases](../test/runtime-admission/runtime-interruption-recovery.json). Runtime check: NOT REPLAYED (#2548); native claim, interruption, ownership and retry effects require code-step checks.

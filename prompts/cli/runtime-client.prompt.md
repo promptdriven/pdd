@@ -93,6 +93,10 @@ including its final batch and summary saves. Batch `--read` and `--retry` acquir
 ownership before loading the saved record and retain it through all refreshes, retry
 decisions, request-ID persistence, POSTs and final saves. Different batches remain independent.
 A later retry loads the current record anew and never resends a submitted/completed check.
+Local ticket, lease and claim IDs may also use the injected randomUUID port. Identify check
+dispatches by actual check POSTs and their request identities, never by total UUID allocations;
+local bookkeeping cannot authorize or create another paid dispatch. A refused live competitor
+allocates no IDs.
 UUID reads keep the raw-receipt-only rule below and do not acquire batch ownership.
 Saved-lint continuation and permanent dispatch-claim adoption run inside this same ownership.
 The lock owner still applies every saved-lint gate and adopts existing claims before deciding
@@ -205,7 +209,20 @@ and proof that each eligible row was held solely for lint and has never had a ch
 A changed capture, unresolved proof or interruption sends nothing. Reuse the completed lint:
 no new lint or redundant lint upload; each check retains its required source multipart from the recaptured identical archive. Preserve original batch/source, selection, call ceilings, all
 prior IDs and answers, completed/running/lost/unknown jobs. An unsent row has zero check calls;
-posted or incompletely accounted usage never becomes zero by inference. Saved reads preserve eligible no-verdict `why` and `next_step` for existing check results; refreshing lint replaces a lint-held row's advice with the fresh lint judgment. Capture original unsent call evidence before normalizing local display rows; dispatch claims and recovered request IDs take precedence over any local zero-call classification. When adopting a recovered claim ID, clear stale local notes, `why` and `next_step`, and clear busy/retry eligibility so an uncertain submission never appears never-sent or safe to retry.
+posted or incompletely accounted usage never becomes zero by inference. Saved reads preserve eligible no-verdict `why` and `next_step` for existing check results; refreshing lint replaces a lint-held row's advice with the fresh lint judgment. Capture original unsent call evidence before normalizing local display rows; dispatch claims and recovered request IDs take precedence over any local zero-call classification.
+
+<a id="interruption-note-precedence"></a>
+**Interruption-note precedence.** Adopting a recovered claim ID clears stale local notes,
+`why`, `next_step` and busy/retry eligibility. Preserve only the truthful `Stopped before sending.`
+note established by this invocation's live knowledge that it interrupted before invoking the
+current POST, even when that request's permanent claim was already recorded or adopted.
+The note describes only that current unsent request, never earlier submissions. This exception
+owns wording alone: claims and the receipt-recovery lifecycle still own request identity,
+execution, known/unknown accounting and retry eligibility. A stored note or older local phase
+alone is never proof of safe retry; older ambiguous saves retain same-ID recovery and uncertainty.
+A later verified same-ID receipt supplies the current result under the recovery lifecycle above
+and supersedes the interruption note. Do not change accounting, receipt projection or dispatch
+authority merely to retain the note.
 
 Each continuation gets a fresh finite wait: --timeout MIN when supplied, otherwise 90 seconds,
 including receipt refresh, source validation and check polling. Allocate the original held
@@ -231,7 +248,7 @@ A valid future maintenance.until pauses new submission until that time, then rec
 
 A confirmed not-started 503 maintenance receives the same bounded sleep chunks, wait and local-time notice, honoring Retry-After and rechecking capacity; an older runtime's 404 still allows later admission-code recovery. Invalid/past maintenance is not an indefinite pause. Do not reinterpret unrelated 503, cloud-unavailable or the legacy opens-soon gate as maintenance.
 
-Local waiting, maintenance, HTTP, queue reads and all backoffs share the existing caller deadline: agent Check/lint 90 seconds, interactive Check/lint unlimited, explicit Check --timeout overrides, Try's existing five-minute setup allowance and 90-second agent lint wait. No new Try timeout flag. The effective lint deadline also bounds dead-owner GETs, local claim waits and request-ID recording before lint POST; never substitute the longer Try setup deadline. Check the remaining wait before each outside read/update, and cap each GET by that remainder. At the deadline or interrupt, allocate/send nothing further; keep pending receipts/reservations and valid JSON stdout, with progress only on stderr. For interruption wording, use the interrupted stage and submission history: at the admitted-but-unsent boundary before the current POST, `Stopped before sending.` refers only to that unsent request and cannot imply that earlier submissions never happened. During a confirmed busy or maintenance pause after a POST, say `Stopped.` and describe what was already submitted and its confirmed or unknown outcome; do not report a wait deadline or imply that nothing was sent. Preserve prior receipts, IDs, known/unknown usage and read-only recovery advice for uncertain submissions. Both interruption cases take precedence over wait-ended wording, keep existing mode-specific exit codes and JSON schemas, and send nothing further. Release only definitely unsent reservations and retain every uncertain dispatched lease under the slots contract. A confirmed admission refusal needs no-execution evidence; positive/unknown usage, evaluated checks and incomplete accounting forbid capacity replay.
+Local waiting, maintenance, HTTP, queue reads and all backoffs share the existing caller deadline: agent Check/lint 90 seconds, interactive Check/lint unlimited, explicit Check --timeout overrides, Try's existing five-minute setup allowance and 90-second agent lint wait. No new Try timeout flag. The effective lint deadline also bounds dead-owner GETs, local claim waits and request-ID recording before lint POST; never substitute the longer Try setup deadline. Check the remaining wait before each outside read/update, and cap each GET by that remainder. At the deadline or interrupt, allocate/send nothing further; keep pending receipts/reservations and valid JSON stdout, with progress only on stderr. For interruption wording, use the interrupted stage and submission history: the admitted-but-unsent boundary follows [interruption-note precedence](#interruption-note-precedence). During a confirmed busy or maintenance pause after a POST, say `Stopped.` and describe what was already submitted and its confirmed or unknown outcome; do not report a wait deadline or imply that nothing was sent. Preserve prior receipts, IDs, known/unknown usage and read-only recovery advice for uncertain submissions. Both interruption cases take precedence over wait-ended wording, keep existing mode-specific exit codes and JSON schemas, and send nothing further. Release only definitely unsent reservations and retain every uncertain dispatched lease under the slots contract. A confirmed admission refusal needs no-execution evidence; positive/unknown usage, evaluated checks and incomplete accounting forbid capacity replay.
 
 ## One replacement after a confirmed runtime restart
 
