@@ -10,13 +10,20 @@ For a `CommandInputError`, print its message once to stderr, leave stdout empty
 and return its exitCode (2). Every line written to stdout or stderr ends with
 one newline. Preserve other commands and their existing dispatch and effects.
 
+## Authoring
+
+Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
+
 ## Dependencies
 
+- [Old-code proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification context for the explicit prove dispatch and injected callback contract.
 - [Argument parser](argument-parser.prompt.md) is required for authoring,
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
 
-Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
+Native authoring/generation uses existing imported project APIs and their owner contracts linked in the route sections below. Those links are the native integration context for the existing commands; the Runtime prove transport uses only its declared callback plus the pure parser/catalog facts, and does not simulate unrelated command effects.
+
+## Workflow dispatch
 
 The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
@@ -36,6 +43,9 @@ For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.
 
 Route workflow-evidence to workflow runner recordEvidence with issue ref and required --summary file path; missing summary is a CLI input error. It records evidence only, not workflow progression.
 
+
+For `workflow-prove`, require both `--test` and `--expect` before importing or invoking any effectful dependency; missing options print exactly `pdd workflow prove requires nonblank --test and --expect.` to stderr and return 2. Dynamically import `src/workflow-prove.mjs` (or injected `dependencies.workflowProve`) and call module function `proveRun({ref: operands[0], test: options.test, expect: options.expect, cwd}, provePorts)`. Preserve quoted strings unchanged. Print its `{exitCode,message}` once, stdout on zero and stderr otherwise, and return its exitCode. Reuse workflow-route safe unexpected-error handling, without retry. `provePorts` is the injected operation ports object; defaults belong to the prove module. Help/discovery never loads it. This explicit route is the sole supplied-command execution exception; it grants no hosted-runtime/auth/token authority.
+
 ## Progress and unexpected errors
 
 Pass the runner a `say` port that writes one line to stderr, so slow workflow steps show progress while stdout keeps the result. An unexpected error in a runner, runtime or view route keeps its fixed safe line and adds `Reason: <cleaned first line of the error>` (the [cause helper](runtime-output.prompt.md#progress-and-causes)), so the person sees what really failed.
@@ -46,11 +56,13 @@ For local `mcp`, dynamically import [Try MCP](try-mcp.prompt.md) and return `run
 
 After setup's existing skills and project-block actions, dynamically import [agent MCP setup](agent-mcp-setup.prompt.md) and await `setupAgentMcp({env, packageRoot}, {stdin, stdout, stderr, confirm})`. Combine its failure with the existing exit status; preserve the earlier actions even if registration is declined or fails. Accept stdin (default process.stdin) and optional confirm as ports. Only registration is covered by its consent; the existing setup actions retain their behavior.
 
+Runtime resource `dispatch.prove` binds the actual injected `workflowProve.proveRun` module function; call it once only for valid prove input. Resource arguments preserve the forwarded native input; the module's operation ports remain its dependency injection. Optional Runtime input `cwd` binds existing `dependencies.cwd` (default `.` in this transport); it is not a new argv option. Other effects are not simulated by this entry.
+
 The `runPdd` entry observes the existing public module function in
 `src/pdd-cli.mjs`: supply argv and capture its stdout/stderr ports and returned
 exit code as the result fields below. This transport does not change that
 function's signature. Invalid syntax is resolved locally before any dependency
-with external effects is invoked; no runtime resource is needed for that path.
+with external effects is invoked; no runtime resource is called for that path.
 
 <details>
 <summary>Runtime interface</summary>
@@ -58,12 +70,12 @@ with external effects is invoked; no runtime resource is needed for that path.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "93c8bdd058a34ce3cc94aa5892120812f42a3969d991d2f95b8907514af9f13b",
+  "prose_sha256": "c5ab30961e7b9032b5c256457504aa1b8a98ac5290810345c7bc91da43c4ece4",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
       "type": "object",
-      "properties": {"argv": {"type": "array", "items": {"type": "string"}}},
+      "properties": {"argv": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}},
       "required": ["argv"], "additionalProperties": false
     },
     "result_schema": {
@@ -76,8 +88,18 @@ with external effects is invoked; no runtime resource is needed for that path.
     },
     "errors": []
   }],
-  "calls": [], "resources": [],
-  "limits": {"max_steps": 1, "max_model_calls": 1},
+  "calls": [],
+  "resources": [{"name": "dispatch", "kind": "port", "access": "write", "operations": [{
+    "name": "prove", "access": "write",
+    "arguments_schema": {"type": "object", "properties": {
+      "ref": {"type": "string"}, "test": {"type": "string"},
+      "expect": {"type": "string"}, "cwd": {"type": "string"}},
+      "required": ["ref", "test", "expect", "cwd"], "additionalProperties": false},
+    "result_schema": {"type": "object", "properties": {
+      "exitCode": {"type": "integer"}, "message": {"type": "string"}},
+      "required": ["exitCode", "message"], "additionalProperties": false}
+  }]}],
+  "limits": {"max_steps": 2, "max_model_calls": 3},
   "conventions": []
 }
 ```
