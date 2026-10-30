@@ -222,7 +222,7 @@ function schemaProblems(value, schema, tokens, out, warnings, evidence = { miss:
       const pointer = pointerOf(tokens);
       if (pattern && !pattern.test(value)) {
         evidence.miss = true;
-        warnings.push(`input${pointer ? ` ${pointer}` : ''} is ${show(value)}. It does not match the pattern ${schema.pattern}, so the runtime will likely refuse it.`);
+        warnings.push(`input${pointer ? ` ${pointer}` : ''} is ${show(value)}. It does not match the pattern ${schema.pattern}, so the interpreter will likely refuse it.`);
       }
     }
   }
@@ -257,7 +257,7 @@ const sectionOf = (base, tokens) => tokens.reduce((text, token) => /^\d+$/.test(
 export function checkInput(input, schema, index) {
   if (hasReference(input)) return { refusals: [], warnings: [] };
   const keyword = unknownKeyword(schema);
-  if (keyword) return { refusals: [], warnings: [`steps[${index}] input was not checked here: the prompt schema uses "${keyword}". The runtime still checks it.`] };
+  if (keyword) return { refusals: [], warnings: [`steps[${index}] input was not checked here: the prompt schema uses "${keyword}". The interpreter still checks it.`] };
   const problems = [], warnings = [];
   schemaProblems(input, schema, [], problems, warnings);
   const seen = new Set();
@@ -286,7 +286,7 @@ function schemaRules(schema, pointer, out) {
   if (Array.isArray(schema.type)) {
     return add('graph-schema-type-list', `has a list of types (${schema.type.map(String).join(', ')}). Use "oneOf" with one schema for each type, for example {"oneOf": [{"type": "string"}, {"type": "null"}]}.`);
   }
-  for (const key of Object.keys(schema)) if (SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which the runtime does not support.`);
+  for (const key of Object.keys(schema)) if (SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `uses "${key}", which the interpreter does not support.`);
   if (Object.hasOwn(schema, 'oneOf')) {
     for (const key of Object.keys(schema)) if (key !== 'oneOf' && !SCHEMA_ANNOTATIONS.has(key) && !SCHEMA_FORBIDDEN.has(key)) add('graph-schema-unsupported-keyword', `has "${key}" next to "oneOf". Put it inside each oneOf schema.`);
     if (!Array.isArray(schema.oneOf) || !schema.oneOf.length) add('graph-schema-invalid', '"oneOf" must be a list of at least one schema.');
@@ -566,7 +566,7 @@ function checkTest(root, found, test, prompts) {
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
   const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
   if (missing.length) return refusal('invalid-document', 'scenario', `The test has no ${missing.map(key => `"${key}"`).join(', ')}.`);
-  if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the runtime does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
+  if (extra.length) return refusal('invalid-document', 'scenario', `The test has keys the interpreter does not know: ${extra.map(key => `"${key}"`).join(', ')}.`);
   if (doc.schema_version !== TEST_SCHEMA) return refusal('invalid-document', 'schema_version', `schema_version must be "${TEST_SCHEMA}".`);
   if (typeof doc.story_path !== 'string' || !doc.story_path) return refusal('pdd-no-story', 'story_path', 'The test has no story_path. Name its story, for example "user_stories/<story>.md".');
   if (!found.visible.has(doc.story_path)) return refusal('story-missing', 'story_path', `${doc.story_path} is not a Git-visible file.`);
