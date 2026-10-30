@@ -6,7 +6,7 @@
     "src/workflow-chat.mjs:restartChat",
     "src/workflow-runner.mjs:openRun"
   ],
-  "notes": "Native specification only; no prompt-runtime binding or runtime pass is claimed. Herdr commands are injected fakes; Git and files are isolated real resources. Executable PR2 replay: test/2627-replacement-protocol.test.mjs. Existing navigation/continuation coverage is in the original 18 tests.",
+  "notes": "Native specification only; Runtime effects remain unbound and NOT RUN. Herdr commands use injected fakes; Git/files use isolated resources. Executable replay paths are maintained separately by the test owner; no provider or staging calls.",
   "cases": [
     {
       "id": "ownership-checkout",
@@ -105,7 +105,7 @@
         7
       ],
       "action": "Restart from selected pdd pane or undetermined Herdr pane",
-      "expected": "Refuse without native effects",
+      "expected": "Refuse without native effects or saved-run changes, including PDD_AGENT_SESSION even without Herdr caller variables",
       "input": {}
     },
     {
@@ -265,7 +265,7 @@
         7
       ],
       "action": "Lose close reply then retry public openRun --new",
-      "expected": "Durable requested phase, one archive, no repeated effects or launch",
+      "expected": "Retry inspects original tab/pane and native session; roll back if exact original remains usable, otherwise continue same attempt only after confirmed closure; unavailable or ambiguous inspection is retryable; one archive and no duplicate native session",
       "input": {
         "kind": "runner-lost-reply",
         "variant": "close"
@@ -278,7 +278,7 @@
         7
       ],
       "action": "Lose create reply then retry public openRun --new",
-      "expected": "Durable requested phase, one archive, no repeated effects or launch",
+      "expected": "Retry reconciles preallocation inventory and attempt label; adopt unique owned allocated tab or allocate only on proof no allocation occurred; finish same attempt with one native session; ambiguous inspection is retryable",
       "input": {
         "kind": "runner-lost-reply",
         "variant": "create"
@@ -301,7 +301,7 @@
         7
       ],
       "action": "Lose launch reply and remove replacement tab/pane, then retry --new",
-      "expected": "Retain same pending unconfirmed identity; absence cannot dispatch another launch",
+      "expected": "Inspect exact saved native session identity; confirm or resume that same session, or continue same prepared identity only if dispatch is authoritatively proven absent; otherwise retryable refusal, never blind allocation or fresh native session",
       "input": {}
     },
     {
@@ -319,7 +319,77 @@
         7
       ],
       "action": "SIGKILL child public openRun at durable closeRequested; retry from another process",
-      "expected": "Pending attempt survives; retry refuses without another close, allocation or launch",
+      "expected": "Pending attempt survives; retry inspects and rolls back an owned usable original or safely completes same attempt after confirmed closure; unavailable inspection is retryable; no duplicate native session",
+      "input": {}
+    },
+    {
+      "id": "pending-intent",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry --new after intent",
+      "expected": "Roll back to verified usable original, keep archive custody, terminal rolledBack; no close or launch",
+      "input": {}
+    },
+    {
+      "id": "pending-prepared",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry --new before dispatch",
+      "expected": "Verify prepared ownership and empty pane; dispatch same prepared native identity once; one archive",
+      "input": {}
+    },
+    {
+      "id": "pending-nonopen-commands",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Use approve, done, ask, changes, evidence or cancel while replacement pending",
+      "expected": "Legacy command semantics; no pending or replacement-lock refusal; cancel closes chats and remains cancelled",
+      "input": {}
+    },
+    {
+      "id": "status-contention",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Read status during slow gh or Herdr inspection while done records progress",
+      "expected": "Status holds no replacement lock during external calls; done does not fail busy; status names pending phase and pdd workflow open ISSUE --new",
+      "input": {}
+    },
+    {
+      "id": "preclose-refusal-state",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Refuse --new eligibility or ownership before intent",
+      "expected": "Entire saved run unchanged including state and chatFailure; no native effect",
+      "input": {}
+    },
+    {
+      "id": "nonempty-launch-reply",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Herdr pane run returns nonempty JSON without throwing",
+      "expected": "Launch succeeds with same replacement; phase launched; one dispatch",
+      "input": {}
+    },
+    {
+      "id": "cancel-during-recovery",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Cancel after replacement checkpoint and before next effect",
+      "expected": "Replacement stops; no later checkpoint restores running or overwrites cancellation",
       "input": {}
     }
   ]
