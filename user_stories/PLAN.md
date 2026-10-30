@@ -25,3 +25,5 @@ ports; catalog/history, CLI, capture and write effects require native verificati
 - [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status.json). Runtime check: native effects unbound.
 - [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift.json). Runtime check: CLI advice unbound.
 - [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync.json). Runtime check: native writes unbound.
+
+- [shared-source-limits](shared-source-limits.md) — [native cases](../test/shared-contracts/shared-source-limits.json). Runtime check: native read/allocation/archive effects unbound.

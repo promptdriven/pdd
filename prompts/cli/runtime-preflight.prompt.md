@@ -84,6 +84,18 @@ Module function `sourceFilePort(root, visible = new Set(gitFiles(root)))` return
 the synchronous `{stat({path}), read({path})}` adapter for local consumers.
 It applies this module's path, Git visibility, privacy and regular-file rules;
 stat returns `{exists,is_symlink,size}` and read returns UTF-8 `{content}`.
+Before each actual native read, reject an individual file above 10,485,760
+bytes using its stat size. Enforce existing selected-source totals and the
+10,000 selected-file budget before reading selected contents. This applies
+to this port, capture selection/metadata/reference reads and preparation-hook
+`readFile`, including a raw file that will be replaced. A single oversized
+file refuses before allocation/open/read, even when sparse or above the native
+Buffer limit. Preserve exit 4 and the finite too-big diagnostic with total and
+largest files; a RangeError is never the public result. Reference/preparation-only
+raw reads do not become upload members or accumulate again in selected totals;
+unrelated files do not count. Effective expanded/replacement bytes and tar retain their
+separate selected-payload limits; equal byte/file boundaries are permitted before
+applying the independent tar limit.
 Missing stat reports absence; missing read refuses exit 4. Reuse the capture
 reader's safe snapshots without selecting payload, creating an archive or writing
 files. Capture additionally checks its attempt's observations and retries.
@@ -92,8 +104,14 @@ Retain original authored paths. Effective upload bytes determine byte limits,
 tar contents and source SHA; no-reference captures keep exactly the prior bytes
 and tar. For reference-only reads, unused contracts and unused records in a
 shared file must not affect a selected Story's source or freshness. Expose expansion provenance per consumer
-and a per-Story selected effective-file footprint for local Check history;
-a whole multi-Story batch hash cannot substitute for that footprint.
+and a per-Story effective-file footprint for local Check history. For a selected
+Story, include every discovered scenario belonging to it and each scenario's own
+dependency closure, plus common explicit includes and supplied app-map context.
+The footprint for unchanged effective source must be identical whether capture
+selects one of that Story's tests, all its tests, or tests from other Stories as
+well. Footprint accounting does not add otherwise unselected tests or other
+Stories' files to the upload. A whole multi-Story batch hash cannot substitute
+for that footprint. Reference-only changes affect only actual users.
 
 - Module function `captureSource(root, {tests, appMap, attempts, prepareSource})` captures a sorted, deduplicated selection with original repository-relative names. The optional preparation hook is defined below. `tests` is a list of test paths in the effective source; absent means every discovered test in that source. Include each selected test, its `story_path`, step `entry_path`s, declared `entry_paths`, test context `prompt_path`s and `paths`, and recursively every reached prompt's interface `calls[].target`. Missing declared files refuse with exit 4, naming the referring file and missing path; never silently send an incomplete program.
 - Required Markdown context is declared in `## Dependencies`: local inline or reference-style Markdown links, and a backticked file path that leads a dependency list item (optionally followed by a colon and description). A bare declaration must name a directory-qualified file with an extension, or a filename with a common text, data or source-code extension (otherwise use a Markdown link); schema/version labels, dotted API identifiers, regular expressions, commands, absolute/home/environment paths and inline-code mentions inside descriptions or rules are not file declarations. Link destinations remain authoritative even when missing; classification must not depend on whether a descriptive token happens to match a Git file. Resolve links and context paths relative to the declaring file, with repository-root paths accepted when they name Git files. Include linked fragments' whole files, and recurse through dependencies in Markdown context files. Include local image links anywhere in reached Markdown, including SVG mockups. Ignore remote URLs and same-file anchors; do not load ordinary navigation links outside Dependencies. Cycles terminate and files appear once. Invalid or escaping paths refuse. Unusual names can use the include list.

@@ -33,6 +33,14 @@
     {
       "id": "AC8",
       "text": "A local constraint beside a shared reference is refused instead of silently overriding it."
+    },
+    {
+      "id": "AC9",
+      "text": "Expansion keeps the surrounding JSON layout and key order, including reasoning before answer."
+    },
+    {
+      "id": "AC10",
+      "text": "The record title C# keeps its literal hash, with or without a spaced closing hash marker."
     }
   ],
   "initial_world": {
@@ -55,6 +63,18 @@
       },
       "contracts/literals.json": {
         "content": "{\"__proto__\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]},\"constructor\":{\"type\":\"string\"}}",
+        "is_symlink": false
+      },
+      "contracts/layout.json": {
+        "content": "{\n  \"type\": \"object\",\n  \"properties\": {\"reasoning\": {\"type\": \"string\"}, \"answer\": {\"type\": \"string\"}},\n  \"required\": [\"reasoning\", \"answer\"],\n  \"additionalProperties\": false\n}",
+        "is_symlink": false
+      },
+      "contracts/hash-title.md": {
+        "content": "### C#\n```json\n{\"type\":\"string\"}\n```\n",
+        "is_symlink": false
+      },
+      "contracts/closing-title.md": {
+        "content": "### C# ###\n```json\n{\"type\":\"boolean\"}\n```\n",
         "is_symlink": false
       }
     }
@@ -156,7 +176,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "# Demo\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"entries\":[{\"input_schema\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"operation\":\"main\",\"result_schema\":{\"type\":\"string\"}}],\"prose_sha256\":\"sample\",\"resources\":[],\"status\":\"draft\"}\n```\n</details>\n"
+          "value": "# Demo\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"sample\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"result_schema\":{\"type\":\"string\"}}],\"resources\":[]}\n```\n</details>\n"
         }
       ]
     },
@@ -307,7 +327,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "{\"additionalProperties\":false,\"description\":\"For this command\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"title\":\"CLI input\",\"type\":\"object\"}"
+          "value": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\",\"description\":\"For this command\",\"title\":\"CLI input\"}"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -348,7 +368,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "{\"additionalProperties\":false,\"properties\":{\"amount\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"},\"literal\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}},\"required\":[],\"type\":\"object\"}"
+          "value": "{\"type\":\"object\",\"properties\":{\"amount\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]},\"literal\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]}},\"required\":[],\"additionalProperties\":false}"
         },
         {
           "criterion_id": "AC6",
@@ -364,6 +384,80 @@
               "value_json": "{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}"
             }
           ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "preserve-consumer-layout",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/layout.prompt.md",
+        "text": "# Keep\r\n\r\n<details><summary>Runtime interface</summary>\n\n```json\n { \"entries\": [ {\"operation\":\"act\", \"input_schema\": {\"$contract\":\"contracts/layout.json#\"}, \"result_schema\":{\"type\":\"string\", \"default\":{\"enum\":[2,1],\"required\":[\"z\",\"a\"]}}} ], \"status\": \"draft\" }\r\n```\n</details>\r\n",
+        "format": "prompt"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC9",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "# Keep\r\n\r\n<details><summary>Runtime interface</summary>\n\n```json\n { \"entries\": [ {\"operation\":\"act\", \"input_schema\": {\n  \"type\": \"object\",\n  \"properties\": {\"reasoning\": {\"type\": \"string\"}, \"answer\": {\"type\": \"string\"}},\n  \"required\": [\"reasoning\", \"answer\"],\n  \"additionalProperties\": false\n}, \"result_schema\":{\"type\":\"string\", \"default\":{\"enum\":[2,1],\"required\":[\"z\",\"a\"]}}} ], \"status\": \"draft\" }\r\n```\n</details>\r\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "literal-hash-title",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/layout.prompt.md",
+        "text": "{\"$contract\":\"contracts/hash-title.md#C#\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC10",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"type\":\"string\"}"
+        },
+        {
+          "criterion_id": "AC10",
+          "target": "result",
+          "path": "/references/0/target",
+          "op": "equals",
+          "value": "contracts/hash-title.md#C#"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "spaced-closing-hashes",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/layout.prompt.md",
+        "text": "{\"$contract\":\"contracts/closing-title.md#C#\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC10",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"type\":\"boolean\"}"
+        },
+        {
+          "criterion_id": "AC10",
+          "target": "result",
+          "path": "/references/0/target",
+          "op": "equals",
+          "value": "contracts/closing-title.md#C#"
         }
       ],
       "model": "gpt-6.1-sol"

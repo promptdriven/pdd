@@ -20,11 +20,15 @@
     },
     {
       "id": "AC5",
-      "text": "Unrelated source stays exact, and a repeated sync makes no further changes."
+      "text": "All bytes outside replaced schema values and an approved-to-draft status stay exact, and a repeated sync makes no further changes."
     },
     {
       "id": "AC6",
       "text": "Sync refuses an unsafe destination or concurrent source edit without overwriting it."
+    },
+    {
+      "id": "AC7",
+      "text": "A successful sync replaces the complete file atomically; a failed write leaves the complete original."
     }
   ],
   "cases": [
@@ -75,6 +79,33 @@
       ],
       "given": "symlink ancestor, secret destination and changed before bytes in separate cases",
       "required_observation": "refuse unsafe/changed file; no overwrite, upload, authentication or model call"
+    },
+    {
+      "id": "layout-only-selected-spans",
+      "criteria": [
+        "AC2",
+        "AC4",
+        "AC5"
+      ],
+      "given": "CRLF prompt with pretty JSON, unsorted keys, reasoning before answer, two matched four-field schemas, unmatched schema, literal default number 9007199254740993 and __proto__/constructor own keys",
+      "required_observation": "only matched schema value spans and approved status string change; retain annotations in written order; all other bytes exact; inserted reference follows original object layout; second sync writes zero files"
+    },
+    {
+      "id": "atomic-complete-file",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "native observer reads destination during temporary-file preparation and after rename; inject temp-write failure separately",
+      "required_observation": "observer sees only exact before or after; failed temp write retains full original and removes owned temp; never truncate destination"
+    },
+    {
+      "id": "replacement-races",
+      "criteria": [
+        "AC6",
+        "AC7"
+      ],
+      "given": "after temp preparation and before replacement, separately alter destination bytes, replace destination with symlink, replace parent with symlink or change destination identity retaining same bytes",
+      "required_observation": "exit 4; preserve concurrent edit/link/target and original elsewhere; no unsafe rename, external effect or leftover owned temp"
     }
   ]
 }

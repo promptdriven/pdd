@@ -76,7 +76,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "{\"initial_world\":{\"flags\":{\"a/b~c\":false},\"keep\":null,\"new\":null,\"orders\":[{\"done\":false,\"total\":0}]}}"
+          "value": "{\"initial_world\": {\"flags\":{\"a/b~c\":false},\"keep\":null,\"orders\":[{\"done\":false,\"total\":0}],\"new\":null}}"
         },
         {
           "criterion_id": "AC1",
@@ -131,7 +131,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "{\"initial_world\":{\"orders\":[{\"total\":0}]}}"
+          "value": "{\"initial_world\": {\"orders\": [{\"total\": 0}]}}"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -151,7 +151,7 @@
           "target": "result",
           "path": "/text",
           "op": "equals",
-          "value": "{\"initial_world\":{\"flags\":{\"a/b~c\":1},\"keep\":null,\"orders\":[{\"total\":4}]}}"
+          "value": "{\"initial_world\": {\"flags\":{\"a/b~c\":1},\"keep\":null,\"orders\":[{\"total\": 4}]}}"
         }
       ],
       "model": "gpt-6.1-sol"

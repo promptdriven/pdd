@@ -10,9 +10,11 @@
 6. Literal defaults retain their values during expansion; source with no applicable reference keeps its exact bytes.
 7. A local title and description survive expansion of a shared schema.
 8. A local constraint beside a shared reference is refused instead of silently overriding it.
+9. Expansion keeps the surrounding JSON layout and key order, including reasoning before answer.
+10. The record title C# keeps its literal hash, with or without a spaced closing hash marker.
 
 ## Rules to check
 
-References apply to schema positions only. Check and Try must validate and upload the same expanded bytes. Missing references stop before upload; real schema $ref remains refused. JSON numbers such as 9007199254740993 retain their exact number text in source and provenance; __proto__ and constructor remain ordinary own keys. Native capture tests must also cover no-reference tar identity, selected-only privacy, snapshot retries, size limits and synchronous readPrompt compatibility.
+References apply to schema positions only. Check and Try must validate and upload the same expanded bytes. Missing references stop before upload; real schema $ref remains refused. JSON numbers such as 9007199254740993 retain their exact number text in source and provenance; __proto__ and constructor remain ordinary own keys. Replace reference values only, preserving the consumer and selected target layouts and key order. Keep provenance canonical and sorted. Stat sizes above 10,485,760 bytes give a finite contract-invalid too-big error before file read; enforce the same boundary during expansion before oversized intermediate values materialize. Native capture tests must also cover no-reference tar identity, selected-only privacy, snapshot retries, size limits and synchronous readPrompt compatibility.
 
 Runtime check: expansion entry bound with supplied file stat/read replies; native upload, privacy and CLI effects need native verification.
