@@ -1,0 +1,372 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/shared-records.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A record heading with spaces and its heading fragment expand to the same schema."
+    },
+    {
+      "id": "AC2",
+      "text": "A JSON Pointer can select escaped names and array index 0, including nested shared records."
+    },
+    {
+      "id": "AC3",
+      "text": "A missing record is refused instead of producing a partial schema."
+    },
+    {
+      "id": "AC4",
+      "text": "A cycle of shared records is refused."
+    },
+    {
+      "id": "AC5",
+      "text": "An ambiguous heading is refused instead of choosing a record."
+    },
+    {
+      "id": "AC6",
+      "text": "Literal defaults retain their values during expansion; source with no applicable reference keeps its exact bytes."
+    },
+    {
+      "id": "AC7",
+      "text": "A local title and description survive expansion of a shared schema."
+    },
+    {
+      "id": "AC8",
+      "text": "A local constraint beside a shared reference is refused instead of silently overriding it."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "contracts/shop.md": {
+        "content": "# Shop records\n\n### About these records\nDescriptive text only.\n\n### sign_in_start input\n```json\n{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}\n```\n",
+        "is_symlink": false
+      },
+      "contracts/records.json": {
+        "content": "{\"defs\":{\"a/b~c\":[{\"additionalProperties\":false,\"properties\":{\"name\":{\"$contract\":\"contracts/records.json#/text\"}},\"required\":[\"name\"],\"type\":\"object\"}]},\"text\":{\"type\":\"string\"}}",
+        "is_symlink": false
+      },
+      "contracts/cycle.md": {
+        "content": "### a\n```json\n{\"$contract\":\"contracts/cycle.md#b\"}\n```\n### b\n```json\n{\"$contract\":\"contracts/cycle.md#a\"}\n```\n",
+        "is_symlink": false
+      },
+      "contracts/ambiguous.md": {
+        "content": "### View Result\n```json\n{\"type\":\"string\"}\n```\n### view-result\n```json\n{\"type\":\"integer\"}\n```\n",
+        "is_symlink": false
+      },
+      "contracts/literals.json": {
+        "content": "{\"__proto__\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]},\"constructor\":{\"type\":\"string\"}}",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    },
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "literal-heading",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/shop.md#sign_in_start input\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "prompts/shop.prompt.md",
+              "source_pointer": "",
+              "target": "contracts/shop.md#sign_in_start input",
+              "kind": "contract",
+              "value_json": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "heading-fragment",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/shop.md#sign_in_start-input\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "prompt-schema-position",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "# Demo\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"status\":\"draft\",\"prose_sha256\":\"sample\",\"entries\":[{\"operation\":\"main\",\"input_schema\":{\"$contract\":\"contracts/shop.md#sign_in_start-input\"},\"result_schema\":{\"type\":\"string\"}}],\"resources\":[]}\n```\n</details>\n",
+        "format": "prompt"
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "# Demo\n\n<details><summary>Runtime interface</summary>\n\n```json\n{\"entries\":[{\"input_schema\":{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"},\"operation\":\"main\",\"result_schema\":{\"type\":\"string\"}}],\"prose_sha256\":\"sample\",\"resources\":[],\"status\":\"draft\"}\n```\n</details>\n"
+        }
+      ]
+    },
+    {
+      "step_id": "pointer-and-nested",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/records.json#/defs/a~1b~0c/0\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "prompts/shop.prompt.md",
+              "source_pointer": "",
+              "target": "contracts/records.json#/defs/a~1b~0c/0",
+              "kind": "contract",
+              "value_json": "{\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"type\":\"object\"}"
+            },
+            {
+              "consumer": "prompts/shop.prompt.md",
+              "source_pointer": "",
+              "target": "contracts/records.json#/text",
+              "kind": "contract",
+              "value_json": "{\"type\":\"string\"}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "missing-record",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/shop.md#absent\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "contract-missing"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "contract-missing"
+    },
+    {
+      "step_id": "cycle",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/cycle.md#a\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "contract-cycle"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "contract-cycle"
+    },
+    {
+      "step_id": "ambiguous",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/ambiguous.md#view-result\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "contract-ambiguous"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "contract-ambiguous"
+    },
+    {
+      "step_id": "literal-no-reference",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": " { \"type\": \"string\", \"default\": {\"$contract\":\"contracts/missing.md#x\"} }\n",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": " { \"type\": \"string\", \"default\": {\"$contract\":\"contracts/missing.md#x\"} }\n"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": []
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "local-annotations",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/shop.md#sign_in_start-input\",\"description\":\"For this command\",\"title\":\"CLI input\"}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"description\":\"For this command\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"],\"title\":\"CLI input\",\"type\":\"object\"}"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "constraint-sibling",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"$contract\":\"contracts/shop.md#sign_in_start-input\",\"required\":[]}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC8",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "contract-invalid"
+        }
+      ],
+      "model": "gpt-6.1-sol",
+      "expected_error": "contract-invalid"
+    },
+    {
+      "step_id": "exact-number-and-own-record-key",
+      "entry_path": "prompts/cli/contract-refs.prompt.md",
+      "operation": "expandSource",
+      "input": {
+        "path": "prompts/shop.prompt.md",
+        "text": "{\"type\":\"object\",\"properties\":{\"amount\":{\"$contract\":\"contracts/literals.json#/__proto__\"},\"literal\":{\"type\":\"number\",\"default\":9007199254740993,\"examples\":[9007199254740993]}},\"required\":[],\"additionalProperties\":false}",
+        "format": "json-schema"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "{\"additionalProperties\":false,\"properties\":{\"amount\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"},\"literal\":{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}},\"required\":[],\"type\":\"object\"}"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/references",
+          "op": "equals",
+          "value": [
+            {
+              "consumer": "prompts/shop.prompt.md",
+              "source_pointer": "/properties/amount",
+              "target": "contracts/literals.json#/__proto__",
+              "kind": "contract",
+              "value_json": "{\"default\":9007199254740993,\"examples\":[9007199254740993],\"type\":\"number\"}"
+            }
+          ]
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

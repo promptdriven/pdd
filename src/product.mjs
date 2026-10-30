@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 61a1f5848af08a5d3840564f888983512b35a5ffafc3da6af4af965b3bb7d60c).
+// Generated from prompts/cli/product.prompt.md (sha256: 7409d8abee2fe8abac27869f7e1bc84b24c8983f6a33b268bb4a649c04d6d3af).
 import { execFile as execute } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';

@@ -1,0 +1,49 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-local-slots.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Ten parallel local checks with PDD_MAX_JOBS=3 all finish with at most 3 runtime jobs active at once."
+    },
+    {
+      "id": "AC2",
+      "text": "Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees."
+    },
+    {
+      "id": "AC3",
+      "text": "pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes."
+    },
+    {
+      "id": "AC4",
+      "text": "Stopping a command preserves slots for dispatched jobs that have not been confirmed ended."
+    }
+  ],
+  "cases": [
+    {
+      "id": "ten-processes",
+      "given": "10 commands, limit 3, fake runtime tracks active jobs",
+      "required_observation": "all pass, measured maximum 3; no busy failure"
+    },
+    {
+      "id": "mixed-work",
+      "given": "several repos/worktrees; check batches, lint, Try setup",
+      "required_observation": "shared cap 4; no parent reservation deadlock; browser session lifetime takes no slot"
+    },
+    {
+      "id": "dead-owner",
+      "given": "dead PID; running, unknown, missing and wrong-ID receipts separately",
+      "required_observation": "keep reservation before 30 minutes"
+    },
+    {
+      "id": "reclaim",
+      "given": "same-ID terminal jobs, separately age 1800000 ms",
+      "required_observation": "reservation reusable; age 1799999 ms with running job remains occupied"
+    },
+    {
+      "id": "interrupt-deadline",
+      "given": "pending posted job, separately confirmed terminal and unsent job",
+      "required_observation": "retain pending; release ended/unsent; no extra dispatch"
+    }
+  ]
+}

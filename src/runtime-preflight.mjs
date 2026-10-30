@@ -79,7 +79,7 @@ export function gitFiles(root) {
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
 
-const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (['ENOENT', 'ENAMETOOLONG'].includes(error.code)) return null; throw error; } };
 const readText = (root, path) => readFileSync(join(root, path), 'utf8');
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
@@ -691,7 +691,7 @@ function sourcePath(raw, from) {
   if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
     || raw.split('/').includes('..')) throw sourceProblem(from, String(raw), 'must be a repository-relative file path with no traversal.');
   const path = posix.normalize(raw);
-  if (path === '.' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
+  if (path === '.' || path === '.git' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
   return path;
 }
 
@@ -827,23 +827,31 @@ function sourceLimit(files) {
   return total;
 }
 
-function captureOnce(root, { tests, appMap = null }) {
-  const names = gitFiles(root), visible = new Set(names), snapshots = new Map(), payload = new Map(), queue = [], visited = new Set();
-  function inspect(path, from) {
+function captureOnce(root, { tests, appMap = null, prepareSource }) {
+  const names = gitFiles(root), diskVisible = new Set(names), visible = new Set(names), snapshots = new Map(), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
+  let unstable = false;
+  function inspectRaw(path, from, allowMissing = false) {
     if (snapshots.has(path)) return snapshots.get(path);
-    if (!visible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
     if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
     const parts = path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
       if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
+      if (stat && !stat.isDirectory()) throw sourceProblem(from, path, `has a non-directory ancestor (${parent}).`);
     }
     const stat = statOf(join(root, path));
-    if (!stat) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
-    if (stat.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
-    if (!stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
-    const file = { path, stat, size: Number(stat.size) };
+    if (stat?.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
+    if (stat && !stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
+    if (stat && !diskVisible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
+    if (!stat && !allowMissing) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
+    const file = { path, stat, size: Number(stat?.size ?? 0) };
     snapshots.set(path, file);
+    return file;
+  }
+  function inspect(path, from) {
+    if (overlay.has(path)) return overlay.get(path);
+    const file = inspectRaw(path, from);
+    if (!file.stat) throw sourceProblem(from, path, 'is missing. Restore it or correct the declared dependency.');
     return file;
   }
   function bytes(file) {
@@ -852,22 +860,59 @@ function captureOnce(root, { tests, appMap = null }) {
     let fd;
     try {
       fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
-      if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) { unstable = true; throw unstableSource; }
       file.bytes = readFileSync(fd);
-      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) throw unstableSource;
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) { unstable = true; throw unstableSource; }
       return file.bytes;
     } catch (error) {
-      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw unstableSource;
+      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code)) { unstable = true; throw unstableSource; }
       throw error;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
   function add(raw, from, role = 'context') {
     const path = sourcePath(raw, from), file = inspect(path, from);
+    for (const selected of payload.keys()) if (selected.startsWith(`${path}/`) || path.startsWith(`${selected}/`)) {
+      throw sourceProblem(from, path, `conflicts with selected file ${selected}.`);
+    }
     if (!payload.has(path)) payload.set(path, file);
     queue.push({ path, role });
   }
   const addStrings = (values, from, role) => { if (Array.isArray(values)) for (const path of values) if (typeof path === 'string') add(path, from, role); };
   try {
+    if (prepareSource !== undefined) {
+      if (typeof prepareSource !== 'function') throw new PreflightError(4, 'prepareSource must be a synchronous function.');
+      let active = true, prepared;
+      const raw = path => {
+        if (!active) throw new PreflightError(4, 'Preparation ports are valid only during prepareSource.');
+        return inspectRaw(sourcePath(path, 'prepareSource'), 'prepareSource', true);
+      };
+      try {
+        prepared = prepareSource({
+          readFile(path) {
+            const file = raw(path);
+            if (!file.stat) throw sourceProblem('prepareSource', path, 'is missing.');
+            return Buffer.from(bytes(file));
+          },
+          statFile(path) {
+            const file = raw(path);
+            return { exists: !!file.stat, is_symlink: false, size: file.size };
+          },
+        });
+      } finally { active = false; }
+      if (unstable) throw unstableSource;
+      if (!Array.isArray(prepared)) throw new PreflightError(4, 'prepareSource must return an array of files synchronously.');
+      for (const output of prepared) {
+        if (!isObject(output) || !(typeof output.bytes === 'string' || output.bytes instanceof Uint8Array)) throw new PreflightError(4, 'prepareSource files need a path and Buffer, Uint8Array or UTF-8 string bytes.');
+        const path = sourcePath(output.path, 'prepareSource');
+        if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
+        for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
+        inspectRaw(path, 'prepareSource', true);
+        const content = Buffer.from(output.bytes), file = { path, bytes: content, size: content.length };
+        overlay.set(path, file);
+        visible.add(path);
+      }
+      for (const path of overlay.keys()) add(path, 'prepareSource');
+    }
     if (visible.has(SOURCE_CONFIG)) {
       const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
       if (config.size > LIMITS.test) throw sourceProblem(SOURCE_CONFIG, '', 'must be at most 1 MiB.');
@@ -879,7 +924,16 @@ function captureOnce(root, { tests, appMap = null }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) add(path, SOURCE_CONFIG);
     }
-    const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
+    const selected = tests ?? [...new Set([
+      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
+      ...[...overlay.keys()].sort().filter(path => {
+      if (!path.endsWith('.json')) return false;
+      const file = overlay.get(path);
+      if (file.size > LIMITS.test) return false;
+      const text = bytes(file).toString('utf8');
+      if (!text.includes('prompt-runtime.program-scenario')) return false;
+      try { return JSON.parse(text)?.schema_version?.startsWith('prompt-runtime.program-scenario') === true; } catch { return true; }
+    })])];
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) add(appMap, 'App map', 'app-map');
     for (let index = 0; index < queue.length; index++) {
@@ -927,9 +981,9 @@ function captureOnce(root, { tests, appMap = null }) {
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
+    const same = !unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
       const after = inspectParentsAndStat(root, file.path);
-      return sameStat(file.stat, after);
+      return file.stat === null ? after === null : sameStat(file.stat, after);
     });
     return same ? { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total } : null;
   } catch (error) { if (error === unstableSource) return null; throw error; }
@@ -937,7 +991,10 @@ function captureOnce(root, { tests, appMap = null }) {
 
 function inspectParentsAndStat(root, path) {
   const parts = path.split('/');
-  for (let i = 1; i < parts.length; i++) if (statOf(join(root, ...parts.slice(0, i)))?.isSymbolicLink()) return null;
+  for (let i = 1; i < parts.length; i++) {
+    const parent = statOf(join(root, ...parts.slice(0, i)));
+    if (parent && !parent.isDirectory()) return unstableSource;
+  }
   return statOf(join(root, path));
 }
 

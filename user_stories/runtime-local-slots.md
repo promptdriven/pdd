@@ -1,0 +1,20 @@
+# Share a local runtime limit
+
+I can run several local agents without exceeding my shared runtime limit.
+
+## Acceptance criteria
+
+1. Ten parallel local checks with PDD_MAX_JOBS=3 all finish with at most 3 runtime jobs active at once.
+2. Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees.
+3. pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes.
+4. Stopping a command preserves slots for dispatched jobs that have not been confirmed ended.
+
+## Rules to check
+
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
+
+## Native cases for the code step
+
+[Requirement-derived native cases](../test/runtime-admission/runtime-local-slots.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
+
+Runtime check: NOT REPLAYED (#2548). The companion native case file records requirement-derived inputs and observations for code-step tests; it is not a prompt-runtime scenario. Real runCheck/runTry depend on native Git/source capture, private state, dispatch claims and process lifecycle without a complete Runtime interface. Injected HTTP/clock replies alone cannot establish this Story. Local exclusion, crash/permission behavior and concurrency need ordinary Node tests and separate processes. No Runtime call or pass is claimed.

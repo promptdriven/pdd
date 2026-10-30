@@ -369,9 +369,10 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   const endsAfter = { 'tests/place-order.json': 60_000, 'tests/unknown-item.json': 25 * 60_000 };
   let clock;
   const fake = await fakeRuntime(t, (entry, f) => {
-    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario });
+    if (entry.method === 'POST' && entry.command === 'check') sent.set(entry.request.requestId, { at: clock.now, test: entry.request.scenario, reads: [] });
     if (entry.method !== 'GET') return f.normal(entry);
-    const id = entry.url.split('/').at(-1), { at, test } = sent.get(id);
+    const id = entry.url.split('/').at(-1), { at, test, reads } = sent.get(id);
+    reads.push(clock.now);
     return { status: 200, json: f.check(id, clock.now - at < endsAfter[test] ? 'running' : 'passed') };
   });
   const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
@@ -384,8 +385,18 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   assert.equal(progress[0], 'Still running: 0 of 2 Stories done · 2 AI calls so far · 30 s');
   assert.equal(progress[7], 'Still running: 1 of 2 Stories done · 2 AI calls so far · 4 min');
   assert.equal(progress.at(-1), 'Still running: 1 of 2 Stories done · 2 AI calls so far · 24 min');
-  // Polite: one GET for each open row every 2 s, the same as with a limit.
-  assert.equal(fake.gets.length, 30 + 750);
+  // A POST acknowledgement can arrive after the fake clock's first polling tick.
+  // Once both rows are readable, each open row must be read every 2 s.
+  const readableAt = Math.max(...[...sent.values()].map(row => row.reads[0]));
+  for (const row of sent.values()) {
+    const steadyReads = row.reads.filter(at => at >= readableAt);
+    assert.ok(steadyReads.length >= 2, `${row.test}: repeated reads of the original request`);
+    for (let index = 1; index < steadyReads.length; index++)
+      assert.equal(steadyReads[index] - steadyReads[index - 1], 2000, `${row.test}: read cadence`);
+    assert.ok(row.reads.at(-1) - row.at >= endsAfter[row.test], `${row.test}: waits until completion`);
+  }
+  assert.deepEqual([...new Set(fake.gets.map(get => get.url))].sort(), [...sent.keys()].map(id => `/v1/runs/${id}`).sort());
+  assert.deepEqual(fake.posts.filter(post => post.command === 'check').map(post => post.request.scenario).sort(), Object.keys(endsAfter).sort());
   assert.equal(fake.posts.length, 3);
   assert.doesNotMatch(out, /STILL RUNNING/);
   assert.match(out, /^2 of 2 stories passed\./m);
@@ -476,7 +487,7 @@ test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request
 });
 
 // Wrong: a pdd that was killed mid-send leaves rows that --read shows as passed (exit 0) or never reads.
-test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a row never sent is not run', async t => {
+test('RUNTIME-SERVER12: --read adopts posted claims and keeps genuinely unsent rows not run', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const first = await check(setup, fake, ['place-order']);
   assert.equal(first.code, 0);
@@ -489,7 +500,26 @@ test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a ro
   assert.equal(read.code, 0, read.out); assert.equal(fake.gets.length, gets + 1); assert.equal(fake.gets.at(-1).url, `/v1/runs/${id}`);
   saved.rows[0] = { ...saved.rows[0], state: 'ready', request_ids: [] };
   writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
-  const never = await check(setup, fake, [], { '--read': true });
+  const posts = fake.posts.length;
+  const adopted = await check(setup, fake, [], { '--read': true, '--json': true });
+  assert.equal(adopted.code, 0);
+  assert.equal(adopted.clock.uuids, 0);
+  assert.equal(adopted.json.rows[0].request_id, id, 'the dispatch claim preserves the paid check identity');
+  assert.equal(fake.posts.length, posts, 'erasing row IDs cannot authorize a second POST');
+
+  // A separate producer batch stopped before any dispatch has no paid claim to adopt.
+  const unsent = harbor(t);
+  const stopped = await check(unsent, fake, ['place-order'], {}, { onInterrupt: handler => { handler(); return () => {}; } });
+  assert.equal(stopped.code, 3);
+  assert.equal(fake.posts.length, posts, 'interruption precedes even the lint POST');
+  const unsentFolder = join(unsent.state, 'batches', stopped.batch);
+  const unsentSaved = batchFile(unsent, stopped.batch);
+  assert.deepEqual(unsentSaved.rows[0].request_ids, []);
+  assert.equal(filesUnder(unsentFolder).some(path => path.endsWith('.dispatch.json')), false);
+  unsentSaved.rows[0].state = 'ready';
+  writeFileSync(join(unsentFolder, 'batch.json'), JSON.stringify(unsentSaved));
+  const never = await check(unsent, fake, [], { '--read': true });
+  assert.equal(fake.posts.length, posts);
   assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
   assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
 });

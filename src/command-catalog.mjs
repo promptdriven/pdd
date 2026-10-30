@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: b1bb7cb3297d1e82153460487139ca0946cb81c547f9989548294b57d44b9a55).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a9baf8509898dadb017d097208c13f5848b30750c0dc3afebe355d8165d384c0).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
@@ -54,11 +54,11 @@ const routes = [
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--local', kind: 'flag' }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
     forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
       form('pdd check --journeys [JOURNEY]', 'Check root journey Stories, or one exact journey ID, with the normal check flow.'),
-      form('pdd check --read [BATCH|CALL_ID] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --read [BATCH|CALL_ID] [--json] [--timeout MIN]', 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
-      form('pdd check --lint [STORY...] [--json]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
+      form('pdd check --lint [STORY...] [--json] [--timeout MIN]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form('pdd check --lint --local [STORY...] [--json]', 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.'),
       form('pdd check --screen URL --drawing PATH [--json]', 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI/runtime calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
@@ -74,6 +74,8 @@ const routes = [
       form('pdd try [STORY] --serve [PORT] [--max-calls N] [--new]', 'Serve real HTTP requests through your Try session on localhost (default port 8080).'),
       form('pdd try --save-last', 'Save the last terminal command and its output in the original Story test file.'),
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
+  { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
+    forms: [form('pdd jobs', 'List active and waiting runtime jobs on this machine without contacting the runtime.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],
