@@ -4,9 +4,10 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseProductDocuments, readProduct } from '../src/product.mjs';
+import { parseProductDocuments, parseProductWorldWriters, productStatus, readProduct } from '../src/product.mjs';
 import { selectJourneys } from '../src/product-composition.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
+import { captureSource } from '../src/runtime-preflight.mjs';
 
 const coffee = relative => readFileSync(new URL(`../examples/coffee-pickup/${relative}`, import.meta.url), 'utf8');
 
@@ -24,6 +25,17 @@ test('pure and async readers retain invalid-plan validation', async () => {
   const mapText = coffee('product/map.md');
   assert.throws(() => parseProductDocuments({ mapText, planText: '' }), error => error.code === 'invalid-product' && error.message.includes('no planned runs'));
   await assert.rejects(readProduct({ cwd: '/repo' }, { readFile: async path => path.endsWith('/map.md') ? mapText : '' }), error => error.code === 'invalid-product' && error.message.includes('no planned runs'));
+});
+
+test('world writer declarations preserve duplicates and meaningful escaped cells', () => {
+  const worldText = '# World\n| Key | Writer | Readers |\n|---|---|---|\n| `orders` | phone | server |\n| orders | phone | server |\n| orders | barista | phone |\n| display\\|state | phone | server |\n';
+  assert.deepEqual(parseProductWorldWriters({ worldText }), [
+    { key: 'orders', writer: 'phone' }, { key: 'orders', writer: 'phone' },
+    { key: 'orders', writer: 'barista' }, { key: 'display|state', writer: 'phone' },
+  ]);
+  for (const text of ['', '| Key |\n|---|\n| orders |', '| Key | Writer |\n|---|---|\n| orders | |']) {
+    assert.throws(() => parseProductWorldWriters({ worldText: text }), error => error.code === 'invalid-product' && error.message.includes('world.md'));
+  }
 });
 
 const rows = [
@@ -82,4 +94,28 @@ test('check --journeys uses ordinary source capture and excludes parts, examples
   assert.equal(await runCheck({ cwd: root, words: ['J99'], options: { '--journeys': true, '--files': true } }, ports), 2);
   assert.match(stderr.text, /Unknown journey J99/);
   assert.equal(outside, 0);
+});
+
+test('journey progress uses actual selected source identity across its parts', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-product-journey-progress-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const copy = (source, target) => { mkdirSync(join(root, target, '..'), { recursive: true }); cpSync(new URL(source, import.meta.url), join(root, target), { recursive: true }); };
+  copy('../examples/coffee-pickup/', 'examples/coffee-pickup');
+  copy('../examples/coffee-pickup/product/', 'product');
+  copy('../user_stories/journeys/J1-coffee-pickup.md', 'user_stories/journeys/J1-coffee-pickup.md');
+  copy('./runtime/J1-coffee-pickup.json', 'test/J1.json');
+  writeFileSync(join(root, 'unrelated.txt'), 'unrelated');
+  for (const args of [['init', '-q'], ['add', '-A']]) assert.equal(spawnSync('git', args, { cwd: root }).status, 0);
+  const source = { kind: 'runtime-capture-v1', tests: ['test/J1.json'], sha256: captureSource(root, { tests: ['test/J1.json'], appMap: null }).sha256 };
+  const run = { number: 81, root, state: 'running', pr: [], runtimeHistory: [{ at: 1, source,
+    summary: 'Runtime check (J1-coffee-pickup): ✓ 2 of 2 criteria\nRuntime check (J10-unrelated): ✓ 1 of 1 criteria' }] };
+  const ports = { listRuns: async () => [run], resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }), planOnBase: async () => true,
+    execFile: async (file, args) => { assert.equal(file, 'gh'); assert.equal(args[0], 'api'); return { stdout: JSON.stringify([[{ number: 81, body: '<!-- pdd-product: run=journeys -->' }]]) }; } };
+  const journey = async () => (await productStatus({ cwd: root }, ports)).parts.find(row => row.part === 'journeys');
+  assert.deepEqual(await journey(), { part: 'journeys', total: 1, pass: 1, stale: 0, notRun: 0 });
+  writeFileSync(join(root, 'unrelated.txt'), 'changed unrelated');
+  assert.equal((await journey()).pass, 1);
+  const part = join(root, 'examples/coffee-pickup/prompts/barista/board.prompt.md');
+  writeFileSync(part, `${readFileSync(part, 'utf8')}\nA changed barista rule.\n`);
+  assert.deepEqual(await journey(), { part: 'journeys', total: 1, pass: 0, stale: 1, notRun: 0 });
 });
