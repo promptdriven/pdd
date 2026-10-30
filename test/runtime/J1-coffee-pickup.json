@@ -12,16 +12,12 @@
     }
   ],
   "initial_world": {
-    "menu": [
-      {
-        "drink": "latte",
-        "size": "M",
-        "priceCents": 450
-      }
-    ],
-    "orders": [],
-    "tickets": [],
-    "order_requests": []
+    "$seed": "examples/coffee-pickup/contracts/seed-world.json",
+    "set": {
+      "/orders": [],
+      "/tickets": [],
+      "/order_requests": []
+    }
   },
   "simulation": {
     "menu.load": {
