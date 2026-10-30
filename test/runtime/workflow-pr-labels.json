@@ -17,6 +17,18 @@
     {
       "id": "AC4",
       "text": "When \"Not fixed yet:\" has a nonblank payload, both PRs use \"Refs #2594\"; otherwise PR 1 keeps \"Part of #2594\" and the code PR keeps \"Closes #2594\". Missing labels create no empty placeholders."
+    },
+    {
+      "id": "AC5",
+      "text": "Both PRs show nonblank \"Not checked:\" lines immediately after \"Not fixed yet:\" and before \"Defect:\", in latest known-step summary then direct-note order; payload ends are trimmed, internal spaces and distinct lines are retained, and exact repeats are omitted."
+    },
+    {
+      "id": "AC6",
+      "text": "Indented, case-varied, embedded and unknown-step \"Not checked:\" lines are omitted, and blank \"Not checked:\" payloads create no placeholders on either PR."
+    },
+    {
+      "id": "AC7",
+      "text": "A nonblank \"Not checked:\" line without a nonblank \"Not fixed yet:\" line keeps \"Part of #2594\" on PR 1 and \"Closes #2594\" on the code PR; with both labels, both PRs retain \"Refs #2594\"."
     }
   ],
   "initial_world": {
@@ -33,6 +45,33 @@
       {
         "request": {
           "root": "/repo/empty-code"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/not-checked-ordered-code"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/not-checked-only-code"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/not-checked-blank-code"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -112,6 +151,118 @@
         "reply": {
           "notes": []
         }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-ordered-pr1",
+          "steps": [
+            "understand",
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Not checked: formal (agent limit)\nNot checked: runner skipped"
+            },
+            {
+              "step": "verify",
+              "text": "Not checked: review (agent limit)\nNot checked: native  browser unavailable"
+            },
+            {
+              "step": "unknown",
+              "text": "Not checked: forbidden unknown step"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-ordered-code",
+          "steps": [
+            "understand",
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Not checked: formal (agent limit)\nNot checked: runner skipped"
+            },
+            {
+              "step": "verify",
+              "text": "Not checked: review (agent limit)\nNot checked: native  browser unavailable"
+            },
+            {
+              "step": "unknown",
+              "text": "Not checked: forbidden unknown step"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-only-pr1",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-only-code",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-blank-pr1",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Not checked:  \n Not checked: indented"
+            },
+            {
+              "step": "unknown",
+              "text": "Not checked: unknown"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-blank-code",
+          "steps": [
+            "understand"
+          ]
+        },
+        "reply": {
+          "notes": [
+            {
+              "step": "understand",
+              "text": "Not checked:  \n Not checked: indented"
+            },
+            {
+              "step": "unknown",
+              "text": "Not checked: unknown"
+            }
+          ]
+        }
       }
     ],
     "publication_readOldCodeProof": [
@@ -127,6 +278,33 @@
       {
         "request": {
           "runDir": "/pub/empty-code"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-ordered-code"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-only-code"
+        },
+        "reply": {
+          "content": "",
+          "error": "missing"
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/not-checked-blank-code"
         },
         "reply": {
           "content": "",
@@ -183,7 +361,7 @@
           "steps": [
             {
               "step": "understand",
-              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
             },
             {
               "step": "verify",
@@ -269,7 +447,7 @@
           "steps": [
             {
               "step": "understand",
-              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
             },
             {
               "step": "verify",
@@ -414,6 +592,297 @@
         },
         {
           "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-ordered-pr1",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-ordered-pr1",
+          "runDir": "/pub/not-checked-ordered-pr1",
+          "root": "/repo/not-checked-ordered-pr1",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Review: 2 must-fix\nNot checked:   formal (agent limit)  \nDefect: real defect\nNot fixed yet: this helps find the cause.\nNot checked: formal (agent limit)\nNot checked:   \n not checked: lowercase\n Not checked: indented\nNot Checked: wrong case\ntext Not checked: embedded"
+            },
+            {
+              "step": "verify",
+              "summary": "Not checked: review (agent limit)"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Not checked: formal (agent limit)",
+            "Not checked: runner skipped",
+            "Not checked: review (agent limit)",
+            "Not checked: native  browser unavailable",
+            "Defect: real defect",
+            "Review: 2 must-fix"
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Not checked: formal (agent limit)",
+            "Not checked: runner skipped",
+            "Not checked: review (agent limit)",
+            "Not checked: native  browser unavailable",
+            "Defect: real defect",
+            "Review: 2 must-fix"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Refs #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-ordered-code",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-ordered-code",
+          "runDir": "/pub/not-checked-ordered-code",
+          "root": "/repo/not-checked-ordered-code",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Review: 2 must-fix\nNot checked:   formal (agent limit)  \nDefect: real defect\nNot fixed yet: this helps find the cause.\nNot checked: formal (agent limit)\nNot checked:   \n not checked: lowercase\n Not checked: indented\nNot Checked: wrong case\ntext Not checked: embedded"
+            },
+            {
+              "step": "verify",
+              "summary": "Not checked: review (agent limit)"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Not checked: formal (agent limit)",
+            "Not checked: runner skipped",
+            "Not checked: review (agent limit)",
+            "Not checked: native  browser unavailable",
+            "Defect: real defect",
+            "Old-code proof: not run.",
+            "Review: 2 must-fix"
+          ]
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not fixed yet: this helps find the cause.",
+            "Not checked: formal (agent limit)",
+            "Not checked: runner skipped",
+            "Not checked: review (agent limit)",
+            "Not checked: native  browser unavailable",
+            "Defect: real defect",
+            "Old-code proof: not run.",
+            "Review: 2 must-fix"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Refs #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-only-pr1",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-only-pr1",
+          "runDir": "/pub/not-checked-only-pr1",
+          "root": "/repo/not-checked-only-pr1",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not fixed yet:  \nNot checked: formal (agent limit)"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not checked: formal (agent limit)"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-only-code",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-only-code",
+          "runDir": "/pub/not-checked-only-code",
+          "root": "/repo/not-checked-only-code",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not fixed yet:  \nNot checked: formal (agent limit)"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Not checked: formal (agent limit)",
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-blank-pr1",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-blank-pr1",
+          "runDir": "/pub/not-checked-blank-pr1",
+          "root": "/repo/not-checked-blank-pr1",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not checked: \nNot checked:\t\n Not checked: indented\nnot checked: lower\nNot Checked: wrong case\ntext Not checked: embedded"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "not-checked-blank-code",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-not-checked-blank-code",
+          "runDir": "/pub/not-checked-blank-code",
+          "root": "/repo/not-checked-blank-code",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "understand",
+              "summary": "Not checked: \nNot checked:\t\n Not checked: indented\nnot checked: lower\nNot Checked: wrong case\ntext Not checked: embedded"
+            }
+          ]
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: not run."
+          ]
+        },
+        {
+          "criterion_id": "AC7",
           "target": "result",
           "path": "/issueReference",
           "op": "equals",

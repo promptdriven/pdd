@@ -10,6 +10,9 @@ Draft for person review; these proposed policies and expected values are not app
 2. Distinct lines from the latest known-step summaries and direct notes are retained in workflow step order within each label; exact repeats and blank labels are omitted.
 3. Indented labels, different case, labels inside other text, unknown-step notes and agent-written machine proof or inventory lines are not lifted.
 4. When "Not fixed yet:" has a nonblank payload, both PRs use "Refs #2594"; otherwise PR 1 keeps "Part of #2594" and the code PR keeps "Closes #2594". Missing labels create no empty placeholders.
+5. Both PRs show nonblank "Not checked:" lines immediately after "Not fixed yet:" and before "Defect:", in latest known-step summary then direct-note order; payload ends are trimmed, internal spaces and distinct lines are retained, and exact repeats are omitted.
+6. Indented, case-varied, embedded and unknown-step "Not checked:" lines are omitted, and blank "Not checked:" payloads create no placeholders on either PR.
+7. A nonblank "Not checked:" line without a nonblank "Not fixed yet:" line keeps "Part of #2594" on PR 1 and "Closes #2594" on the code PR; with both labels, both PRs retain "Refs #2594".
 
 ## Rules to check
 
