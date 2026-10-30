@@ -63,7 +63,7 @@ for(const boundary of ['close','allocation-check','create','launch-check'])test(
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;let advanced=false;
  const advance=()=>{const saved=f.record();saved.area=1;saved.done.scope={summary:'concurrent progress'};writeFileSync(saved.runDir+'/status.json',JSON.stringify(saved));advanced=true;};
  f.ports.herdr=async args=>{const reply=await healthy(args);
-   if(!advanced && (boundary==='close'&&args[0]==='tab'&&args[1]==='close' || boundary==='allocation-check'&&args[0]==='tab'&&args[1]==='list'&&f.record().chatReplacement?.phase==='createRequested' || boundary==='create'&&args[0]==='tab'&&args[1]==='create' || boundary==='launch-check'&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared'))advance();
+   if(!advanced && (boundary==='close'&&args[0]==='tab'&&args[1]==='close' || boundary==='allocation-check'&&args[0]==='workspace'&&args[1]==='list'&&f.record().chatReplacement?.phase==='createRequested' || boundary==='create'&&args[0]==='tab'&&args[1]==='create' || boundary==='launch-check'&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared'))advance();
    return reply;};
  // Empty prepared panes throw agent_not_found, so publish progress before returning that inspection too.
  if(boundary==='launch-check')f.ports.herdr=async args=>{if(!advanced&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared')advance();return healthy(args);};
