@@ -1,0 +1,12 @@
+{
+  "menu": [
+    {
+      "drink": "latte",
+      "size": "M",
+      "priceCents": 450
+    }
+  ],
+  "orders": [],
+  "tickets": [],
+  "order_requests": []
+}

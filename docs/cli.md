@@ -20,6 +20,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 
 | Command | What it does |
 |---|---|
+| `pdd workflow prove ISSUE --test COMMAND --expect TEXT` | Fetch the selected base branch and run the supplied command on its merge-base with committed changed test files overlaid, then on committed head, in disposable snapshots. Both quoted text options are required; each phase has a fixed 120-second limit, 2-second termination grace and 1 MiB output cap. Save `old-code-proof.json` in the run folder. A successful comparison exits 0; failed or unavailable evidence exits 1 and never blocks publication. |
 | `pdd workflow run NAME ISSUE [--agent codex\|claude] [--base BRANCH]` | Make a branch and a worktree for the issue, open the first chat in Herdr and return at once. `--base BRANCH` selects an existing branch on origin; omitted means the repository default. An explicit base must fetch successfully before startup. PRs target the saved base, with PR 2 stacked on an open PR 1. Every chat of the run uses the `CODEX_HOME` (Codex) or `CLAUDE_CONFIG_DIR` (Claude Code) of this terminal. A leading `~` in it means your home folder. If that folder does not exist, `run` stops before it starts anything |
 | `pdd workflow list [--json]` | List the workflows that pdd finds, with their areas and gates: the PDD ones and [your own](workflows.md#make-your-own-workflow) |
 | `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, also `Stories: N of M pass`. Without ISSUE, show all runs in this repo. In a run's worktree, show that run. With `--all`, or outside a Git repo, show every run on this machine: waiting for you first, then working, PR open, done. `--cancelled` also shows the hidden cancelled runs. `--json` gives the same list as data. It says "the chat stopped" when no agent runs in the chat: run `pdd workflow open ISSUE` to start it again. Failed or unconfirmed startup/open and unavailable Herdr status show waiting with recovery advice. At a gate it says that the agent writes the gate message until the chat has asked you |
@@ -30,7 +31,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | `pdd workflow changes ISSUE TEXT` | Send the text to the same chat. The chat revises. The gate stays open. Also use it to answer a question that the chat asked. At a gate, a plain approval such as "I approve" is not sent: pdd tells you to run `pdd workflow approve ISSUE` |
 | `pdd workflow cancel ISSUE` | Close the run's chat tabs. Keep the worktree and the branch. A new `run` on the issue then starts fresh |
 
-- NAME is `small-change`, `bug`, `feature` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
+- NAME is `small-change`, `bug`, `feature`, `product` or the name of [your own workflow](workflows.md#make-your-own-workflow). pdd uses the skill `pdd-NAME`.
 - ISSUE is the issue number in the current repo, worktrees included. If several repos match, use `owner/repo#N`. An issue can have only one active run. `run` refuses a second one.
 - `--base` takes a branch name such as `feature/checkout`. The branch must already be on `origin`. PDD fetches it and starts from that remote commit, preserves the repository default, and pushes only its new issue branches. A failed explicit fetch stops startup.
 - `status` prints `pdd workflow view ISSUE` for passive review. The view links to the full issue, Stories and acceptance criteria, plan, prompts, test cases and Markdown gate notes. It identifies the current commit and uncommitted edits; recorded gate approvals do not certify later edits or approve prompts. Missing links/files are stated plainly.
@@ -137,6 +138,18 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 
 `pdd check --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted Try CLI commands print this exact recovery command. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.
 
+`workflow prove` leaves the saved run base unchanged. Fresh worktrees have no installed dependencies; include required installation in `--test`. The command inherits your environment and network access, and shares the repository’s Git refs and config, just like tests run by hand. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both snapshots before exit 130, 143 or 129. Only positively owned stale proof worktrees with inactive owners are recovered; unrelated worktrees are left alone.
+
 Remote lint shares the Check caller wait, including `--timeout`, with no separate lint limit. Recovery of a saved lint-held Check has a fresh finite wait (`--timeout`, otherwise 90 seconds), retains the saved runtime origin and dispatches each original check at most once. Standalone lint reads never send checks.
 
 Before sending work, pdd asks whether the runtime has room. During announced maintenance, it shows the end time and reason, then waits within the same deadline. If the runtime does not offer this information, pdd uses the reply to the submission instead. A queued job keeps its ID while pdd shows its place. If the runtime confirms that a check ended because the service restarted, pdd tries that check once more and saves both attempts and their usage. If a reply is lost or the outcome is uncertain for another reason, pdd reads the original job without sending it again.
+
+## Product plans
+
+| Command | What it does |
+|---|---|
+| `pdd product status [--json]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs. Makes no runtime calls |
+| `pdd product next` | Show ready planned runs and their start commands; parallel starts are optional |
+| `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
+
+See [Build a whole product](build-a-whole-product.md).

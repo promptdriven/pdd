@@ -82,9 +82,18 @@ for (const cap of domain.cap) for (const schedule of domain.schedule) {
       assert.ok(posts[0].tar.length > 0, 'check retains required source multipart');
       const id = posts[0].request.requestId;
       assert.deepEqual(after.rows[0].request_ids, [...before.rows[0].request_ids, id], 'exactly one original check identity');
+      assert.deepEqual(firstTwo.map(result => result.code).sort(), schedule === 'concurrent' ? [0, 3] : [0, 0],
+        'an overlapping command refuses the live owner; later commands read its result');
       for (const result of firstTwo) {
-        const json = JSON.parse(result.ports.stdout.text);
-        assert.equal(json.rows[0].request_id, id, 'overlapping readers retain winner identity');
+        if (result.code === 3) {
+          assert.equal(result.ports.stdout.text, '', 'live-owner refusal has no JSON stdout');
+          assert.match(result.ports.stderr.text, /pdd check --read/);
+          assert.equal(result.clock.uuids, 0, 'live-owner refusal precedes identity allocation');
+          assert.equal(result.clock.gh.length, 0, 'live-owner refusal precedes authentication');
+        } else {
+          const json = JSON.parse(result.ports.stdout.text);
+          assert.equal(json.rows[0].request_id, id, 'the successful owner retains winner identity');
+        }
       }
     } else {
       assert.deepEqual(after.rows.map(row => row.request_ids), before.rows.map(row => row.request_ids));

@@ -1,11 +1,20 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: ce3defc1b4f7df3e20fcd8a6873b55b0b5d006cf8ac783a91e328aed94bcb279).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 4382e5ad8cab8bfcbd0a8b7c831108d97f63fdf4dfa2644f91c5f0e5f2c868a0).
 const form = (form, description) => Object.freeze({ form, description });
-export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
+export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
+  { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
+    forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no runtime calls.')] },
+  { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
+    forms: [form('pdd product next', 'Show ready planned runs and their start commands; no runtime calls.')] },
+  { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No runtime calls.')] },
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
     forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+  { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
+    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },

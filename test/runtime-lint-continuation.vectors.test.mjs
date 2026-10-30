@@ -97,7 +97,11 @@ for (const retry of [false, true]) test(`CONTINUATION native table: concurrent r
   assert.equal(new Set(paid(r).map(e => e.request.scenario)).size, 2);
   const final = await recovery(r, batch);
   assert.equal(final.code, 0); assert.equal(final.clock.uuids, 0);
-  for (const reply of replies) assert.deepEqual(reply.json.rows.map(row => row.request_id).sort(), final.json.rows.map(row => row.request_id).sort());
+  assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
+  for (const reply of replies) {
+    if (reply.code === 3) { assert.equal(reply.json, null); assert.match(reply.ports.stderr.text, /pdd check --read/); }
+    else assert.deepEqual(reply.json.rows.map(row => row.request_id).sort(), final.json.rows.map(row => row.request_id).sort());
+  }
 });
 
 test('CONTINUATION native table: lost POST and repeated recovery preserve ID and unknown usage', async t => {
@@ -202,6 +206,236 @@ test('CONTINUATION native table: posted completed/running/lost/unknown IDs remai
   assert.ok(next.json.rows.slice(2).every(row => row.calls === 'unknown'));
 });
 
+// Story AC5 and Recovery deadline: authentication and receipt refresh share the
+// caller's minute; local evidence is still readable after that minute expires.
+async function budgetFixture(t, { unknown = false, terminalLint = false, openCheck = false } = {}) {
+  const r = await setup(t, { multiple: openCheck ? 3 : true }), { batch } = await r.first();
+  const s = saved(r, batch), folder = join(r.h.state, 'batches', batch);
+  const id = '44444444-4444-4444-8444-444444444444', receipt = r.f.check(id);
+  Object.assign(s.doc.rows[1], { request_ids: [id], state: 'passed', phase: 'server', note: null });
+  writeFileSync(join(folder, id + '.json'), JSON.stringify(receipt));
+  const lintId = s.doc.lint.request_ids.at(-1);
+  if (unknown) {
+    Object.assign(s.doc.lint, { state: 'unknown', pending: false, unknown: true });
+    s.doc.rows[0].note = { code: null, message: 'The lint result is unknown, so pdd sent no checks.' };
+  }
+  if (terminalLint) writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
+  const openId = '55555555-5555-4555-8555-555555555555';
+  if (openCheck) Object.assign(s.doc.rows[2], { request_ids: [openId], state: 'unknown', phase: 'server', note: null,
+    lost: true, read_until: START + 300000 });
+  writeFileSync(s.path, JSON.stringify(s.doc));
+  return { r, batch, s, folder, id, receipt, lintId, openId, files: readdirSync(folder).sort() };
+}
+function assertBudgetPreserved(b, p, json) {
+  const { r, batch, s, folder, id, receipt } = b, retained = saved(r, batch).doc;
+  assert.equal(p.clock.uuids, 0, 'expiry cannot allocate a paid check ID');
+  assert.equal(paid(r).length, 0);
+  assert.deepEqual(readdirSync(folder).sort(), b.files, 'no dispatch claim, posted marker or new receipt');
+  assert.deepEqual(retained.rows.map(row => row.request_ids), s.doc.rows.map(row => row.request_ids));
+  assert.equal(retained.source_sha256, s.doc.source_sha256);
+  assert.equal(json.batch, batch); assert.equal(json.rows.length, s.doc.rows.length, 'all saved rows remain visible');
+  const prior = json.rows.find(row => row.test === s.doc.rows[1].test);
+  assert.equal(prior.request_id, id); assert.equal(prior.state, 'passed'); assert.equal(prior.calls, 1);
+  assert.deepEqual(prior.checks, { passed: 1, total: 1 });
+  assert.deepEqual(prior.criteria, { passed: 1, total: 1 });
+  assert.equal(prior.report_url, receipt.report_url);
+  assert.deepEqual(JSON.parse(readFileSync(join(folder, id + '.json'))), receipt);
+}
+async function budgetRecovery(b, retry, authMs, configure = () => {}) {
+  const p = portsFor(b.r.env), gh = p.ports.gh;
+  b.r.state.clock = p.clock;
+  p.ports.gh = args => { p.clock.now += authMs / 2; return gh(args); };
+  configure(p);
+  const code = await runCheck({ cwd: b.r.h.repo, words: retry ? [] : [b.batch], options: {
+    [retry ? '--retry' : '--read']: retry ? b.batch : true, '--json': true, '--timeout': 1,
+  } }, p.ports);
+  return { ...p, code, json: JSON.parse(p.ports.stdout.text) };
+}
+
+for (const retry of [false, true]) for (const openCheck of [false, true]) test(`CONTINUATION repair2: near deadline bounds ${openCheck ? 'historical check' : 'lint'} GET abort for ${retry ? 'retry' : 'read'}`, async t => {
+  const b = await budgetFixture(t, { openCheck }), starts = [], timers = [], events = [];
+  // Exercise Runtime.send's actual scheduled timer without waiting a real minute.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const schedule = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    timers.push(ms); return schedule(fn, ms, ...args);
+  };
+  let next;
+  try {
+    next = await budgetRecovery(b, retry, 55000, p => {
+      p.ports.fetch = (url, init) => {
+        const abortMs = timers.at(-1);
+        starts.push({ method: init.method, path: url.pathname, elapsed: p.clock.now - START, abortMs });
+        if (openCheck && url.pathname.endsWith(b.lintId)) {
+          return Promise.resolve(new Response(JSON.stringify(b.r.f.job(b.lintId, 'lint', 'running'))));
+        }
+        const reply = new Promise((resolve, reject) => {
+          const responseTimer = setTimeout(() => {
+            p.clock.now += 20000; events.push('response');
+            resolve(new Response(JSON.stringify(b.r.f.job(openCheck ? b.openId : b.lintId, openCheck ? 'check' : 'lint', 'running'))));
+          }, 20000);
+          init.signal.addEventListener('abort', () => {
+            clearTimeout(responseTimer); p.clock.now += abortMs; events.push('abort');
+            reject(new DOMException('Timed out', 'AbortError'));
+          }, { once: true });
+        });
+        t.mock.timers.tick(20000);
+        return reply;
+      };
+    });
+  } finally { globalThis.setTimeout = schedule; t.mock.timers.reset(); }
+  const expected = [{ method: 'GET', path: `/v1/runs/${b.lintId}`, elapsed: 55000, abortMs: 5000 }];
+  if (openCheck) expected.push({ method: 'GET', path: `/v1/runs/${b.openId}`, elapsed: 55000, abortMs: 5000 });
+  assert.deepEqual(starts, expected,
+    'the HTTP abort must use the five seconds left in the caller budget');
+  assert.deepEqual(events, ['abort'], 'delayed fetch must honor the actual HTTP abort signal');
+  assert.equal(next.clock.now - START, 60000); assert.equal(next.code, 3);
+  assertBudgetPreserved(b, next, next.json);
+  assert.equal(saved(b.r, b.batch).doc.lint[openCheck ? 'pending' : 'unknown'], true);
+  if (openCheck) {
+    const row = next.json.rows.find(row => row.test === b.s.doc.rows[2].test);
+    assert.equal(row.request_id, b.openId); assert.equal(row.state, 'unknown'); assert.equal(row.calls, 'unknown');
+  }
+});
+
+for (const retry of [false, true]) for (const authMs of [60000, 61000]) for (const unknown of [false, true]) {
+  test(`CONTINUATION repair2: expired ${authMs}ms ${unknown ? 'unknown' : 'pending'} ${retry ? 'retry' : 'read'} starts no GET`, async t => {
+    const b = await budgetFixture(t, { unknown }), starts = [];
+    const next = await budgetRecovery(b, retry, authMs, p => {
+      p.ports.fetch = async (url, init) => {
+        starts.push({ method: init.method, elapsed: p.clock.now - START });
+        return new Response(JSON.stringify(b.r.f.job(b.lintId, 'lint', 'running')));
+      };
+    });
+    assert.deepEqual(starts, [], 'no receipt GET at or after the caller deadline');
+    assert.equal(next.clock.now - START, authMs); assert.equal(next.code, 3);
+    assertBudgetPreserved(b, next, next.json);
+    const retained = saved(b.r, b.batch).doc;
+    assert.deepEqual(retained.lint, b.s.doc.lint, 'keep pending/unknown lint evidence when refresh is unavailable');
+    assert.deepEqual(retained.rows[0], b.s.doc.rows[0], 'keep the held row evidence');
+    assert.equal(next.json.rows[0].state, 'not_run');
+  });
+}
+
+for (const retry of [false, true]) test(`CONTINUATION repair2: cached terminal lint and check survive expired ${retry ? 'retry' : 'read'}`, async t => {
+  const b = await budgetFixture(t, { terminalLint: true }), starts = [];
+  const next = await budgetRecovery(b, retry, 61000, p => {
+    p.ports.fetch = async (url, init) => { starts.push(init.method); return new Response('{}'); };
+  });
+  // runtime-output's exit contract: confirmed lint leaves an unsent check (5),
+  // whereas unresolved lint or interruption above returns 3.
+  assert.deepEqual(starts, []); assert.equal(next.code, 5);
+  assertBudgetPreserved(b, next, next.json);
+  const retained = saved(b.r, b.batch).doc;
+  assert.equal(retained.lint.state, 'passed'); assert.equal(retained.lint.pending, false); assert.equal(retained.lint.unknown, false);
+  assert.equal(retained.rows[0].note.code, 'lint-finished', 'cached terminal lint was consumed despite expiry');
+  assert.deepEqual(JSON.parse(readFileSync(join(b.folder, b.lintId + '.json'))), b.r.f.lint(b.lintId));
+});
+
+for (const retry of [false, true]) test(`CONTINUATION repair2: interrupted ${retry ? 'retry' : 'read'} keeps held evidence and cached check`, async t => {
+  const b = await budgetFixture(t), starts = [];
+  const next = await budgetRecovery(b, retry, 0, p => {
+    const gh = p.ports.gh;
+    p.ports.gh = args => { if (args[0] === 'api') p.clock.interrupt(); return gh(args); };
+    p.ports.fetch = async (url, init) => { starts.push(init.method); return new Response('{}'); };
+  });
+  assert.deepEqual(starts, []); assert.equal(next.code, 3);
+  assertBudgetPreserved(b, next, next.json);
+  assert.deepEqual(saved(b.r, b.batch).doc.lint, b.s.doc.lint);
+  assert.deepEqual(saved(b.r, b.batch).doc.rows[0], b.s.doc.rows[0]);
+});
+
+for (const retry of [false, true]) test(`CONTINUATION repair1: completed receipt survives slow held ${retry ? 'retry' : 'read'}`, async t => {
+  const r = await setup(t, { multiple: true }); const { batch } = await r.first();
+  const s = saved(r, batch), completed = s.doc.rows[1], id = '22222222-2222-4222-8222-222222222222';
+  Object.assign(completed, { request_ids: [id], state: 'passed', phase: 'server', note: null });
+  const receipt = r.f.check(id), folder = join(r.h.state, 'batches', batch);
+  writeFileSync(join(folder, id + '.json'), JSON.stringify(receipt));
+  writeFileSync(s.path, JSON.stringify(s.doc));
+  r.state.lint = 'passed'; r.state.checks = 'running';
+  const next = await recovery(r, batch, retry);
+  assert.equal(next.code, 3); assert.equal(next.clock.now - START, 90000);
+  assert.equal(paid(r).length, 1, 'only the held row gets a first POST');
+  assert.equal(next.clock.uuids, 1); assert.equal(paid(r)[0].request.scenario, s.doc.rows[0].test);
+  assert.equal(paid(r)[0].request.max_calls, 6);
+  const prior = next.json.rows.find(row => row.test === completed.test);
+  assert.equal(prior.request_id, id); assert.equal(prior.state, 'passed');
+  assert.equal(prior.calls, 1, 'AC5: preserve known usage after the network wait ends');
+  assert.deepEqual(prior.checks, { passed: 1, total: 1 });
+  assert.deepEqual(prior.criteria, { passed: 1, total: 1 });
+  assert.equal(prior.report_url, receipt.report_url);
+  assert.equal(next.json.batch, batch); assert.equal(next.json.source_sha256, s.doc.source_sha256);
+  const summary = JSON.parse(readFileSync(join(folder, 'summary.json')));
+  assert.deepEqual(summary.rows.find(row => row.test === completed.test), prior);
+  assert.deepEqual(saved(r, batch).doc.rows[1].request_ids, [id]);
+  assert.deepEqual(JSON.parse(readFileSync(join(folder, id + '.json'))), receipt);
+  assert.ok(r.f.gets.every(entry => !entry.url.endsWith(id)), 'saved terminal answer needs no GET');
+  const again = await recovery(r, batch, retry);
+  assert.equal(again.code, 3); assert.equal(again.clock.uuids, 0); assert.equal(paid(r).length, 1);
+  assert.deepEqual(again.json.rows.find(row => row.test === completed.test), prior);
+});
+
+for (const legacy of [false, true]) for (const retry of [false, true]) {
+  for (const cap of [undefined, null, 0, 1001, 1.5, '6']) test(`CONTINUATION repair1: ${legacy ? 'legacy' : 'current'} ${retry ? 'retry' : 'read'} rejects saved cap ${String(cap)}`, async t => {
+    const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+    const s = saved(r, batch), folder = join(r.h.state, 'batches', batch);
+    if (legacy) delete s.doc.intent;
+    if (cap === undefined) delete s.doc.rows[0].max_calls;
+    else s.doc.rows[0].max_calls = cap;
+    writeFileSync(s.path, JSON.stringify(s.doc));
+    const lintId = s.doc.lint.request_ids.at(-1);
+    for (let i = 0; i < 2; i++) {
+      const next = await recovery(r, batch, retry);
+      assert.equal(paid(r).length, 0, 'AC3: no paid POST without the valid original ceiling');
+      assert.equal(next.clock.uuids, 0); assert.equal(next.code, 5);
+      assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:.*(?:intent|proof|ceilings)/);
+      assert.equal(next.json.batch, batch); assert.equal(next.json.rows.length, 1);
+      assert.equal(next.json.rows[0].request_id, null); assert.equal(next.json.rows[0].calls, 0);
+      assert.equal(next.json.rows[0].state, 'not_run');
+      assert.ok(!readdirSync(folder).some(name => name.endsWith('.dispatch.json')), 'refuse before a claim');
+      const retained = saved(r, batch).doc;
+      assert.equal(retained.intent, legacy ? undefined : 'check');
+      assert.equal(retained.rows[0].max_calls, cap);
+      assert.deepEqual(retained.rows[0].request_ids, []);
+      assert.deepEqual(retained.rows[0].steps, s.doc.rows[0].steps);
+      assert.equal(retained.rows[0].criteria_total, s.doc.rows[0].criteria_total);
+      for (const key of ['root', 'login', 'user_id', 'origin', 'source_sha256']) assert.equal(retained[key], s.doc[key]);
+      assert.deepEqual(retained.lint.request_ids, [lintId]);
+      assert.deepEqual(JSON.parse(readFileSync(join(folder, lintId + '.json'))), r.f.lint(lintId));
+    }
+    assert.equal(r.f.posts.filter(entry => entry.command === 'lint').length, 1);
+  });
+}
+
+for (const legacy of [false, true]) for (const cap of [1, 1000]) test(`CONTINUATION repair1: ${legacy ? 'legacy' : 'current'} retains boundary ceiling ${cap}`, async t => {
+  const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
+  const s = saved(r, batch); if (legacy) delete s.doc.intent;
+  s.doc.rows[0].max_calls = cap; writeFileSync(s.path, JSON.stringify(s.doc));
+  const next = await recovery(r, batch);
+  assert.equal(next.code, 0); assert.equal(next.clock.uuids, 1); assert.equal(paid(r).length, 1);
+  assert.equal(paid(r)[0].request.max_calls, cap); assert.equal(saved(r, batch).doc.rows[0].max_calls, cap);
+});
+
+for (const legacy of [false, true]) test(`CONTINUATION repair1: missing ${legacy ? 'legacy' : 'current'} held ceiling does not block independent busy row`, async t => {
+  const r = await setup(t, { multiple: true }); const { batch } = await r.first(); r.state.lint = 'passed';
+  const s = saved(r, batch), [held, busy] = s.doc.rows;
+  if (legacy) delete s.doc.intent;
+  delete held.max_calls;
+  Object.assign(busy, { state: 'not_run', phase: 'local', calls: 0, busy: true, can_retry: true, eligible: true,
+    retry_at: null, note: { code: 'check-busy', message: 'Held locally; this check was not sent. Retry this batch later.' } });
+  writeFileSync(s.path, JSON.stringify(s.doc));
+  const next = await recovery(r, batch, true);
+  assert.equal(paid(r).length, 1); assert.equal(paid(r)[0].request.scenario, busy.test);
+  assert.equal(paid(r)[0].request.max_calls, 6); assert.equal(next.clock.uuids, 1);
+  assert.equal(next.code, 5); assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:/);
+  assert.equal(next.json.rows.find(row => row.test === held.test).request_id, null);
+  assert.equal(next.json.rows.find(row => row.test === busy.test).state, 'passed');
+  const retained = saved(r, batch).doc.rows.find(row => row.test === held.test);
+  assert.equal(retained.max_calls, undefined); assert.deepEqual(retained.request_ids, []);
+  const claim = createHash('sha256').update(held.test).digest('hex') + '.0.dispatch.json';
+  assert.ok(!readdirSync(join(r.h.state, 'batches', batch)).includes(claim));
+});
+
 for (const broken of [null, {}, { criterion_id: '' }]) test(`CONTINUATION native table: malformed legacy authored check ${JSON.stringify(broken)}`, async t => {
   const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed';
   const s = saved(r, batch); delete s.doc.intent; s.doc.rows[0].steps[0].checks = [broken]; writeFileSync(s.path, JSON.stringify(s.doc));
@@ -230,7 +464,7 @@ test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims
   writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } } }));
   const replies = await Promise.all([recovery(r, batch, true), recovery(r, batch, true)]);
-  assert.equal(paid(r).length, 1); assert.ok(replies.every(reply => reply.code === 0));
+  assert.equal(paid(r).length, 1); assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
   const final = saved(r, batch).doc.rows[0];
   assert.deepEqual(final.request_ids, [oldId, paid(r)[0].request.requestId]);
 });
@@ -306,7 +540,12 @@ test('CONTINUATION: two real CLI read processes send the original held check exa
   const replies = await Promise.all([child(), child()]);
   assert.equal(paid(r).length, 1);
   const id = paid(r)[0].request.requestId;
-  for (const reply of replies) { assert.equal(reply.code, 0, reply.stderr); assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id); }
+  assert.ok(replies.some(reply => reply.code === 0), 'at least one CLI owns recovery');
+  for (const reply of replies) {
+    assert.ok([0, 3].includes(reply.code), reply.stderr);
+    if (reply.code === 3) { assert.equal(reply.stdout, ''); assert.match(reply.stderr, /pdd check --read/); }
+    else assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id);
+  }
   assert.deepEqual(saved(r, batch).doc.rows[0].request_ids, [id]);
   const repeat = await recovery(r, batch); assert.equal(repeat.code, 0); assert.equal(repeat.clock.uuids, 0);
   assert.equal(repeat.json.rows[0].request_id, id); assert.equal(paid(r).length, 1);
