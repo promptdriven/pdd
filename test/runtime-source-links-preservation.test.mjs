@@ -29,11 +29,13 @@ test('LINK preservation references: linked contract and seed stat/read expand wi
 });
 
 test('LINK preservation bindings: root metadata follows safe source policy while executable declarations stay banned',async t=>{
-  const {repo}=fixture(t); accepted(repo);
+  const {repo}=fixture(t);
   write(repo,'inventory.json','{"schema_version":"pdd.bindings.v1","modules":[]}');
   symlinkSync('inventory.json',join(repo,'pdd-bindings.json'));
   const found={visible:new Set(['pdd-bindings.json','inventory.json','alias.json','shared/data.json']),stories:[]};
-  assert.deepEqual(bindingCoverage({root:repo,found,selected:[]}),{available:true,bound:0,total:0,modules:[]});
+  let coverage;
+  assert.doesNotThrow(()=>{coverage=bindingCoverage({root:repo,found,selected:[]});},'linked root binding metadata must follow source-reading policy');
+  assert.deepEqual(coverage,{available:true,bound:0,total:0,modules:[]});
   const {ports}=portsFor({HOME:join(repo,'..','home')},{gh:()=>assert.fail('offline auth'),fetch:()=>assert.fail('offline upload')});
   assert.equal(await runCheck({cwd:repo,words:['place-order'],options:{'--files':true}},ports),0,ports.stderr.text);
   write(repo,'inventory.json',JSON.stringify({schema_version:'pdd.bindings.v1',modules:[{module:'alias.json',stories:['missing.md'],reason:'native',port_attempt:'native filesystem'}]}));
