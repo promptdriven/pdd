@@ -123,7 +123,7 @@ test('2675: acquisition is a runtime-faked boundary and releases after source re
   assert.equal(acquired, 2); assert.equal(released, 2);
 });
 
-for (const kind of ['live', 'dead', 'foreign', 'malformed', 'guard']) test(`2675: native lock handles ${kind} owners without unsafe age expiry`, async t => {
+for (const kind of ['live', 'dead', 'foreign', 'malformed']) test(`2675: native lock handles ${kind} owners without unsafe age expiry`, async t => {
   assert.equal(typeof client.acquireRuntimeBatchLock, 'function', 'native lock boundary must exist');
   const folder = temp(t), lock = join(folder, 'batch.lock'), guard = join(folder, 'batch.lock.claim');
   let deadPid;
@@ -206,4 +206,25 @@ test('2675: native live-owner refusal leaves persisted data and the live owner i
   assert.equal(read(join(r.folder, 'batch.lock')).pid, process.pid);
   assert.deepEqual(readFileSync(r.file), bytes); assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), summary); assert.equal(r.fake.posts.length, before);
   release();
+});
+
+
+test('2675: an abandoned recovery guard is recoverable and a live recovery guard is respected', async t => {
+  assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
+  const child = spawn(process.execPath, ['-e', '']); const dead = child.pid; await new Promise(done => child.on('close', done));
+  for (const live of [true, false]) {
+    const folder = temp(t), lock = join(folder, 'batch.lock'), guard = `${lock}.recover.${dead}`;
+    const metadata = pid => JSON.stringify({ pid, host: hostname(), started_at: '2026-10-01T00:00:00.000Z' });
+    writeFileSync(lock, metadata(dead)); writeFileSync(guard, metadata(live ? process.pid : dead));
+    if (live) { await assert.rejects(client.acquireRuntimeBatchLock(folder), error => error.code === 'BATCH_LOCK_BUSY'); assert.equal(read(lock).pid, dead); assert.equal(read(guard).pid, process.pid); }
+    else { let warnings = 0; const release = await client.acquireRuntimeBatchLock(folder, { onWarning: () => { warnings++; } }); assert.equal(warnings, 1); assert.equal(existsSync(guard), false); release(); assert.equal(existsSync(lock), false); }
+  }
+});
+
+test('2675: a warning sink failure releases recovered ownership before propagating', async t => {
+  assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
+  const folder = temp(t), child = spawn(process.execPath, ['-e', '']), dead = child.pid; await new Promise(done => child.on('close', done));
+  writeFileSync(join(folder, 'batch.lock'), JSON.stringify({ pid: dead, host: hostname(), started_at: '2026-10-01T00:00:00.000Z' }));
+  await assert.rejects(client.acquireRuntimeBatchLock(folder, { onWarning: () => { throw new Error('sink failed'); } }), /sink failed/);
+  assert.equal(existsSync(join(folder, 'batch.lock')), false);
 });

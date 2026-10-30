@@ -103,7 +103,9 @@ to acquire ownership. Do not add a time-based expiry or another check refusal.
 
 Release ownership on every normal return, interruption and exception. Only a provably dead
 process on the same host (PID check gives ESRCH) permits abandoned owner recovery; serialize
-recovery against other claimants, and print one warning line through `onWarning`. A live,
+recovery against other claimants, and print one warning line through `onWarning`. Any
+short-lived recovery guard follows the same dead-owner recovery rule, so a crashed
+recoverer with valid ownership metadata cannot strand the batch. A live,
 foreign-host, malformed or unverifiable owner is never displaced. Native folders stay 0700
 and files 0600; never remove another owner's lock. An interrupted command that acquires a
 free batch retains the existing saved-evidence projection, including unknown usage when a
