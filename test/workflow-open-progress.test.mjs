@@ -69,3 +69,37 @@ for (const mode of ['focus', 'resume', 'open-start', 'run-start']) {
     }
   }
 }
+
+for (const action of ['advance', 'cancel']) test(`2627 delayed missing-start reset preserves concurrent ${action}`, async t => {
+  const f = await fixture(t), healthy = f.ports.herdr;
+  f.ports.herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'run') throw unavailable();
+    return healthy(args);
+  };
+  assert.equal((await f.run()).exitCode, 1);
+  f.ports.herdr = healthy;
+  const original = f.record().chats[0];
+  assert.equal(original.startUnconfirmed, true);
+  await healthy(['tab', 'close', original.tabId]);
+  let enter, release;
+  const reached = new Promise(resolve => { enter = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const opening = openRun({ ref: '17', cwd: f.source, packageRoot }, { ...f.ports, herdr: async args => {
+    if (args[0] === 'agent' && args[1] === 'get') { enter(); await gate; }
+    return healthy(args);
+  } });
+  assert.equal(await Promise.race([reached.then(() => true), opening.then(() => false)]), true);
+  let expected;
+  try {
+    if (action === 'cancel') assert.equal((await cancelRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+    else {
+      assert.equal((await stepDone({ step: 'scope', summary: 'Completed during reset inspection', cwd: f.record().root }, f.agentPorts())).exitCode, 0);
+      assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+    }
+    expected = f.record();
+  } finally { release(); }
+  assert.equal((await opening).exitCode, 1);
+  assert.deepEqual(progress(f.record()), progress(expected), 'A stale missing-start reset cannot change newer workflow progress');
+  assert.deepEqual(f.record().chats, expected.chats, 'A stale current-area reset cannot retire a now-historical chat');
+  assert.deepEqual(f.record().chatFailure, expected.chatFailure);
+});
