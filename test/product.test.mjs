@@ -14,7 +14,7 @@ import { resolveWorkflowRepository } from '../src/workflow-github.mjs';
 
 const root = new URL('../', import.meta.url).pathname;
 const stream = () => ({ text: '', write(value) { this.text += value; } });
-const pr = (number, state = 'OPEN', extra = {}) => ({ number, state, body: `PR 2 of this run: the code.\n<!-- pdd-workflow:run-${number}:code -->`, isDraft: true, updatedAt: `2026-10-${number}`, ...extra });
+const pr = (number, state = 'OPEN', extra = {}) => ({ number, url: `https://github.com/example/coffee/pull/${number}`, isCrossRepository: false, headRepository: {name:'coffee'}, headRepositoryOwner:{login:'example'}, headRefName: `branch-${number}`, state, body: `PR 2 of this run: the code.\n<!-- pdd-workflow:run-${number}:code -->`, isDraft: true, updatedAt: `2026-10-${number}`, ...extra });
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), 'pdd-product-'));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
@@ -22,6 +22,7 @@ function fixture(t) {
   const state = { issues: [], runs: [], prs: [], events: [], base: true, starts: [], commands: [] };
   const ports = {
     listRuns: async () => state.runs,
+    openBaseSource: async () => ({root:cwd,handle:null}),
     resolveRepository: async () => ({ repository: 'example/coffee', defaultBranch: 'alpha' }),
     planOnBase: async args => { state.baseArgs = args; return state.base; },
     storyEvidence: async run => run.rows ?? [],
@@ -30,12 +31,17 @@ function fixture(t) {
       state.commands.push({ file, args });
       if (state.fail) throw Error('GitHub unavailable');
       assert.equal(file, 'gh');
-      if (args[0] === 'api') return { stdout: JSON.stringify(args.at(-1).includes('/timeline?') ? [state.events] : state.pages ?? [state.issues]) };
+      if (args[0] === 'api') {
+        if (args[1].includes('/timeline?')) return {stdout:JSON.stringify(state.events.map(event => ({event:'cross-referenced',...event})))};
+        const all = (state.pages?.flat() ?? state.issues).map(item => ({author_association:'MEMBER',user:{login:'member'},created_at:'2026-10-01T00:00:00Z',...item}));
+        const query = new URL('https://api.github.com/'+args[1]).searchParams, page=Number(query.get('page')), size=Number(query.get('per_page'));
+        return {stdout:JSON.stringify({items:all.slice((page-1)*size,page*size),total_count:all.length,incomplete_results:false})};
+      }
       if (args[0] === 'issue' && args[1] === 'create') {
         const issue = { number: 81 + state.issues.length, state: 'OPEN', body: args[args.indexOf('--body') + 1] };
         state.issues.push(issue); return { stdout: `https://github.com/example/coffee/issues/${issue.number}\n` };
       }
-      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(state.prs.find(pr => pr.number === Number(args[2]))) };
+      if (args[0] === 'pr' && args[1] === 'view') return {stdout:JSON.stringify(state.prs.find(pr => pr.number === Number(args[2])))};
       assert.fail(`${file} ${args.join(' ')}`);
     },
   };
@@ -85,10 +91,10 @@ test('exact marker on a later closed page is reused; lookup failures and unknown
 test('only a merged implementation PR satisfies needs, not stopped prompt-only workflows', async t => {
   const f = fixture(t);
   f.state.issues = ['server-1', 'phone-1', 'barista-1'].map((name, i) => issue(name, 81 + i));
-  f.state.runs = f.state.issues.map((item, i) => ({ number: item.number, state: 'completed', doneAt: 'PR 1', pr: [{ number: 20 + i, stage: 'prompt-pr' }], rows: [] }));
+  f.state.runs = f.state.issues.map((item, i) => ({ number: item.number, state: 'completed', doneAt: 'PR 1', pr: [{ number: 20 + i, stage: 'prompt-pr', branch: `branch-${20+i}` }], rows: [] }));
   f.state.prs = [20, 21, 22].map(number => pr(number, 'MERGED', { body: 'PR 1 of this run: the prompt, Story and test cases.' }));
   assert.deepEqual((await productNext({ cwd: f.cwd }, f.ports)).ready, []);
-  f.state.runs.forEach((run, i) => run.pr.push({ number: 30 + i, stage: 'code' }));
+  f.state.runs.forEach((run, i) => run.pr.push({ number: 30 + i, stage: 'code', branch: `branch-${30+i}` }));
   f.state.prs.push(...[30, 31, 32].map(number => pr(number, 'MERGED')));
   assert.deepEqual((await productNext({ cwd: f.cwd }, f.ports)).ready, ['journeys']);
 });
@@ -104,7 +110,7 @@ test('base-plan lookup uses saved product base; missing plan advises explicit st
 test('remote PR evidence is labelled and counts only exact leading Story ids', async t => {
   const f = fixture(t); f.state.issues = [issue('phone-1')];
   f.state.events = [{ source: { issue: { pull_request: { html_url: 'https://github.com/example/coffee/pull/61' } } } }];
-  f.state.prs = [pr(61, 'OPEN', { body: 'Runtime check (user_stories/P01-menu.md): ✓ 1 of 1 criteria\nRuntime check (P010-wrong): ✓ 1 of 1 criteria' })];
+  f.state.prs = [pr(61, 'OPEN', { body: '<!-- pdd-product: run=phone-1 -->\nRuntime check (user_stories/P01-menu.md): ✓ 1 of 1 criteria\nRuntime check (P010-wrong): ✓ 1 of 1 criteria' })];
   const status = await productStatus({ cwd: f.cwd }, f.ports);
   assert.equal(status.parts[0].pass, 1); assert.equal(status.runs[1].fromPr, 61);
   assert.match((await runProduct({ cwd: f.cwd, command: 'status' }, f.ports)).message, /from PR #61/);
@@ -186,7 +192,7 @@ test('real CLI process resolves nested repo cwd with a fake gh executable and no
   execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/example/coffee.git'], { cwd: f.cwd });
   execFileSync('git', ['add', '.'], { cwd: f.cwd }); execFileSync('git', ['commit', '-qm', 'reviewed plan'], { cwd: f.cwd });
   const bin = join(f.cwd, 'fake-bin'); mkdirSync(bin); mkdirSync(join(f.cwd, 'nested'));
-  writeFileSync(join(bin, 'gh'), '#!/usr/bin/env node\nconst args=process.argv.slice(2);process.stdout.write(JSON.stringify(args[0]==="repo"?{nameWithOwner:"example/coffee",defaultBranchRef:{name:"alpha"},url:"https://github.com/example/coffee"}:[]));\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'gh'), '#!/usr/bin/env node\nconst args=process.argv.slice(2);process.stdout.write(JSON.stringify(args[0]==="repo"?{nameWithOwner:"example/coffee",defaultBranchRef:{name:"alpha"},url:"https://github.com/example/coffee"}:{items:[],total_count:0,incomplete_results:false}));\n', { mode: 0o755 });
   const output = execFileSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'product', 'next'], { cwd: join(f.cwd, 'nested'), encoding: 'utf8', env: { ...process.env, HOME: f.cwd, PATH: `${bin}:${process.env.PATH}` } });
   assert.match(output, /server-1, phone-1, barista-1/); assert.match(output, /pdd product start phone-1/);
 });
@@ -305,15 +311,15 @@ for (const latestPass of [true, false]) {
 test('remote progress uses PR receipt time across runs and keeps each PR source label', async t => {
   const f = fixture(t); f.state.issues = [issue('phone-1', 81), issue('barista-1', 82)];
   f.state.prs = [
-    pr(61, 'OPEN', { updatedAt: '2026-10-30T00:00:20Z', body: 'Runtime check (P01-menu): ✓ 1 of 1 criteria' }),
-    pr(62, 'OPEN', { updatedAt: '2026-10-30T00:00:10Z', body: 'Runtime check (P01-menu): ✗ 0 of 1 criteria' }),
+    pr(61, 'OPEN', { updatedAt: '2026-10-30T00:00:20Z', body: '<!-- pdd-product: run=phone-1 -->\nRuntime check (P01-menu): ✓ 1 of 1 criteria' }),
+    pr(62, 'OPEN', { updatedAt: '2026-10-30T00:00:10Z', body: '<!-- pdd-product: run=barista-1 -->\nRuntime check (P01-menu): ✗ 0 of 1 criteria' }),
   ];
   const gh = f.ports.execFile;
   f.ports.execFile = async (file, args) => {
-    const number = /\/issues\/(81|82)\/timeline\?/.exec(args.at(-1))?.[1];
-    return number ? { stdout: JSON.stringify([[{ source: { issue: { pull_request: {
+    const number = /\/issues\/(81|82)\/timeline\?/.exec(args[1])?.[1];
+    return number ? { stdout: JSON.stringify([{ event: 'cross-referenced', source: { issue: { pull_request: {
       html_url: `https://github.com/example/coffee/pull/${number === '81' ? 61 : 62}`,
-    } } } }]]) } : gh(file, args);
+    } } } }]) } : gh(file, args);
   };
   const status = await productStatus({ cwd: f.cwd }, f.ports);
   assert.deepEqual(status.parts[0], { part: 'phone', total: 4, pass: 1, stale: 0, notRun: 3 });

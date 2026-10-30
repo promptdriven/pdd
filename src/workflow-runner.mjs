@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 48bd8466d7ab32723b54e1d6bc7c864a409c0e59e71bd14e7f2493dd83319ce6).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6f8a06a39063707495105f0a6150d05cd364240c75c4bed46a4d941f68380187).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -315,7 +315,10 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   const a = allocated.assignment;
   // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
   if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
+  const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
+  if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
   const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
+    ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
     configDir,
@@ -417,12 +420,13 @@ export function storyCount(run) {
   if (!compatible.length) result.evidence = 'Source changed, unavailable, or not recorded; saved results are unverified.';
   return result;
 }
-export function storyEvidence(run) {
+export function storyEvidence(run, { comparisonRoot } = {}) {
   const records = [...(run.runtimeHistory ?? []), ...Object.values(run.done ?? {}), ...(run.evidence ?? [])]
     .filter(record => runtimeLines(record.summary).length).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-  const current = new Map(), older = new Map(), fingerprint = gitFingerprint(run.root);
+  const root = comparisonRoot === undefined ? run.root : comparisonRoot;
+  const current = new Map(), older = new Map(), fingerprint = root === null ? null : gitFingerprint(root);
   for (const record of records) {
-    const compatible = matchesSource(record, run.root, fingerprint);
+    const compatible = root !== null && matchesSource(record, root, fingerprint);
     for (const row of latestStories(runtimeLines(record.summary))) {
       (compatible ? current : older).set(row.story, { story: row.story, pass: row.pass, current: compatible, result: row.result, at: record.at ?? 0 });
     }
@@ -559,7 +563,7 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
   const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
-  const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
+  const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(run.productMarker ? ['', run.productMarker] : []), ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body('')), env));
