@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 44b6c3adfdc44b6fb0496da1e272c2585ec5bc6d9a67b0633cdc1e0975760a45).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2386453b9d9111e2ece54b2b53279d856739e16dd76916e0faa6caa7ca1664b4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -74,7 +74,7 @@ export function storyCriteria(source) {
 }
 
 export function gitFiles(root) {
-  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024 });
+  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (listed.status !== 0) throw new PreflightError(5, 'pdd could not list the Git files of this repository.');
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
