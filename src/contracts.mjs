@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contracts.prompt.md (sha256: ca9f3b17487d6bc9ef98a782a9dc0a7595cb507f4590055a71ba3bcb8a993794).
+// Generated from prompts/cli/contracts.prompt.md (sha256: 7b8e18a03b9d3844bfe1a099b212bc0f0ad26181be5785deda78795176fbea30).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';

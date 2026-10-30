@@ -41,41 +41,40 @@ is unavailable, never a pass. Syntax/no-repository and native I/O retain their
 own exits. Print a truthful checked-record/world-value count on success, including
 zero when there is nothing to validate.
 
-### Schema and data roles
+### Schema roles and copy authorities
 
-Catalog records include worlds and JSON containers, so catalog membership alone
-does not make a value a schema. Determine roles before validating:
+Separate validation from authority to prevent an old incidental copy from hiding
+real drift. Seed worlds and resolved `$seed` targets remain data; never search
+business values, annotations or simulation/resource declarations for schemas.
 
-- `contracts/seed-world.json` and every resolved `$seed` target are data, even
-  when their keys resemble schema keywords. Never search business data for schemas.
-- Every Markdown `###` JSON record and every explicit `$contract` or world-table
-  Schema target is a schema. A selected empty or incomplete object is invalid;
-  it cannot become a container merely because it lacks `type`.
-- A nonseed JSON object with an executable schema keyword or a known forbidden
-  schema keyword, or `$contract`, is a schema. Expand references before
-  validating. Use the canonical preflight keyword vocabulary; annotations alone
-  do not establish this role. Obtain that vocabulary from its module function
-  `schemaKeywordNames()`, not a copied list. Thus `{"$ref":"x"}` is an
-  invalid schema, not an ignored wrapper.
-- A marker-free nonseed JSON object is a container only when every object-map
-  branch ends in a marker-bearing schema. Stop at each schema; follow only its
-  canonical schema positions during expansion/validation, never annotations or
-  literal values. Include container leaf targets in `catalogRecords`' targets.
-  A wrapper such as `{"defs":{"flag":{"type":"boolean"}}}` contains a schema
-  at `#/defs/flag`; the wrapper is not itself a schema. An empty/unclassified
-  branch or primitive metadata leaves its role unavailable. For example
-  `{"defs":{"bad":{}}}` is unavailable unless that leaf is explicitly selected,
-  when it is an invalid schema; `{"note":"hello"}` is unavailable.
+Validate Markdown `###` JSON records, root JSON schemas, explicit `$contract`
+and world-table Schema selections, and leaves of pure schema-map wrappers.
+Use preflight's `schemaKeywordNames()` vocabulary to recognize root schema
+keywords, including forbidden keywords: a selected incomplete object or
+`{"$ref":"x"}` is invalid, not an ignored container. Expand before validating.
+A pure wrapper has only object-map branches ending in recognized schemas;
+`{"defs":{"flag":{"type":"boolean"}}}` validates the leaf. Primitive metadata,
+empty unselected branches and resources/simulation declarations do not qualify.
+Skip unrelated non-schema JSON files with one sorted summary line:
+`Skipped N files that are not schemas: <comma-separated paths>`.
+Do not report their arbitrary nested values as unavailable schema evidence.
+Explicitly selecting an otherwise skipped leaf still validates that selection.
 
-Use `expandSource` with the safe file port for every selected schema and every
-applicable prompt/scenario reference, including transitive uses. Use
-`catalogRecords` for canonical identities/expanded records and `compareCopies`
-for inline agreement. Exact copies pass; differing selected near copies are
-drift problems, with their canonical target and constraint differences.
-Ambiguous copy candidates leave agreement unavailable rather than choosing one.
-Keep the reference owner's eligibility boundaries: this is not a claim to find
-every possible copied schema. Literal inputs, expected values and annotations
-are not copy candidates.
+Copy authorities are only Markdown records, root JSON schemas and explicitly
+selected `$contract` or Schema targets. Implicit wrapper leaves may validate but
+cannot become copy authorities. Thus `contracts/legacy.json` containing an old
+schema under `copy` cannot hide drift against a declared Markdown record.
+Filter the catalog records supplied to `compareCopies`; preserve ordinary
+listing/sync's catalog and advisory comparison behavior. Keep its existing
+object-copy eligibility and near-copy thresholds unchanged. Deduplicate repeated
+drift differences by consumer, schema source pointer, canonical target and
+field/difference while retaining independent locations. Ambiguous declared
+candidates leave agreement unavailable. Exact copies pass; near copies differ.
+
+Use `expandSource` with the existing safe file port for selected schemas and
+applicable prompt/scenario references, including transitive uses; reuse
+`catalogRecords` for canonical identities and expansion. Do not duplicate the
+reference resolver, codec or comparison rules.
 
 Validate expanded schemas and present world values through preflight's module
 function `validateContract({schema_json,value_json?})`, retaining exact JSON text.
@@ -91,25 +90,49 @@ by the canonical validator remains unavailable with its field and reason.
 `contracts/world.md` and `contracts/seed-world.json` are optional together. If
 exactly one exists, checking the world is incomplete (exit 4, naming the missing
 partner). The seed must expand to an object by the reference owner's seed rules.
-Read the first actual contiguous Markdown table with `Key` and `Writer` columns
-outside fences; unrelated tables and prose are not ownership declarations.
-It must have a `Schema` column for this check. Listing/sync still accept existing
-five-column ownership tables.
+Read the first actual contiguous Markdown table outside fences with `Key` or
+`Path` and `Writer` columns; unrelated tables and prose are not declarations.
+`Schema` is optional, including a blank cell. Check a value's type only where a
+schema target is explicitly declared; never infer one from its name or value.
 
-Each key cell is the exact top-level own seed key, plain or enclosed in backticks.
-Its `Schema` cell is one plain/backticked repository-root contract target, resolved
-by the reference owner; do not infer a link from a name, description or value.
-Each row declares exactly one nonblank writer, a single name rather than a comma
-list. Do not require a matching product part. Repeated rows with the same key,
-resolved canonical schema and writer coalesce; distinct writers or schema mappings
-for one key are problems. Missing key, writer or Schema cells are problems.
+A Key cell names an exact top-level own seed key, plain or backticked. Every
+present top-level seed key still requires a Key declaration. A Path cell names
+an exact nested path; separately backticked paths enumerated in one cell declare
+separate paths. Commas inside backticks are literal. Ownership of a parent and
+child is independent. Symbolic paths such as `/hosts/<machine_id>` without a
+Schema declare ownership only: do not infer wildcard matching or seed coverage.
+Path tables require no top-level seed coverage.
 
-Validate every declared schema even when its key is absent from the starting
-world. An absent declared key requires no seed value. Every present own seed key
-must have a declaration, explicit schema and one writer; unknown seed keys cannot
-be silently skipped. Empty containers, null, false, zero and absence remain
-distinct. These checks establish declared ownership and seed shape, not the
-actual runtime effects of a part's code.
+Treat each nonblank Writer cell as one opaque label, including commas in prose.
+The same exact key/path and complete writer label coalesce; different writer
+labels for the same exact key/path are problems. Missing key/path or writer is
+a problem. Distinct explicit schema mappings for the same key/path are problems;
+blank Schema cells supply no conflicting mapping. Do not require product parts.
+
+A nonblank Schema cell is one plain/backticked repository-root target resolved
+by the reference owner. Validate it even when its key/path is absent in the seed.
+Schema validation diagnostics name the canonical target file and record;
+resolution/selection failures retain their consumer and Schema column.
+For present concrete paths whose declared schemas are valid, validate the corresponding
+seed value using exact pointer segments, without coercion or guessed templates.
+Do not attempt redundant value validation under a known-invalid schema.
+Absent values require no seed value check. Preserve null, false, zero and empty
+containers as present values. These checks establish declared ownership and
+shape, not actual runtime writes.
+
+### Machine-readable check results
+
+`--json` is accepted only with `--check`; other combinations exit 2. Emit one
+JSON object on stdout with `exit_code`, `checked_records`, `checked_world_values`,
+`skipped_files` and `diagnostics`, with no text summary mixed into stdout.
+Count each canonical schema validation attempted once, including invalid verdicts,
+and each attempted present value validation. Expansion failures do not count as
+completed schema validations. Skipped files are sorted.
+Each diagnostic has `file`, `record`, `field`, `kind` (`problem` or `unavailable`)
+and a finite `message`. Include `source_pointer` and `target` only when actually
+available. Sort by file, record, field, kind, source_pointer and target, then
+message. Text and JSON carry the same counts, diagnostics and exit result.
+Native I/O and syntax retain their existing exit semantics.
 
 ## Listing and freshness
 

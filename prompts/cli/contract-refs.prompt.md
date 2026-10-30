@@ -200,7 +200,10 @@ for every discovered record. Warn about invalid or ambiguous records without
 choosing an arbitrary record.
 
 Module function `compareCopies(sources, records)` takes prompt sources and catalog
-records, returning `{matches,warnings}`. A match is
+records, returning `{matches,warnings}`. The caller selects the authority set;
+compare only supplied records, never discover additional authorities implicitly.
+Local plan-check declaration policy belongs to [contracts](contracts.prompt.md);
+ordinary listing/sync retain their catalog selection. A match is
 `{path,source_pointer,target,kind,differences}`, where `kind` is `exact` or `near`
 and differences are plain field/constraint descriptions. Inspect the same schema
 positions as expansion, skipping existing references. Compare object schemas with
@@ -251,7 +254,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "2160afa7b33fca4e500bc98ee119d3c40c35959749b15bb92c0a865a7d720a19",
+  "status": "draft", "prose_sha256": "3f4eaf698edc75df115b577c7b4fc8a9fa40a5f52d9e78a1618fa6ef1728d940",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
