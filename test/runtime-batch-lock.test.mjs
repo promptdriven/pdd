@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import * as client from '../src/runtime-client.mjs';
@@ -243,4 +243,15 @@ test('2675: real batch ownership is removed after an exception and Ctrl-C', asyn
   assert.equal(checks(r.fake).length - before, 1); assert.equal(read(r.file).rows[0].request_ids.length, 1);
   passed(await r.run({ '--read': true }, [r.batch]));
   assert.equal(checks(r.fake).length - before, 1);
+});
+
+
+test('2675: releasing a replaced lock never removes the replacement owner', async t => {
+  assert.equal(typeof client.acquireRuntimeBatchLock, 'function');
+  const folder = temp(t), lock = join(folder, 'batch.lock'), held = join(folder, 'original-owner');
+  const release = await client.acquireRuntimeBatchLock(folder);
+  renameSync(lock, held);
+  const replacement = JSON.stringify({ pid: process.pid, host: hostname(), started_at: '2026-10-02T00:00:00.000Z' });
+  writeFileSync(lock, replacement); release(); release();
+  assert.equal(readFileSync(lock, 'utf8'), replacement);
 });
