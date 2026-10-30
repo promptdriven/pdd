@@ -260,27 +260,33 @@ test('2615: a hand-edited repeated repository key selects the matching clone and
 });
 
 
+async function assertOpen(f,input={}) {
+ let result;
+ await assert.doesNotReject(async()=>{result=await f.open(input);},'the requested owned layout must remain available');
+ return result;
+}
+
 test('2615: a new clone uses the free short label despite a closed peer workspace in the registry', async t => {
- const f=await fixture(t),first=await f.open();
+ const f=await fixture(t),first=await assertOpen(f);
  f.workspaces.splice(f.workspaces.findIndex(w=>w.workspace_id===first.repoWorkspaceId),1);
  const peers=structuredClone(f.workspaces),sourceRoot=join(f.root,'fresh-clone'),cwd=join(f.root,'fresh-run');
  await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
- const next=await f.open({runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ const next=await assertOpen(f,{runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
  assert.equal(f.workspaces.find(w=>w.workspace_id===next.repoWorkspaceId).label,'coffee');
  assert.deepEqual(f.workspaces.slice(0,peers.length),peers);
  assert(!f.calls.some(args=>args[0]==='workspace'&&args[1]==='rename'));
 });
 
 test('2615: canceling the short-label clone makes that label available while another clone stays open', async t => {
- const f=await fixture(t),first=await f.open(),sourceRoot=join(f.root,'peer'),cwd=join(f.root,'peer-run');
+ const f=await fixture(t),first=await assertOpen(f),sourceRoot=join(f.root,'peer'),cwd=join(f.root,'peer-run');
  await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
- const peer=await f.open({runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+ const peer=await assertOpen(f,{runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
  await f.module.withHerdrLayoutLock(async()=>{
   await f.module.closeHerdrRunLayout({...f.input,layout:first},f.ports);
   assert.equal(await f.module.closeHerdrRepoLayoutIfIdle({repository:f.input.repository,commonDir:f.input.commonDir},f.ports),true);
  },f.ports);
  const peerRows=structuredClone(f.workspaces),newCwd=join(f.root,'restart');await mkdir(newCwd);
- const restarted=await f.open({runId:randomUUID(),cwd:newCwd});
+ const restarted=await assertOpen(f,{runId:randomUUID(),cwd:newCwd});
  assert.equal(f.workspaces.find(w=>w.workspace_id===restarted.repoWorkspaceId).label,'coffee');
  assert.deepEqual(f.workspaces.slice(0,peerRows.length),peerRows);
  assert(f.workspaces.some(w=>w.workspace_id===peer.repoWorkspaceId));
@@ -288,12 +294,12 @@ test('2615: canceling the short-label clone makes that label available while ano
 
 for(const holder of ['free owner/repo label','unrelated workspace']) {
  test(`2615: different-repository qualification preserves stable peer labels with ${holder}`, async t => {
-  const f=await fixture(t),first=await f.open();
+  const f=await fixture(t),first=await assertOpen(f);
   const clone=async name=>{
    const sourceRoot=join(f.root,name),cwd=join(f.root,name+'-run');
    await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'alice/coffee');
    const input={runId:randomUUID(),sourceRoot,commonDir:join(sourceRoot,'.git'),cwd};
-   return {input,layout:await f.open(input)};
+   return {input,layout:await assertOpen(f,input)};
   };
   const second=await clone('second'),third=await clone('third');
   const stable=f.workspaces.find(w=>w.workspace_id===third.layout.repoWorkspaceId).label;
@@ -310,7 +316,7 @@ for(const holder of ['free owner/repo label','unrelated workspace']) {
   }
   const before=f.calls.length,sourceRoot=join(f.root,'bob'),cwd=join(f.root,'bob-run');
   await mkdir(sourceRoot);await mkdir(cwd);await f.init(sourceRoot,'bob/coffee');
-  const bob=await f.open({runId:randomUUID(),repository:'bob/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
+  const bob=await assertOpen(f,{runId:randomUUID(),repository:'bob/coffee',sourceRoot,commonDir:join(sourceRoot,'.git'),cwd});
   const label=f.workspaces.find(w=>w.workspace_id===first.repoWorkspaceId).label;
   if(unrelated) {
    assert(label.startsWith('alice/coffee@'));assert.notEqual(label,stable);
