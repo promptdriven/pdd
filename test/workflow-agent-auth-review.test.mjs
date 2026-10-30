@@ -33,3 +33,21 @@ test('2451 native Codex API-key status keeps exact CODEX_HOME and private output
  const reply=await checkWorkflowAgents({cwd:root,env:{HOME:root,PATH:bin,CODEX_HOME:config},requested:'codex'});
  assert.deepEqual(reply,{ok:true,agent:'codex',message:''});
 });
+
+for(const [agent,result,state] of [
+ ['codex',{code:0,stdout:'',stderr:'\u001b[32mLogged in using ChatGPT\u001b[0m'},'ready'],
+ ['codex',{code:0,stdout:'Logged in',stderr:'Not logged in'},'unavailable'],
+ ['codex',{code:0,stdout:apiText,stderr:'Sign-in required'},'unavailable'],
+ ['codex',{code:1,stdout:'',stderr:'Not signed in'},'signed_out'],
+ ['codex',{code:2,stdout:'',stderr:'Not logged in'},'unavailable'],
+ ['codex',{code:1,stdout:apiText,stderr:''},'unavailable'],
+ ['claude',{code:0,stdout:'{"loggedIn":false}',stderr:''},'signed_out'],
+ ['claude',{code:1,stdout:'{"loggedIn":true}',stderr:''},'unavailable'],
+ ['claude',{code:0,stdout:'banner\n{"loggedIn":true}',stderr:''},'unavailable'],
+])test(`2451 shared parser states ${agent}/${state}: ${JSON.stringify(result)}`,()=>{
+ assert.equal(typeof adapters.parseAgentAuthStatus,'function');assert.equal(adapters.parseAgentAuthStatus({agent,result}),state);
+});
+test('2451 Try discovery does not claim ready on a nonzero Claude success payload',async()=>{
+ const rows=await adapters.discoverAgents({definitions:[{id:'claude',name:'Claude',kind:'claude',command:'claude'}],run:async(c,args)=>args[0]==='--help'?{code:0,stdout:'--safe-mode --tools --permission-prompts',stderr:''}:{code:1,stdout:'{"loggedIn":true}',stderr:''}});
+ assert.equal(rows[0].state,'error');
+});
