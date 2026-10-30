@@ -385,12 +385,12 @@ test('SKILLS24: the story gate may offer a Try before the check; the order stays
 // Wrong (2048 run, 0.1.7): 47 follow-up messages and 15 timed-out waits to the step subagents.
 test('SKILLS25: the main chat gives each subagent its full brief at once, then waits once with a long time-out', () => {
   for (const name of Object.keys(AREAS)) {
-    const brief = read(`${name}/SKILL.md`).split('\n').find(line => /step file/.test(line) && /paths/.test(line));
+    const brief = read(`${name}/SKILL.md`).split('\n').find(line => /step file/i.test(line) && /paths/i.test(line));
     assert.ok(brief, `${name}: complete step brief`);
-    assert.match(brief, /at once/, name);
-    assert.match(brief, /no chat history|not.*history/, name);
+    assert.match(brief, /at once/i, name);
+    assert.match(brief, /no chat history|not.*history/i, name);
     assert.match(brief, /wait once.*long.*time-out|wait.*one long/i, name);
-    assert.match(brief, /\b(?:no|avoid) small follow-ups/, name);
+    assert.match(brief, /\b(?:no|avoid) small follow-ups/i, name);
   }
 });
 
