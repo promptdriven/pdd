@@ -28,7 +28,10 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   f.save([f.entry(),f.orphan()]);const before=f.read(),run=JSON.stringify(f.record());f.ports.now=()=>2000;
   assert.equal((await f.ack('r1','  Added\n the reason  ')).exitCode,0);assert.deepEqual(f.read(),[{...before[0],ackedAt:e.ackedAt,ackSummary:e.ackSummary},before[1]]);
   const bytes=f.bytes();f.ports.now=()=>3000;assert.equal((await f.ack('r1','Different note')).exitCode,0);assert.equal(f.bytes(),bytes);assert.equal(JSON.stringify(f.record()),run);
-  assert.deepEqual((await f.row()).requests.filter(r=>r.ackedAt==null),[]);f.save([f.entry('epoch',{ackedAt:0,ackSummary:'At epoch'})]);const zero=f.bytes();assert.equal((await f.ack('epoch','Later')).exitCode,0);assert.equal(f.bytes(),zero);break;
+  assert.deepEqual((await f.row()).requests.filter(r=>r.ackedAt==null),[]);f.save([f.entry('epoch',{ackedAt:0,ackSummary:'At epoch'})]);const zero=f.bytes();assert.equal((await f.ack('epoch','Later')).exitCode,0);assert.equal(f.bytes(),zero);
+  assert.equal((await f.change('Add an independent example')).exitCode,0);
+  const later=f.read();assert.deepEqual(later[0],f.entry('epoch',{ackedAt:0,ackSummary:'At epoch'}),'new delivery preserves the first uptake exactly');
+  assert.equal(later.length,2);assert.notEqual(later[1].id,'epoch');assert.equal(later[1].state,'delivered');assert.equal(later[1].ackedAt??null,null,'later request remains independently open');break;
  }
  case 'concurrent-first-wins':{
   f.save([f.entry()]);
