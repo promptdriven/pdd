@@ -8,15 +8,15 @@
     },
     {
       "id": "AC2",
-      "text": "pdd honors Retry-After between confirmed capacity attempts and stops sending at the caller deadline or interruption."
+      "text": "pdd spaces capacity retries by Retry-After within the caller deadline and interruption rules."
     },
     {
       "id": "AC3",
-      "text": "An accepted queued job keeps its request ID; pdd reports its supplied queue place and busy slots without resubmitting it."
+      "text": "An accepted queued job is read by its original request ID, with its supplied queue place and busy slots shown as progress."
     },
     {
       "id": "AC4",
-      "text": "Lost replies, mismatched receipts, evaluated checks, positive or unknown calls and incomplete accounting never authorize a capacity retry."
+      "text": "pdd never resends a check for capacity when it may have started."
     }
   ],
   "cases": [

@@ -4,13 +4,13 @@ I can recover a check interrupted by a confirmed runtime restart once while reta
 
 ## Acceptance criteria
 
-1. A same-ID check ending unknown with service-restarted is sent again once with a fresh attempt ID and the original source and call ceiling.
-2. Repeated or concurrent recovery permits only one replacement for that Story row across saved reads and retries.
-3. Both attempts keep their request IDs, receipts and known or unknown usage; a second restart or another uncertain outcome gets no automatic replacement.
+1. Only a same-ID check ending unknown with service-restarted permits a replacement with a fresh attempt ID and the original source and call ceiling.
+2. Each Story row gets at most one replacement across repeated or concurrent saved reads and retries.
+3. Recovery preserves both attempts' request IDs, receipts and known or unknown usage.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch. Expected cases below come from DESIGN section 4 and E 1, before implementation.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 ## Native cases for the code step
 

@@ -4,13 +4,15 @@ I can leave a command waiting during announced maintenance and continue afterwar
 
 ## Acceptance criteria
 
-1. Before submission, pdd reads authenticated runtime capacity; a maintenance window reports its end and reason, waits, then rechecks before sending.
-2. A confirmed unstarted 503 maintenance response gets the same wait; capacity 404 permits compatibility through admission response codes.
-3. Maintenance waiting shares the caller deadline and stops on interruption; authentication, access and unrelated service errors retain their existing handling.
+1. Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its end and reason before rechecking.
+2. When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait.
+3. A runtime without the capacity endpoint can still accept work under its ordinary submission rules.
+4. Maintenance waiting obeys the caller deadline and interruption.
+5. Authentication, access and unrelated service errors retain their existing handling.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch. Expected cases below come from DESIGN section 4 and E 1, before implementation.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 ## Native cases for the code step
 

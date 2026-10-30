@@ -8,15 +8,15 @@
     },
     {
       "id": "AC2",
-      "text": "Checks, remote lint and Try setup share the same limit across repositories and worktrees; the default limit is 4."
+      "text": "Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees."
     },
     {
       "id": "AC3",
-      "text": "A dead process does not free a slot while its runtime job still runs; confirmed completion or 30 minutes allows reclamation."
+      "text": "pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes."
     },
     {
       "id": "AC4",
-      "text": "An interrupted or timed-out command retains reservations for unfinished or uncertain dispatched jobs, and releases jobs confirmed ended."
+      "text": "Stopping a command preserves slots for dispatched jobs that have not been confirmed ended."
     }
   ],
   "cases": [

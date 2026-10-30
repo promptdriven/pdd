@@ -4,15 +4,23 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Before submission, pdd reads authenticated runtime capacity; a maintenance window reports its end and reason, waits, then rechecks before sending."
+      "text": "Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its end and reason before rechecking."
     },
     {
       "id": "AC2",
-      "text": "A confirmed unstarted 503 maintenance response gets the same wait; capacity 404 permits compatibility through admission response codes."
+      "text": "When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait."
     },
     {
       "id": "AC3",
-      "text": "Maintenance waiting shares the caller deadline and stops on interruption; authentication, access and unrelated service errors retain their existing handling."
+      "text": "A runtime without the capacity endpoint can still accept work under its ordinary submission rules."
+    },
+    {
+      "id": "AC4",
+      "text": "Maintenance waiting obeys the caller deadline and interruption."
+    },
+    {
+      "id": "AC5",
+      "text": "Authentication, access and unrelated service errors retain their existing handling."
     }
   ],
   "cases": [

@@ -5,13 +5,13 @@ I can run several local agents without exceeding my shared runtime limit.
 ## Acceptance criteria
 
 1. Ten parallel local checks with PDD_MAX_JOBS=3 all finish with at most 3 runtime jobs active at once.
-2. Checks, remote lint and Try setup share the same limit across repositories and worktrees; the default limit is 4.
-3. A dead process does not free a slot while its runtime job still runs; confirmed completion or 30 minutes allows reclamation.
-4. An interrupted or timed-out command retains reservations for unfinished or uncertain dispatched jobs, and releases jobs confirmed ended.
+2. Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees.
+3. pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes.
+4. Stopping a command preserves slots for dispatched jobs that have not been confirmed ended.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch. Expected cases below come from DESIGN section 4 and E 1, before implementation.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 ## Native cases for the code step
 

@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "A same-ID check ending unknown with service-restarted is sent again once with a fresh attempt ID and the original source and call ceiling."
+      "text": "Only a same-ID check ending unknown with service-restarted permits a replacement with a fresh attempt ID and the original source and call ceiling."
     },
     {
       "id": "AC2",
-      "text": "Repeated or concurrent recovery permits only one replacement for that Story row across saved reads and retries."
+      "text": "Each Story row gets at most one replacement across repeated or concurrent saved reads and retries."
     },
     {
       "id": "AC3",
-      "text": "Both attempts keep their request IDs, receipts and known or unknown usage; a second restart or another uncertain outcome gets no automatic replacement."
+      "text": "Recovery preserves both attempts' request IDs, receipts and known or unknown usage."
     }
   ],
   "cases": [

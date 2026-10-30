@@ -4,13 +4,13 @@ I can see my place while other local agents use the runtime.
 
 ## Acceptance criteria
 
-1. The oldest live waiting job takes the next free local slot, and each waiting job keeps one ticket.
+1. Each waiting job keeps one ticket in oldest-first order for the next free local slot.
 2. While I wait, pdd reports the local busy count, limit and number ahead of me.
-3. Interruption or the caller deadline stops my waiting job without dispatching it or leaving a live waiting ticket.
+3. Interruption or the caller deadline removes my waiting ticket without submitting its job.
 
 ## Rules to check
 
-The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch. Expected cases below come from DESIGN section 4 and E 1, before implementation.
+The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
 ## Native cases for the code step
 
