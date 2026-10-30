@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 6f83f15b65ca1e0e624a599cf72f68034a02bebc60c3acdd8f31fb03a49041c2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: e050d2e9218a1a53d0ee592c0ebc206640db0f59dcefa3f16df019af6a3073e2).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -464,7 +464,7 @@ function adoptClaims(context, row) {
     }
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
-      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null });
+      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null, next_step: null, busy: false, can_retry: false });
     }
   }
 }
