@@ -162,7 +162,7 @@ test('2698: runner exits 1 for bare-in-.git linked checkout before run, claim, a
   assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
   for (const words of [/bare repository/i, /\.git/, /linked worktrees/i, /independent normal clone/i, /run.*workflow.*there/i])
     assert.match(out.message, words);
-  assert.doesNotMatch(out.message, /(?:git\s+config.*core\.bare|(?:change|set|disable).*core\.bare)/i);
+  assert.doesNotMatch(out.message, /core\.bare/i);
 });
 
 test('small-change: run exits at once, done reaches the gate, changes go to the same chat, approve opens a new chat, done verify opens the PR', async t => {
