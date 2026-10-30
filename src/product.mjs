@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: c5b83ac4f78832c60aba9321f3becd054de96b9b757d9cc71f15ee64bb45afa8).
+// Generated from prompts/cli/product.prompt.md (sha256: 026fd92a03547e6f45030de94dce6283178899e31f71ecd6e630d739eb6650b2).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { listRuns } from './workflow-runs.mjs';
 import { runtimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository } from './workflow-github.mjs';
 import { causeText } from './runtime-output.mjs';
-import { savedStoryEvidence } from './runtime-client.mjs';
+import { createSavedStoryEvidenceReader } from './runtime-client.mjs';
 
 const ordinary = promisify(execute);
 const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
@@ -49,7 +49,7 @@ const duplicate = (items, key, file) => { const seen = new Set(); for (const ite
 const portsFor = given => {
   const execFile = given.execFile ?? ((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
-    storyEvidence, savedStoryEvidence, startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
+    storyEvidence, savedStoryEvidence: createSavedStoryEvidenceReader(), startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
     ...given, execFile };
   p.issuePage ??= async ({ cwd, repository, marker, page, perPage }) => {
     const quoted = marker.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
