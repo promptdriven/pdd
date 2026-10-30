@@ -45,7 +45,8 @@ For lint-only JSON with selected tests, `lint_state` summarizes the selected tes
 
 Unqualified remote `pdd check --lint` can inspect existing source before the first
 Story test is written. This exception applies only with no Story operands and
-zero discovered program-scenario tests; `--json` and `--timeout` keep their normal
+zero discovered program-scenario tests and no candidate hints from preflight’s
+module function `whyNoTests(root, visible)`; `--json` and `--timeout` keep their normal
 meaning. Select the existing Git-visible `product/map.md`, `product/plan.md`,
 recursive `contracts/` Markdown and JSON files, every `*.prompt.md` wherever it
 lives, and files named exactly `seed.json` beneath `prompts/`. Do not create a
@@ -58,13 +59,20 @@ flowchart TD
     T{Discovered tests?} -->|Yes| R[Use selected test lint]
     T -->|No| W{Story operands?}
     W -->|Yes| E[Selection error: exit 2]
-    W -->|No| S{Eligible source exists?}
+    W -->|No| H{Candidate hints?}
+    H -->|Yes| E
+    H -->|No| S{Eligible source exists?}
     S -->|No| N[No tests found: exit 2]
     S -->|Yes| C[Capture source and run complete lint]
     C -->|Confirmed pass| P[Source pass: no tests yet]
     C -->|Lint refusal or error diagnostic| F[Refused: exit 4]
     C -->|Pending or uncertain| U[Read saved lint: exit 3]
 ```
+
+A candidate hint keeps the ordinary No tests found exit 2 and the same bounded
+help, before capture, sign-in or upload. Candidate meaning belongs to
+[preflight Files](runtime-preflight.prompt.md#files), not a broader all-JSON
+heuristic. Discovered tests retain ordinary selected-test lint.
 
 Use preflight's module function `captureSource` with `tests: []`, `appMap: null`
 and the selected paths as `sourceFiles`; the same includes, dependency/reference
@@ -94,12 +102,27 @@ Keep `rows: []` in JSON, with the actual `lint_state`, `problems`, `warnings` an
 exit code: `passed`/`refused` for confirmed lint judgments, `queued`/`running`
 while pending, `unknown` for uncertainty and `not_run` for work that did not run. The source-lint summary includes "No tests yet", "0 AI calls" and
 "No checks were sent"; a confirmed refusal is labeled refused. Its remaining
-wording is free. These summaries describe source lint, never validated Stories
+wording is free except that a successful result with warnings includes
+`Source lint passed with N warnings`. N is the number of entries surfaced in
+public `warnings` plus entries in `problems` with severity `warning`, after
+existing owners’ deduplication; count each surfaced entry once. Do not introduce
+cross-list matching or suppress distinct warnings. Informational retry advice
+is not a warning. Keep these lists and warning severity unchanged. Text displays
+all context warnings, including a Story with no test, and server diagnostics.
+The source summary is the last stdout line after coverage and warning output.
+These summaries describe source lint, never validated Stories
 or passing tests.
 Save ordinary lint-only intent and source identity. Pending source-only lint
 prints its batch read command; `--read` obtains only that saved lint's result,
 retains source-only state/summary and empty rows, and never dispatches a Check or
-Try. Existing owner/origin, ID, transport and uncertainty rules still apply.
+Try. `--retry` of a saved source-only lint has the same read and result semantics
+as `--read`: say there is nothing to retry as information, preserve its truthful
+exit/state, and print exactly one result (one JSON object in JSON mode). Use
+only the saved lint ID and GET when refresh is needed; never capture current
+source, allocate a UUID, POST or continue checks. Cached terminal results and
+refreshed passed/refused/unknown/pending/busy outcomes retain ordinary read
+meaning. Existing owner/origin, ID, transport and uncertainty rules still apply;
+ordinary selected-check retry is unchanged.
 
 Order:
 1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).

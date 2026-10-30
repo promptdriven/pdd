@@ -53,7 +53,7 @@ Setup also reports the running Alpha executable and version, the `pdd` paths in 
 | `pdd check --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd check --fill-hash` | Fill the hash of draft runtime interfaces. No network |
 | `pdd check --files [STORY...] [--app-map PATH]` | List the exact selected upload manifest and byte sizes. No network; `--app-map` previews a Try map |
-| `pdd check --lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the source format, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. With no tests or Story operand, lint existing plan, contracts, prompts and seeds and report "No tests yet". Requires network access; use it before a real check |
+| `pdd check --lint [STORY...] [--json] [--timeout MIN]` | Print local SVG layout warnings, then the server checks the source format, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. With no tests, no test-candidate hints or Story operand, lint existing plan, contracts, prompts and seeds and report "No tests yet". Requires network access; use it before a real check |
 | `pdd check --lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts and labels with prompt prose locally; warning advice only, 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no runtime tests |
 | `pdd check --screen URL --drawing PATH [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport. No AI/runtime call; missing/hidden parts, order or region differences fail |
 | `pdd approve PROMPT` | Show the prompt's runtime interface in plain words and its text changes since the last approved version, then ask y/n. On `y`, set it to `approved` and fill its hash. For a person at a terminal only |
@@ -132,14 +132,16 @@ Append the last command and its observed output to its original Story test file.
 
 Story counts use the newest source-compatible evidence across check, verify and saved evidence records. Unknown results stay unknown. Source changes invalidate old counts. To refresh counts without rerunning workflow steps, save `pdd check --read BATCH --json` outside the repository, then run `pdd workflow evidence ISSUE --summary /path/to/check.json`. The JSON must retain its repository, selected test paths, Story lines and source SHA. This records saved evidence, not new execution or approval.
 
-With no program-scenario tests and no Story operand, remote `pdd check --lint`
+With no program-scenario tests, no test-candidate hints and no Story operand, remote `pdd check --lint`
 selects existing `product/map.md`, `product/plan.md`, Markdown/JSON under
 `contracts/`, every `*.prompt.md` and `prompts/**/seed.json`, plus their normal
 source dependencies and includes. A confirmed pass says "No tests yet" and sends
 no checks; JSON keeps empty rows and the real lint result. Refusals and pending
 lint remain nonzero, and saved lint reads send no checks. With no eligible source,
 or with an explicit unknown Story, selection still exits 2. This checks source
-format; it does not validate a Story’s behavior.
+format; it does not validate a Story’s behavior. Candidate hints retain exit 2;
+source-only `--retry` reads the saved lint and says there is nothing to retry.
+Successful lint with warnings ends with "Source lint passed with N warnings".
 
 An explicit `pdd check --lint` that is still queued/running exits 3 and prints its saved read command; exit 0 means validation finished successfully. The all-Story cost estimate includes entry executions, declared saved-data operations and nested prompt-call allowances. Conditional operations may use fewer calls; `--max-calls` remains the hard cap.
 

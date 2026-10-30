@@ -1,0 +1,1351 @@
+{
+  "schema_version": "pdd.native-source-lint-followup.v1",
+  "story_path": "user_stories/lint-before-tests-followup.md",
+  "synthetic": true,
+  "boundary": "src/runtime-client.mjs#runCheck",
+  "notes": [
+    "Native fixtures use actual Git-visible synthetic repositories and injected transport/capture observations.",
+    "Generated oversized candidate uses valid scenario schema but is not read by whyNoTests.",
+    "Cached busy is a saved definitive not-run note; refreshed busy is an authoritative GET admission response.",
+    "Retry info is separate from warnings; exactly one public JSON result.",
+    "Existing source-only-lint-cases.json and Runtime cases are unchanged.",
+    "All fixture descriptors, case inputs and expected observation names are native harness metadata, not runtime wire fields, exported APIs or verdict-producing ports. Assertions must observe the real public boundary and effects; do not assert descriptor metadata itself."
+  ],
+  "cases": [
+    {
+      "id": "missing-schema",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "tests/order.json": "{}"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "tests/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "wrong-schema",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "tests/order.json": "{\"schema_version\":\"foreign.v1\"}"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "tests/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "invalid-json",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "tests/order.json": "{"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "tests/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "misnamed-prompt",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "prompts/board.prompt": "# Board"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "prompts/board.prompt",
+          "must end in .prompt.md"
+        ]
+      }
+    },
+    {
+      "id": "missing-interface",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "prompts/board.prompt.md": "# Board"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "prompts/board.prompt.md",
+          "has no Runtime interface block"
+        ]
+      }
+    },
+    {
+      "id": "oversized-valid-schema",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan"
+        },
+        "generated_file": {
+          "path": "tests/order.json",
+          "prefix": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"padding\":\"",
+          "pad_byte": "x",
+          "bytes": 1048577,
+          "suffix": "\"}"
+        },
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "tests/order.json",
+          "1 MiB"
+        ],
+        "candidate_content_reads": 0
+      }
+    },
+    {
+      "id": "contracts-json",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "contracts/record.json": "{}"
+        },
+        "reply": "passed-empty-program",
+        "options": {
+          "--lint": true,
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0
+      }
+    },
+    {
+      "id": "seed-json",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "prompts/server/seed.json": "{}"
+        },
+        "reply": "passed-empty-program",
+        "options": {
+          "--lint": true,
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0
+      }
+    },
+    {
+      "id": "unrelated-json",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "data/notes.json": "{}"
+        },
+        "reply": "passed-empty-program",
+        "options": {
+          "--lint": true,
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0
+      }
+    },
+    {
+      "id": "empty",
+      "criterion": "AC2",
+      "input": {
+        "fixture": "empty",
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0
+      }
+    },
+    {
+      "id": "unrelated-only",
+      "criterion": "AC2",
+      "input": {
+        "fixture": "unrelated-only",
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0
+      }
+    },
+    {
+      "id": "explicit-unknown",
+      "criterion": "AC2",
+      "input": {
+        "fixture": "explicit-unknown",
+        "options": {
+          "--lint": true
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0
+      }
+    },
+    {
+      "id": "retry-cached-passed-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "passed",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-cached-refused-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "refused",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-cached-busy-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "busy",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 5,
+        "lint_state": "not_run",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-passed-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "passed",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-refused-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "refused",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-unknown-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "unknown",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "unknown",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-queued-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "queued",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "queued",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-running-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "running",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "running",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-busy-text",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "busy",
+        "mode": "text",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 5,
+        "lint_state": "not_run",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 0,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-cached-passed-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "passed",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-cached-refused-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "refused",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-cached-busy-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "cached",
+        "outcome": "busy",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 5,
+        "lint_state": "not_run",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 0,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-passed-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "passed",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-refused-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "refused",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-unknown-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "unknown",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "unknown",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-queued-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "queued",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "queued",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-running-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "running",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 3,
+        "lint_state": "running",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "retry-refresh-busy-json",
+      "criterion": "AC3",
+      "input": {
+        "saved_fixture": "source-only-lint",
+        "cache": "refresh",
+        "outcome": "busy",
+        "mode": "json",
+        "operation": "--retry"
+      },
+      "expected": {
+        "exit_code": 5,
+        "lint_state": "not_run",
+        "rows": [],
+        "capture_calls": 0,
+        "uuid_calls": 0,
+        "posts": 0,
+        "check_posts": 0,
+        "get_ids": "only saved lint ID",
+        "get_calls": 1,
+        "informational_contains": [
+          "nothing to retry"
+        ],
+        "new_warning_entries": 0,
+        "json_objects": 1,
+        "result_summaries": 1
+      }
+    },
+    {
+      "id": "warnings-broken-contract-and-seed-text",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "broken-contract-and-seed",
+        "context_warning_entries": 2,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "text"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 2,
+        "context_warnings_visible": 2,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 2 warnings"
+        ],
+        "summary_is_last_stdout_line": true,
+        "story_warning_contains": null
+      }
+    },
+    {
+      "id": "warnings-broken-contract-and-seed-json",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "broken-contract-and-seed",
+        "context_warning_entries": 2,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "json"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 2,
+        "context_warnings_visible": 2,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 2 warnings"
+        ],
+        "story_warning_contains": null,
+        "json_objects": 1,
+        "extra_result_lines": 0
+      }
+    },
+    {
+      "id": "warnings-mixed-context-server-text",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "mixed-context-server",
+        "context_warning_entries": 1,
+        "server_warning_entries": 1,
+        "reply": "passed-empty-program",
+        "mode": "text"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 2,
+        "context_warnings_visible": 1,
+        "server_warning_diagnostics_visible": 1,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 2 warnings"
+        ],
+        "summary_is_last_stdout_line": true,
+        "story_warning_contains": null
+      }
+    },
+    {
+      "id": "warnings-mixed-context-server-json",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "mixed-context-server",
+        "context_warning_entries": 1,
+        "server_warning_entries": 1,
+        "reply": "passed-empty-program",
+        "mode": "json"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 2,
+        "context_warnings_visible": 1,
+        "server_warning_diagnostics_visible": 1,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 2 warnings"
+        ],
+        "story_warning_contains": null,
+        "json_objects": 1,
+        "extra_result_lines": 0
+      }
+    },
+    {
+      "id": "warnings-server-only-text",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "server-only",
+        "context_warning_entries": 0,
+        "server_warning_entries": 1,
+        "reply": "passed-empty-program",
+        "mode": "text"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 1,
+        "context_warnings_visible": 0,
+        "server_warning_diagnostics_visible": 1,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 1 warning"
+        ],
+        "summary_is_last_stdout_line": true,
+        "story_warning_contains": null
+      }
+    },
+    {
+      "id": "warnings-server-only-json",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "server-only",
+        "context_warning_entries": 0,
+        "server_warning_entries": 1,
+        "reply": "passed-empty-program",
+        "mode": "json"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 1,
+        "context_warnings_visible": 0,
+        "server_warning_diagnostics_visible": 1,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 1 warning"
+        ],
+        "story_warning_contains": null,
+        "json_objects": 1,
+        "extra_result_lines": 0
+      }
+    },
+    {
+      "id": "warnings-no-warnings-text",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "no-warnings",
+        "context_warning_entries": 0,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "text"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 0,
+        "context_warnings_visible": 0,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ],
+        "summary_is_last_stdout_line": true,
+        "story_warning_contains": null
+      }
+    },
+    {
+      "id": "warnings-no-warnings-json",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "no-warnings",
+        "context_warning_entries": 0,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "json"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 0,
+        "context_warnings_visible": 0,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent"
+        ],
+        "story_warning_contains": null,
+        "json_objects": 1,
+        "extra_result_lines": 0
+      }
+    },
+    {
+      "id": "warnings-story-no-test-text",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "story-no-test",
+        "context_warning_entries": 1,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "text"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 1,
+        "context_warnings_visible": 1,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 1 warning"
+        ],
+        "summary_is_last_stdout_line": true,
+        "story_warning_contains": "user_stories/x.md has no test."
+      }
+    },
+    {
+      "id": "warnings-story-no-test-json",
+      "criterion": "AC4",
+      "input": {
+        "fixture": "story-no-test",
+        "context_warning_entries": 1,
+        "server_warning_entries": 0,
+        "reply": "passed-empty-program",
+        "mode": "json"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "warning_count": 1,
+        "context_warnings_visible": 1,
+        "server_warning_diagnostics_visible": 0,
+        "summary_contains": [
+          "No tests yet",
+          "0 AI calls",
+          "No checks were sent",
+          "Source lint passed with 1 warning"
+        ],
+        "story_warning_contains": "user_stories/x.md has no test.",
+        "json_objects": 1,
+        "extra_result_lines": 0
+      }
+    },
+    {
+      "id": "error-not-hidden-by-warnings",
+      "criterion": "AC4",
+      "input": {
+        "context_warning_entries": 2,
+        "server_error_entries": 1,
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 4,
+        "lint_state": "refused",
+        "rows": []
+      }
+    },
+    {
+      "id": "preserve-selected-test-lint",
+      "criterion": "AC5",
+      "input": {
+        "control_reference": {
+          "fixture": "test/fixtures/harbor",
+          "selected_story": "place-order",
+          "owner": "prompts/cli/runtime-client.prompt.md"
+        },
+        "words": [
+          "place-order"
+        ],
+        "extra_files": {
+          "product/plan.md": "# Unrelated synthetic plan\n",
+          "contracts/unrelated.md": "# Unrelated synthetic contract\n"
+        },
+        "options": {
+          "--lint": true,
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "source_only": false,
+        "rows_count": 1,
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 0,
+        "capture_tests": [
+          "tests/place-order.json"
+        ],
+        "excluded_paths": [
+          "product/plan.md",
+          "contracts/unrelated.md",
+          "tests/unknown-item.json"
+        ],
+        "captured_paths": [
+          "prompts/place_order.prompt.md",
+          "tests/place-order.json",
+          "user_stories/place-order.md"
+        ],
+        "lint_state": "passed",
+        "row_states": [
+          "passed"
+        ]
+      }
+    },
+    {
+      "id": "preserve-ordinary-check",
+      "criterion": "AC5",
+      "input": {
+        "control_reference": {
+          "fixture": "test/fixtures/harbor",
+          "selected_story": "place-order",
+          "owner": "prompts/cli/runtime-client.prompt.md"
+        },
+        "words": [
+          "place-order"
+        ],
+        "extra_files": {
+          "product/plan.md": "# Unrelated synthetic plan\n",
+          "contracts/unrelated.md": "# Unrelated synthetic contract\n"
+        },
+        "options": {
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "source_only": false,
+        "rows_count": 1,
+        "lint_posts": 1,
+        "check_posts": 1,
+        "try_posts": 0,
+        "capture_tests": [
+          "tests/place-order.json"
+        ],
+        "excluded_paths": [
+          "product/plan.md",
+          "contracts/unrelated.md",
+          "tests/unknown-item.json"
+        ],
+        "captured_paths": [
+          "prompts/place_order.prompt.md",
+          "tests/place-order.json",
+          "user_stories/place-order.md"
+        ],
+        "row_states": [
+          "passed"
+        ]
+      }
+    },
+    {
+      "id": "preserve-ordinary-try",
+      "criterion": "AC5",
+      "input": {
+        "control_reference": {
+          "fixture": "test/fixtures/harbor",
+          "selected_story": "place-order",
+          "owner": "prompts/cli/runtime-client.prompt.md"
+        },
+        "words": [
+          "place-order"
+        ],
+        "extra_files": {
+          "product/plan.md": "# Unrelated synthetic plan\n",
+          "contracts/unrelated.md": "# Unrelated synthetic contract\n"
+        },
+        "options": {
+          "--no-open": true,
+          "--no-wait": true
+        },
+        "boundary": "src/runtime-client.mjs#runTry"
+      },
+      "expected": {
+        "exit_code": 0,
+        "source_only": false,
+        "lint_posts": 1,
+        "check_posts": 0,
+        "try_posts": 1,
+        "capture_tests": [
+          "tests/place-order.json"
+        ],
+        "excluded_paths": [
+          "product/plan.md",
+          "contracts/unrelated.md",
+          "tests/unknown-item.json"
+        ],
+        "captured_paths": [
+          "prompts/place_order.prompt.md",
+          "tests/place-order.json",
+          "user_stories/place-order.md"
+        ],
+        "try_setups": 1
+      }
+    },
+    {
+      "id": "preserve-ordinary-retry",
+      "criterion": "AC5",
+      "input": {
+        "control_reference": {
+          "fixture": "test/fixtures/harbor",
+          "selected_story": "place-order",
+          "owner": "prompts/cli/runtime-client.prompt.md"
+        },
+        "words": [
+          "place-order"
+        ],
+        "extra_files": {
+          "product/plan.md": "# Unrelated synthetic plan\n",
+          "contracts/unrelated.md": "# Unrelated synthetic contract\n"
+        },
+        "options": {},
+        "operation": "--retry",
+        "saved_producer": "Actual normal Check with selected Harbor place-order; inject matching passed lint/check receipts, then retry saved batch.",
+        "observations_scope": "Retry invocation only"
+      },
+      "expected": {
+        "exit_code": 0,
+        "source_only": false,
+        "rows_count": 1,
+        "lint_posts": 0,
+        "check_posts": 0,
+        "try_posts": 0,
+        "capture_tests": [
+          "tests/place-order.json"
+        ],
+        "excluded_paths": [
+          "product/plan.md",
+          "contracts/unrelated.md",
+          "tests/unknown-item.json"
+        ],
+        "captured_paths": [
+          "prompts/place_order.prompt.md",
+          "tests/place-order.json",
+          "user_stories/place-order.md"
+        ],
+        "row_states": [
+          "passed"
+        ],
+        "posts": 0,
+        "preserved_check_request_id": true
+      }
+    },
+    {
+      "id": "preserve-local-svg",
+      "criterion": "AC5",
+      "input": {
+        "control_reference": {
+          "fixture": "plan",
+          "approved_case": "test/fixtures/source-only-lint-cases.json#local-svg-mode-remains-local",
+          "owner": "prompts/cli/runtime-client.prompt.md#local-drawing-checks"
+        },
+        "words": [],
+        "files": {
+          "product/plan.md": "# Synthetic plan\n"
+        },
+        "options": {
+          "--lint": true,
+          "--local": true,
+          "--json": true
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "source_only": false,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "lint_posts": 0,
+        "check_posts": 0,
+        "try_posts": 0,
+        "summary_contains": [
+          "SVG layout lint:"
+        ]
+      }
+    },
+    {
+      "id": "actual-check-help",
+      "criterion": "AC5",
+      "input": {
+        "boundary": "actual CLI",
+        "argv": [
+          "check",
+          "--help"
+        ]
+      },
+      "expected": {
+        "semantic_facts": [
+          "lint selected Stories when tests exist",
+          "lint existing source when no tests, candidates or Story operand",
+          "zero AI calls",
+          "no checks sent"
+        ]
+      }
+    }
+  ],
+  "default_input": {
+    "words": [],
+    "options": {
+      "--lint": true,
+      "--json": true
+    }
+  },
+  "fixture_sources": {
+    "plan": {
+      "files": {
+        "product/plan.md": "# Synthetic plan\n"
+      }
+    },
+    "broken-contract-and-seed": {
+      "files": {
+        "product/plan.md": "# Synthetic plan\n",
+        "contracts/record.json": "{",
+        "contracts/seed-world.json": "{"
+      }
+    },
+    "story-no-test": {
+      "files": {
+        "product/plan.md": "# Synthetic plan\n",
+        "user_stories/x.md": "# X\n\n## Acceptance criteria\n\n1. I can plan before writing a test.\n"
+      }
+    },
+    "mixed-context-server": {
+      "context_warnings": [
+        "Warning: synthetic local catalog advice."
+      ],
+      "server_problems": [
+        {
+          "code": "synthetic-warning",
+          "file": "product/plan.md",
+          "severity": "warning",
+          "message": "Synthetic server advice."
+        }
+      ]
+    },
+    "server-only": {
+      "context_warnings": [],
+      "server_problems": [
+        {
+          "code": "synthetic-warning",
+          "file": "product/plan.md",
+          "severity": "warning",
+          "message": "Synthetic server advice."
+        }
+      ]
+    },
+    "no-warnings": {
+      "files": {
+        "product/plan.md": "# Synthetic plan\n"
+      }
+    },
+    "source-only-lint": {
+      "producer": "Create source-only batch through public runCheck with plan fixture and injected fake lint reply; preserve actual saved lint identity. Refresh fixtures initially save unknown/pending before GET result. Definitive cached busy has saved not-run note."
+    },
+    "preservation": "Use existing approved native source-only fixture and actual selected-test fixture controls; do not create new expectations from implementation output."
+  }
+}
