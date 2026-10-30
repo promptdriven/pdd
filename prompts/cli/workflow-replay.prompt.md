@@ -179,7 +179,7 @@ let an agent's free-form PASS summary replace this status.
 
 ```json
 {
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "2b05028ee5f8ab28417f57e1223ceef7e8b0cfc41d2fb55b62e317dc36a1879b",
   "entries": [
     {
