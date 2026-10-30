@@ -84,14 +84,20 @@ Module function `sourceFilePort(root, visible = new Set(gitFiles(root)))` return
 the synchronous `{stat({path}), read({path})}` adapter for local consumers.
 It applies this module's path, Git visibility, privacy and regular-file rules;
 stat returns `{exists,is_symlink,size}` and read returns UTF-8 `{content}`.
-Before reading an actual upload candidate, check its stat size against
-10,485,760 bytes, including a raw file replaced for upload. Enforce selected-source
-totals and the 10,000 selected-file budget before selected reads. An oversized
-selected file refuses before allocation/open/read, even when sparse or above the
-native Buffer limit; preserve exit 4 and the finite too-big diagnostic with total
-and largest files, never a RangeError. Reference/preparation inputs required by selected effective source retain
-their bounded stat-before-read protection; those raw inputs do not
-become upload members or accumulate again in selected totals. Discovery-only or
+Before each actual raw-file read, check its stat size against 10,485,760 bytes.
+This guards this port, `readPrompt`, capture selection/metadata/reference reads
+and preparation-hook `readFile`, including raw bytes read before replacement.
+An oversized required raw file refuses before allocation/open/read, even when
+sparse or above the native Buffer limit; preserve exit 4 and the finite too-big
+diagnostic with total and largest files, never a RangeError. Deferring a selected
+read cannot bypass this guard. Enforce selected-source totals and the 10,000
+selected-file budget before selected reads. Reference/preparation-only raw reads
+do not become upload members or accumulate again in selected totals.
+A safe Git-visible regular path may instead receive prepared replacement bytes
+without reading its raw original, even when that original is 2 GiB. Its stat size
+alone must not refuse this replacement: only effective bytes enter the payload
+and memory. Preserve the original path's privacy, Git-visibility and snapshot
+checks. Virtual and replacement bytes are actual upload bytes. Discovery-only or
 unselected footprint documents cannot refuse the selected work merely for their
 size: skip or warn before allocating their contents and record affected footprints
 as unavailable. Never replace an ignored-file refusal with an unbounded read.
