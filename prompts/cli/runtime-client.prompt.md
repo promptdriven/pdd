@@ -9,6 +9,12 @@ Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` an
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
 - Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`, `interactive` (stdin and stdout are both terminals). Read the environment only from `env`.
 
+## Subprocess input
+
+Git repository-root and revision lookups are noninteractive: explicitly ignore their stdin and keep stdout and stderr captured as before. This is defensive isolation for scripted callers, including callers whose stdin is an SSH socket; a helper or its descendants must not retain the caller's stdin after pdd exits. Git file discovery belongs to [runtime preflight](runtime-preflight.prompt.md#files).
+
+The default `gh` port likewise ignores stdin and captures stdout and stderr; it must never prompt through the caller's input. The default browser opener ignores all three standard streams. Preserve terminal input for pdd's own interactive approval flow and the explicitly requested Try shell; this policy does not change their owners' contracts.
+
 ## Sign-in
 
 - Token = `gh auth token`, in memory only: never in files, logs, argv, URLs or error text. No `gh`: exit 5, `Install the GitHub CLI, then run gh auth login`. Empty: exit 5, `Run gh auth login`.
