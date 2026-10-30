@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { captureSource, sourceFilePort } from '../src/runtime-preflight.mjs';
+import { runContracts } from '../src/contracts.mjs';
 import { runCheck } from '../src/runtime-client.mjs';
 import { harbor, fakeRuntime, portsFor, sha } from './runtime-fake.mjs';
 
@@ -108,4 +109,47 @@ test('LINK Markdown context: dependencies resolve from authored linked path', t 
   assert.doesNotThrow(() => { capture = captureSource(setup.repo, { tests: [ORDER] }); });
   assert.ok(capture.files.some(file => file.path === 'services/api/policy.md'));
   assert.ok(!capture.files.some(file => file.path === 'shared/policy.md'));
+});
+
+
+test('LINK authored eligibility: visible later chains cannot authorize ignored direct or folder paths', t => {
+  const { repo } = harbor(t);
+  write(repo, 'target.md', 'visible target');
+  write(repo, 'target-dir/file.md', 'visible folder target');
+  symlinkSync('target.md', join(repo, 'middle.md'));
+  symlinkSync('target-dir', join(repo, 'middle-dir'));
+  symlinkSync('middle.md', join(repo, 'hidden.md'));
+  symlinkSync('middle-dir', join(repo, 'hidden-dir'));
+  symlinkSync('target-dir', join(repo, 'visible-dir'));
+  write(repo, '.gitignore', 'hidden.md\nhidden-dir\n');
+  const port = sourceFilePort(repo);
+  let accepted;
+  assert.doesNotThrow(() => { accepted = port.read({ path: 'middle.md' }); }, 'safe visible source remains accepted');
+  assert.equal(accepted.content, 'visible target');
+  assert.equal(port.read({ path: 'visible-dir/file.md' }).content, 'visible folder target', 'visible authored symlink ancestor remains eligible');
+  for (const path of ['hidden.md', 'hidden-dir/file.md']) {
+    assert.throws(() => port.read({ path }), /Git-visible|ignor/i, `ignored authored path ${path} has no visible authored symlink ancestor`);
+    assert.throws(() => port.stat({ path }), /Git-visible|ignor/i);
+    include(repo, path);
+    assert.throws(() => captureSource(repo, { tests: [ORDER] }), /Git-visible|ignor/i);
+  }
+});
+
+test('LINK contracts boundary: safe source acceptance preserves standalone command no-follow refusal', t => {
+  const setup = harbor(t), { repo } = setup;
+  write(repo, 'contracts/order.json', '{"type":"object","properties":{},"required":[],"additionalProperties":false}');
+  const target = readFileSync(join(repo, 'contracts/order.json'));
+  symlinkSync('contracts/order.json', join(repo, 'safe-source.json'));
+  let accepted;
+  assert.doesNotThrow(() => { accepted = sourceFilePort(repo).read({ path: 'safe-source.json' }); }, 'safe linked source remains accepted');
+  assert.equal(accepted.content, target.toString());
+  symlinkSync('../contracts/order.json', join(repo, 'prompts/linked.prompt.md'));
+  const original = readFileSync(join(repo, 'prompts/place_order.prompt.md'));
+  for (const options of [{}, { '--write': true }]) {
+    const stdout = { text: '', write(value) { this.text += value; } }, stderr = { text: '', write(value) { this.text += value; } };
+    assert.equal(runContracts({ cwd: repo, words: ['sync'], options }, { env: { HOME: setup.home }, stdout, stderr }), 4, 'standalone contracts commands must refuse linked originals');
+    assert.match(stderr.text, /link|unsafe/i);
+    assert.deepEqual(readFileSync(join(repo, 'contracts/order.json')), target);
+    assert.deepEqual(readFileSync(join(repo, 'prompts/place_order.prompt.md')), original);
+  }
 });
