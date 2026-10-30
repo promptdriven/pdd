@@ -354,29 +354,10 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 4,
+        "exit_code": 0,
         "checked_records": 0,
         "checked_world_values": 0,
-        "diagnostics": [
-          {
-            "file": "contracts/world.md",
-            "record": "/calls/codex",
-            "field": "Writer",
-            "kind": "problem"
-          },
-          {
-            "file": "contracts/world.md",
-            "record": "/calls/pdd",
-            "field": "Writer",
-            "kind": "problem"
-          },
-          {
-            "file": "contracts/world.md",
-            "record": "/hosts/<machine_id>",
-            "field": "Writer",
-            "kind": "problem"
-          }
-        ],
+        "diagnostics": [],
         "skipped_files": [],
         "source_bytes_unchanged": true,
         "source_modes_unchanged": true,
@@ -542,17 +523,10 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 4,
+        "exit_code": 0,
         "checked_records": 1,
         "checked_world_values": 1,
-        "diagnostics": [
-          {
-            "file": "contracts/seed-world.json",
-            "record": "extra",
-            "field": "/extra",
-            "kind": "problem"
-          }
-        ],
+        "diagnostics": [],
         "skipped_files": [],
         "source_bytes_unchanged": true,
         "source_modes_unchanged": true,
@@ -564,7 +538,15 @@
           "history": 0,
           "write": 0
         },
-        "warnings": []
+        "warnings": [
+          {
+            "kind": "world-writer-missing",
+            "file": "contracts/seed-world.json",
+            "world_keys": [
+              "/extra"
+            ]
+          }
+        ]
       }
     },
     {

@@ -212,14 +212,8 @@
       },
       "delete_files": [],
       "expected": {
-        "exit_code": 4,
-        "diagnostics": [
-          {
-            "file": "contracts/seed-world.json",
-            "record": "extra",
-            "field": "/extra"
-          }
-        ],
+        "exit_code": 0,
+        "diagnostics": [],
         "source_bytes_unchanged": true,
         "calls": {
           "runtime": 0,
@@ -228,7 +222,16 @@
           "slots": 0,
           "history": 0,
           "write": 0
-        }
+        },
+        "warnings": [
+          {
+            "kind": "world-writer-missing",
+            "file": "contracts/seed-world.json",
+            "world_keys": [
+              "/extra"
+            ]
+          }
+        ]
       }
     },
     {

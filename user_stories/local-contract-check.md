@@ -19,7 +19,7 @@ eligible copy agreement and present world value. Definite contract problems exit
 4; absent a definite problem, unavailable selected-schema/predicate evidence exits 5.
 Syntax/no repository exits 2. No check authenticates, reserves a runtime slot,
 contacts a server/model, reads Check history or writes a file. Declared absent
-world keys are allowed; uncovered seed keys fail ownership checks. Optional
+world keys are allowed; uncovered seed values warn with their exact paths. Optional
 schemas leave an honest unchecked-values warning; selected schemas validate
 present values. Lossy numeric comparison and unknown pattern membership can
 never establish a pass. Ordinary listing/sync and Runtime P9 remain unchanged.

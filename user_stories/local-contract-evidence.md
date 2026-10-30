@@ -12,8 +12,9 @@
 
 ## Rules to check
 
-Writer cells split on commas, standalone and, and slash; repeated trimmed actors
-coalesce. Recognized JSON members validate independently; annotation-only payloads,
+Writer cells use the [writer rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values),
+including initial-only declarations, comma qualifiers and exact-path actor deduplication.
+Uncovered seed branches warn; advisory value coverage gives no inherited writer. Recognized JSON members validate independently; annotation-only payloads,
 resources, simulation and seeds remain data unless a schema target is explicit.
 An explicit Schema wins; otherwise exactly one canonical declared identity designated
 by a schema link, exact inline-code identifier in a non-actor cell, or whole

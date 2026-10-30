@@ -159,11 +159,14 @@ combined with `sync` or `--write`. Both world files may be absent; if either
 `contracts/world.md` or `contracts/seed-world.json` exists, both are required.
 The first Key/Writer or Path/Writer table may omit Schema. Leading `/` cells
 are JSON Pointers under either heading (`~1` escapes `/`, `~0` escapes `~`);
-bare Keys name exact top-level keys. A nested Key declaration covers its root
-seed namespace without assigning parent ownership. Uncovered extra seed keys
-fail; Path tables require no seed coverage. Split Writer cells on commas,
-standalone `and` or `/`; identical trimmed actors coalesce and multiple actors
-fail. Parent and child paths have independent owners.
+bare Keys name exact top-level keys. Parent and child paths have independent
+owners. Writer lists split on commas, standalone `and`, `/`, `&` or `;`, preserving
+hyphenated actor names. Seed labels identify initial-only data, while comma
+qualifiers such as `through the resource` describe the preceding writer. Repeated
+actors coalesce; two runtime writers fail. Present seed branches without a row
+warn once with their exact paths, for either header. A declared container covers
+its value for this advisory without assigning its writer to child paths. See the
+[writer and seed rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values).
 
 Explicit Schema targets take precedence; otherwise one canonical declared record
 designated by a schema link, exact inline-code identifier or whole plain Key/What it holds

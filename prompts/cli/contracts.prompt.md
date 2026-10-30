@@ -118,20 +118,31 @@ backticked. Decode `~1` as `/` and `~0` as `~`; reject malformed escapes rather
 than guessing a slash-containing literal key. A bare Key names one exact top-level
 own seed key, represented by its escaped pointer. A Path must begin with `/`.
 Separately backticked paths enumerated in one cell declare separate paths; commas
-inside backticks are literal. Key tables retain top-level seed coverage: a root
-key is covered by its exact declaration or a declaration beneath its namespace
-(for example `/kv/shop` covers the seed container `kv`). This does not give any
-writer ownership of undeclared parents or siblings. An uncovered extra top-level
-seed key is a problem. Path tables require no top-level seed coverage. Parent
-and child ownership remain independent. Symbolic paths such as
+inside backticks are literal. Parent and child ownership remain independent; neither header gives a writer
+ownership of undeclared parents or siblings. Symbolic paths such as
 `/hosts/<machine_id>` declare ownership without wildcard matching or guessed
 concrete seed values.
 
-Split Writer cells on commas, standalone word `and`, and `/`. Trim actors and
-coalesce identical actor claims for the same exact key/path. Zero or more than
-one unique actor is a Writer problem. Duplicate rows with the same actor coalesce;
-different actors for the same exact path fail. There are no prose or test-data
-exceptions. Missing key/path is a problem. Distinct explicit schema mappings for
+A writer is a part that changes the value during a product run. Normalize Writer
+markup as for existing actor labels and trim whitespace. The exact labels
+`test data`, `seed` and `initial world`, case-insensitively, identify initialization,
+not runtime actors; `seed-worker` remains an actor. A nonempty declaration made
+only of initialization labels is valid initial-only data, with no runtime writer.
+Aggregate claims across rows for the same exact path: with no runtime actor or
+initialization provenance, the Writer is a problem. A blank row supplies neither
+claim; it does not invalidate another row's actor or initial-only declaration.
+
+A comma-following piece beginning with the whole word `through`, `via`, `using`
+or `by` qualifies the preceding writer. Discard that whole piece as descriptive
+text before splitting actors, even if it contains `and`, `/`, `&` or `;`. The next
+comma begins another piece; an ordinary actor there still counts. A first piece
+is not a comma qualifier, and `throughput` or `bystander` is not a qualifier word.
+Split the remaining pieces on commas, whitespace-delimited standalone `and`,
+`/`, `&` and `;`, never inside a hyphenated word such as `search-and-rescue bot`.
+Remove initialization labels, trim and coalesce identical actors across rows for
+the same exact key/path. More than one unique runtime actor is a Writer problem.
+An initial-only row and one runtime actor agree; two runtime actors still fail.
+Duplicate claims by the same actor coalesce. Missing key/path is a problem. Distinct explicit schema mappings for
 the same key/path are problems; blanks supply no conflicting mapping. Do not
 require product parts.
 
@@ -154,7 +165,8 @@ aliases, array wrappers, templates or schemas from a value's shape. Explicit
 Schema and `$contract` resolution errors retain their existing definite errors.
 Count unique declared keys/paths without a unique schema, including absent and
 symbolic declarations, and emit one honest warning:
-`N world keys have no schema; their seed values were not checked`.
+`N world keys have no schema; their seed values were not checked` (use
+`1 world key has no schema; its seed value was not checked` for one).
 Retain sorted key/path names in JSON. This advisory alone does not change exit 0.
 
 A nonblank Schema cell is one plain/backticked repository-root target resolved
@@ -167,6 +179,24 @@ Do not attempt redundant value validation under a known-invalid schema.
 Absent values require no seed value check. Preserve null, false, zero and empty
 containers as present values. These checks establish declared ownership and
 shape, not actual runtime writes.
+
+For either Key or Path, report present seed values with no declaring row as one
+advisory, never a problem. Coverage here describes a declared value, not inherited
+writer ownership: an exact concrete declaration covers its whole seed value,
+including an initial-only declaration. Where only descendant rows exist, inspect
+the concrete namespace branches. Report the closest present branch with neither
+an exact declaration nor a concrete declared descendant; do not list every field
+inside that uncovered value. Thus a lone `/kv/menu` row with seed siblings
+`orders` and `tickets` warns about `/kv/orders` and `/kv/tickets`. A `/kv` row
+covers its whole value for this advisory but never assigns its writer to a
+separately declared child. Symbolic paths do not match concrete seed paths.
+If a present prefix ends at a scalar or empty container before a declared
+descendant, warn at that present prefix: `/kv/orders/tickets` does not cover an
+empty or scalar `/kv/orders`. Absent seed values and an empty root seed add no
+warning. Uncovered empty
+containers, null, false and zero are present. Use sorted, unique escaped JSON
+Pointers, including own keys such as `__proto__`, in the warning. Do not infer
+schemas or validate uncovered values from this coverage rule.
 
 ### Machine-readable check results
 
@@ -183,6 +213,10 @@ message. Text and JSON carry the same counts, diagnostics and exit result.
 Warnings are separate from problem/unavailable diagnostics and never change the
 exit code. Missing-schema warnings have `kind: "world-schema-missing"`,
 `file: "contracts/world.md"`, sorted `world_keys` and the summary `message`.
+Missing-writer-row warnings have `kind: "world-writer-missing"`,
+`file: "contracts/seed-world.json"`, sorted `world_keys` and a finite nonblank
+`message` naming every uncovered path and the quantity, using singular for one.
+They remain separate from missing-schema warnings, including when both apply.
 Declared-record warnings have `kind: "declared-record-disagreement"`, sorted
 `records` (two canonical IDs) and a nonempty `message`. Sort warnings by kind,
 then file/record identities. Text prints the same advisory facts once.

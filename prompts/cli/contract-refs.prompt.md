@@ -261,7 +261,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "3f4eaf698edc75df115b577c7b4fc8a9fa40a5f52d9e78a1618fa6ef1728d940",
+  "status": "draft", "prose_sha256": "1696894a32f481a0a142a022db13d31d15124877ab4a2e25432df595dd403349",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {

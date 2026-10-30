@@ -11,8 +11,11 @@
 
 Key and Path cells beginning with `/` are exact JSON Pointers. Bare Keys retain
 top-level identity and namespace declarations cover their root seed container
-without assigning parent ownership. Writer lists split on commas, standalone
-`and` or `/`; repeated identical actors coalesce, multiple actors fail. Optional
+without assigning parent ownership. Writer lists follow the
+[writer rules](../prompts/cli/contracts.prompt.md#world-keys-and-their-seed-values):
+initialization labels are not runtime writers, comma qualifiers describe the
+preceding writer, and repeated actors coalesce. Missing seed declarations warn
+without assigning an ancestor's writer to a child. Optional
 schemas can be inferred from one declared record identity named or linked in a
 row; unresolved or ambiguous inference warns without a refusal. Primitive JSON
 metadata never suppresses a recognized schema member. Annotation/resource/
