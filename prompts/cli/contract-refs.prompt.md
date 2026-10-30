@@ -154,6 +154,35 @@ not an approval hash or a pin that prevents changes. A no-reference result has
 
 ## Catalog and copy proposals
 
+### Shared native lossless JSON bindings
+
+Expose the existing lossless codec through these module functions for native
+consumers, including preflight. These are not additional Runtime entries:
+
+- `parseJsonValue(text)` takes a JSON text string and returns an opaque lossless
+  JSON tree. Invalid JSON throws `SyntaxError`; a non-string argument throws
+  `TypeError`. Reuse the existing parser, including exact numeric tokens, own
+  keys and parsed container layout; do not parse through rounded numeric values.
+- `stringifyJsonValue(value)` returns JSON text for a parsed tree or subvalue
+  through the existing codec. Preserve exact number tokens, own-key order and
+  retained unchanged parsed container layout. This returns the selected JSON
+  value, not whitespace outside it or an enclosing source file.
+- `jsonNumberText(value)` returns the original JSON number token string for a
+  numeric node, or `null` for a nonnumeric node. Callers must not inspect private
+  brands or assume a numeric node is an ordinary JavaScript number.
+- `jsonValuesEqual(a,b)` returns Boolean general JSON value equality using the
+  existing value identity: object key order is immaterial, arrays retain order,
+  and numeric tokens compare by exact mathematical value. Thus `1`, `1.0` and
+  `1e0` are equal; `9007199254740993` and `9007199254740992` differ. This is literal
+  equality for enum, const and uniqueItems, not schema-copy comparison: it never
+  ignores annotations or reorders required/enum arrays in a supplied value.
+
+The domain of codec/equality/accessor values is trees and subvalues returned by
+`parseJsonValue`; native consumers may traverse own object keys and array items
+but must consume them read-only. These bindings promise no editing API or new
+write behavior. Reuse the current parser, renderer and general value identity;
+do not duplicate their implementations or expose their private representation.
+
 Module function `catalogRecords(sources, targets = [])` takes `{path,text}` files
 from `contracts/` and canonical used-target strings, returning `{records,warnings}`.
 Each record is

@@ -47,6 +47,70 @@ A broken step or check shape uses the engine code (`missing-steps`, `invalid-ste
   Label remaining advice `Warning: possible numeric mismatch`, locate the test, step/check, target/path and Story criterion, and explain that the quantities may differ. Ask the author to confirm against the Story and prompt, retain a correct expected value, and record a scoped rationale in `pdd-numeric-reviews.json` if needed. Never edit a test or criterion automatically.
   The optional repository-root review file is local authoring metadata, not an automatic upload or a Runtime waiver. Read only a Git-visible regular non-symlink file, at most 16 KiB, with exactly `{schema_version:"pdd.numeric-reviews.v1",reviews:[...]}` (at most100 rows). Each closed row has `test_path`, `test_sha256` (current full test bytes,64hex), `step_id`, `criterion_id`, `target` (`result`/`error`), `path`, finite numeric `value`, and a nonblank one-line `reason` (at most1000 characters). Match all those identity fields to suppress only that advisory; a stale hash or other mismatch suppresses nothing. Invalid/unreadable review metadata gives a warning and applies no reviews. Keep P1–P10, exact criterion-text validation and all Runtime assertions unchanged. The count of files sent that are not prompt, story or test files is a calm note (see the [runtime client](runtime-client.prompt.md)).
 
+## Local contract validation
+
+Module function `schemaKeywordNames()` returns a fresh string array of the
+executable and known forbidden schema keywords from this module's canonical
+schema-node vocabulary, excluding annotations. Consumers use it to recognize
+schema roles without another keyword policy. It has no arguments or effects;
+mutating a returned array cannot change this module's rules or later results.
+
+Module function `validateContract({schema_json,value_json?})` is the shared native
+schema/value validator used by [contract commands](contracts.prompt.md). Both
+arguments are complete JSON text strings, not already rounded JavaScript values.
+Omitting `value_json` checks only the schema; supplying `"null"` checks null.
+This is a native module binding, not an added Runtime entry. Return exactly
+`{schema_problems,value_problems,unproved}`, each an array of
+`{code,pointer,rule}`. Pointers are JSON Pointers relative to the corresponding
+schema/value root; an empty pointer means that root. `schema_problems` retain
+the executable-subset `graph-schema-*` codes; value problems use `invalid-input`;
+unproved entries use `contract-validation-unavailable` and explain the unsupported
+predicate at the affected value pointer (schema pointer when checking only schema).
+Invalid argument types or malformed JSON throw `TypeError` with a finite message
+naming `schema_json` or `value_json`; native callers translate these as local
+contract problems, without leaking an entire document.
+
+Reuse this module's schema-node and concrete-value checks, with the same
+canonical schema positions and keyword vocabulary. Do not validate a synthetic
+Runtime interface or impose its limits or resource object-root rules. A component
+schema may have any supported root type. Schema problems prevent claiming a value
+match. Definite mismatches and uncertainty may coexist; return both without
+turning uncertainty into a definite mismatch. This binding does not change
+ordinary P9 warning/refusal behavior or interface limits admission.
+
+Preserve original numeric tokens and own keys during parsing and validation;
+reuse existing lossless parsing facilities rather than changing JSON through a
+round trip. Use the reference owner's module functions `parseJsonValue`,
+`stringifyJsonValue`, `jsonNumberText` and `jsonValuesEqual` for lossless trees,
+numeric-token access, stable-projection evidence and const/enum/uniqueItems
+literal equality; do not copy its parser or inspect private numeric brands.
+Finite round-trip-stable JSON numbers may use the existing concrete
+checker for type, equality and order, including ordinary decimal bounds and enum
+values. Round-trip-stable means that the original token and the number's shortest
+JSON representation have the same exact mathematical value; spelling alone does
+not distinguish `0.10`, `1e-1` and `0.1`. Never silently round a precision-changing
+raw token to obtain a verdict. Merely declaring a fractional bound is not
+unavailable schema validation.
+
+Where exact comparison, numeric representation or arithmetic cannot be established
+without changing a token's value, report `unproved` for that predicate, not a
+match or invented mismatch. In particular, equality/order involving integers
+outside ±9007199254740991 or precision-changing decimals remains unavailable
+through this binding. For example, const `9007199254740993` against value
+`9007199254740992`, or minimum `0.1` against raw value `0.10000000000000001`,
+returns unproved rather than using a rounded operand. Type-only large-number
+validation may pass if exact token evidence establishes its type. `multipleOf`
+and other numeric arithmetic require exact established evidence; uncertain
+precision/large operands remain unavailable rather than using a floating-point
+tolerance as proof. These limits do not reject otherwise valid JSON numbers.
+
+Portable pattern evidence and three-way oneOf membership follow the existing
+concrete-value owner rules above. Unlike advisory P9, this binding exposes every
+unjudged predicate as `unproved`, even when P9 would emit no warning. A definite
+pattern miss is a value problem here; a nonportable/unjudged pattern is unavailable,
+not a match. Do not count unknown oneOf alternatives as definitely fitting or
+definitely failing. Annotation-only fields do not constrain value membership.
+
 ## Story criteria
 
 Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## Acceptance` / `## Acceptance Criteria` heading (any case, at a line start, `\n` lines only), one numbered list from 1 with continued lines, and the bullet list in the heading section when there is no numbered list. Use Python `splitlines`, `strip` and `split` whitespace rules. The results must equal the engine for the same text.
@@ -216,7 +280,10 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 - [References](contract-refs.prompt.md): required generation and verification
   context for synchronous expansion and provenance; native adapters preserve
-  this module's privacy, snapshot and capture rules.
+  this module's privacy, snapshot and capture rules. Its module functions
+  `parseJsonValue`, `stringifyJsonValue`, `jsonNumberText` and `jsonValuesEqual`
+  are also required generation/verification context and native dependencies for
+  lossless local contract validation, token evidence and literal equality.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [runtime client](runtime-client.prompt.md) calls this module.
 

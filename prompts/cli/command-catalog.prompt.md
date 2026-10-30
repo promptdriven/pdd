@@ -53,9 +53,11 @@ Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sol
 ## Shared contract routes
 
 Catalog `contracts` (stable id `contracts`, local `contracts`) with form
-`pdd contracts`, no operands/options: list shared records, users and Stories made
-stale since their last check. Catalog `contracts.sync` (local `contracts-sync`)
-with form `pdd contracts sync [--write]`, no operands and only flag `--write`.
+`pdd contracts`, no operands, with optional flag `--check`: list shared records,
+users and Stories made stale since their last check. Add the help form
+`pdd contracts --check`: validate shared schemas, agreement, world ownership and
+seed values locally; nonzero means a problem or unavailable validation.
+Catalog `contracts.sync` (local `contracts-sync`) with form `pdd contracts sync [--write]`, no operands and only flag `--write`.
 Help says preview moving copies to references, and apply only with --write.
 Both routes are local, use working files and make no runtime call. Include them
 in root help and completion; do not import the runtime client for parsing/help.

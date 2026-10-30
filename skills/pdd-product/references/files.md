@@ -54,7 +54,13 @@ repository; a reference in a comment or unrelated prose is not PR ownership.
 Each record has a `### record_name` heading and a fenced `json` schema. Schema
 objects name properties, required fields and additionalProperties explicitly.
 `contracts/world.md` has a key table: Key, What it holds, Writer, Readers, How it
-is written. Each key has one writer. State shared refusal and update rules.
+is written, Schema. Each key has one writer and an explicit repository-root
+schema target, for example `contracts/world.md#orders`. Key and Schema cells may
+be plain text or backticked. A key is one exact top-level seed key; Schema names
+the shape of its whole value (an array key needs an array schema). Do not infer
+schema links from names or prose. Identical repeated declarations coalesce;
+conflicting writers or schemas are errors. A declared key may be absent initially,
+but every present seed key needs a declaration. State shared refusal and update rules.
 Put shared starting data in `contracts/seed-world.json`.
 
 For example, phone → server crosses order_in and order_view under

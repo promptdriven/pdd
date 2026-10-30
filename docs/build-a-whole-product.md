@@ -28,6 +28,21 @@ Read the [file formats](../skills/pdd-product/references/files.md) for the map,
 plan tables and contract records. `product/map.md` lists parts, Stories, journeys
 and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
+Each world-table row has one Writer and an explicit Schema target for the whole
+value of its Key, for example `contracts/world.md#orders` for an array of orders.
+A declared key may be absent initially; each present seed key needs a declaration.
+The coffee example adds illustrative world schemas alongside its table; these
+are authored shared shapes, not a proof of how a running part writes data.
+
+Before the plan PR, run `pdd contracts --check`. It checks supported schemas,
+references, eligible inline-copy drift, declared writers and seed values locally,
+with no authentication, runtime slot, server or model call. Exit 0 means the
+local check is complete; 4 identifies a definite problem; 5 means I/O or validation
+is unavailable. Diagnostics name the file, record/key and field. Nonportable
+patterns and numeric predicates outside the local exact range can be unavailable;
+a local result does not prove runtime behavior. Fix or review reported gaps.
+The plan makes no server lint/check or Try call. Each part's first server
+lint/check happens in its feature run once its prompt, Stories and tests exist.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
 needs wait for the implementation PR to merge. Explicit starts show unmet needs

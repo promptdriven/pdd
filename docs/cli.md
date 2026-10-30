@@ -149,7 +149,21 @@ Before sending work, pdd asks whether the runtime has room. During announced mai
 | Command | What it does |
 |---|---|
 | `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no runtime calls |
+| `pdd contracts --check` | Check supported schemas, references, eligible copy drift, world writers and seed values locally; 0 complete, 4 definite problem, 5 unavailable validation or I/O, 2 syntax/no repository |
 | `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+
+`pdd contracts --check` writes nothing and reads no Check history. It cannot be
+combined with `sync` or `--write`. Both world files may be absent; if either
+`contracts/world.md` or `contracts/seed-world.json` exists, both are required.
+The first Key/Writer ownership table needs a Schema column with an explicit
+repository-root contract target per key. A missing initial key is allowed;
+every present seed key needs one schema and one writer. Identical duplicate
+rows coalesce; conflicting mappings/writers fail. Listing and sync are advisory
+and also accept a five-column table without Schema. JSON schema containers are checked
+by their schema leaves, and seed data is never mistaken for schemas. Unclassified
+JSON roles, unjudged patterns and precision that cannot be checked without
+rounding report validation unavailable, with a location. Ordinary finite decimal
+bounds and enum values can be checked locally; uncertainty never produces a false pass.
 
 Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
 The Markdown section has a `### order_in` heading and one JSON code block;
