@@ -27,6 +27,17 @@ const YES_WORDS = /\b(?:yes|approved?|build the code|go ahead|code pr now|contin
 // Try links (/s/<token>/) open a live session; they never go into a PR body. Report links (/r/) stay.
 const redactTry = text => String(text).replace(/https?:\/\/[^\s)<>\]"'`]*?\/s\/[^/\s)<>\]"'`]+(?:\/[^\s)<>\]"'`]*)?/g, '(Try link removed)');
 const ordinary = promisify(execFileCallback);
+function execute(file, args, { cwd, input, ...options } = {}) {
+  if (input === undefined) return ordinary(file, args, { cwd, ...options });
+  return new Promise((resolve, reject) => {
+    const child = execFileCallback(file, args, { cwd, ...options }, (error, stdout, stderr) => {
+      if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); return; }
+      resolve({ stdout, stderr });
+    });
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+    child.stdin.end(input);
+  });
+}
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 // A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
@@ -56,7 +67,7 @@ const looksLikeApproval = text => APPROVAL.test(text) && !CHANGE_WORDS.test(text
 
 function deps(ports = {}) {
   const env = ports.env ?? process.env;
-  const execFile = ports.execFile ?? ((file, args, { cwd }) => ordinary(file, args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
+  const execFile = ports.execFile ?? ((file, args, options = {}) => execute(file, args, { ...options, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }));
   return { ...ports, env, execFile, commandPorts: ports.execFile ? { execFile: ports.execFile } : {}, now: ports.now ?? Date.now,
     isTTY: ports.isTTY ?? Boolean(process.stdin.isTTY && process.stderr.isTTY), say: ports.say ?? (() => {}) };
 }
@@ -567,25 +578,21 @@ async function publishAreaPr(run, area, p, lines, retry) {
   }
   const opted = area.replay_evidence === REPLAY_POLICY;
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
-  const replayBody = join(run.runDir,`pr-${area.name}.md`);
   const markedReplayBody = evidence => {
     const body=prBody({...run,replayEvidence:evidence},area,p.env);
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
     return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
   };
-  try {if (opted) writeFileSync(replayBody,markedReplayBody(run.replayEvidence));}
-  catch(error){return fail([...lines,oneLine(error.message)].join('\n'));}
-  const editReplay = async (file,afterPush=false) => {
+  const editReplay = async (body,afterPush=false) => {
     try {
-      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file',file],{cwd:run.root});
+      const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:body});
       if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr||'gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
     } catch(error) {return fail([...lines,`The code-space PR description could not be updated (${causeOf(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${retry}.`].join('\n'));}
     return null;
   };
   if (existing) {
     if (opted) {
-      const pending = join(run.runDir,`pr-${area.name}-pending.md`);
-      writeFileSync(pending,markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'}));
+      const pending=markedReplayBody({...run.replayEvidence,outcome:'blocked',reason:'Publication pending; source-bound replay status will be refreshed after the push.'});
       const failed=await editReplay(pending);if(failed)return failed;
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
@@ -594,11 +601,10 @@ async function publishAreaPr(run, area, p, lines, retry) {
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
-    if (opted) {const failed=await editReplay(replayBody,true);if(failed)return failed;}
+    if (opted) {const failed=await editReplay(markedReplayBody(run.replayEvidence),true);if(failed)return failed;}
     else if (codePr) {
       try {
-        writeFileSync(replayBody,markedReplayBody());
-        const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file',replayBody],{cwd:run.root});
+        const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:markedReplayBody()});
         if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
       } catch(error) {
         lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${run.testInventory.baseSha} → ${run.testInventory.headSha}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${causeOf(error)}); ${retry}.`);
@@ -608,21 +614,21 @@ async function publishAreaPr(run, area, p, lines, retry) {
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
   }
-  const bodyFile = join(run.runDir, `pr-${area.name}.md`), base = run.prBase ?? run.baseBranch;
+  const base = run.prBase ?? run.baseBranch;
   // PR 1 says "tests" only when it has a test file (0.1.6 tester: a browser-only Story had none).
   const tests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
-  writeFileSync(bodyFile, prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests));
+  const body = prBody(run, area, p.env, label === 'PR 1' ? await draftPrompts(run, p, run.branch, base) : [], tests);
   let intent;
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
-    intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base, bodyFile,
+    intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base,
       title: label === 'PR 1' ? `${title} (${tests ? 'prompt, Story and tests' : 'prompt and Story'})` : label === 'PR 2' ? `${title} (code)` : title }, p.commandPorts);
   } catch (error) {
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
       : `pdd could not prepare ${label} (${causeOf(error)}). Fix it, then ${retry}.`;
     return fail([...lines, why].join('\n'));
   }
-  const outcome = await publishWorkflowPr({ cwd: run.root, intent }, p.commandPorts);
+  const outcome = await publishWorkflowPr({ cwd: run.root, intent, body: `${body}\n<!-- ${intent.marker} -->\n` }, p.commandPorts);
   // GitHub's refusal and a too-long body are certain: their message names the fix. Only a real doubt says "unconfirmed".
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
@@ -817,9 +823,8 @@ async function draftDescription(run, pr1, drafts, p) {
     const body = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body'], { cwd: run.root })).stdout ?? '')).body;
     const old = String(body).split('\n').find(line => line.startsWith('Draft prompts: '));
     if (!old || old === (drafts.length ? draftLine(drafts) : null)) return [];
-    const file = join(run.runDir, `pr-${pr1.stage}-description.md`);
-    writeFileSync(file, drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, ''));
-    await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', file], { cwd: run.root });
+    const nextBody = drafts.length ? body.replace(old, draftLine(drafts)) : body.replace(`\n\n${old}`, '').replace(old, '');
+    await p.execFile('gh', ['pr', 'edit', pr1.url, '--body-file', '-'], { cwd: run.root, input: nextBody });
     return [`pdd updated the PR 1 description: ${drafts.length ? `draft prompts left: ${drafts.join(', ')}` : 'no draft prompts are left'}.`];
   } catch (error) { return [`warning: pdd could not update the PR 1 description (${error.code ?? 'error'}). Its "Draft prompts" line is out of date.`]; }
 }

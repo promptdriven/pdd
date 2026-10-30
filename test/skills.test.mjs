@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,15 +13,19 @@ const AREAS = {
   'pdd-small-change': [['plan', ['scope'], [], 'approve'], ['build', ['change', 'verify', 'formal'], [], 'pr']],
   // 0.1.4 #13: the person tries it and approves before pdd opens PR 1 ("before":"approve").
   'pdd-bug': [['story', ['reproduce', 'prompt-story'], [], 'approve'], ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'],
-    ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
   'pdd-feature': [['story', ['understand', 'visual', 'prompt-story'], ['visual'], 'approve'],
-    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal'], [], 'pr']],
+    ['prompt-pr', ['check', 'try'], ['try'], 'pr', 'ask-code', 'approve'], ['code', ['build', 'verify', 'formal', 'review'], [], 'pr']],
 };
 const ALL_SKILLS = ['pdd-prompting', 'pdd-setup', ...Object.keys(AREAS)];
 // 0.1.7: the size that counts is what one agent loads. The main chat loads SKILL.md; each subagent loads one step file
 // and the RUNBOOK sections it points to. prompt-story alone also loads the 16 KB guide, and it carries the most real-run rules
 // (1.6 KB since the round-2 cli test: a CLI has one program prompt).
-const SKILL_LIMIT = 3072, STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638 };
+// #2595: the verbatim principle and bounded review repairs need 4 KB only in bug/feature.
+// The six-question independent review brief needs 2.25 KB.
+// #2602 / pdd #2610 needs 1.5 KB for the 1501-byte change.md brief.
+const SKILL_LIMIT = 3072, SKILL_LIMITS = { 'pdd-bug': 4096, 'pdd-feature': 4096 };
+const STEP_LIMIT = 1228, STEP_LIMITS = { 'prompt-story': 1638, review: 2304, change: 1536 };
 const frontmatter = text => {
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   assert.ok(match, 'SKILL.md starts with frontmatter');
@@ -78,7 +82,7 @@ test('SKILLS4: workflow skills have version 2 areas, one step file per step, and
       assert.ok(body.includes(`${area}: ${shown} → ${before ? `${before}, then ` : ''}gate: ${gate}`), `${name} lists ${area}`);
     }
     const skillBytes = statSync(join(skills, name, 'SKILL.md')).size;
-    assert.ok(skillBytes <= SKILL_LIMIT, `${name}/SKILL.md is ${skillBytes} bytes`);
+    assert.ok(skillBytes <= (SKILL_LIMITS[name] ?? SKILL_LIMIT), `${name}/SKILL.md is ${skillBytes} bytes`);
     // The total is for information only: no one agent loads every file.
     t.diagnostic(`${name}: ${filesUnder(join(skills, name)).reduce((sum, file) => sum + statSync(file).size, 0)} bytes in all`);
     assert.deepEqual(readdirSync(join(skills, name)).sort(), ['SKILL.md', 'steps', 'workflow.json']);
@@ -467,4 +471,89 @@ test('SKILLS34: verify.md puts the tables first and the commands last in a close
     assert.match(read(`${name}/steps/formal.md`), /Add `## Formal check` to verify.md after the tables, before the `<details>` block/, name);
   }
   for (const name of ['pdd-bug', 'pdd-feature']) assert.ok(read(`${name}/steps/verify.md`).includes('Put the tables first, after a `✗ N vectors fail` line if cases fail.'), name);
+});
+
+// #2595: these are shipped instruction contracts, not runtime enforcement or tests of reviewer judgment.
+const BRAKES_AND_LIGHT = "Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.";
+
+test('SKILLS35: the approved principle is verbatim at the top of all workflow skills and RUNBOOK', () => {
+  for (const name of Object.keys(AREAS)) {
+    const { body } = frontmatter(read(`${name}/SKILL.md`));
+    assert.equal(body.trimStart().split('\n\n')[1], BRAKES_AND_LIGHT, name);
+  }
+  for (const text of [readFileSync(join(root, 'RUNBOOK.md'), 'utf8'), read('pdd-prompting/RUNBOOK.md')])
+    assert.equal(text.split('\n\n')[1], BRAKES_AND_LIGHT);
+});
+
+// Labels and Markdown structure are source checks, not proof of reviewer judgment.
+test('SKILLS36: independent code review asks all six evidence questions without builder context', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const path = `${name}/steps/review.md`;
+    assert.ok(existsSync(join(skills, path)), `${path} must ship before it can be loaded`);
+    const brief = read(path);
+    const questions = [...brief.matchAll(/^(\d)\. /gm)].map(match => Number(match[1]));
+    assert.deepEqual(questions, [1, 2, 3, 4, 5, 6], name);
+    for (const label of ['Defect:', 'Not caught because:', 'Old-code proof:', 'Tests vs base:',
+      'Review: N must-fix', 'Review: no must-fix']) assert.ok(brief.includes(`\`${label}\``), `${name}: ${label}`);
+    assert.match(brief, /`<run folder>\/review\.md`/, name);
+  }
+  assert.equal(read('pdd-bug/steps/review.md'), read('pdd-feature/steps/review.md'));
+});
+
+test('SKILLS37: review repairs are bounded after initial review and exhausted findings reach the PR', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const area = JSON.parse(read(`${name}/workflow.json`)).areas.at(-1);
+    assert.equal(area.name, 'code');
+    assert.deepEqual(area.steps, ['build', 'verify', 'formal', 'review']);
+    assert.equal(area.gate, 'pr');
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /2 repair rounds/, name);
+    assert.match(skill, /`Review:`/, name);
+    assert.ok(existsSync(join(skills, name, 'steps/review.md')), 'review brief exists');
+  }
+  const docs = readFileSync(join(root, 'docs/workflows.md'), 'utf8');
+  for (const label of ['Review: N must-fix', 'Review: no must-fix']) assert.ok(docs.includes(`\`${label}\``), label);
+  assert.match(RUNBOOK(), /`Review:`/);
+});
+
+test('SKILLS38: small-change behavior fixes name the defect, detection gap and both proofs', () => {
+  const scope = read('pdd-small-change/steps/scope.md'), verify = read('pdd-small-change/steps/verify.md');
+  for (const label of ['Defect:', 'Not caught because:']) assert.ok(scope.includes(`\`${label}\``), label);
+  for (const label of ['Proof (defect fixed):', 'Proof (gap closed):', 'Not fixed yet: this helps find the cause', 'Refs #N'])
+    assert.ok(verify.includes(`\`${label}\``), label);
+  assert.match(verify, /verify\.md/);
+});
+
+test('SKILLS40: RUNBOOK review reporting labels live in section 17 and both copies match', () => {
+  const canonical = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
+  assert.equal(canonical, read('pdd-prompting/RUNBOOK.md'));
+  const section = canonical.split(/^## 17\. /m)[1]?.split(/^## /m)[0];
+  assert.ok(section, 'code-space evidence section');
+  for (const label of ['`Review:`', '`verify.md`', 'Formal check', '✗ N vectors fail'])
+    assert.ok(section.includes(label), label);
+});
+
+// #2595 lead repair: intermediate review must not trigger the existing PR gate.
+test('SKILLS41: review completion is held during repairs and released only by the final branch', () => {
+  for (const name of ['pdd-bug', 'pdd-feature']) {
+    const branches = Object.fromEntries([...read(`${name}/SKILL.md`).matchAll(/^  - ([^:]+): (.+)$/gm)]
+      .map(([, label, body]) => [label, body]));
+    assert.ok(branches['Repair pending'], `${name}: repair branch before PR completion`);
+    assert.ok(branches['Final review'], `${name}: final review branch`);
+    const pending = branches['Repair pending'], final = branches['Final review'];
+    assert.match(pending, /must-fixes/);
+    assert.match(pending, /fewer/);
+    assert.match(pending, /\b2\b/);
+    assert.match(pending, /repairs/);
+    assert.match(pending, /do not run `workflow done review`/);
+    assert.match(pending, /fresh build/);
+    assert.match(pending, /must-fix list/);
+    assert.match(final, /clear/);
+    assert.match(final, /\bor\b/);
+    assert.match(final, /\b2\b/);
+    assert.match(final, /repairs/);
+    assert.match(final, /run `workflow done review`/);
+    assert.match(final, /PR 2/);
+    assert.doesNotMatch(pending, /(?:^|; )run `workflow done review`/);
+  }
 });

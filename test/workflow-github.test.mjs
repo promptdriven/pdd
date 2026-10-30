@@ -1,8 +1,8 @@
 import test from 'node:test';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, mkdir, symlink, link, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, reconcileWorkflowPr } from '../src/workflow-github.mjs';
@@ -11,14 +11,14 @@ const headSha = 'a'.repeat(40), mergeSha = 'b'.repeat(40);
 async function fixture(t) {
   const cwd = await mkdtemp(join(tmpdir(), 'pdd-github-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
-  const bodyFile = join(cwd, 'body.md'), calls = [];
+  const calls = [];
   const state = { origin: 'git@github.com:Acme/Project.git', pushOrigin: 'https://github.com/Acme/Project.git',
     dirty: '', branch: 'topic/feature', headSha, count: '1', tracked: false, rows: [], published: false,
-    remoteHead: null,
+    remoteHead: null, body: '<!-- pdd-workflow:run-123:prompt -->\n', input: null,
     issue: { number: 12, html_url: 'https://github.com/Acme/Project/issues/12', title: 'Real issue', body: 'Authored body' } };
   const ports = { async execFile(file, args, options) {
     calls.push({ file, args: [...args], options });
-    assert.deepEqual(options, { cwd });
+    assert.equal(options.cwd, cwd); if (options.input !== undefined) state.input = options.input;
     if (state.intercept) { const result = await state.intercept(file, args); if (result !== undefined) return result; }
     const key = `${file} ${args.join(' ')}`;
     let stdout;
@@ -43,8 +43,8 @@ async function fixture(t) {
     else assert.fail(`Unexpected command: ${key}`);
     return { stdout: file === 'git' && args[0] === 'status' ? stdout : stdout + '\n', stderr: '' };
   } };
-  const input = { cwd, runId: 'run-123', stageId: 'prompt', repository: 'Acme/Project', baseBranch: 'main', bodyFile };
-  return { cwd, bodyFile, calls, state, ports, input, prepare: () => prepareWorkflowPr(input, ports) };
+  const input = { cwd, runId: 'run-123', stageId: 'prompt', repository: 'Acme/Project', baseBranch: 'main' };
+  return { cwd, calls, state, ports, input, prepare: () => prepareWorkflowPr(input, ports), publish: (intent, extra = {}) => publishWorkflowPr({ cwd, intent, body: extra.body ?? state.body, ...(extra.unpublishedOnly === undefined ? {} : { unpublishedOnly: extra.unpublishedOnly }) }, ports) };
 }
 function row(extra = {}) {
   return { number: 42, url: 'https://github.com/Acme/Project/pull/42', state: 'OPEN', headRefName: 'topic/feature',
@@ -85,47 +85,32 @@ test('origin and malformed JSON errors are finite without exposing raw command o
   await assert.rejects(resolveWorkflowIssue({ cwd: f.cwd, issue: 12 }, f.ports), { message: 'workflow_github_json_invalid' });
 });
 
-test('prepare preserves authored body, returns exact committed intent and is marker-idempotent without effects', async t => {
+test('prepare returns the exact committed intent and is idempotent without effects', async t => {
   const f = await fixture(t);
-  await writeFile(f.bodyFile, 'Authored rationale\n');
   const intent = await f.prepare();
-  assert.deepEqual(intent, { repository: 'Acme/Project', runId: 'run-123', stageId: 'prompt', headBranch: 'topic/feature', baseBranch: 'main', headSha, marker: 'pdd-workflow:run-123:prompt', title: 'Implement selected feature', bodyFile: f.bodyFile });
-  const body = await readFile(f.bodyFile, 'utf8');
-  assert.equal(body, 'Authored rationale\n\n<!-- pdd-workflow:run-123:prompt -->\n');
+  assert.deepEqual(intent, { repository: 'Acme/Project', runId: 'run-123', stageId: 'prompt', headBranch: 'topic/feature', baseBranch: 'main', headSha, marker: 'pdd-workflow:run-123:prompt', title: 'Implement selected feature' });
   assert.deepEqual(await f.prepare(), intent);
-  assert.equal(await readFile(f.bodyFile, 'utf8'), body);
   assert.equal(effects(f.calls).length, 0);
 });
 
-test('prepare refuses dirty, base, detached, uncommitted, tracked-body and conflicting-marker inputs', async t => {
+test('prepare refuses dirty, base, detached and uncommitted inputs', async t => {
   const f = await fixture(t);
-  for (const [field, value] of [['dirty', ' M src/app.mjs\0'], ['dirty', '?? unrelated\0'], ['branch', 'main'], ['branch', ''], ['headSha', ''], ['count', '0'], ['tracked', true]]) {
+  for (const [field, value] of [['dirty', ' M src/app.mjs\0'], ['dirty', '?? unrelated\0'], ['branch', 'main'], ['branch', ''], ['headSha', ''], ['count', '0']]) {
     const old = f.state[field]; f.state[field] = value;
     await assert.rejects(f.prepare(), /workflow_github_/);
     f.state[field] = old;
   }
-  for (const body of ['<!-- pdd-workflow:other:prompt -->', '<!-- pdd-workflow:run-123:prompt -->\n<!-- pdd-workflow:run-123:prompt -->', '<!-- pdd-workflow:run-123:prompt -->\npdd-workflow:???']) {
-    await writeFile(f.bodyFile, body);
-    await assert.rejects(f.prepare(), /marker_mismatch/);
-  }
   assert.equal(effects(f.calls).length, 0);
-});
-
-test('only the declared untracked body metadata may appear in clean status', async t => {
-  const f = await fixture(t); f.state.dirty = '?? body.md\0';
-  assert.equal((await f.prepare()).headSha, headSha);
-  f.state.dirty += '?? extra.md\0';
-  await assert.rejects(f.prepare(), /worktree_dirty/);
 });
 
 test('first publication pushes saved SHA once, creates once, and trusts readback rather than create stdout', async t => {
   const f = await fixture(t), intent = await f.prepare();
   f.calls.length = 0;
-  const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const result = await f.publish(intent);
   assert.equal(result.state, 'open'); assert.equal(result.pr.number, 42); assert.equal(result.pr.mergeCommit, null);
   assert.deepEqual(effects(f.calls).map(c => [c.file, c.args]), [
     ['git', ['push', 'origin', `${headSha}:refs/heads/topic/feature`]],
-    ['gh', ['pr', 'create', '--repo', 'Acme/Project', '--head', 'topic/feature', '--base', 'main', '--title', intent.title, '--body-file', f.bodyFile]]
+    ['gh', ['pr', 'create', '--repo', 'Acme/Project', '--head', 'topic/feature', '--base', 'main', '--title', intent.title, '--body-file', '-']]
   ]);
   const createIndex = f.calls.findIndex(c => c.args[1] === 'create');
   assert(f.calls.slice(createIndex + 1).some(c => c.args[1] === 'list'));
@@ -134,7 +119,7 @@ test('first publication pushes saved SHA once, creates once, and trusts readback
 test('existing exact PR is recovered without push, create, or body I/O', async t => {
   const f = await fixture(t), intent = await f.prepare(); f.state.rows = [row()]; f.calls.length = 0;
   const ports = { ...f.ports, readFile() { assert.fail('no body read'); }, writeFile() { assert.fail('no write'); } };
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, ports)).state, 'open');
+  assert.equal((await f.publish(intent)).state, 'open');
   assert.equal(effects(f.calls).length, 0);
 });
 
@@ -142,7 +127,7 @@ test('changed local source and foreign push URL fail before effects', async t =>
   const f = await fixture(t), intent = await f.prepare();
   for (const [field, value] of [['headSha', 'd'.repeat(40)], ['branch', 'another'], ['pushOrigin', 'git@github.com:Other/Project.git'], ['pushOrigin', 'https://github.com/Acme/Project.git\nhttps://github.com/Other/Project.git']]) {
     const old = f.state[field]; f.state[field] = value;
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'failed');
+    assert.equal((await f.publish(intent)).state, 'failed');
     f.state[field] = old;
   }
   assert.equal(effects(f.calls).length, 0);
@@ -153,7 +138,7 @@ for (const interrupted of ['push', 'create']) test(`interrupted ${interrupted} r
   f.state.intercept = (file, args) => {
     if (interrupted === 'push' && file === 'git' && args[0] === 'push' || interrupted === 'create' && file === 'gh' && args[1] === 'create') throw new Error('connection lost after unknown effect');
   };
-  const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const result = await f.publish(intent);
   assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
   assert.equal(effects(f.calls).length, interrupted === 'push' ? 1 : 2);
   f.calls.length = 0;
@@ -167,10 +152,10 @@ for (const interrupted of ['push', 'create']) test(`interrupted ${interrupted} r
 test('nonzero push stops before create; successful create with no actual readback remains unknown', async t => {
   const f = await fixture(t), intent = await f.prepare();
   f.state.intercept = (file, args) => file === 'git' && args[0] === 'push' ? { code: 1, stdout: '' } : undefined;
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'recovery_required');
+  assert.equal((await f.publish(intent)).state, 'recovery_required');
   assert.equal(f.calls.filter(c => c.args[1] === 'create').length, 0);
   f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { stdout: 'https://github.com/Acme/Project/pull/42' } : undefined;
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'recovery_required');
+  assert.equal((await f.publish(intent)).state, 'recovery_required');
 });
 
 test('read-only recovery refuses missing, duplicate, mismatched or forked originals', async t => {
@@ -237,11 +222,10 @@ test('real disposable Git checkout enforces topic commits, dirt and root-gitdir 
   await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git');
   await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
   await git('switch', '-c', 'topic/real');
-  const bodyFile = join(cwd, '.git', 'workflow-body.md');
-  const input = { cwd, runId: 'real-run', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main', bodyFile };
+  const input = { cwd, runId: 'real-run', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main' };
   const calls = [];
   const ports = { async execFile(file, args, options) {
-    assert.deepEqual(options, { cwd }); calls.push([file, args]);
+    assert.equal(options.cwd, cwd); if (options.input !== undefined) state.input = options.input; calls.push([file, args]);
     if (file === 'git') {
       assert.notEqual(args[0], 'push', 'no real push allowed');
       return execute(file, args, { ...options, encoding: 'utf8' });
@@ -258,19 +242,38 @@ test('real disposable Git checkout enforces topic commits, dirt and root-gitdir 
   assert.equal(intent.headBranch, 'topic/real');
   assert.equal(intent.title, 'Actual committed topic');
   assert.equal((await git('status', '--porcelain=v1')).stdout, '');
-  assert.match(await readFile(bodyFile, 'utf8'), /<!-- pdd-workflow:real-run:code -->/);
+  const body = '<!-- pdd-workflow:real-run:code -->\n';
   await git('switch', '--detach');
   await assert.rejects(prepareWorkflowPr(input, ports), /command_failed/);
   assert(calls.every(([file, args]) => file !== 'gh' || args[0] === 'repo'));
 });
 
 
+test('real Git checkout reached through a symlink prepares without a body file', async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'pdd-github-symlink-')), real = join(parent, 'real-repo'), alias = join(parent, 'alias-name');
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const execute = promisify(execFile), git = (...args) => execute('git', args, { cwd: alias, encoding: 'utf8' });
+  await mkdir(real); await symlink(real, alias, 'dir');
+  await git('init', '--initial-branch=main'); await git('config', 'user.name', 'Disposable test'); await git('config', 'user.email', 'test@example.invalid');
+  await writeFile(join(alias, 'source.txt'), 'base\n'); await git('add', 'source.txt'); await git('commit', '-m', 'Base');
+  await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git'); await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  await git('switch', '-c', 'topic/symlink'); await writeFile(join(alias, 'source.txt'), 'topic\n'); await git('add', 'source.txt'); await git('commit', '-m', 'Symlink topic');
+  const ports = { async execFile(file, args, options) {
+    assert.equal(options.cwd, alias);
+    if (file === 'git') return execute(file, args, { cwd: alias, encoding: 'utf8' });
+    assert.deepEqual(args, ['repo', 'view', 'Acme/Project', '--json', 'nameWithOwner,defaultBranchRef,url']);
+    return { stdout: JSON.stringify({ nameWithOwner: 'Acme/Project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/Acme/Project' }) };
+  } };
+  const intent = await prepareWorkflowPr({ cwd: alias, runId: 'symlink-run', stageId: 'prompt', repository: 'Acme/Project', baseBranch: 'main' }, ports);
+  assert.equal(intent.headBranch, 'topic/symlink'); assert.equal(intent.marker, 'pdd-workflow:symlink-run:prompt');
+});
+
 test('rejected push with numeric zero is unknown and cannot continue to create or resend', async t => {
   const f = await fixture(t), intent = await f.prepare(); f.calls.length = 0;
   f.state.intercept = (file, args) => {
     if (file === 'git' && args[0] === 'push') throw Object.assign(new Error('unknown push'), { code: 0, stdout: '' });
   };
-  const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const result = await f.publish(intent);
   assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
   assert.equal(f.calls.filter(c => c.file === 'git' && c.args[0] === 'push').length, 1);
   assert.equal(f.calls.filter(c => c.file === 'gh' && c.args[1] === 'create').length, 0);
@@ -282,40 +285,6 @@ test('rejected push with numeric zero is unknown and cannot continue to create o
   assert.equal(effects(f.calls).length, 0);
 });
 
-for (const alias of ['file symlink', 'ancestor symlink', 'hard link']) test(`real Git metadata ${alias} refuses before body write and preserves tracked bytes`, async t => {
-  const cwd = await mkdtemp(join(tmpdir(), 'pdd-github-alias-'));
-  t.after(() => rm(cwd, { recursive: true, force: true }));
-  const execute = promisify(execFile), git = (...args) => execute('git', args, { cwd, encoding: 'utf8' });
-  await git('init', '--initial-branch=main');
-  await git('config', 'user.name', 'Disposable test'); await git('config', 'user.email', 'test@example.invalid');
-  await mkdir(join(cwd, 'src'));
-  const target = join(cwd, 'src', 'source.txt'), original = 'Committed source must stay exact\n';
-  await writeFile(target, original); await git('add', 'src/source.txt'); await git('commit', '-m', 'Base source');
-  await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git');
-  await git('update-ref', 'refs/remotes/origin/main', 'HEAD'); await git('switch', '-c', 'topic/alias');
-  await git('commit', '--allow-empty', '-m', 'Committed topic');
-  let bodyFile = join(cwd, '.git', 'body.md');
-  if (alias === 'file symlink') await symlink(target, bodyFile);
-  else if (alias === 'hard link') await link(target, bodyFile);
-  else {
-    await symlink(join(cwd, 'src'), join(cwd, '.git', 'body-dir'), 'dir');
-    bodyFile = join(cwd, '.git', 'body-dir', 'source.txt');
-  }
-  assert.equal((await git('status', '--porcelain=v1')).stdout, '');
-  const calls = []; let writes = 0;
-  const ports = { async execFile(file, args, options) {
-    calls.push({ file, args }); assert.deepEqual(options, { cwd });
-    if (file === 'git') { assert.notEqual(args[0], 'push'); return execute(file, args, { ...options, encoding: 'utf8' }); }
-    assert.deepEqual(args, ['repo', 'view', 'Acme/Project', '--json', 'nameWithOwner,defaultBranchRef,url']);
-    return { stdout: JSON.stringify({ nameWithOwner: 'Acme/Project', defaultBranchRef: { name: 'main' }, url: 'https://github.com/Acme/Project' }) };
-  }, async writeFile(...args) { writes++; return writeFile(...args); } };
-  await assert.rejects(prepareWorkflowPr({ cwd, runId: 'alias-run', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main', bodyFile }, ports), /workflow_github_body_unsafe/);
-  assert.equal(writes, 0); assert.equal(effects(calls).length, 0);
-  assert.equal(await readFile(target, 'utf8'), original);
-  assert.equal((await git('status', '--porcelain=v1')).stdout, '');
-});
-
-
 test('explicit unpublished-only recovery proves both absences and publishes the unchanged original once', async t => {
   const f = await fixture(t), intent = await f.prepare(), original = JSON.stringify(intent);
   f.calls.length = 0;
@@ -323,7 +292,7 @@ test('explicit unpublished-only recovery proves both absences and publishes the 
   assert.equal(effects(f.calls).length, 0);
   assert(!f.calls.some(c => c.args[0] === 'ls-remote'));
   f.calls.length = 0;
-  const actual = await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports);
+  const actual = await f.publish(intent, { unpublishedOnly: true });
   assert.equal(actual.state, 'open'); assert.equal(actual.pr.headSha, intent.headSha);
   assert.equal(JSON.stringify(intent), original);
   const remote = f.calls.findIndex(c => c.args[0] === 'ls-remote'), push = f.calls.findIndex(c => c.args[0] === 'push');
@@ -351,7 +320,7 @@ test('unpublished-only present or unconfirmed remote head refuses all publicatio
       }
     };
     f.calls.length = 0;
-    const actual = await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports);
+    const actual = await f.publish(intent, { unpublishedOnly: true });
     assert.equal(actual.state, 'recovery_required'); assert.equal(actual.pr, null);
     assert.equal(effects(f.calls).length, 0);
   }
@@ -362,46 +331,44 @@ test('unpublished-only any existing PR or uncertain original lookup stays inspec
   for (const rows of [[row()], [row({ state: 'CLOSED' })], [row({ state: 'MERGED', mergeCommit: { oid: mergeSha } })],
     [row({ headRefOid: 'd'.repeat(40) })], [row(), row({ number: 43 })], Array.from({ length: 100 }, () => row())]) {
     f.state.rows = rows; f.calls.length = 0;
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+    assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
     assert.equal(effects(f.calls).length, 0); assert(!f.calls.some(c => c.args[0] === 'ls-remote'));
   }
   for (const stdout of ['bad JSON', '{}']) {
     f.state.intercept = (file, args) => file === 'gh' && args[1] === 'list' ? { stdout } : undefined;
     f.calls.length = 0;
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+    assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
     assert.equal(effects(f.calls).length, 0);
   }
 });
 
 test('unpublished-only rechecks saved source, repository and marker before effects', async t => {
-  const f = await fixture(t), intent = await f.prepare(), body = await readFile(f.bodyFile, 'utf8');
+  const f = await fixture(t), intent = await f.prepare(), body = f.state.body;
   for (const change of [{ branch: 'other' }, { headSha: 'd'.repeat(40) }, { dirty: ' M source.mjs\0' },
     { pushOrigin: 'https://github.com/Other/Project.git' }, { pushOrigin: 'https://github.com/Acme/Project.git\nhttps://github.com/Other/Project.git' }]) {
     const before = { ...f.state }; Object.assign(f.state, change); f.calls.length = 0;
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+    assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
     assert.equal(effects(f.calls).length, 0); Object.assign(f.state, before);
   }
-  await writeFile(f.bodyFile, body.replace(intent.marker, 'pdd-workflow:other:stage'));
   f.calls.length = 0;
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+  assert.equal((await f.publish(intent, { unpublishedOnly: true, body: body.replace(intent.marker, 'pdd-workflow:other:stage') })).state, 'recovery_required');
   assert.equal(effects(f.calls).length, 0);
 });
 
 test('unpublished-only refuses body or source changes while remote absence read waits', async t => {
-  const f = await fixture(t), intent = await f.prepare(), body = await readFile(f.bodyFile, 'utf8');
-  for (const kind of ['body', 'head', 'dirty', 'origin']) {
+  const f = await fixture(t), intent = await f.prepare(), body = f.state.body;
+  for (const kind of ['head', 'dirty', 'origin']) {
     f.state.headSha = headSha; f.state.dirty = ''; f.state.origin = 'git@github.com:Acme/Project.git';
-    await writeFile(f.bodyFile, body); f.calls.length = 0;
+    f.calls.length = 0;
     f.state.intercept = async (file, args) => {
       if (file === 'git' && args[0] === 'ls-remote') {
-        if (kind === 'body') await writeFile(f.bodyFile, 'Changed authored text\n' + body);
         if (kind === 'head') f.state.headSha = 'd'.repeat(40);
         if (kind === 'dirty') f.state.dirty = ' M source.mjs\0';
         if (kind === 'origin') f.state.origin = 'https://github.com/Other/Project.git';
         return { stdout: '', code: 2 };
       }
     };
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+    assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
     assert.equal(effects(f.calls).length, 0);
   }
 });
@@ -416,11 +383,11 @@ for (const operation of ['push', 'create']) test(`unpublished-only uncertain ${o
     }
     if (file === 'gh' && args[1] === 'create' && operation === 'create') throw Object.assign(new Error('lost create reply'), { code: 'ETIMEDOUT' });
   };
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+  assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
   assert.equal(effects(f.calls).length, operation === 'push' ? 1 : 2);
   f.state.intercept = undefined; f.calls.length = 0;
   assert.equal((await reconcileWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'recovery_required');
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly: true }, f.ports)).state, 'recovery_required');
+  assert.equal((await f.publish(intent, { unpublishedOnly: true })).state, 'recovery_required');
   assert.equal(effects(f.calls).length, 0);
   f.state.rows = [row()];
   assert.equal((await reconcileWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'open');
@@ -431,7 +398,7 @@ test('unpublished-only rejects nonboolean mode without effects', async t => {
   const f = await fixture(t), intent = await f.prepare();
   f.calls.length = 0;
   for (const unpublishedOnly of [null, 'true', 1, {}])
-    assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent, unpublishedOnly }, f.ports)).state, 'failed');
+    assert.equal((await f.publish(intent, { unpublishedOnly })).state, 'failed');
   assert.equal(f.calls.length, 0);
 });
 
@@ -445,11 +412,13 @@ test('real local Git proves absent remote branch, recovers one original publicat
   await git('init', '--bare', remote); await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git');
   await git('update-ref', 'refs/remotes/origin/main', 'HEAD'); await git('switch', '-c', 'topic/real-recovery');
   await writeFile(join(cwd, 'source.txt'), 'Committed actual source\n'); await git('add', 'source.txt'); await git('commit', '-m', 'Actual topic');
-  const actualSha = (await git('rev-parse', 'HEAD')).stdout.trim(), calls = []; let rows = [];
+  const actualSha = (await git('rev-parse', 'HEAD')).stdout.trim(), calls = []; let rows = [], pushed = false;
   const ports = { async execFile(file, args, options) {
-    assert.deepEqual(options, { cwd }); calls.push({ file, args: [...args] });
+    assert.equal(options.cwd, cwd); calls.push({ file, args: [...args] });
     if (file === 'git') {
-      if (['push', 'ls-remote'].includes(args[0])) {
+      if (args[0] === 'push') { pushed = true; const localArgs = args.map((arg, i) => arg === 'origin' ? remote : arg); return execute('git', localArgs, { cwd, encoding: 'utf8' }); }
+      if (args[0] === 'ls-remote' && pushed) { const localArgs = args.map((arg, i) => arg === 'origin' ? remote : arg); return execute('git', localArgs, { cwd, encoding: 'utf8' }); }
+      if (args[0] === 'ls-remote') {
         const localArgs = args.map((arg, i) => arg === 'origin' && i > 0 ? remote : arg);
         return execute('git', localArgs, { cwd, encoding: 'utf8' });
       }
@@ -461,20 +430,44 @@ test('real local Git proves absent remote branch, recovers one original publicat
     // Simulate a lost create acknowledgement AFTER a real local push, never any live GitHub request.
     throw Object.assign(new Error('lost create reply'), { code: 'ETIMEDOUT' });
   } };
-  const bodyFile = join(cwd, '.git', 'pr.md');
-  const intent = await prepareWorkflowPr({ cwd, runId: 'real-original', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main', bodyFile }, ports);
-  const saved = JSON.stringify(intent), body = await readFile(bodyFile, 'utf8'); calls.length = 0;
-  assert.equal((await publishWorkflowPr({ cwd, intent, unpublishedOnly: true }, ports)).state, 'recovery_required');
+  const intent = await prepareWorkflowPr({ cwd, runId: 'real-original', stageId: 'code', repository: 'Acme/Project', baseBranch: 'main' }, ports);
+  const saved = JSON.stringify(intent), body = `<!-- ${intent.marker} -->\n`; calls.length = 0;
+  assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
   assert.equal(effects(calls).length, 2);
-  assert.equal((await git('ls-remote', remote, 'refs/heads/topic/real-recovery')).stdout.trim(), `${actualSha}\trefs/heads/topic/real-recovery`);
+  assert.deepEqual(calls.find(c => c.file === 'git' && c.args[0] === 'push').args, ['push', 'origin', `${actualSha}:refs/heads/${intent.headBranch}`]);
+  assert.deepEqual(calls.find(c => c.file === 'git' && c.args[0] === 'ls-remote').args, ['ls-remote', '--exit-code', '--refs', 'origin', `refs/heads/${intent.headBranch}`]);
   calls.length = 0;
-  assert.equal((await publishWorkflowPr({ cwd, intent, unpublishedOnly: true }, ports)).state, 'recovery_required');
+  assert.equal((await publishWorkflowPr({ cwd, intent, body, unpublishedOnly: true }, ports)).state, 'recovery_required');
   assert.equal(effects(calls).length, 0);
   rows = [row({ headRefName: intent.headBranch, headRefOid: actualSha, body })];
   assert.equal((await reconcileWorkflowPr({ cwd, intent }, ports)).state, 'open');
   assert.equal(effects(calls).length, 0); assert.equal(JSON.stringify(intent), saved);
-  assert.equal(await readFile(bodyFile, 'utf8'), body);
   assert.equal((await git('status', '--porcelain=v1')).stdout, '');
+});
+
+test('an early stdin failure becomes recovery_required without an unhandled EPIPE', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'pdd-gh-epipe-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const cwd = join(directory, 'repo'), remote = join(directory, 'remote.git'), bin = join(directory, 'bin');
+  await mkdir(cwd); await mkdir(bin);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const gitShim = join(bin, 'git');
+  await writeFile(gitShim, `#!/bin/sh\nif [ "$1" = remote ] && [ "$2" = get-url ]; then\n  if [ "$3" = --push ] || [ "$4" = --push ]; then echo "$PDD_PUSH_URL"; else echo "https://github.com/Acme/Project.git"; fi; exit 0; fi\nif [ "$1" = ls-remote ]; then exec ${realGit} ls-remote "$PDD_REMOTE" "${'refs/heads/topic/epipe'}"; fi\nif [ "$1" = push ]; then exit 0; fi\nexec ${realGit} "$@"\n`); await chmod(gitShim, 0o755);
+  await writeFile(join(bin, 'gh'), `#!/bin/sh\nif [ "$1" = repo ]; then echo '{"nameWithOwner":"Acme/Project","defaultBranchRef":{"name":"main"},"url":"https://github.com/Acme/Project"}'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = list ]; then echo '[]'; exit 0; fi\nif [ "$1" = pr ] && [ "$2" = create ]; then exec 0<&-; : > "$PDD_READY"; while [ ! -f "$PDD_GO" ]; do sleep 0.01; done; kill -KILL $$; fi\nexit 1\n`); await chmod(join(bin, 'gh'), 0o755);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_REMOTE: remote, PDD_PUSH_URL: 'https://github.com/Acme/Project.git' };
+  const git = (...args) => promisify(execFile)('git', args, { cwd, env, encoding: 'utf8' });
+  await git('init', '--initial-branch=main'); await git('config', 'user.name', 'Test'); await git('config', 'user.email', 'test@example.invalid'); await git('commit', '--allow-empty', '-m', 'Base'); await git('init', '--bare', remote); await git('remote', 'add', 'origin', 'https://github.com/Acme/Project.git'); await git('update-ref', 'refs/remotes/origin/main', 'HEAD'); await git('switch', '-c', 'topic/epipe'); await git('commit', '--allow-empty', '-m', 'Topic');
+  const oldPath = process.env.PATH, oldRemote = process.env.PDD_REMOTE, oldPush = process.env.PDD_PUSH_URL, oldReady = process.env.PDD_READY, oldGo = process.env.PDD_GO; process.env.PATH = `${bin}:${oldPath}`; process.env.PDD_REMOTE = remote; process.env.PDD_PUSH_URL = 'https://github.com/Acme/Project.git';
+  t.after(() => { process.env.PATH = oldPath; process.env.PDD_REMOTE = oldRemote; process.env.PDD_PUSH_URL = oldPush; process.env.PDD_READY = oldReady; process.env.PDD_GO = oldGo; });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ready = join(directory, `ready-${attempt}`), go = join(directory, `go-${attempt}`); process.env.PDD_READY = ready; process.env.PDD_GO = go;
+    const intent = await prepareWorkflowPr({ cwd, runId: `run-${attempt}`, stageId: 'prompt', repository: 'Acme/Project', baseBranch: 'main' }, undefined);
+    const publishing = publishWorkflowPr({ cwd, intent, body: `<!-- ${intent.marker} -->\n${'😀'.repeat(65_000)}` }, undefined);
+    for (;;) { try { await readFile(ready); break; } catch { await new Promise(resolve => setTimeout(resolve, 5)); } }
+    await writeFile(go, 'go\n');
+    const result = await publishing;
+    assert.equal(result.state, 'recovery_required'); assert.equal(result.pr, null);
+  }
 });
 
 // Wrong (0.1.7 tester, #2518): a 105,489-character body was pushed, GitHub refused it, and pdd said only "unconfirmed".
@@ -482,12 +475,11 @@ test('PRBODY1: a body over 65,536 characters (code points, marker included) is r
   const f = await fixture(t), intent = await f.prepare(), marker = `<!-- ${intent.marker} -->\n`;
   // "é" is one character but two UTF-8 bytes: GitHub counts characters.
   const sized = n => 'é'.repeat(n - [...marker].length - 1) + '\n' + marker;
-  await writeFile(f.bodyFile, sized(65_537)); f.calls.length = 0;
-  const refused = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  f.calls.length = 0;
+  const refused = await f.publish(intent, { body: sized(65_537) });
   assert.equal(refused.state, 'failed'); assert.equal(effects(f.calls).length, 0);
   assert.equal(refused.message, 'The PR description has 65,537 characters. GitHub accepts at most 65,536. Nothing was pushed. Make it shorter, then try again.');
-  await writeFile(f.bodyFile, sized(65_536));
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'open');
+  assert.equal((await f.publish(intent, { body: sized(65_536) })).state, 'open');
 });
 
 test('PRBODY2: GitHub\'s own refusal after the push names the cause and the fix; the retry creates without a second push', async t => {
@@ -496,12 +488,12 @@ test('PRBODY2: GitHub\'s own refusal after the push names the cause and the fix;
   // gh's exact stderr from the real run.
   const stderr = 'pull request create failed: GraphQL: Body is too long (maximum is 65536 characters) (createPullRequest)\n';
   f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined;
-  const refused = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const refused = await f.publish(intent);
   assert.equal(refused.state, 'rejected'); assert.equal(refused.pr, null);
   assert.equal(refused.message, 'GitHub refused to open the PR: its description is too long (GitHub\'s limit is 65,536 characters). The branch is pushed; no PR was opened. Make the PR description shorter, then try again.');
   assert.deepEqual(kinds(), ['push', 'create']);
   f.state.intercept = null; f.calls.length = 0;
-  assert.equal((await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports)).state, 'open');
+  assert.equal((await f.publish(intent)).state, 'open');
   assert.deepEqual(kinds(), ['create']);
 });
 
@@ -509,11 +501,11 @@ test('PRBODY3: other GitHub refusals keep GitHub\'s reason; a lost create stays 
   const f = await fixture(t), intent = await f.prepare(), token = `ghp_${'x'.repeat(36)}`;
   const failCreate = stderr => { f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined; };
   failCreate('Creating pull request for topic/feature into main in Acme/Project\n\npull request create failed: GraphQL: No commits between main and topic/feature (createPullRequest)\n');
-  const other = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const other = await f.publish(intent);
   assert.equal(other.state, 'rejected');
   assert.equal(other.message, 'GitHub refused to open the PR: No commits between main and topic/feature. The branch is pushed; no PR was opened. Fix what GitHub names, then try again.');
   failCreate(`Creating pull request for topic/feature into main in Acme/Project\nPost "https://api.github.com/graphql": read: connection reset by peer (Authorization: token ${token})\n`);
-  const lost = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+  const lost = await f.publish(intent);
   assert.equal(lost.state, 'recovery_required');
   assert.match(lost.message, /^PR creation is unconfirmed \(gh: Post "https:\/\/api\.github\.com\/graphql": read: connection reset by peer/);
   assert.ok(!lost.message.includes(token), lost.message);
@@ -533,7 +525,7 @@ test('PRBODY6: known refusals and uncertain gh diagnostics redact private paths 
   ]) {
     const f = await fixture(t), intent = await f.prepare();
     f.state.intercept = (file, args) => file === 'gh' && args[1] === 'create' ? { code: 1, stdout: '', stderr } : undefined;
-    const result = await publishWorkflowPr({ cwd: f.cwd, intent }, f.ports);
+    const result = await f.publish(intent);
     assert.equal(result.state, state); assert.ok(result.message.includes(reason));
     assert.doesNotMatch(result.message, /alice|private-client|private-report|private-share|\/home\/|\/Users\//);
     assert.match(result.message, /<local path>/);

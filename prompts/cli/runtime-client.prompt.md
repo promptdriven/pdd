@@ -241,6 +241,10 @@ module. No user configuration, model, global agent settings or login is changed.
 
 Use [runtime output step time limits](runtime-output.prompt.md#step-time-limits) for check answers, saved GET-only reads, Try setup refusals and terminal/HTTP door call refusals. Supply authored step IDs when available. Print its step name, reported minutes, stopped message and small-step advice instead of a failed expectation. Preserve unknown execution, IDs, calls and report links; never replay it automatically. A Try setup time refusal must be displayed before the generic unknown-setup path and must not claim zero AI calls when the receipt says otherwise. Door failures, including CLI/HTTP Try setup, keep wrapper exit125 and the same specific timeout guidance and known usage. The hosted Try page's own runtime action UI remains server-owned.
 
+## Explain failed checks
+
+Pass authored step IDs and short criterion text into runtime output. Preserve a failed check's runtime-contract `diagnosis`, and preserve the failed row's `why`, `who` and `next_step` for text and JSON only for failed state; use the first failed check diagnosis when the run-level fields are empty. The fallback is person-first: `A person decides expected values. The agent may propose a change, and never makes it.` For target `error` with actual `{"missing":true}`, display `got no error (a normal result)` only when the step has a result and no error, or diagnosis kind `no-error`/`needs-tool`; otherwise keep the missing object. Use the authored step ID when the report omits it.
+
 For a connected Try guide, report each newly handled saved case’s id/name/Story/result through the optional private context.onAgentCaseSaved callback after addSavedCase returns. Only successful “added to …” outcomes mark guide memory saved; refusals remain refusals. The callback does not change file selection, criteria, append behavior or save authority, and never receives raw saved-test data. A callback exception cannot undo a saved case or prevent collection of later cases.
 
 ## Read one call and recover an interrupted command
