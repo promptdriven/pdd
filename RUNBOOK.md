@@ -155,6 +155,8 @@ and all Runtime checks stay in force.
 
 ## 5. Saved data
 
+The AI cannot compute a hash. When the program must build or verify a SHA-256 or other digest, declare a `compute` resource with `hash_json` or `hash_utf8`, or keep that criterion in native tests. See the [record-id example in §21](#verify-a-record-id).
+
 Declare the data as a resource in the interface. The prose names each operation: "Read the tasks once with
 `store.load` and the key `todos`." This is the full `todo-cli` resource. `TASKS` is the list schema of the first
 line: write it out in full in all 3 places (`$ref` is not allowed). A missing key reads as `null`, so `load` uses `oneOf`.
@@ -803,6 +805,24 @@ The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The de
 ```
 
 Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptdriven.ai/r/5b26a5ee-1b45-4a79-beb6-ae1dd4c891a3).
+
+### Verify a record id
+
+For a synthetic record with `text` and `id`, `verify(record)` returns `{"valid":boolean}`. Strip `id`, call `compute.hash_json` with `{"value":{"text":record.text}}`, then compare the returned lowercase SHA-256 with the supplied `id`. Add this `resources` entry to the prompt's Runtime interface:
+
+```json
+{"resources":[{"name":"compute","kind":"compute","access":"read","operations":[{"name":"hash_json","access":"read","arguments_schema":{"type":"object","properties":{"value":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}},"required":["value"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}]}]}
+```
+
+Add this `simulation` entry to the scenario:
+
+```json
+{"simulation":{"compute.hash_json":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"}}}
+```
+
+`hash_json` hashes the runtime's JCS-style canonical JSON (sorted keys, compact, its own number format). It can differ from an application's serializer, for example with floats or non-ASCII keys. Use `hash_utf8` for exact application-produced UTF-8 bytes; native tests must prove the application's bytes.
+
+A scratch `verify(record)` with inline Python `hashlib` and no compute argument was accepted by zero-call server lint with this declaration. Its inventory reported `1 of 1 modules bound`; the native module was absent from the upload manifest. Preserve the native signature: this declares deterministic compute for the prompt. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) establishes declared executable prompt reachability, not execution of native hashing or serializer equivalence. Native tests own those obligations; lint is not a behavior pass.
 
 ### Inject a fixed-answer callback
 
