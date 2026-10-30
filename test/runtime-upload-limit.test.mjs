@@ -17,8 +17,8 @@ for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1
       rmSync(join(repo, 'tests/unknown-item.json'));
       for (let i = 1; i < 20; i++) writeFileSync(join(repo, `tests/order-${i}.json`), bytes);
     });
-    const firstWindow = gate(), nextPost = gate(), terminal = gate(), releaseAll = gate();
-    const replies = [], requests = []; let open = 0, peak = 0, reads = 0, firstReads = 0;
+    const firstWindow = gate(), nextPost = gate(), readStarted = gate(), terminal = gate(), releaseAll = gate();
+    const replies = [], requests = []; let open = 0, peak = 0, reads = 0;
     const fake = await fakeRuntime(t, (entry, f) => {
       if (entry.command === 'check') return { status: 202, json: f.check(entry.request.requestId, 'queued') };
       if (entry.method === 'GET') return { status: 200, json: f.check(entry.url.split('/').at(-1)) };
@@ -38,7 +38,7 @@ for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1
           open--; return globalThis.fetch(url, init);
         }
         if (new URL(url).pathname.startsWith('/v1/runs/')) {
-          reads++; if (requests.length <= limit) firstReads++;
+          reads++; readStarted.release();
           await terminal.promise;
         }
         return globalThis.fetch(url, init);
@@ -53,12 +53,16 @@ for (const [raw, limit, warnings] of [[undefined, 8, 0], ['2', 2, 0], ['0', 8, 1
       heldCount = requests.length;
       replies[0].release();
       await watchdog(nextPost.promise);
-      afterReply = { count: requests.length, reads, firstReads };
+      // GET may start before or after the replacement POST; both must progress
+      // while every other POST reply and every terminal GET reply stays held.
+      await watchdog(readStarted.promise);
+      afterReply = { count: requests.length, reads };
     } finally {
       releaseAll.release(); terminal.release(); result = await running;
     }
     assert.equal(heldCount, limit, 'unanswered POSTs alone fill the upload window');
     assert.equal(afterReply.count, limit + 1, 'one answered POST permits the next upload while jobs have no terminal reply');
+    assert.ok(afterReply.reads > 0, 'GET reads progress while uploads and terminal job replies remain held');
     assert.equal(result, 0, ports.stderr.text + ports.stdout.text);
     assert.equal(peak, limit); assert.equal(requests.length, 20);
     assert.equal(new Set(requests.map(row => row.scenario)).size, 20);
