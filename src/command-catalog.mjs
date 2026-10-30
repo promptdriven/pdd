@@ -1,7 +1,11 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6f6c423d3ecf597840a53569291b158d5cd784e93237abe521b9ad152f768fbe).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a0406307307481941974224d7e1e421323843003e1516fe30cf04eafdd1d5a15).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
+const REQUEST_UPTAKE_VERB = 'ack';
 const routes = [
+  { id: 'workflow.request-uptake', prefix: ['workflow', REQUEST_UPTAKE_VERB], local: 'workflow-request-uptake',
+    operands: [{name:'request-id',type:'text'}], options: [{name:'--summary',kind:'text'}],
+    forms: [form(`pdd workflow ${REQUEST_UPTAKE_VERB} REQUEST_ID --summary TEXT`, 'For the agent in a run worktree: acknowledge a delivered change request with a short note.')] },
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no runtime calls.')] },
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [],
