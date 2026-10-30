@@ -34,6 +34,7 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   assert.equal(later.length,2);assert.notEqual(later[1].id,'epoch');assert.equal(later[1].state,'delivered');assert.equal(later[1].ackedAt??null,null,'later request remains independently open');break;
  }
  case 'concurrent-first-wins':{
+  assert.equal(typeof runner.acknowledgeRequest,'function','public ACK entry exists before concurrent claims');
   f.save([f.entry()]);
   const barrier=new SharedArrayBuffer(4),run=f.record();
   const worker=new Worker(new URL('./helpers/workflow-uptake-ack-contender.mjs',import.meta.url),{workerData:{root:run.root,stateDir:f.ports.stateDir,env:f.ports.env,barrier}});
