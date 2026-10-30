@@ -1,11 +1,11 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 94d0e5e69ef69ee2184690a4b974fe280709f7bc0d858ab98e4484558aeb6495).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
   { id: 'workflow.run', prefix: ['workflow', 'run'], local: 'workflow-run',
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
-    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
+    forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH] [--adopt-corpus FILE]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },

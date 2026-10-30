@@ -118,6 +118,58 @@ independently prove execution or prompt/code equivalence. The schema does not au
 execution claims. Review commands, results and committed replay tests before merging.
 
 New bundled feature/bug code areas opt in explicitly. Saved areas and custom workflows without the field,
-and small-change, keep their publication behavior. Custom opt-in needs an approved prompt area with
-`then: "ask-code"` to establish the original-vector anchor; absent anchors are blocked, never reconstructed
+and small-change, keep their publication behavior. Custom opt-in without corpus adoption needs an approved prompt area with
+`then: "ask-code"` to establish the original-vector anchor. [Corpus adoption](#adopt-an-unchanged-approved-corpus) can instead supply that anchor to a fresh workflow whose first area is code. Otherwise absent anchors are blocked, never reconstructed
 from code-space files.
+
+## Adopt an unchanged approved corpus
+
+A fresh workflow with an explicit replay evidence policy can use the complete
+scenario corpus already approved at an immutable commit. For a custom workflow
+named `replay`, put its definition in `.agents/skills/pdd-replay/workflow.json`:
+
+```json
+{"version":2,"areas":[{"name":"code","steps":["build","verify","formal"],"gate":"pr","replay_evidence":"pdd.replay-evidence.v1"}]}
+```
+
+Give the declaration to the workflow you selected:
+
+```sh
+pdd workflow run replay 123 --adopt-corpus /path/to/approval.json
+```
+
+The first area can be the code area. Adoption supplies its original vector anchor
+without requiring an earlier prompt publication. Workflow gates still apply.
+Without adoption, an absent original anchor remains BLOCKED.
+
+The declaration names the canonical repository, full approved commit, entry prompts
+and an explicit assertion covering every scenario and all required context:
+
+```json
+{
+  "schema_version":"pdd.replay-adoption.v1",
+  "repository":"example/project",
+  "commit":"0123456789abcdef0123456789abcdef01234567",
+  "prompts":["prompts/count.prompt.md"],
+  "approval":{
+    "kind":"external-human-assertion",
+    "reference":"review:123",
+    "asserted_by":"Reviewer"
+  }
+}
+```
+
+The commit must be available locally. pdd independently inventories the whole
+repository corpus and compares raw scenario bytes, check identities, prompts and
+required context. Added, removed or edited covered files block reuse; use an
+ordinary approval workflow for changed requirements. Other implementation edits
+are allowed and bind replay evidence to the current source fingerprint.
+
+The new run saves the declaration bytes, digest, source and approval reference.
+Later validation uses that saved copy, so editing or removing the caller's file
+cannot change its authority. Historical runs remain separate.
+
+The trust label is `external-assertion-unverified`: pdd cannot independently
+authenticate the asserted human authorization. The person is responsible for its
+truth. Adoption proves content identity only. Agents still execute the original
+cases and record public operations, mutation controls and formal results.

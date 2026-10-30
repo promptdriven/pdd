@@ -1,6 +1,8 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 4204cf58756e541bb3e0d43e8180fdc71394bc99ea69676396239617eab271a7).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 2b05028ee5f8ab28417f57e1223ceef7e8b0cfc41d2fb55b62e317dc36a1879b).
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { gitFiles } from './runtime-preflight.mjs';
 import { cleanText } from './runtime-output.mjs';
@@ -36,7 +38,7 @@ export function sourceFingerprint(root) {
     return hash(JSON.stringify(files));
   } catch { return null; }
 }
-function boundedFile(path, max = LIMIT) {
+function boundedFile(path, max = LIMIT, allowEmpty = false) {
   for (let parent = dirname(path); ; parent = dirname(parent)) {
     requireThat(!lstatSync(parent).isSymbolicLink(), 'Evidence paths cannot traverse symbolic links.');
     if (dirname(parent) === parent) break;
@@ -45,7 +47,7 @@ function boundedFile(path, max = LIMIT) {
   try {
     const stat = fstatSync(fd);
     requireThat(stat.isFile() && stat.nlink === 1, 'Evidence must be a regular single-link file.');
-    requireThat(stat.size > 0 && stat.size <= max, 'Evidence is empty or exceeds its byte limit.');
+    requireThat((allowEmpty || stat.size > 0) && stat.size <= max, 'Evidence is empty or exceeds its byte limit.');
     const bytes = Buffer.alloc(Math.min(max + 1, stat.size + 1));
     let size = 0, read;
     while (size < bytes.length && (read = readSync(fd,bytes,size,bytes.length-size,null))) size += read;
@@ -89,6 +91,174 @@ export function pinReplayVectors(root, paths) {
     }
     return anchor;
   } catch (e) { return {...anchor,outcome:'blocked',reason:sanitize(e.message)}; }
+}
+const canonicalPath = value => text(value) && !isAbsolute(value) && !value.includes('\\') && !value.includes('\0') && !value.split('/').some(part => !part || part === '.' || part === '..' || part === '.git');
+const commitId = value => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+const repositoryId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(value);
+function validDeclaration(d) {
+  const keys=(value,names)=>object(value)&&Object.keys(value).sort().join(',')===names.sort().join(',');
+  return keys(d,['schema_version','repository','commit','prompts','approval']) && d.schema_version === 'pdd.replay-adoption.v1' && repositoryId(d.repository) && commitId(d.commit) &&
+    Array.isArray(d.prompts) && d.prompts.length > 0 && d.prompts.length <= 200 && d.prompts.every(canonicalPath) && new Set(d.prompts).size === d.prompts.length &&
+    keys(d.approval,['kind','reference','asserted_by']) && d.approval.kind === 'external-human-assertion' && text(d.approval.reference) && text(d.approval.asserted_by);
+}
+function gitEnvironment() {
+  const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('GIT_')));
+  return {...env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null'};
+}
+function localGit(root, ...args) {
+  return execFileSync('git', args, {cwd:root,env:gitEnvironment(),maxBuffer:128*1024*1024,stdio:['ignore','pipe','pipe']});
+}
+function repository(root) {
+  const remote = localGit(root,'remote','get-url','origin').toString().trim();
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(remote);
+  requireThat(match && repositoryId(match[1]), 'The repository needs a canonical GitHub origin.');
+  return match[1];
+}
+// Build a disposable local view from exact tracked blobs or bounded current files.
+// No worktree, index, branch, run, or claim in the source repository is changed.
+function adoptionView(root, ref) {
+  const temp = mkdtempSync(join(tmpdir(),'pdd-adoption-'));
+  try {
+    const rows = ref ? localGit(root,'ls-tree','-r','-z','--full-tree',ref).toString('utf8').split('\0').filter(Boolean).map(row => {
+      const match = /^(\d+) (blob|commit) ([a-f0-9]+)\t([\s\S]+)$/.exec(row);
+      requireThat(match, 'Invalid Git tree inventory.'); return {mode:match[1],oid:match[3],path:match[4]};
+    }) : [...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].map(path=>({path}));
+    const names = new Set(), sources=new Map(), loaded=new Set();
+    for (const row of rows) {
+      requireThat(canonicalPath(row.path) && !names.has(row.path), 'Invalid or duplicate source path.'); names.add(row.path);sources.set(row.path,row);
+      const full=join(temp,row.path);mkdirSync(dirname(full),{recursive:true});
+      if(ref && row.mode==='160000') {mkdirSync(full);continue;}
+      let link;
+      if(ref && row.mode==='120000')link=localGit(root,'cat-file','blob',row.oid).toString();
+      if(!ref) {
+        let stat;try{stat=lstatSync(join(root,row.path));}catch(error){if(error.code!=='ENOENT')throw error;}
+        if(stat?.isDirectory()){mkdirSync(full);continue;}
+        if(stat?.isSymbolicLink())link=readlinkSync(join(root,row.path));
+      }
+      if(link!==undefined)symlinkSync(link,full);else writeFileSync(full,'');
+    }
+    const load=path=>{
+      if(loaded.has(path))return false;
+      const row=sources.get(path);requireThat(row,'Selected source is unavailable.');
+      const full=join(temp,path);requireThat(lstatSync(full).isFile(),'Selected source must be regular.');
+      let bytes;
+      if(ref) {
+        const size=Number(localGit(root,'cat-file','-s',row.oid).toString());requireThat(size<=10*1024*1024,'Selected blob exceeds the source limit.');
+        bytes=localGit(root,'cat-file','blob',row.oid);
+      } else bytes=boundedFile(join(root,path),10*1024*1024,true);
+      writeFileSync(full,bytes);loaded.add(path);return true;
+    };
+    for(const path of names)if(path.endsWith('.json'))load(path);
+
+    localGit(temp,'init','-q');localGit(temp,'add','-f','--all');
+    return {root:temp,names:[...names],load};
+  } catch(error) {rmSync(temp,{recursive:true,force:true});throw error;}
+}
+function selectedFiles(root, tests) {
+  const script=`import {captureSource} from ${JSON.stringify(new URL('./runtime-preflight.mjs',import.meta.url).href)};process.stdout.write(JSON.stringify(captureSource(process.argv[1],{tests:JSON.parse(process.argv[2])}).files));`;
+  return JSON.parse(execFileSync(process.execPath,['--input-type=module','-e',script,root,JSON.stringify(tests)],{env:gitEnvironment(),maxBuffer:16*1024*1024,stdio:['ignore','pipe','pipe']}).toString());
+}
+function nativeFingerprint(root) {
+  const names=[...new Set(localGit(root,'ls-files','-z','-co','--exclude-standard').toString('utf8').split('\0').filter(Boolean))].sort();
+  return hash(JSON.stringify(names.map(path=>{
+    requireThat(canonicalPath(path),'Invalid source path.');
+    try {
+      const stat=lstatSync(join(root,path),{bigint:true});
+      return [path,...['dev','ino','mode','nlink','size','mtimeNs','ctimeNs'].map(key=>String(stat[key]))];
+    } catch(error){if(error.code==='ENOENT')return [path,'missing'];throw error;}
+  })));
+}
+function inspectAdoptionView(view, prompts) {
+  const vectors=[], seeds=[...prompts]; let total=0, checks=0, steps=0;
+  for (const path of view.names.filter(path=>path.endsWith('.json')).sort()) {
+    const raw=boundedFile(join(view.root,path),10*1024*1024); const doc=parse(raw);
+    if(doc?.schema_version !== 'prompt-runtime.program-scenario.v1') continue;
+    requireThat(raw.length<=LIMIT,'Original vector exceeds its byte limit.');
+    const vector=scenario(path,raw); total+=raw.length; checks+=vector.checks.length; steps+=vector.steps.length;
+    requireThat(vectors.length < 200 && total<=10*1024*1024 && checks<=MAX && steps<=MAX, 'Corpus exceeds original vector bounds.');
+    vectors.push(vector);
+    seeds.push(...doc.steps.map(step=>step.entry_path));
+    if(typeof doc.story_path==='string')seeds.push(doc.story_path);
+    if(Array.isArray(doc.entry_paths))seeds.push(...doc.entry_paths);
+    for(const item of doc.context??[]) {
+      requireThat(object(item)&&canonicalPath(item.prompt_path)&&Array.isArray(item.paths)&&item.paths.every(canonicalPath),'Invalid scenario context.');
+      seeds.push(item.prompt_path,...item.paths);
+    }
+  }
+  // The source selector owns required links, explicit context and prompt call targets.
+  // A private seed supplies declaration prompts without altering original scenarios.
+  let seed='.pdd-adoption-seed';while(view.names.includes(seed))seed+='-';
+  writeFileSync(join(view.root,seed),JSON.stringify({entry_paths:[...new Set(seeds)]}));localGit(view.root,'add','-f','--',seed);
+  if(view.names.includes('pdd-source.json'))view.load('pdd-source.json');
+  const paths=vectors.map(v=>v.path);
+  // Resolve with the canonical selector until all newly selected files have their
+  // actual bytes. Unrelated implementation files remain placeholders in this view.
+  let selected;
+  for(;;) {
+    selected=selectedFiles(view.root,[seed]).map(file=>file.path).filter(path=>path!==seed);
+    let changed=false;for(const path of selected)changed=view.load(path)||changed;
+    if(!changed)break;
+  }
+  const context=selected.filter(path=>!paths.includes(path)).map(path=>({path,sha256:hash(boundedFile(join(view.root,path),10*1024*1024,true))}));
+  // Detect required-context cycles using the selector's actual transitive relation.
+  // Remove global includes only in this disposable cycle-analysis view.
+  const config=join(view.root,'pdd-source.json');let configBytes;
+  try {configBytes=readFileSync(config);rmSync(config);localGit(view.root,'rm','--cached','--','pdd-source.json');} catch(error) {if(error.code!=='ENOENT')throw error;}
+  for(const {path} of context.filter(row=>row.path.endsWith('.md'))) {
+    let index=0,alias;do{alias=join(dirname(path),`.pdd-adoption-cycle-${index++}`+(path.endsWith('.prompt.md')?'.prompt.md':'.md'));}while(view.names.includes(alias));
+    writeFileSync(join(view.root,alias),readFileSync(join(view.root,path)));
+    localGit(view.root,'add','-f','--',alias);
+    writeFileSync(join(view.root,seed),JSON.stringify({entry_paths:[alias]}));
+    requireThat(!selectedFiles(view.root,[seed]).some(file=>file.path===path),'Required context cycle.');
+    rmSync(join(view.root,alias));localGit(view.root,'rm','--cached','--',alias);
+  }
+  if(configBytes)writeFileSync(config,configBytes);
+  return {vectors:vectors.map(v=>({path:v.path,sha256:v.sha256,checks:v.checks.map(c=>JSON.stringify([c.vector,c.step_id,c.check_index,...identity.map(k=>c[k])]))})),context};
+}
+function readNativeAdoptionSnapshot({root,declarationPath}, options) {
+  const raw=boundedFile(resolve(root,declarationPath),64*1024), declaration=parse(raw);
+  const snapshot={available:true,repository:repository(root),commit:declaration.commit,declaration,declaration_sha256:hash(raw),declaration_bytes:raw.toString('base64')};
+  if(!validDeclaration(declaration)) return {snapshot};
+  const commit=localGit(root,'rev-parse','--verify','--end-of-options',`${declaration.commit}^{commit}`).toString().trim();
+  requireThat(commit===declaration.commit,'Approved commit is unavailable.');snapshot.commit=commit;
+  const before=options.currentRef ? null : nativeFingerprint(root);
+  requireThat(options.currentRef || before,'Current source is unreadable.');
+  const approved=adoptionView(root,commit);let current;
+  try {
+    current=adoptionView(root,options.currentRef);
+    const a=inspectAdoptionView(approved,declaration.prompts),c=inspectAdoptionView(current,declaration.prompts);
+    requireThat(options.currentRef || nativeFingerprint(root)===before,'Current source changed while reading.');
+    Object.assign(snapshot,{approved_vectors:a.vectors,current_vectors:c.vectors,approved_context:a.context,current_context:c.context});
+    return {snapshot};
+  } finally {rmSync(approved.root,{recursive:true,force:true});if(current)rmSync(current.root,{recursive:true,force:true});}
+}
+export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
+  const provenance={repository:'',commit:'',reference:'',asserted_by:'',trust:'external-assertion-unverified',declaration_sha256:'',prompts:[]};
+  const blocked=reason=>({outcome:'blocked',reason,paths:[],provenance});
+  try {
+    const {snapshot:s}=await (ports.readAdoptionSnapshot ?? (args=>readNativeAdoptionSnapshot(args,ports)))({root,declarationPath});
+    if(!object(s) || s.available!==true)return blocked('unavailable');
+    const d=s.declaration;
+    if(!validDeclaration(d))return blocked('invalid-approval');
+    if(d.repository!==s.repository || d.commit!==s.commit)return blocked('foreign-source');
+    const inventory=rows=>Array.isArray(rows) && rows.length>0 && rows.length<=200 && rows.every(r=>object(r)&&canonicalPath(r.path)) && new Set(rows.map(r=>r.path)).size===rows.length;
+    if(!inventory(s.approved_vectors)||!inventory(s.current_vectors))return blocked('inventory-mismatch');
+    const sorted=rows=>[...rows].sort((a,b)=>a.path.localeCompare(b.path));
+    if(JSON.stringify(sorted(s.approved_vectors).map(r=>r.path))!==JSON.stringify(sorted(s.current_vectors).map(r=>r.path)))return blocked('inventory-mismatch');
+    // Tuple strings encode several independently bounded identities; JSON escaping
+    // can expand a valid component to six characters per original character.
+    const facts=(rows,vector)=>Array.isArray(rows) && rows.length<=10000 &&
+      new Set(rows.map(r=>r?.path)).size===rows.length && rows.every(r=>object(r) && canonicalPath(r.path) && sha(r.sha256) &&
+        (!vector || (Array.isArray(r.checks) && r.checks.length>0 && r.checks.length<=MAX && new Set(r.checks).size===r.checks.length &&
+          r.checks.every(value=>typeof value==='string' && value.trim().length>0 && value.length<=64*1024))));
+    if(!sha(s.declaration_sha256)||!facts(s.approved_vectors,true)||!facts(s.current_vectors,true)||!facts(s.approved_context)||!facts(s.current_context))return blocked('unavailable');
+    for(const kind of ['vectors','context']) {
+      const normalized=rows=>sorted(rows).map(r=>[r.path,r.sha256,...(kind==='vectors'?[r.checks]:[])]);
+      if(JSON.stringify(normalized(s[`approved_${kind}`]))!==JSON.stringify(normalized(s[`current_${kind}`])))return blocked('content-mismatch');
+    }
+    ports.onSnapshot?.(s);
+    return {outcome:'adopted',reason:'',paths:sorted(s.approved_vectors).map(r=>r.path),provenance:{repository:d.repository,commit:d.commit,reference:d.approval.reference,asserted_by:d.approval.asserted_by,trust:provenance.trust,declaration_sha256:s.declaration_sha256,prompts:[...d.prompts]}};
+  } catch {return blocked('unavailable');}
 }
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
 export function readReplayEvidence(run) {

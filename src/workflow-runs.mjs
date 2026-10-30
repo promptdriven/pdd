@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 55ebcbc365e6b8dd0c4d8ad8bc6de35fdf0e2fa6c68d50907a197bcf6111dd31).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: f554dcc4c6ea44b0e2ad6f9a1c99e33c2952905b0da9e92c004c72f7413bed8e).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
