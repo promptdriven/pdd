@@ -20,7 +20,8 @@ No AI check or Try starts before lint passes. Lint uses no AI calls.
 If a reply is lost, pdd reads the original request instead of sending it again.
 It retries only when the runtime confirms that capacity prevented the job from
 starting and that retrying is safe. Problems with the input need a correction.
-Ctrl-C stops further submissions.
+Ctrl-C stops further submissions. After "Stopped before sending.", the claimed row
+stays unknown and cannot be retried; start a fresh check.
 
 If lint is still queued or running when your wait ends, pdd says so and exits
 with code 3. No checks or Try were sent. Check and explicit lint print a saved

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 1afdd8092e16d190147d0a55d7bbd16ccea2ac187a2b1a81823278b9a8c8a44f).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 17a5059eeb8500e8c22743e3345950da5f41d740c9eb9baaeda295a6c080c8ff).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -460,12 +460,12 @@ function safeAdmission(reply) {
     && json?.accounting_complete !== false && json?.usage?.accounting_complete !== false && report?.accounting_complete !== false
     && !(report && Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0) && !report?.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length));
 }
-function checkCapacity(answer) {
+function checkCapacity(answer, headers) {
   const report = answer?.result?.report;
   if (answer?.command !== 'check' || answer.state !== 'refused' || answer.usage?.calls !== 0 || report?.dispatch !== 'not_started'
     || Object.hasOwn(report, 'provider_calls') && report.provider_calls !== 0 || report.accounting_complete === false || answer.usage?.accounting_complete === false
     || report.samples?.some(sample => sample?.steps?.some(step => step?.checks?.length))) return null;
-  return [report.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].map(item => capacityDelay(item)).find(wait => wait !== null) ?? null;
+  return [report.refusal, ...(Array.isArray(answer.result?.refusals) ? answer.result.refusals : [])].map(item => capacityDelay(item, headers)).find(wait => wait !== null) ?? null;
 }
 function accumulatedCalls(context, row) {
   const calls = row.request_ids.map(id => {
@@ -486,10 +486,21 @@ function stoppedPause(context, target, kind) {
     + 'The runtime confirmed that the last attempt did not start; no work ran for this attempt. '
     + (calls === 'unknown' ? 'Total usage is unknown; earlier submissions may have run.' : `Recorded usage: ${calls} AI calls.`) + recovery;
 }
-function markBusy(context, row, wait) {
+function markBusy(context, row, wait, observedAt = context.ports.now(), legacy = context.reading) {
+  const id = row.request_ids.at(-1);
+  const anchored = row.busy_request_id === id && Number.isFinite(row.busy_observed_at)
+    && Number.isFinite(row.retry_at) && Number.isFinite(row.capacity_until);
+  if (!anchored) {
+    const now = observedAt;
+    // Legacy receipts have no trustworthy answer time. Repair once at observation,
+    // retaining a later saved server wait; a POST start is never that anchor.
+    const savedWait = legacy && Number.isFinite(row.retry_at) ? row.retry_at : 0;
+    Object.assign(row, { busy_request_id: id, busy_observed_at: now,
+      retry_at: Math.max(savedWait, now + (legacy ? 10_000 : Math.max(wait, 10_000))), capacity_until: now + 60_000 });
+  }
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
     checks: null, criteria: null, all_checks: [], failed_checks: [], why: null, next_step: null,
-    retry_at: context.reading && Number.isFinite(row.retry_at) ? row.retry_at : context.ports.now() + wait, note: { code: 'check-busy', message: 'The runtime is busy. No checks ran for this attempt. Retry this batch later.' } });
+    note: { code: 'check-busy', message: 'The runtime is busy. No checks ran for this attempt. Retry this batch later.' } });
   if (row.restart_used) row.calls = accumulatedCalls(context, row);
   if (!context.reading) context.checkWindow = 1;
 }
@@ -602,7 +613,7 @@ async function readCapacity(context, deadline, refresh) {
     }
   }
 }
-async function capacityReady(context, deadline) {
+async function capacityReady(context, deadline, busyRow = null) {
   let refresh = !!context.admissionMaintenance;
   while (!context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline) {
     const reply = await readCapacity(context, deadline, refresh);
@@ -619,7 +630,23 @@ async function capacityReady(context, deadline) {
     const pending = context.admissionMaintenance;
     const future = Number.isFinite(until) && until > context.ports.now();
     const end = Math.max(future ? until : 0, pending?.end ?? 0);
-    if (end <= context.ports.now()) { context.admissionMaintenance = null; context.maintenanceLine = null; return true; }
+    if (end <= context.ports.now()) {
+      context.admissionMaintenance = null; context.maintenanceLine = null;
+      if (busyRow) {
+        const now = context.ports.now(), counts = reply.status === 200 ? reply.json?.slots?.check : null;
+        const usable = Number.isSafeInteger(counts?.running) && counts.running >= 0
+          && Number.isSafeInteger(counts?.limit) && counts.limit >= 0;
+        const minimum = Math.max(0, busyRow.retry_at - now);
+        const full = usable && counts.running >= counts.limit && busyRow.capacity_until > now;
+        if (minimum > 0 || full) {
+          context.waitCause = 'server capacity';
+          if (!await waitBudget(context, Math.min(10_000, minimum > 0 ? minimum : busyRow.capacity_until - now), deadline)) return false;
+          refresh = false;
+          continue;
+        }
+      }
+      return true;
+    }
     context.waitCause = 'maintenance';
     if (future) showMaintenance(context, maintenance); else if (pending) showMaintenance(context, pending.details);
     if (!await waitBudget(context, Math.min(60_000, end - context.ports.now()), deadline)) return false;
@@ -636,7 +663,7 @@ async function admission(context, kind, target, deadline = context.deadline) {
   context.waitCause = 'server capacity';
   context.reservations ??= new Set(); context.reservations.add(reservation);
   let ready = false;
-  try { ready = await capacityReady(context, deadline); return ready && !context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline; }
+  try { ready = await capacityReady(context, deadline, kind === 'check' && target.busy ? target : null); return ready && !context.interrupted && !context.stopped && !context.sendError && context.ports.now() < deadline; }
   finally {
     if (context.interrupted) interruptedAdmissions.add(target);
     if (!ready || context.interrupted || context.stopped || context.sendError || context.ports.now() >= deadline) { await releaseRuntimeSlot(reservation, { ended: true }, slotPorts(context, deadline)); target.reservation = null; }
@@ -661,7 +688,7 @@ function judgePost(reply, id, command, secrets) {
   }
   const note = fallback => ({ code: cleanText(error?.code, secrets) || null, message: cleanText(error?.message, secrets) || fallback });
   if (reply.status === 200 || reply.status === 202) {
-    return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
+    return sameJob(reply.json, id, command) ? { kind: 'accepted', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   }
   if (reply.status === 429) {
     return error?.code === 'server-full' && reply.json?.dispatch === 'not_started' && safeAdmission(reply) ? { kind: 'busy', wait: retryAfter(reply.headers), admission: reply.json }
@@ -685,7 +712,7 @@ function judgeGet(reply, id, command) {
   if (reply.lost) return { kind: 'again', why: reply.unreachable ? 'cannot reach the runtime' : reply.why, unreachable: reply.unreachable };
   const stopLine = blockingAnswer(reply);
   if (stopLine) return { kind: 'blocked', message: stopLine };
-  if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
+  if (reply.status === 200) return sameJob(reply.json, id, command) ? { kind: 'state', answer: reply.json, wait: checkCapacity(reply.json, reply.headers) } : { kind: 'unknown', why: 'The runtime answered with another request ID or command.' };
   if (reply.status === 404) return { kind: 'missing' };
   if (reply.status === 410) return { kind: 'unknown', why: 'The result expired.', status: 410 };
   if (reply.status === 401) return { kind: 'auth' };
@@ -787,7 +814,7 @@ function noVerdictAdvice(answer, view) {
     next_step: checkCapacity(answer) === null ? view.next_step : null };
 }
 
-function applyAnswer(row, answer, context) {
+function applyAnswer(row, answer, context, observedWait = null, observedAt = context.ports.now()) {
   context.unsentInterruptions?.delete(row);
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
   const advice = noVerdictAdvice(answer, view);
@@ -803,7 +830,7 @@ function applyAnswer(row, answer, context) {
     draft: view.draft ?? row.draft });
   if (row.restart_used) row.calls = accumulatedCalls(context, row);
   const wait = checkCapacity(answer);
-  if (wait !== null) markBusy(context, row, wait);
+  if (wait !== null) markBusy(context, row, observedWait ?? wait, observedAt, context.reading && observedWait === null);
   else { row.busy = false; row.can_retry = false; row.note = null; }
   if (row.state === 'refused') addHints(row, context.root, context.visible);
   if (ENDED.has(row.state) && row.sent_at && !row.ended_at && !context.reading) row.ended_at = context.ports.now();
@@ -840,6 +867,7 @@ function batchRecord(context) {
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
+      busy_request_id: row.busy_request_id ?? null, busy_observed_at: row.busy_observed_at ?? null, capacity_until: row.capacity_until ?? null,
       engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
@@ -896,6 +924,7 @@ async function postJob(context, path, command, request, row, timeoutMs, deadline
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
+  verdict.observed_at = context.ports.now();
   if (row) row.post_verdict = verdict.kind;
   if (verdict.maintenance) maintenanceNotice(context, verdict, reply);
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
@@ -912,6 +941,7 @@ async function sendCheck(context, row) {
 }
 async function sendCheckAttempt(context, row) {
   if (context.interrupted || context.ports.now() >= context.deadline || !['ready', 'waiting'].includes(row.state)) return;
+  if (row.busy && row.request_ids.length && !await capacityReady(context, context.deadline, row)) return;
   const attempt = row.request_ids.length, previousCalls = row.restart_used || row.restart_pending ? accumulatedCalls(context, row) : 0;
   if (!await admission(context, 'check', row)) {
     if (context.interrupted && interruptedAdmissions.has(row)) Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note: { code: null, message: 'Stopped before sending.' } });
@@ -960,6 +990,7 @@ async function sendCheckAttempt(context, row) {
   }
   row.attempts = (row.attempts ?? 0) + 1;
   row.sent_at = context.ports.now(); row.ended_at = null; row.retry_at = null; row.busy = false; row.can_retry = false;
+  row.busy_request_id = null; row.busy_observed_at = null; row.capacity_until = null;
   row.phase = 'server';
   const request = { requestId: id, source_sha256: context.capture.sha256, scenario: row.test, max_calls: row.max_calls };
   const verdict = await postJob(context, '/v1/check', 'check', request, row, Math.max(1, Math.min(context.ports.postMs, context.deadline - context.ports.now())));
@@ -969,8 +1000,8 @@ async function sendCheckAttempt(context, row) {
     if (context.interrupted) (context.unsentInterruptions ??= new WeakMap()).set(row, { id, note });
     Object.assign(row, { state: 'not_run', calls: previousCalls, phase: 'local', note });
   }
-  else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context);
-  else if (verdict.kind === 'busy') markBusy(context, row, verdict.wait);
+  else if (verdict.kind === 'accepted') applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at);
+  else if (verdict.kind === 'busy') markBusy(context, row, verdict.wait, verdict.observed_at);
   else if (verdict.kind === 'not_run') Object.assign(row, { state: 'not_run', note: verdict.note });
   else if (verdict.kind === 'stop') { Object.assign(row, { state: 'not_run', note: verdict.note }); context.stopped = verdict.note; if (verdict.blocked) context.blocked = verdict.note.message; }
   else if (verdict.kind === 'refused') Object.assign(row, { state: 'refused', refusals: [verdict.refusal] });
@@ -984,10 +1015,11 @@ async function readRow(context, row, deadline = Infinity) {
   const id = row.request_ids.at(-1), end = Math.min(deadline, row.lost ? row.read_until ?? context.deadline : context.deadline);
   if (!id) return;
   const verdict = judgeGet(await context.runtime.get(id, Math.max(1, Math.min(GET_MS, (end ?? Infinity) - context.ports.now()))), id, 'check');
+  verdict.observed_at = context.ports.now();
   // A network problem while reading says so once; pdd keeps reading the same IDs.
   if (verdict.kind === 'again' && verdict.why && !context.readTrouble) line(context.ports.stderr, `pdd cannot read the results right now (${verdict.why}). It keeps trying.`);
   if (verdict.kind !== 'again') context.readTrouble = false; else if (verdict.why) context.readTrouble = true;
-  if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); queueProgress(context, verdict.answer); await finishReservation(context, row, verdict.answer); applyAnswer(row, verdict.answer, context); row.lost = false; }
+  if (verdict.kind === 'state') { saveAnswer(context, id, verdict.answer); queueProgress(context, verdict.answer); await finishReservation(context, row, verdict.answer); applyAnswer(row, verdict.answer, context, verdict.wait, verdict.observed_at); row.lost = false; }
   else if (verdict.kind === 'unknown') Object.assign(row, { state: 'unknown', why: verdict.why, lost: false, final: true });
   else if (verdict.kind === 'auth') context.readStop = AUTH_TEXT;
   else if (verdict.kind === 'blocked') context.readStop = verdict.message;

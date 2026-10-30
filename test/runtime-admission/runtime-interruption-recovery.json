@@ -43,32 +43,32 @@
     {
       "id": "more-than-three-busy-attempts",
       "criterion_id": "AC3",
-      "given": "Four successive same-ID-per-attempt terminal check capacity refusals each prove dispatch not_started, zero calls, no evaluated checks and complete accounting; Retry-After is one second and the caller deadline leaves room. The next fresh attempt returns a matching passed receipt.",
-      "required_observation": "Admission continues beyond three attempts and reaches the passed receipt within the deadline, honoring backoff and preserving every earlier ID/raw receipt. Only confirmed unstarted attempts get fresh IDs; final accounting comes from the matching receipt, not from attempt count."
+      "given": "Four successive same-ID-per-attempt terminal check capacity refusals each prove dispatch not_started, zero calls, no evaluated checks and complete accounting; Retry-After is one second, capacity is unsupported 404 and the caller wait is 90 seconds. The next fresh attempt returns a matching passed receipt.",
+      "required_observation": "Admission continues beyond three attempts and reaches the passed receipt within the deadline, honoring at least 10000 ms between busy uploads (at least 40000 ms before the fifth POST) and preserving every earlier ID/raw receipt. Only confirmed unstarted attempts get fresh IDs; final accounting comes from the matching receipt, not from attempt count."
     },
     {
       "id": "busy-caller-deadline",
       "criterion_id": "AC3",
-      "given": "Every capacity attempt has authoritative unstarted/zero-call evidence and one-second backoff; advance the fake clock through more than three attempts to the finite caller deadline.",
-      "required_observation": "Stop at the caller deadline with busy/not-run, exit 5, zero check calls and plain busy/no-checks-ran advice. Keep all IDs/receipts and send/allocate nothing afterward. Assert more than three attempts and bounded termination, never an exact final count."
+      "given": "Every capacity attempt has authoritative unstarted/zero-call evidence and server Retry-After 1 second; capacity is unsupported 404. Advance the fake clock through the 90 second caller wait, allowing the approved minimum 10 second backoff between busy uploads.",
+      "required_observation": "Stop at the caller deadline with busy/not-run, exit 5, zero check calls and plain busy/no-checks-ran advice. Keep all IDs/receipts and send/allocate nothing afterward. Assert more than 3 and at most 10 Check uploads, at least 10000 ms apart, and bounded termination; this 90 second fixture bound is not an attempt ceiling or an exact final count."
     },
     {
       "id": "busy-interruption",
       "criterion_id": "AC3",
-      "given": "After more than three confirmed unstarted capacity attempts, synchronize interruption during the next busy backoff before the caller deadline.",
-      "required_observation": "Stop promptly, send/allocate nothing further, retain all IDs/receipts and existing Check interruption exit 3. Say Stopped. with what was submitted and confirmed, not a wait-ended message or Stopped before sending. for the already submitted capacity attempts."
+      "given": "After more than three confirmed unstarted capacity attempts with server Retry-After 1 second and unsupported capacity 404, synchronize interruption during the next minimum 10 second busy backoff before the 90 second caller deadline.",
+      "required_observation": "Honor at least 10000 ms between prior busy uploads. Stop promptly, send/allocate nothing further, retain all IDs/receipts and existing Check interruption exit 3. Say Stopped. with what was submitted and confirmed, not a wait-ended message or Stopped before sending. for the already submitted capacity attempts."
     },
     {
       "id": "busy-then-lost",
       "criterion_id": "AC3",
-      "given": "The first check attempt has authoritative zero-call unstarted capacity evidence and stale advice STALE RETRY. The next authorized POST loses its reply; same-ID reads return 410 expired.",
-      "required_observation": "Exactly two check POSTs, no replay of the uncertain second attempt, exit 3 and unknown usage for that attempt. Keep both IDs and the first receipt; clear stale busy/can_retry, why and next_step advice. A later batch read says the result expired, retains same-ID recovery and never offers the old safe retry advice."
+      "given": "The first check attempt has authoritative zero-call unstarted capacity evidence and stale advice STALE RETRY. The next authorized POST loses its reply; same-ID reads return 410 expired. Capacity is unsupported 404, the busy answer advises Retry-After 1 second, and the 90 second caller wait leaves time for the approved minimum 10 second pause.",
+      "required_observation": "Exactly two check POSTs, no replay of the uncertain second attempt, exit 3 and unknown usage for that attempt. Keep both IDs and the first receipt; clear stale busy/can_retry, why and next_step advice. A later batch read says the result expired, retains same-ID recovery and never offers the old safe retry advice. The second Check POST and its new request ID occur only after at least 10000 ms from the confirmed busy answer."
     },
     {
       "id": "busy-then-fresh-refusal",
       "criterion_id": "AC3",
-      "given": "The first attempt has authoritative zero-call unstarted capacity evidence and STALE RETRY advice. The next POST returns 422 source-too-large with the canonical cause test and fresh reason/fix/hint containing a synthetic credential and private server paths.",
-      "required_observation": "Exactly two check POSTs, final refusal exit 4 and no automatic replay. Preserve prior IDs/receipts and fresh refusal diagnostics/accounting; clear stale busy/can_retry and earlier advice. JSON retains the sanitized reason/fix/hint and cause test. Refusal text follows the existing runtime-output contract: retain the fresh reason/fix/hint with secrets and private paths redacted; it need not print arbitrary cause strings. Later reads preserve the final refusal without GET or POST for it."
+      "given": "The first attempt has authoritative zero-call unstarted capacity evidence and STALE RETRY advice. The next POST returns 422 source-too-large with the canonical cause test and fresh reason/fix/hint containing a synthetic credential and private server paths. Capacity is unsupported 404, the busy answer advises Retry-After 1 second, and the 90 second caller wait leaves time for the approved minimum 10 second pause.",
+      "required_observation": "Exactly two check POSTs, final refusal exit 4 and no automatic replay. Preserve prior IDs/receipts and fresh refusal diagnostics/accounting; clear stale busy/can_retry and earlier advice. JSON retains the sanitized reason/fix/hint and cause test. Refusal text follows the existing runtime-output contract: retain the fresh reason/fix/hint with secrets and private paths redacted; it need not print arbitrary cause strings. Later reads preserve the final refusal without GET or POST for it. The second Check POST and its new request ID occur only after at least 10000 ms from the confirmed busy answer."
     }
   ]
 }

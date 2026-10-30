@@ -130,7 +130,7 @@ test('REVIEW busy retry to lost response or fresh refusal never inherits retry a
       return f.normal(e);
     });
     const result = await run(setup, fake);
-    if (mode === 'busy') assert.ok(posts > 3, 'confirmed capacity retries are bounded by the caller deadline, not an attempt ceiling');
+    if (mode === 'busy') assert.ok(posts > 3 && posts <= 10, '90-second busy uploads are bounded by minimum backoff, without an attempt ceiling');
     else assert.equal(posts, 2);
     assert.equal(result.json.rows[0].next_step, null);
     const text = await run(setup, fake, { '--read': result.json.batch });
