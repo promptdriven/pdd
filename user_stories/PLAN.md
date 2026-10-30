@@ -22,4 +22,4 @@
 11. [Keep my other saved run links](product-state-updates.md): preserve other bindings during coordinated updates.
 
 - [Try my server with my screens](product-server-without-screen.md) — Runtime check: test/runtime/product-server-without-screen.json
-- [Find the missing screen setting](product-map-field-diagnostics.md) — Runtime check: test/runtime/product-map-field-diagnostics.json
+- [Find the missing screen setting](product-map-field-diagnostics.md) — Native cases: test/native/product-map-field-diagnostics.json; Runtime cannot check error messages.

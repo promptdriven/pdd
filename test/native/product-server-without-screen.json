@@ -1,0 +1,228 @@
+{
+  "story_path": "user_stories/product-server-without-screen.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "With phone, server and barista selected, I see only the phone and barista screens, and each tap still includes the server's background work."
+    },
+    {
+      "id": "AC2",
+      "text": "My server's starting data is included even though the server has no screen, and trying it leaves my project files unchanged."
+    },
+    {
+      "id": "AC3",
+      "text": "If I select only the server, Try explains that no screen is available."
+    }
+  ],
+  "initial_world": {
+    "files": {
+      "/project/product/map.md": {
+        "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| server | prompts/server | Server |\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+        "is_symlink": false
+      },
+      "/project/product/plan.md": {
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "is_symlink": false
+      },
+      "/project/contracts/world.md": {
+        "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+        "is_symlink": false
+      },
+      "/project/contracts/seed-world.json": {
+        "content": "{\"orders\":[],\"enabled\":true}",
+        "is_symlink": false
+      },
+      "/project/app/maps/phone.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/project/app/maps/barista.json": {
+        "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+        "is_symlink": false
+      },
+      "/project/prompts/server.prompt.md": {
+        "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/project/prompts/phone.prompt.md": {
+        "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+        "is_symlink": false
+      },
+      "/project/prompts/server/seed.json": {
+        "content": "{\"serverQueue\":[]}",
+        "is_symlink": false
+      }
+    }
+  },
+  "simulation": {
+    "files.read": {
+      "action": "blob.read",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "content": ""
+      },
+      "result_value_pointer": "/content"
+    },
+    "files.stat": {
+      "action": "blob.stat",
+      "world_pointer": "/files",
+      "path_argument_pointer": "/path",
+      "content_argument_pointer": null,
+      "result_template": {
+        "exists": false,
+        "is_symlink": false,
+        "size": 0
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "three-parts-two-maps",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/project",
+        "parts": [
+          "server",
+          "phone",
+          "barista"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/parts",
+          "op": "equals",
+          "value": [
+            "server",
+            "phone",
+            "barista"
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/labels",
+          "op": "equals",
+          "value": [
+            {
+              "id": "phone/menu",
+              "title": "phone \u00b7 menu"
+            },
+            {
+              "id": "barista/menu",
+              "title": "barista \u00b7 menu"
+            }
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/tapOperations",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/0/content",
+          "op": "contains",
+          "value": "\"initial_screen\":\"phone/menu\""
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/files/0/content",
+          "op": "contains",
+          "value": "\"operation\":\"forward\""
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/files/1/content",
+          "op": "equals",
+          "value": "{\"enabled\":true,\"orders\":[],\"serverQueue\":[]}"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/files",
+          "op": "equals",
+          "value": {
+            "/project/product/map.md": {
+              "content": "# Demo: map\nSize: medium\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| server | prompts/server | Server |\n| phone | prompts/phone | Phone |\n| barista | prompts/barista | Board |\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | Menu | CORE |\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | Order | P01 |\n",
+              "is_symlink": false
+            },
+            "/project/product/plan.md": {
+              "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+              "is_symlink": false
+            },
+            "/project/contracts/world.md": {
+              "content": "| Key | What it holds | Writer | Readers | How it is written |\n|---|---|---|---|---|\n| orders | Orders | phone | barista | Replace |\n",
+              "is_symlink": false
+            },
+            "/project/contracts/seed-world.json": {
+              "content": "{\"orders\":[],\"enabled\":true}",
+              "is_symlink": false
+            },
+            "/project/app/maps/phone.json": {
+              "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+              "is_symlink": false
+            },
+            "/project/app/maps/barista.json": {
+              "content": "{\"schema_version\": \"prompt-runtime.app-map.v1\", \"name\": \"phone \\u00b7 Menu\", \"initial_screen\": \"menu\", \"initial_route\": null, \"initial_state\": {\"selected\": \"latte\"}, \"state_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"synthetic\": true, \"screens\": [{\"id\": \"menu\", \"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"render\", \"source\": \"operation\", \"format\": \"html\", \"input\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"result_pointer\": \"/html\"}], \"router\": null, \"routes\": [], \"handlers\": [{\"screen\": \"*\", \"kind\": \"button\", \"match\": {\"value\": \"order-latte\"}, \"handler\": {\"prompt_path\": \"prompts/phone.prompt.md\", \"operation\": \"order\"}, \"input\": {\"drink\": {\"$ref\": \"/state/selected\"}, \"size\": \"M\"}, \"next\": {\"kind\": \"screen\", \"screen\": \"menu\", \"route_pointer\": null}, \"state\": {\"selected\": {\"$ref\": \"/state/selected\"}}, \"after\": []}], \"stylesheets\": []}",
+              "is_symlink": false
+            },
+            "/project/prompts/server.prompt.md": {
+              "content": "# Forward\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"forward\", \"input_schema\": {\"type\": \"object\", \"properties\": {}, \"required\": [], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"forwarded\": {\"type\": \"integer\"}}, \"required\": [\"forwarded\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+              "is_symlink": false
+            },
+            "/project/prompts/phone.prompt.md": {
+              "content": "# Phone\n\n<details><summary>Runtime interface</summary>\n```json\n{\"status\": \"draft\", \"prose_sha256\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"entries\": [{\"operation\": \"render\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"selected\": {\"type\": \"string\"}}, \"required\": [\"selected\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"html\": {\"type\": \"string\"}}, \"required\": [\"html\"], \"additionalProperties\": false}, \"errors\": []}, {\"operation\": \"order\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"drink\": {\"type\": \"string\"}, \"size\": {\"type\": \"string\"}}, \"required\": [\"drink\", \"size\"], \"additionalProperties\": false}, \"result_schema\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}}, \"required\": [\"id\"], \"additionalProperties\": false}, \"errors\": []}], \"calls\": [], \"resources\": []}\n```\n</details>\n",
+              "is_symlink": false
+            },
+            "/project/prompts/server/seed.json": {
+              "content": "{\"serverQueue\":[]}",
+              "is_symlink": false
+            }
+          }
+        }
+      ]
+    },
+    {
+      "step_id": "server-only",
+      "entry_path": "prompts/cli/product-composition.prompt.md",
+      "operation": "composeProductTry",
+      "input": {
+        "root": "/project",
+        "parts": [
+          "server"
+        ]
+      },
+      "model": "gpt-6.1-sol",
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/code",
+          "op": "equals",
+          "value": "invalid-product-map"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "error",
+          "path": "/message",
+          "op": "contains",
+          "value": "screen"
+        }
+      ],
+      "expected_error": "invalid-product-map"
+    }
+  ]
+}
