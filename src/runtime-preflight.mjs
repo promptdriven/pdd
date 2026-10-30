@@ -636,7 +636,7 @@ export function fillHashes({ root, files = gitFiles(root) }) {
 
 const SECRET_NAME = /^(?:\.env.*|auth\.json|credentials\.json|id_rsa|id_ed25519|id_ecdsa|id_dsa|\.npmrc|\.netrc|\.git-credentials|\.pypirc|.+\.(?:pem|key|p12|pfx|keystore|tfstate|tfvars))$/;
 const SECRET_PART = new Set(['secrets', '.ssh', '.codex', '.terraform', '.aws']);
-export const isSecretPath = path => path.split('/').some(part => SECRET_NAME.test(part) || SECRET_PART.has(part))
+export const isSecretPath = path => SECRET_NAME.test(basename(path)) || path.split('/').some(part => SECRET_PART.has(part))
   || /(?:^|\/)\.docker\/config\.json$/.test(path)
   || /(?:^|\/)(?:\.pdd\/agents\.json|\.config\/pdd\/agents\.json)$/i.test(path);
 
@@ -688,7 +688,7 @@ const unstableSource = Symbol('unstable source');
 const sourceProblem = (from, path, reason) => new PreflightError(4, `${from}: ${path}${reason.startsWith(':') ? '' : ' '}${reason}`);
 
 function sourcePath(raw, from) {
-  if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f\x7f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
+  if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
     || raw.split('/').includes('..')) throw sourceProblem(from, String(raw), 'must be a repository-relative file path with no traversal.');
   const path = posix.normalize(raw);
   if (path === '.' || path === '.git' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
@@ -924,16 +924,16 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) add(path, SOURCE_CONFIG);
     }
-    const selected = tests ?? (prepareSource === undefined ? findTests({ root, files: names }).tests.map(test => test.path) : [...visible].sort().filter(path => {
+    const selected = tests ?? [...new Set([
+      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
+      ...[...overlay.keys()].sort().filter(path => {
       if (!path.endsWith('.json')) return false;
-      // Match ordinary discovery, using effective bytes and their actual size.
-      if (!overlay.has(path) && !statOf(join(root, path))?.isFile()) return false;
-      const file = inspect(path, 'Test discovery');
+      const file = overlay.get(path);
       if (file.size > LIMITS.test) return false;
       const text = bytes(file).toString('utf8');
       if (!text.includes('prompt-runtime.program-scenario')) return false;
       try { return JSON.parse(text)?.schema_version?.startsWith('prompt-runtime.program-scenario') === true; } catch { return true; }
-    }));
+    })])];
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) add(appMap, 'App map', 'app-map');
     for (let index = 0; index < queue.length; index++) {

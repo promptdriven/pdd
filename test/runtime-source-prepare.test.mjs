@@ -18,7 +18,7 @@ const extract = (tar, path) => {
 const refuse = action => assert.throws(action, error => error.exitCode === 4 && !error.message.includes('PRIVATE-CONTENT'));
 
 test('PREPARE keeps exact existing tar and synchronous return with no output', t => {
-  const { repo } = harbor(t), expected = captureSource(repo, { tests: [ORDER] });
+  const { repo } = harbor(t, repo => write(repo,'auth.json','{"token":"PRIVATE-CONTENT"}')), expected = captureSource(repo, { tests: [ORDER] });
   let calls = 0;
   const actual = captureSource(repo, { tests: [ORDER], prepareSource(ports) {
     calls++;
@@ -28,6 +28,7 @@ test('PREPARE keeps exact existing tar and synchronous return with no output', t
   assert.equal(calls, 1);
   assert.deepEqual(actual, expected);
   assert.equal(actual.then, undefined);
+  assert.deepEqual(captureSource(repo,{prepareSource:()=>[]}),captureSource(repo));
 });
 
 test('PREPARE selects virtual files and discovers replacement calls, map assets and effective config', t => {
@@ -189,7 +190,7 @@ test('PREPARE all access modes reject unsafe paths and unsafe original entries',
     symlinkSync(join(repo, 'secret-source.txt'), join(repo, 'link.txt'));
     symlinkSync(sandbox, join(repo, 'linked'));
     mkdirSync(join(repo, 'directory'));
-    for (const path of ['../outside', '/absolute', 'bad\\path', 'bad\npath', '.git/config', '.env.local', 'secrets/a.txt', '.env.private/a.txt', 'ignored.txt', 'link.txt', 'linked/a.txt', 'directory']) {
+    for (const path of ['../outside', '/absolute', 'bad\\path', 'bad\npath', '.git/config', '.env.local', 'secrets/a.txt', '.aws/a.txt', 'ignored.txt', 'link.txt', 'linked/a.txt', 'directory']) {
       refuse(() => captureSource(repo, { tests: [], prepareSource({ readFile, statFile }) {
         if (mode === 'read') readFile(path);
         if (mode === 'stat') statFile(path);
