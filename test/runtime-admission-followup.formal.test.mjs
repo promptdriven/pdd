@@ -45,7 +45,7 @@ function memory(clock) {
   };
   return { records, modified, files };
 }
-const warnings = made => (made.ports.stderr.text.match(/Warning: runtime capacity/g) ?? []).length;
+const warnings = made => (made.ports.stderr.text.match(/Warning: interpreter capacity/g) ?? []).length;
 function caller(setup, origin, clock, extra = {}, owner = 'formal 4242') {
   const made = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: origin }, {
     now: () => clock.now,

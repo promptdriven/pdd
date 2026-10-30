@@ -13,7 +13,7 @@ test('RELEASE4: feature routing covers new behavior while its core stays within 
   assert.match(source,/Use when the person asks for a new feature or new behavior in a PDD project/);
   assert.ok(Buffer.byteLength(source)<=4096);
   assert.doesNotMatch(source,/To try a CLI/);
-  assert.match(read('skills/pdd-feature/steps/try.md'),/pdd try <story> --cli/);
+  assert.match(read('skills/pdd-feature/steps/try.md'),/pdd simulate <story> --cli/);
 });
 test('RELEASE8: public branch examples and messages use neutral names', () => {
   for(const file of ['docs/USAGE.md','docs/cli.md','src/workflow-runner.mjs']) assert.doesNotMatch(read(file),/round3\//,file);
