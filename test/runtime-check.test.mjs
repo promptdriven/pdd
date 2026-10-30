@@ -224,6 +224,35 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
 
+// Split documented shell words without evaluating expansions or commands.
+function runbookWords(command) {
+  const words = []; let word = '', quote = '', started = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === '\\' && quote !== "'") { if (i + 1 >= command.length) throw Error('Unfinished escape'); word += command[++i]; started = true; }
+    else if (quote) { if (ch === quote) quote = ''; else word += ch; }
+    else if (ch === '"' || ch === "'") { quote = ch; started = true; }
+    else if (/\s/.test(ch)) { if (started) { words.push(word); word = ''; started = false; } }
+    else { word += ch; started = true; }
+  }
+  if (quote) throw Error('Unclosed quote');
+  if (started) words.push(word);
+  return words;
+}
+
+test('RUNTIME-RUNBOOK-QUOTES: quoted summary words remain one existing-command argument', () => {
+  let plan;
+  assert.doesNotThrow(() => { plan = parseArgv(runbookWords('pdd workflow done build --summary "defect x"').slice(1)); });
+  assert.deepEqual(plan.operands, ['build']);
+  assert.equal(plan.options['--summary'], 'defect x');
+  assert.deepEqual(runbookWords("pdd workflow done build --summary 'a # b'"), ['pdd','workflow','done','build','--summary','a # b']);
+  let proof;
+  assert.doesNotThrow(() => { proof = parseArgv(runbookWords('pdd workflow prove 2594 --test "node --test test/new.test.mjs" --expect "defect x"').slice(1)); });
+  assert.deepEqual(proof.operands, ['2594']);
+  assert.equal(proof.options['--test'], 'node --test test/new.test.mjs');
+  assert.equal(proof.options['--expect'], 'defect x');
+});
+
 // Wrong: the package has no runbook, so the skills and the setup block never mention pdd check, or the runbook names commands pdd refuses.
 test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill carries it, and its commands parse', () => {
   const runbook = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
@@ -237,7 +266,7 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
     .map(text => text.trim()).filter(Boolean);
   assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
-  for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1)), command);
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.

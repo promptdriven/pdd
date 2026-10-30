@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93d2b93b9ee80165eef919ed37588cf2552c1d6da021f56c98bd596442d08875).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 34099a29e5fdab3421469db9b22b3ef3d75c36e576adfd862ed70f2d7f5151e2).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -6,6 +6,9 @@ const routes = [
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
     forms:[form('pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]', 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+  { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
+    operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
+    forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
   { id: 'workflow.done', prefix: ['workflow', 'done'], local: 'workflow-done',
     operands: [{name:'step',type:'workflow-name'}], options: [{name:'--summary',kind:'text'}],
     forms: [form('pdd workflow done STEP [--summary TEXT]', 'For the agent in a run worktree: record a step and print what to do next.')] },
@@ -47,11 +50,11 @@ const routes = [
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag' }, { name: '--local', kind: 'flag' }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
     forms: [form('pdd check [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]', 'Check stories on the PDD runtime with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.'),
-      form('pdd check --read [BATCH|CALL_ID] [--json]', 'Show saved check results again; sends no check.'),
+      form('pdd check --read [BATCH|CALL_ID] [--json] [--timeout MIN]', 'Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.'),
       form('pdd check --retry BATCH [--json] [--details] [--timeout MIN]', 'Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.'),
       form('pdd check --fill-hash', 'Fill prose_sha256 of draft runtime interfaces; no network.'),
       form('pdd check --files [STORY...] [--app-map PATH]', 'List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.'),
-      form('pdd check --lint [STORY...] [--json]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
+      form('pdd check --lint [STORY...] [--json] [--timeout MIN]', 'Print local SVG layout warnings, then the PDD runtime lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form('pdd check --lint --local [STORY...] [--json]', 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.'),
       form('pdd check --screen URL --drawing PATH [--json]', 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI/runtime calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],

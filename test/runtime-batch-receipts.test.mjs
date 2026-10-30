@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync, mkdirSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync, cpSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
 import { fakeRuntime, harbor, portsFor } from './runtime-fake.mjs';
@@ -43,6 +43,10 @@ function complete(result) {
 test('2655: dispatching a held local row preserves receipt counts in retry and batch read', async t => {
   const r = await fixture(t);
   r.edit(row => Object.assign(row, { phase: 'local', state: 'not_run', request_ids: [], eligible: true, can_retry: true, busy: true, retry_at: null }));
+  // This fixture is never-posted: retain no authoritative claim from fixture's initial completed check.
+  for (const name of readdirSync(r.folder).filter(name => name.endsWith('.dispatch.json'))) {
+    if (read(join(r.folder, name)).id === r.id) rmSync(join(r.folder, name));
+  }
   const before = r.fake.posts.length;
   const story = join(r.setup.repo, 'user_stories/place-order.md'), originalStory = readFileSync(story, 'utf8');
   writeFileSync(story, originalStory + '\nChanged source.\n');
