@@ -11,6 +11,8 @@ I can see when pdd delivered my change request and whether the agent has explici
 5. Completing a step or reaching a review gate warns about each delivered change still without an acknowledgement, with its identity and delivery time. The warning does not block normal progress or add an approval gate. A generic completion summary never acknowledges a request.
 6. Acknowledgement preserves request custody and all workflow progress, questions, approvals and transport behavior. Concurrent delivery or stale run writes cannot erase acknowledgement or other requests. A later new change is independently open. An agent's acknowledgement is a claim, not proof it understood or fully implemented my request.
 
+7. If an old submission remains protected as in progress, status and any refusal it causes identify that request, its text and original chat. They tell me to check that chat and type the request there if absent, rather than promise that retrying pdd will clear it. Protection never causes an automatic resend, even after time passes or the sender's PID is reused or host name changes.
+
 ## Rules to check
 
 - Only a delivered change in the current active run can gain its first acknowledgement; forbidden results include acknowledging an answer, another run's request or an uncertain submission.
