@@ -1,33 +1,36 @@
-# Use the new command names
+# Use one name for each command
 
-I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd workflow start`. My old commands still work, and each one tells me its new name.
+I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd workflow run`. When I type an old name, `pdd check` or `pdd try`, pdd runs nothing and tells me the new name in one line.
 
 ## Acceptance criteria
 
-1. `pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start`, never says "pdd check", "pdd try" or "workflow run", prints nothing to stderr and exits with code 0.
+1. `pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says "pdd check", "pdd try" or "workflow start", prints nothing to stderr and exits with code 0.
 2. `pdd test --help` lists the `pdd test` forms with --read, --retry, --fill-hash, --files and --screen, prints nothing to stderr and exits with code 0.
 3. `pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0.
-4. `pdd check --help` prints the `pdd test` help to stdout, prints one notice line to stderr that names `pdd check` and `pdd test`, and exits with code 0.
-5. `pdd check --lint --help` prints the `pdd lint` help to stdout, prints one notice line to stderr that names `pdd check --lint` and `pdd lint`, and exits with code 0.
-6. `pdd try --help` prints the `pdd simulate` help to stdout, prints one notice line to stderr that names `pdd try` and `pdd simulate`, and exits with code 0.
-7. `pdd workflow run --help` prints the `pdd workflow start` help to stdout, prints one notice line to stderr that names `pdd workflow run` and `pdd workflow start`, and exits with code 0.
-8. `pdd workflow start 81` tells me on stderr to name the workflow with `pdd workflow start small-change 81`, prints nothing to stdout and exits with code 2.
-9. `pdd workflow run 81` still prints only "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list." to stderr, with no notice, prints nothing to stdout and exits with code 2.
-10. `pdd test --bogus` and `pdd check --bogus` each print a usage error to stderr, with no notice and no "Unknown command", print nothing to stdout and exit with code 2.
-11. `pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0.
+4. `pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2.
+5. `pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2.
+6. `pdd try --help` prints nothing to stdout, prints one line to stderr that names `pdd try` and `pdd simulate`, and exits with code 2.
+7. `pdd help check` and `pdd help try` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2.
+8. `pdd check new-command-names --json`, `pdd check --bogus` and `pdd try new-command-names --new` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2.
+9. `pdd workflow run --help` prints the `pdd workflow run` help to stdout, prints nothing to stderr and exits with code 0.
+10. `pdd workflow start --help` prints the same `pdd workflow run` help to stdout, never says "workflow start", prints nothing to stderr and exits with code 0.
+11. `pdd workflow run 81` still prints only "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list." to stderr, prints nothing to stdout and exits with code 2.
+12. `pdd workflow start 81` prints only the same line, "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.", to stderr, prints nothing to stdout and exits with code 2.
+13. `pdd test --bogus` prints a usage error to stderr, with no "Unknown command" and no "was removed", prints nothing to stdout and exits with code 2.
+14. `pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0.
 
 ## What must not change
 
-Each old name runs the same code as today, with the same options, effects, exit codes and stdout bytes. The notice goes only to stderr, so `--json` output and `pdd mcp` stdout stay exact. MCP tool names, workflow step names, `pdd run` and the next-step hints that name old commands stay as they are.
+`pdd test`, `pdd lint` and `pdd simulate` keep every option, effect, exit code and stdout byte that they have today. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json, and with no Story it tests every Story. `pdd simulate` keeps --cli, --shell, --serve, --save-last, --stop, --tab, --app-map, --new, --no-open, --no-wait, --agent and --max-calls. The machine-read words keep `check` and `try`: the wire commands, the `/v1/try/…` paths, the `.pdd/try` folder, saved records and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command.
 
 ## Rules to check
 
-`pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`, with the same options. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json. `pdd lint` takes --local and the lint options. `pdd test --lint` works like `pdd lint` and prints no notice. Forbidden: an old name that changes its options, effects or exit code, or a new refusal for `pdd test --lint`.
+`pdd check` and `pdd try` are removed. Any input with them, with any options, help flags, unknown options, or after `pdd help`, exits with code 2, prints nothing to stdout and prints exactly one line to stderr. The line names the old and the new command: `pdd test`, or `pdd lint` when `--lint` is one of the options of `pdd check`, or `pdd simulate`. It runs nothing: no help, no sign-in, no file read, no interpreter call and no saved state. Forbidden: help on stdout, a second line, a usage error about another option, "Unknown command", an alias that still runs the old name, or any work before the refusal.
 
-An old name prints its notice once, on stderr, after a good parse and before any other line, also for its help. Forbidden: the notice on stdout, the notice twice, the notice on a parser usage error (exit 2 before the command runs) or the notice for a new name. A later refusal by the command itself may follow the notice.
+`pdd sim` and `pdd workflow start` are quiet forms of `pdd simulate` and `pdd workflow run`: the same plan and the same result, with no extra line. Help and shell completion show only `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`. `pdd test --lint` still works like `pdd lint`, and `--lint` and `--local` stay hidden on `pdd test`. Forbidden: a notice for a quiet form, a different result from the main name, `workflow start`, `check` or `try` in help or completion, or a new refusal for `pdd test --lint`.
 
-Help and shell completion show only the new names. Old names still parse. Forbidden: an old name in `pdd --help`, in a help form or in the completion choices.
+No line that pdd prints names `pdd check` or `pdd try`, except the removal line. This covers next-step hints, errors, progress lines, status lines, PR text and the Simulator guide text. The lines that pdd writes about the simulation say Simulator, for example `Simulator ready for "<title>": <link>`, and the error label is `pdd simulate:`. Forbidden: `Read the results later with: pdd check --read BATCH`, `Run pdd try <story> --new`, `Try ready for "<title>"` or `pdd try:` in a line that pdd writes.
 
-`pdd sim` is the short form of `pdd simulate`: the same code, and no notice. Forbidden: a notice for `pdd sim`, or a different result from `pdd simulate`.
+The MCP tools of `pdd mcp` are `simulate_open`, `simulate_state`, `simulate_input`, `simulate_test` and `simulate_save_case`. Forbidden: a `try_*` tool name, or an alias for one.
 
-The new words are data in one place, so a later rename is one edit. The test file checks help, notices and usage errors. The same code, the stdout of `--json` and `pdd mcp`, and completion need Node tests in the code area.
+The new words are data in one place, so a later rename is one edit. The test file checks help, removal lines, quiet forms and usage errors. That nothing runs, completion, the hint and Simulator lines and the MCP tool names need Node tests in the code area.
