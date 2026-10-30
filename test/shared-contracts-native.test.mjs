@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runContracts } from '../src/contracts.mjs';
-import { runCheck, runTry, readContractHistory, readTryOwner } from '../src/runtime-client.mjs';
+import { runCheck, runTry, runDoorCall, readContractHistory, readTryOwner } from '../src/runtime-client.mjs';
 import { captureSource, findTests, fillHashes, gitFiles, interfaceBlocks, preflight, readPrompt, sourceFilePort } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor, PLACE, sink } from './runtime-fake.mjs';
 
@@ -312,6 +312,36 @@ test('NATIVE Try pins expanded prompts while preserving its original world and a
   setup.records.order.description=undefined;delete setup.records.order.description;setup.save();
   const legacy=repoState(setup);delete legacy.value.tries[ORDER].effective_prompt_hashes;writeFileSync(legacy.path,JSON.stringify(legacy.value));
   await assert.rejects(readTryOwner({cwd:setup.repo,story:'place-order'},ready.ports),/reference baseline is unavailable.*--new/);
+});
+
+test('NATIVE door calls enforce saved prompt pins with or without the original scenario',async t=>{
+  for(const removed of [false,true])await t.test(removed?'original scenario removed':'original scenario present',async t=>{
+    const setup=shared(t);json(setup.repo,'contracts/world.json',{stock:0});
+    const scenario=load(setup.repo,ORDER);scenario.initial_world={$seed:'contracts/world.json'};json(setup.repo,ORDER,scenario);
+    const ready=await runtime(t,setup,(entry,f)=>{
+      if(entry.method==='POST' && entry.url.endsWith('/call')) {
+        const id=entry.json.requestId;
+        f.jobs.set(id,f.job(id,'call','passed',{program_result:{totalCents:900}}));
+        return{status:202,json:f.job(id,'call','running')};
+      }
+      const answer=f.jobs.get(entry.url.split('/').at(-1));
+      if(answer)return{status:200,json:answer};
+    });
+    assert.equal(await runTry({cwd:setup.repo,words:['place-order'],options:{'--no-open':true,'--no-wait':true}},ready.ports),0);
+    const record=repoState(setup).value.tries[ORDER];
+    const descriptor={root:setup.repo,origin:ready.fake.origin,sessionId:record.id,login:record.login,prompt:PLACE,operation:'place_order'};
+    if(removed)rmSync(join(setup.repo,ORDER));
+    json(setup.repo,'contracts/world.json',{stock:9});
+    assert.deepEqual((await runDoorCall(descriptor,{},ready.ports)).result,{totalCents:900});
+    assert.equal(ready.fake.jsonPosts.length,1);
+    setup.records.order.description='Contract changed after opening';setup.save();
+    await assert.rejects(runDoorCall(descriptor,{},ready.ports),error=>error.exitCode===125 && /shared contract changed.*--new/.test(error.message));
+    assert.equal(ready.fake.jsonPosts.length,1,'a stale expanded prompt must not dispatch');
+    delete setup.records.order.description;setup.save();
+    write(setup.repo,PLACE,readFileSync(join(setup.repo,PLACE),'utf8')+'\nChanged prompt prose.\n');
+    await assert.rejects(runDoorCall(descriptor,{},ready.ports),error=>error.exitCode===125 && /prompt changed.*--new/.test(error.message));
+    assert.equal(ready.fake.jsonPosts.length,1,'a stale authored prompt must not dispatch');
+  });
 });
 
 test('NATIVE command parser dispatch and subprocess listing stay local without agent/PATH/auth effects',async t=>{
