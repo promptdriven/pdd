@@ -191,3 +191,14 @@ for(const [limits,pointer,action] of [
  if(limits===undefined){assert.match(problem.hint,/limits/);assert.match(problem.hint,/max_steps/);assert.match(problem.hint,/max_model_calls/);assert.match(problem.hint,/1/);}
  else assert.match(problem.hint,new RegExp(pointer.split('/').at(-1)));
 });
+test('2676 mixed lint text preserves refused and not run selected rows',async t=>{
+ const setup=harbor(t),child='prompts/child.prompt.md';
+ prompt(setup.repo,child,'{"max_steps":1,"max_model_calls":0}');
+ const file=join(setup.repo,'tests/unknown-item.json'),doc=JSON.parse(readFileSync(file,'utf8'));
+ doc.steps[0].entry_path=child;doc.steps[0].operation='value';writeFileSync(file,JSON.stringify(doc));
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state},{gh:()=>assert.fail('no auth'),fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,options:{'--lint':true}},ports),4);
+ const lines=ports.stdout.text.split('\n');
+ assert.ok(lines.some(line=>line.includes('tests/place-order.json')&&/not run/.test(line)),ports.stdout.text);
+ assert.ok(lines.some(line=>line.includes('tests/unknown-item.json')&&/refused:.*invalid-limits/.test(line)),ports.stdout.text);
+});
