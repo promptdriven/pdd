@@ -60,6 +60,7 @@ An inventory failure, removal, changed assertion, new skip, or unavailable compa
 
 ## Dependencies
 
+- [Simulation selection](runtime-client.prompt.md#choose-how-to-open-the-program): required generation/verification context for gate and bundled skill advice.
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
 - [PR evidence preparation](workflow-pr-evidence.prompt.md): required authoring/generation/verification/testing context for the real `src/workflow-pr-evidence.mjs` module function `preparePrEvidence({run,isCode}, ports)`. Both PR creation and updates must call it with the actual saved-run projection and native ports; insert its lines/reference through the existing body protections. It owns lifted labels, machine proof freshness, reference substitution and their publication-refresh requirements. No alternative test-only renderer.
 - [Old-code proof](workflow-prove.prompt.md): required generation/runtime/verification context for machine result schema, classification and provenance; runner consumes results without executing proof.
@@ -173,3 +174,14 @@ comparison root through the existing matching policy.
 ## PR evidence integration
 
 Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) boundary for both new and updated PR bodies, including relevant PR 1 updates. Its `{lines,issueReference,proofStatus}` replaces only the owned top evidence/reference content; preserve all existing caller, approval, stacking, publication-pending-before-push ordering, marker/redaction/report/body-budget behavior. Pass `isCode` false for prompt-space and true for code/small-change, and derive the helper's known ordered step projection, workflow type and selected baseBranch from the saved run/workflow. Keep saved run.baseSha unchanged. The helper's entire top evidence block precedes all replay status blocks (including PASS, BLOCKED, NOT REPLAYED and publication-pending); this display order does not relax pending-before-push safeguards. Native integration must provide real current Git-head and direct note/machine-record readers. Compose the helper's lines with the current inventory at its reserved slot, using only the inventory collector's result; summaries and notes cannot supply machine proof or inventory text. The helper's Runtime pass does not prove the runner uses it or that GitHub edits/pushes occur in the required order; native lifecycle tests remain required.
+
+## Simulation advice at gates
+
+Gate instructions and bundled feature/bug skill advice show `pdd simulate <story>` for a
+named Story and `pdd simulate` for the whole project. Explain that pdd automatically opens
+a shell for a command-line program, localhost with an example request for HTTP routes,
+or the Simulator page for screens. Do not promise a browser/page link for every program
+or require flags for the ordinary path. Offer `--page` only when the person wants the page.
+[Runtime client](runtime-client.prompt.md#choose-how-to-open-the-program) owns the choice;
+keep approval and
+workflow transitions unchanged.

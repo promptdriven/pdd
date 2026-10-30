@@ -91,3 +91,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 
 1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.
 2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
+
+## Open a simulation naturally (#2760)
+
+1. [Open my program the way I use it](simulate-program-kind.md) — [Node cases](../test/simulate-kind.test.mjs), plus the `2760` Story-gate case in [workflow runner](../test/workflow-runner.test.mjs). Runtime check: NOT RUN; Node/fake transport only, no interpreter or AI calls authorized.

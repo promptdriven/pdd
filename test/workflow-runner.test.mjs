@@ -2352,3 +2352,23 @@ test('product association: conflicting markers warn and ordinary issues keep the
     if(body.includes('pdd-product')) assert.match(f.record().warnings.join(' '),/multiple.*marker/i);
   }
 });
+
+test('2760: feature and bug Story gates offer the automatic simulation command and whole project', async t => {
+  for (const name of ['feature', 'bug']) {
+    const f = await fixture(t, { name, agent: 'codex' });
+    assert.equal((await f.run()).exitCode, 0);
+    const run = f.record();
+    let gate;
+    for (const step of run.areas[0].steps) {
+      f.tick();
+      gate = await stepDone({ step, summary: `${step} ready`, cwd: run.root }, f.agentPorts());
+      assert.equal(gate.exitCode, 0, gate.message);
+    }
+    assert.match(gate.message, /pdd simulate <story>/);
+    assert.match(gate.message, /automatically/i);
+    assert.match(gate.message, /shell/);
+    assert.match(gate.message, /localhost/);
+    assert.match(gate.message, /whole project/i);
+    assert.equal(f.prs.length, 0, 'advice must not publish or approve');
+  }
+});

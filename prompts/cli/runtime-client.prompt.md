@@ -365,7 +365,7 @@ $PDD_STATE_DIR/tries/<id>.json             Try records
 
 Request IDs appear only in state files and in `--json`.
 
-## `pdd try`
+## `pdd simulate`
 
 A new Try requests a total session budget of400 calls, overridden by explicit `--max-calls N`.
 Validate N as a positive whole safe integer from1 through1000 before sign-in, capture or network effects.
@@ -390,7 +390,54 @@ fails without creating a replacement unless the user explicitly supplies --new. 
 budget changes must not be reported as success; an unsupported raise fails before any paused-session reopen; no new dispatch after interruption. The runtime's
 owner API binding for this raise is pending the planner's contract; do not invent a mutation path.
 
-- STORY as for `pdd check`. No STORY and one test: use it. Many tests: list them, exit 2. Then preflight, capture and lint as for `pdd check`, for this one test.
+### Choose how to open the program
+
+`runTry` owns simulation selection; preserve its public signature, session identity, budgets,
+source pins, authentication and saved-case behavior. These rules refine the former default page.
+Read Story entry interfaces through preflight, including shared-schema references. A CLI entry
+has both CLI conventions; an HTTP entry has the declared `HTTP METHOD /path` input title.
+Do not infer kinds from filenames, operation names or test results.
+
+```mermaid
+flowchart TD
+    E{Explicit way?} -->|Yes| F[Use requested way]
+    E -->|No| P{Whole project with app map?}
+    P -->|Yes| B[Simulator page with all mapped screens]
+    P -->|No| C{One distinct CLI program?}
+    C -->|Yes| S[Shell with program ready]
+    C -->|No CLI| H{HTTP routes?}
+    C -->|Several CLI programs| R[Ask for a Story and list eligible names]
+    H -->|Yes| L[Localhost server and example request]
+    H -->|No| B
+```
+
+For a named Story, apply the CLI/HTTP/page alternatives only to its entries; a project app
+map must not turn an unrelated CLI Story into a screen Story. Explicit `--cli` prints the
+launcher/PATH and returns; `--cli --shell` opens the shell. `--shell` alone selects the CLI
+shell. `--serve [PORT]` forces the existing localhost adapter, including its Screen support.
+`--page` forces the Simulator page for any Story. Existing `--agent` and `--tab` requests also
+select the page unless a conflicting explicit way is supplied. `--no-open` suppresses browser
+opening only; `--no-wait` retains existing bridge behavior. Conflicting ways refuse with exit 2
+before sign-in, capture or remote effects. Stop and Save retain their existing separate rules.
+
+STORY is optional. With no Story, use the complete selected app map, including every screen
+and its dependency closure. Otherwise the one distinct CLI entry across Stories is the main
+program: multiple Stories for that same prompt/operation are not ambiguous. Without CLI,
+include all declared HTTP routes for the whole project. Choose a stable lexicographically
+first eligible test path as the seed only; do not limit captured project capabilities to it.
+Several distinct CLI programs have no inferred main: refuse with exit 2, list their Story names
+and ask the person to name one. An empty project refuses plainly without authentication.
+A named Story matching several case files keeps the existing exact-test-path ambiguity rule.
+Preflight, capture and lint still apply to the selected source before creating a session.
+
+An incompatible forced CLI/HTTP way refuses with a plain reason and sorted distinct eligible
+Story names, without RUNBOOK/schema/convention jargon. For example: `This Story is not a
+command-line program. These are: one-cli-one-action.` If none qualify, say `No Stories are
+command-line programs.` The HTTP equivalent says `This Story has no HTTP routes or screens.`
+and lists Stories with routes or an app map. Refuse a known local mismatch before sign-in or
+runtime calls; do not create an unusable session. Ambiguous entries within a Story remain a
+refusal. Explicit page mode remains usable for generic call-only Stories.
+
 - If `repos/<key>.json` has a Try for this test and GET says `result.session.state` `running` with a valid link, open that link again. For `paused`, validate the same-origin link, then explicitly send one authenticated JSON `{}` POST to `/v1/try/<id>/reopen`. Keep the same ID and original seed identity. Read that ID until its session is running before showing/opening the link. Restore consumes no AI calls, creates no new Try and keeps the original expiry and remaining allowance. A lost reopen answer is read by the same ID; never automatically repeat the POST. A busy/refused/missing reopen or unconfirmed restore keeps the record and returns nonzero with its reason and retry advice naming the exact authored test path, shell-quoted when needed; never print a paused link as ready. `--new` stops the paused Try and creates a new one through its normal route, without reopening it. Options that apply only to a new Try remain refused before reopening. After interruption, send nothing new. `--new`: stop the old Try first, then make a new one. A Try that ended (404, 410, failed, refused, unknown, session stopped or unknown) is forgotten, and a new Try is made: a new Try costs no AI calls. A Try that is still starting, or a GET with no answer, is exit 3 with no new Try, unless `--new` stops it first. A new Try whose setup ends `unknown` is forgotten too: `The Try setup did not finish on the server (its state is unknown; the server may have restarted). It used no AI calls. Run pdd try <story> to make a new Try.` (exit 3).
 - After Ctrl-C, pdd sends nothing new: no POST starts after the interrupt.
 - App map: `--app-map PATH`, else `app-map.json` at the repo root, else `app/app-map.json`. An app map is a Git-visible JSON object with `"schema_version": "prompt-runtime.app-map.v1"` and a nonempty `name` (the engine's first checks). A bad `--app-map` is exit 2 with the reason (`not a Git-visible file`, `not JSON`, wrong `schema_version`, no `name`) and `See RUNBOOK.md §13.`; a bad found file is skipped with a note. With an open Try, `--app-map` or `--tab` without `--new` is exit 2: they apply only to a new Try. POST `/v1/try` multipart `{requestId, source_sha256, seed: <test path>, app_map, tab}`: `app_map` only when there is one; `tab` = `--tab`, else `screen` with an app map, else `call`; `max_calls` is the explicit budget or400. Read until `state: passed`, `result.session.state: running` and a valid `result.url`: the origin's scheme and host, path `/s/<token>/`, no user or password. Else refused, not run or unknown, as for a check, with one exception.
@@ -434,7 +481,7 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 
 ## Terminal and HTTP doors
 
-`runTry` also accepts `--cli`, `--shell` (only with --cli), `--serve [PORT]` (default 8080), and `--save-last`.
+`runTry` also accepts the explicit ways declared in [Choose how to open the program](#choose-how-to-open-the-program), plus `--save-last`.
 These modes share the ordinary Story selection, lint, upload, owner authentication and saved Try.
 Reject incompatible modes before any network effect. A door reuses an open Try only at its recorded origin and
 with its recorded GitHub login. --cli selects terminal on new sessions and delegates local launch behavior to

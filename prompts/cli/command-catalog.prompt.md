@@ -53,10 +53,15 @@ Check also catalogs `--screen` (text URL) and `--drawing` (text PATH), with the 
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
-Try also catalogs flags --cli, --shell and --save-last and optional-integer --serve (1..65535, default 8080).
+Try also catalogs flags --cli, --shell, --page and --save-last and optional-integer --serve (1..65535, default 8080).
 Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]`,
 `pdd simulate --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
-into its original test. --shell compatibility and mode conflicts belong to runtime-client.
+into its original test. Add the explicit form `pdd simulate [STORY] --page [--new]`.
+The default help explains automatic choice: command-line program opens a shell, HTTP routes
+start on localhost with an example request, screens open the Simulator page. With no Story,
+open the whole project. `--page` forces the page. Preserve the optional Story operand and all
+existing explicit forms. Mode conflicts and choice are owned by
+[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program).
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
 Try catalogs --agent as nonempty text NAME: accept quoted custom display names as one argument as well as the default codex, claude and gemini names. Agent discovery and unknown-name errors belong to the local agent bridge; parsing does not read configuration or execute a launcher. Workflow --agent keeps its codex|claude value choices. Completion must not present a fixed provider-only list for Try agent names. Its help says pdd stays running to connect the person’s own agent when stdout is a terminal or --agent is explicit; ordinary non-terminal Try returns after collecting saved cases once. --agent selects a configured name and --no-wait skips the bridge. Runtime-client owns conflicts/lifecycle.

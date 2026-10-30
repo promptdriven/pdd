@@ -4,7 +4,8 @@ Own src/try-doors.mjs. Provide one generic adapter around the owner's saved Try.
 streams and saved session identity. Do not interpret commands, execute a project binary, or generate project logic.
 
 `openCli(context, test, sessionId, options)` selects the first distinct CLI entry used by the Story's tests; refuse
-if there are multiple distinct CLI entries. Both input and result schemas carry the cli convention. A safe program
+if there are multiple distinct CLI entries. Simulation mode selection and plain eligibility refusals belong to
+[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program). Both input and result schemas carry the cli convention. A safe program
 name comes from the prompt's first H1 (optionally backticked): letters/digits/dot/underscore/hyphen, starting with
 a letter, up to 64 characters; pdd, node, gh and git are reserved because putting their shims first on PATH would shadow pdd’s own tools. Record schema, original test and Story criteria privately using
 the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a POSIX shell shebang that execs the absolute Node executable. Never traverse a symlink
@@ -36,7 +37,7 @@ Print the target file and new step name. No model call is needed.
 ## Dependencies
 
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for authentication, state, owner
-  calls, confirmed results and safe original-test append.
+  calls, confirmed results, safe original-test append and automatic simulation selection.
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for CLI interfaces.
 - [Prompting guide](../../docs/prompting-guide.md): required authoring context.
 
