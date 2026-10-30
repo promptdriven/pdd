@@ -135,7 +135,7 @@ named `replay`, put its definition in `.agents/skills/pdd-replay/workflow.json`:
 Give the declaration to the workflow you selected:
 
 ```sh
-pdd workflow start replay 123 --adopt-corpus /path/to/approval.json
+pdd workflow run replay 123 --adopt-corpus /path/to/approval.json
 ```
 
 The first area can be the code area. Adoption supplies its original vector anchor
