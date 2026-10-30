@@ -12,9 +12,9 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring 
 
 The catalog's `formerly` words ([Names](command-catalog.prompt.md#names)) still parse like the new words of their route: same operands, options, validation and plan. `check` and `try` are known first words, so they never get `Unknown command`. The former `check` parses with the `check` route (`test`) and keeps every option that it had, `--lint` and `--local` included.
 
-A plan from former words also has `notice`: one plain line, `pdd FORMER is now pdd NEW.`, with no backticks or quotes. The four lines are `pdd check is now pdd test.`, `pdd check --lint is now pdd lint.` (the former `check` with the flag `--lint` anywhere in its options), `pdd try is now pdd playground.` and `pdd workflow run is now pdd workflow start.`
+A plan from former words also has `notice`: one plain line, `pdd FORMER is now pdd NEW.`, with no backticks or quotes. The four lines are `pdd check is now pdd test.`, `pdd check --lint is now pdd lint.` (the former `check` with the flag `--lint` anywhere in its options), `pdd try is now pdd simulate.` and `pdd workflow run is now pdd workflow start.`
 - Help of a former name (`pdd check --help`, `pdd check -h`, `pdd help try`, `pdd workflow run --help`) is the help of the new name, with the same notice. `check --lint` with a help flag gets the help of `lint`.
-- New words never get a notice. `pdd test --lint` works like `pdd lint`.
+- New words never get a notice. `pdd test --lint` works like `pdd lint`. `sim` is the short form of `simulate`: it parses like `simulate`, with the same plan, and gets no notice.
 - A refused input is a `CommandInputError` with no notice, so a usage error prints only its own message (exit 2).
 
 ## Missing workflow name

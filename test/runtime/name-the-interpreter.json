@@ -5,7 +5,7 @@
     {"id": "AC1", "text": "`pdd --help` calls the hosted service the \"PDD interpreter\", never says \"PDD runtime\" or \"runtime call\", prints nothing to stderr and exits with code 0."},
     {"id": "AC2", "text": "`pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says \"PDD runtime\" and exits with code 0."},
     {"id": "AC3", "text": "`pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says \"PDD runtime\" and exits with code 0."},
-    {"id": "AC4", "text": "`pdd playground --help` says that it makes a Try link on the PDD interpreter, never says \"PDD runtime\" and exits with code 0."},
+    {"id": "AC4", "text": "`pdd simulate --help` says that it opens the PDD Simulator on the PDD interpreter, never says \"PDD runtime\" and exits with code 0."},
     {"id": "AC5", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."},
     {"id": "AC6", "text": "`pdd approve --help` still says \"runtime interface\", the name of the block in a prompt file, prints nothing to stderr and exits with code 0."}
   ],
@@ -51,13 +51,13 @@
       ]
     },
     {
-      "step_id": "playground-help-names-the-interpreter",
+      "step_id": "simulate-help-names-the-interpreter",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["playground", "--help"]},
+      "input": {"argv": ["simulate", "--help"]},
       "checks": [
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "Try link"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD Simulator"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
         {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]

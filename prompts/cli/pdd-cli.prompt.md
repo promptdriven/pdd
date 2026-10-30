@@ -53,7 +53,7 @@ authentication or runtime-client import belongs to these routes.
 
 ## Help contract
 
-The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [help forms](#help-forms) below, in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the help-form lines whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd playground` lines and `pdd workflow run --help` the `pdd workflow start` line. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
+The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [help forms](#help-forms) below, in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the help-form lines whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd simulate` lines and `pdd workflow run --help` the `pdd workflow start` line. `pdd sim --help` gives the `pdd simulate` lines with no notice. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
 
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
@@ -81,7 +81,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
-  pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Try links; never start or resume a chat.
+  pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
   pdd workflow open ISSUE  Focus or attach the current area chat; resume it if its session ended.
   pdd  Show local commands.
   pdd --help  Show local commands.
@@ -90,20 +90,20 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd --version  Show this package version.
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
-  pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: sends selected Stories and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
+  pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
   pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
-  pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects a Try map.
+  pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
   pdd test --screen URL --drawing PATH [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.
   pdd lint [STORY...] [--json] [--timeout MIN]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
   pdd approve PROMPT  Show a prompt's runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.
-  pdd playground [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Make a Try link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. A new Try defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved on the Try page to the story's test file.
-  pdd playground [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Try session; prints a PATH line, or opens a shell with --shell.
-  pdd playground [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Try session on localhost (default port 8080).
-  pdd playground --save-last  Save the last terminal command and its output in the original Story test file.
-  pdd playground --stop [STORY]  Stop the open Try link of a story.
+  pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
+  pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
+  pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
+  pdd simulate --save-last  Save the last terminal command and its output in the original Story test file.
+  pdd simulate --stop [STORY]  Stop the open Simulator link of a story.
   pdd jobs  List active and waiting interpreter jobs on this machine without contacting the interpreter.
   pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
   pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
@@ -161,7 +161,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "e7c867a0a7d82afea3589eef236b333263232a49757ac5d8a96041c0fc939d6d",
+  "prose_sha256": "86727a845600e628f756afffa5abfe5f4f0b08504a9e3a1643a514dfa16d05ea",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

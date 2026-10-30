@@ -7,7 +7,7 @@ I can read "PDD interpreter" in the help and messages that pdd writes, so I know
 1. `pdd --help` calls the hosted service the "PDD interpreter", never says "PDD runtime" or "runtime call", prints nothing to stderr and exits with code 0.
 2. `pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says "PDD runtime" and exits with code 0.
 3. `pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says "PDD runtime" and exits with code 0.
-4. `pdd playground --help` says that it makes a Try link on the PDD interpreter, never says "PDD runtime" and exits with code 0.
+4. `pdd simulate --help` says that it opens the PDD Simulator on the PDD interpreter, never says "PDD runtime" and exits with code 0.
 5. `pdd product --help` says that the product commands make no interpreter calls, never says "runtime" and exits with code 0.
 6. `pdd approve --help` still says "runtime interface", the name of the block in a prompt file, prints nothing to stderr and exits with code 0.
 
