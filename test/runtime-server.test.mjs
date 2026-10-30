@@ -273,6 +273,64 @@ test('RUNTIME-XFIX3: diagnosis sources stay distinct, missing-error wording is c
   assert.match(longError.out, /got:\n {6}no error \(a normal result\)/);
 });
 
+test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and account for calls', async t => {
+  const setup = harbor(t);
+  const answerFor = (rerun, calls = 5, includeDiagnosis = true) => (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false }]);
+    const first = answer.result.report.samples[0].steps[0];
+    first.step_id = 'first-step'; first.checks = [
+      { criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false,
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 3, failed: 3, stable: true } } } : {}) },
+      { criterion_id: 'AC2', target: 'result', path: '/customerName', expected: 'Sam', actual: 'Jo', passed: false,
+        ...(includeDiagnosis ? { diagnosis: { rerun: { runs: 2, failed: 0, stable: true } } } : {}) }];
+    answer.result.report.samples[0].steps.push({ step_id: 'second-step', checks: [
+      { criterion_id: 'AC3', target: 'result', path: '/totalCents', expected: 899, actual: 901, passed: false }] });
+    answer.result.report.rerun = rerun;
+    answer.usage.calls = calls;
+    return { status: 200, json: answer };
+  };
+  const stable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order']);
+  assert.equal(stable.code, 1);
+  assert.match(stable.out, /Runtime check \(place-order\): ✗ [^\n]*5 AI calls \(2 for reruns\)/);
+  assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
+  assert.doesNotMatch(stable.out, /passed 2 of 2 reruns/);
+  assert.equal((stable.out.match(/Rerun:/g) ?? []).length, 2); assert.doesNotMatch(stable.out, /more AI calls/);
+  assert.match(stable.out, /AC3  step second-step[\s\S]*Rerun: failed 1 of 3 \(unstable\)\. Make the rule in the prompt firmer\./);
+  const stableJson = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order'], { '--json': true });
+  assert.equal(stableJson.code, 1); assert.equal(stableJson.json.rows[0].rerun.calls, 2);
+  assert.equal(stableJson.json.rows[0].failed_checks[0].diagnosis.rerun.failed, 3);
+
+  const noCalls = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 3, failed: 3, stable: true }] }, 1)), ['place-order']);
+  assert.match(noCalls.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
+  assert.doesNotMatch(noCalls.out, /more AI calls/);
+
+  const oneRun = await check(setup, await fakeRuntime(t, answerFor({ steps: [{ step_id: 'first-step', runs: 1, failed: 1, stable: true }] }, 5, false)), ['place-order']);
+  assert.doesNotMatch(oneRun.out, /Rerun:/);
+
+  const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: 'more-than-3-failed-steps' }, 5, false)), ['place-order']);
+  assert.match(skippedText.out, /Rerun: skipped \(more-than-3-failed-steps\)\./);
+  const skipReasons = ['more-than-3-failed-steps', 'not-failed', 'budget', 'live-resources'];
+  for (const reason of skipReasons) {
+    const skippedText = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order']);
+    assert.ok(skippedText.out.includes(`Rerun: skipped (${reason}).`));
+    const skipped = await check(setup, await fakeRuntime(t, answerFor({ skipped: reason }, 5, false)), ['place-order'], { '--json': true });
+    assert.equal(skipped.json.rows[0].rerun.skipped, reason);
+  }
+  const missingUsage = await check(setup, await fakeRuntime(t, (entry, f) => {
+    const reply = answerFor({ calls: 2, steps: [{ step_id: 'first-step', runs: 3, failed: 3, stable: true }] }, 5, false)(entry, f);
+    return Promise.resolve(reply).then(result => { if (result.json?.usage) delete result.json.usage; return result; });
+  }), ['place-order']);
+  assert.doesNotMatch(missingUsage.out, /0 AI calls/); assert.match(missingUsage.out, /2 for reruns/);
+  const invalid = await check(setup, await fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'failed', [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', expected: 899, actual: 900, passed: false }]);
+    answer.result.report.rerun = { calls: -1, steps: [{ step_id: 'first-step', runs: '3', failed: -1, stable: true }] };
+    return { status: 200, json: answer };
+  }), ['place-order'], { '--json': true });
+  assert.equal(invalid.json.rows[0].rerun.calls, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].runs, undefined); assert.equal(invalid.json.rows[0].rerun.steps[0].failed, undefined);
+});
+
 test('RUNTIME-XFIX5: multiline values, result targets and run-level diagnosis sources stay guarded', async t => {
   const setup = harbor(t);
   const answerFor = ({ checks, result = {}, why = null, who = null, next_step = null, error = null }) => async (entry, f) => {
@@ -348,6 +406,7 @@ test('RUNTIME-XFIX6D: text and JSON use run-level diagnosis fields when no check
   const row = json.json.rows[0];
   assert.equal(row.why, 'run-level why'); assert.equal(row.who, 'runtime'); assert.equal(row.next_step, 'run-level next'); assert.equal(row.reason, null);
 });
+
 
 // Wrong: pdd waits forever, or calls a still-running check failed or done at the timeout.
 test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and was read every 2 s', async t => {
@@ -476,7 +535,7 @@ test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request
 });
 
 // Wrong: a pdd that was killed mid-send leaves rows that --read shows as passed (exit 0) or never reads.
-test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a row never sent is not run', async t => {
+test('RUNTIME-SERVER12: --read adopts posted claims and keeps genuinely unsent rows not run', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const first = await check(setup, fake, ['place-order']);
   assert.equal(first.code, 0);
@@ -489,7 +548,26 @@ test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a ro
   assert.equal(read.code, 0, read.out); assert.equal(fake.gets.length, gets + 1); assert.equal(fake.gets.at(-1).url, `/v1/runs/${id}`);
   saved.rows[0] = { ...saved.rows[0], state: 'ready', request_ids: [] };
   writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
-  const never = await check(setup, fake, [], { '--read': true });
+  const posts = fake.posts.length;
+  const adopted = await check(setup, fake, [], { '--read': true, '--json': true });
+  assert.equal(adopted.code, 0);
+  assert.equal(adopted.clock.uuids, 0);
+  assert.equal(adopted.json.rows[0].request_id, id, 'the dispatch claim preserves the paid check identity');
+  assert.equal(fake.posts.length, posts, 'erasing row IDs cannot authorize a second POST');
+
+  // A separate producer batch stopped before any dispatch has no paid claim to adopt.
+  const unsent = harbor(t);
+  const stopped = await check(unsent, fake, ['place-order'], {}, { onInterrupt: handler => { handler(); return () => {}; } });
+  assert.equal(stopped.code, 3);
+  assert.equal(fake.posts.length, posts, 'interruption precedes even the lint POST');
+  const unsentFolder = join(unsent.state, 'batches', stopped.batch);
+  const unsentSaved = batchFile(unsent, stopped.batch);
+  assert.deepEqual(unsentSaved.rows[0].request_ids, []);
+  assert.equal(filesUnder(unsentFolder).some(path => path.endsWith('.dispatch.json')), false);
+  unsentSaved.rows[0].state = 'ready';
+  writeFileSync(join(unsentFolder, 'batch.json'), JSON.stringify(unsentSaved));
+  const never = await check(unsent, fake, [], { '--read': true });
+  assert.equal(fake.posts.length, posts);
   assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
   assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
 });
@@ -541,7 +619,7 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
 });
 
 // Wrong: the PR line hides a failure, or --json lacks the line an agent pastes.
-test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summary_line in --json', async t => {
+test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict mark, also as summary_line in --json', async t => {
   const setup = harbor(t);
   const failed = [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', expected: 899, actual: 900, passed: false },
     { criterion_id: 'AC2', target: 'result', path: '/customerName', op: 'equals', expected: 'Sam', actual: 'Sam', passed: true }];
@@ -561,7 +639,7 @@ test('RUNTIME-SERVER16: one pasteable summary line with ✓ or ✗, also as summ
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
   });
   const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: ✗ 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
@@ -722,7 +800,13 @@ const PLAIN_REFUSALS = [
 // Wrong: a refused check shows only a code, or calls an AI service failure a problem in the test (round-2 report text, Oct 27).
 test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and fix; ai-service says the test is fine; old answers keep their text', async t => {
   const setup = harbor(t);
-  const refusing = refusals => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: f.check(entry.url.split('/').at(-1), 'refused', [], refusals) } : f.normal(entry));
+  // This compatibility case deliberately models the old server without run-level advice.
+  const refusing = refusals => fakeRuntime(t, (entry, f) => {
+    if (entry.method !== 'GET') return f.normal(entry);
+    const answer = f.check(entry.url.split('/').at(-1), 'refused', [], refusals);
+    Object.assign(answer.result, { outcome: 'Fail', why: 'Checks failed.', next_step: null });
+    return { status: 200, json: answer };
+  });
   const plain = await check(setup, await refusing(PLAIN_REFUSALS), ['place-order']);
   assert.equal(plain.code, 4, plain.err + plain.out);
   const lines = plain.out.split('\n'), at = lines.indexOf('REFUSED  Place a coffee order (tests/place-order.json)');
@@ -832,11 +916,11 @@ test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses
 });
 
 // Wrong: a check that is still running looks like a failure in the PR line (cli 12b).
-test('RUNTIME-COST2: the summary line shows running or unknown, never a cross, until a row really fails', async () => {
+test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
   const { summaryLine } = await import('../src/runtime-output.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
   assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
-  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: unknown · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: no verdict · /);
   assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
   assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
 });

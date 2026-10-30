@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c85c10a68973046f0ae46f6ef890ba44fc470ec144124645843ce1d8b343e5a6).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 2386453b9d9111e2ece54b2b53279d856739e16dd76916e0faa6caa7ca1664b4).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -74,7 +74,7 @@ export function storyCriteria(source) {
 }
 
 export function gitFiles(root) {
-  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024 });
+  const listed = spawnSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { cwd: root, maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   if (listed.status !== 0) throw new PreflightError(5, 'pdd could not list the Git files of this repository.');
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
@@ -606,7 +606,7 @@ export function preflight({ root, found, selected }) {
 
 // --fill-hash: fill draft hashes; report approved interfaces whose text changed.
 export function fillHashes({ root, files = gitFiles(root) }) {
-  const result = { filled: [], current: [], refused: [], stale: [] };
+  const result = { filled: [], current: [], refused: [], stale: [], warnings: [] };
   for (const path of files) {
     if (!path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     const text = readText(root, path), blocks = interfaceBlocks(text);
@@ -616,6 +616,11 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     let value;
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
+    if (!Object.hasOwn(value, 'status')) {
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      continue;
+    }
     const hash = proseSha256(text);
     if (value.status === 'approved') { (value.prose_sha256 === hash ? result.current : result.stale).push({ path }); continue; }
     if (value.status !== 'draft') { result.refused.push({ path, message: `${path} has status ${show(value.status)}. Use "draft" until the person approves it.` }); continue; }
