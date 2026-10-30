@@ -53,7 +53,7 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 
 - The interface block is the engine `_INTERFACE` regex (`prompt_program_discovery.py` at eae2202a), in JS with the flags `gi`.
 - `prose_sha256` = lowercase hex SHA-256 of the UTF-8 bytes of the text with every block removed. Read the file as UTF-8 and do not change newlines.
-- `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": "56d0ab43ab5426c98d7b54ea6f72a5810bbede74cb757d6217387c91141d8ae1"`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
+- `--fill-hash`, for each Git-visible `*.prompt.md` with a block: `draft` = replace only the string value of `"prose_sha256"` in that block and keep every other byte; no key = refuse that file (`add "prose_sha256": "f322596a8c3ccd1958d9ba09bd58cf6e636904527c9bee6ae051f8be08911d4c"`); `approved` and current = no change; `approved` and stale = no change, print the stale text, exit 4. Two blocks or bad JSON refuse that file. `--fill-hash` never sets `approved`.
 
 ## Source capture
 
@@ -168,9 +168,7 @@ attempt-local inputs; this module owns capture policy, not product composition.
 
 ## Dependencies
 
-- [References](contract-refs.prompt.md): required generation and verification
-  context for synchronous expansion and provenance; native adapters preserve
-  this module's privacy, snapshot and capture rules.
+- [References](contract-refs.prompt.md): required generation/runtime/verification context for synchronous effective-source expansion, provenance and shared lossless JSON codec bindings; native adapters preserve this module's privacy, snapshot and capture rules.
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before you change this prompt. Follow the [alpha boundary](public-boundary.prompt.md). The [runtime client](runtime-client.prompt.md) calls this module.
 

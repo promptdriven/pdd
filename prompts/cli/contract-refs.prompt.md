@@ -96,6 +96,14 @@ Invalid world shape, siblings, missing parents,
 array bounds or set pointers give `seed-invalid`. A missing seed file still gives
 `contract-missing`; seed cycles give `contract-cycle`.
 
+## Shared native JSON values
+
+Export native module functions `parseJsonValue(text)`, `stringifyJsonValue(value)` and `isJsonNumber(value)` for production consumers composing effective source. These bindings share this module’s numerical and own-key preservation rules; they are not another parser policy or a Runtime-only checking API. Existing expandSource invocation and Runtime entry remain unchanged.
+
+parseJsonValue accepts JSON text and returns its lossless value, representing JSON numeric tokens as opaque immutable numeric atoms rather than rounding them through Number. Invalid JSON throws SyntaxError. Every own key, including __proto__ and constructor, remains ordinary data without prototype mutation. isJsonNumber returns true exactly for those numeric atoms, allowing consumers to distinguish an atom from an ordinary container without importing a private class.
+
+stringifyJsonValue accepts ordinary JSON values plus these numeric atoms and returns compact JSON with recursively lexicographically sorted object keys, preserved array order and no final newline. Preserve each numeric atom’s original valid JSON number token exactly. Ordinary JSON numbers retain their normal JSON value; numeric atoms must never turn into strings or serialized implementation fields. Consumers must use these bindings when parsing, cloning or serializing source values that require lossless preservation rather than round-tripping them through JSON.parse/JSON.stringify.
+
 ## Effective bytes and provenance
 
 Expansion, provenance, cataloging and sync preserve JSON number values and their
@@ -174,7 +182,7 @@ the runtime client owns saved Check provenance and freshness judgments.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "17539e1dd959588d78b64e31cb1f85d0f371c4c3a2ebea0f29ee7f179b0da75a",
+  "status": "draft", "prose_sha256": "4ecd985f99d99f7fbc9a9e45cb48846531dd82be070293559821caa42e01675e",
   "entries": [{
     "operation": "expandSource",
     "input_schema": {
