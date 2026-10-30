@@ -1,12 +1,12 @@
 # Report a problem with pdd
 
-Use this guide to report a problem with pdd itself: the `pdd` command, the PDD skills, the PDD runtime (`pdd check` and `pdd try`) or these docs. The guide is for people and for their coding agents. Most issues come from agents, so each step is an instruction that an agent can follow.
+Use this guide to report a problem with pdd itself: the `pdd` command, the PDD skills, the PDD interpreter (`pdd test` and `pdd simulate`) or these docs. The guide is for people and for their coding agents. Most issues come from agents, so each step is an instruction that an agent can follow.
 
-For a bug in your own project, use the `pdd-bug` skill. For access to the runtime, see [Access](../README.md#access).
+For a bug in your own project, use the `pdd-bug` skill. For access to the interpreter, see [Access](../README.md#access).
 
 **Agent:** do the steps in order. Get each fact from a command or from the person. Never invent a fact. When you do not know a fact, ask the person.
 
-## 1. Check that it is pdd v2
+## 1. Check the pdd version
 
 ```sh
 pdd --version
@@ -14,11 +14,11 @@ pdd --version
 
 | It prints | What to do |
 |---|---|
-| `0.1.` and a number, for example `0.1.10` | This is pdd v2. Go to step 2. |
-| `pdd, version 0.0.` and a number, for example `pdd, version 0.0.310` | This is the Python pdd (v1). v1 is retired. Do not file an issue. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
-| `command not found` | pdd is not installed. Tell the person to install pdd v2 with the steps in [Install](../README.md#install). |
+| `0.1.` and a number, for example `0.1.10` | Go to step 2. |
+| `pdd, version 0.0.` and a number, for example `pdd, version 0.0.310` | This is the Python pdd (0.0.x). It is retired. Do not file an issue. Tell the person to install pdd with the steps in [Install](../README.md#install). |
+| `command not found` | pdd is not installed. Tell the person to install pdd with the steps in [Install](../README.md#install). |
 
-If the person installed pdd v2 and `pdd --version` prints `pdd, version 0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
+If the person installed pdd 0.1.10 or newer and `pdd --version` prints `pdd, version 0.0.` and a number, the Python pdd comes first on the PATH. See [USAGE §3](USAGE.md#3-if-you-have-the-old-python-pdd).
 
 If the version is older than the version in [Install](../README.md#install), update pdd first with the steps in Install. Then run the failing command again. Report the problem only if it stays.
 
@@ -54,19 +54,19 @@ Then collect:
 - **The goal.** What the person tried to do, in one sentence.
 - **The command.** The exact command that failed.
 - **The output.** The full output, copied as text. Do not retype it. Add the exit code: run `echo $?` directly after the command.
-- **The link or ID.** The report link that `pdd check` printed (`https://…/r/…`), or a request ID that pdd printed. For a workflow run, the issue number and the output of `pdd workflow status N`, `git --version` and `herdr --version`.
+- **The link or ID.** The report link that `pdd test` printed (`https://…/r/…`), or a request ID that pdd printed. For a workflow run, the issue number and the output of `pdd workflow status N`, `git --version` and `herdr --version`.
 - **The expected result.** What the person expected to see.
-- **The smallest example.** The smallest repo or set of files that shows the problem. For example: one prompt, one Story with 2 criteria and its test file. `pdd check --files` lists the files that a check sends.
+- **The smallest example.** The smallest repo or set of files that shows the problem. For example: one prompt, one Story with 2 criteria and its test file. `pdd test --files` lists the files that a check sends.
 - **The agent.** The name and version of the agent that ran pdd. Write "none" when the person typed the command.
 
-A report link shows the steps, the checks and the answers of the check, and anyone with the link can open it. Add it only when the person agrees. Never add a Try link (`…/s/…`). Anyone with a Try link can use it and spend its AI calls.
+A report link shows the steps, the checks and the answers of the check, and anyone with the link can open it. Add it only when the person agrees. Never add a Simulator link (`…/s/…`). Anyone with a Simulator link can use it and spend its AI calls.
 
 ## 4. Remove secrets and private data
 
 An issue or a comment stays public. Read all the text before you post it. Remove:
 
 - tokens, passwords, keys and the output of `gh auth token`;
-- Try links and private chat links;
+- Simulator links and private chat links;
 - links to private repos, and private code;
 - personal data: names, email addresses and paths that contain a user name. Write `~/my-app`, not `/Users/ana/my-app`.
 
@@ -144,7 +144,7 @@ Give the person the issue link that `gh` prints. A person without `gh` can use t
 
 This example is not a real problem. It shows the shape of a good issue.
 
-Title: `[alpha] pdd try --serve answers 404 for a route that my prompt declares`
+Title: `[alpha] pdd simulate --serve answers 404 for a route that my prompt declares`
 
 ~~~markdown
 ### pdd version
@@ -153,7 +153,7 @@ Title: `[alpha] pdd try --serve answers 404 for a route that my prompt declares`
 ### What you did
 I tried my HTTP API by hand, with the route that my prompt declares.
 ```sh
-pdd try my-story --serve 8091
+pdd simulate my-story --serve 8091
 curl -i http://127.0.0.1:8091/api/items
 ```
 
@@ -161,7 +161,7 @@ curl -i http://127.0.0.1:8091/api/items
 ```
 HTTP/1.1 404 Not Found
 ```
-Exit code of curl: 0. The prompt entry has the input schema title `HTTP GET /api/items`. `pdd check my-story` passes.
+Exit code of curl: 0. The prompt entry has the input schema title `HTTP GET /api/items`. `pdd test my-story` passes.
 
 ### What you expected
 The answer of the prompt for GET /api/items, the same as in the check.
@@ -187,10 +187,10 @@ Maybe pdd does not serve the routes of a prompt with only one entry. I did not t
 
 ## A bad example
 
-Title: `pdd check broken, retry bug in runtime-client.mjs`
+Title: `pdd test broken, retry bug in runtime-client.mjs`
 
 ```
-pdd does not work. The retry code in runtime-client is wrong. Also pdd try is slow,
+pdd does not work. The retry code in runtime-client is wrong. Also pdd simulate is slow,
 and the README has a typo. My token is ghp_… if you need it.
 ```
 
