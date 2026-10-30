@@ -1,6 +1,8 @@
 // Public navigation races, with scratch Git and native Herdr fakes only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { openRun, stepDone, approveRun, cancelRun } from '../src/workflow-runner.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
@@ -52,4 +54,19 @@ for (const cancel of [false, true]) test(`2627 historical failed resume retains 
   pause.release(); assert.equal((await opening).exitCode, 1);
   assert.deepEqual(progress(f.record()), latest, 'Failed historical navigation must preserve newer workflow progress');
   if (!cancel) assert.equal(f.record().chats.find(item => item.area === 'plan').startUnconfirmed, true);
+});
+
+test('2627 AREA late observation cannot overwrite a newer selected chat', async t => {
+  const f = await fixture(t); await f.run();
+  const pause = paused(f, args => args[0] === 'tab' && args[1] === 'focus');
+  const opening = open(f, pause.ports);
+  await pause.reached;
+  // Simulate another persisted owner of this area while the native reply waits.
+  const latest = f.record();
+  const selected = latest.chats.find(chat => chat.area === 'plan');
+  selected.tabId = 'newer-tab'; selected.paneId = 'newer-pane';
+  selected.session = { agent: latest.agent, id: '11111111-1111-4111-8111-111111111111' };
+  writeFileSync(join(latest.runDir, 'status.json'), JSON.stringify(latest));
+  pause.release(); await opening;
+  assert.deepEqual(f.record().chats, latest.chats, 'A late AREA reply cannot replace newer chat custody');
 });

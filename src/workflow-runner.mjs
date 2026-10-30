@@ -1567,6 +1567,20 @@ function validReplacement(record, run) {
   const replacement = record.replacement;
   return chat(replacement) && replacement.paneId !== record.original.paneId && replacement.tabId !== record.original.tabId && replacement.workspaceId === record.original.workspaceId && typeof replacement.terminalId === 'string' && Boolean(replacement.terminalId) && typeof replacement.label === 'string' && Number.isSafeInteger(replacement.startedAt) && replacement.startedAt >= 0 && replacement.messageFile === join(run.runDir, `${record.area}-restart-${record.id}-start.md`) && (replacement.configDir === null || typeof replacement.configDir === 'string') && (record.phase !== 'launchRequested' || replacement.startUnconfirmed === true) && (record.phase !== 'launched' || !replacement.startUnconfirmed);
 }
+// Explicit AREA navigation owns only observations of the selected saved chat.
+// Human progress and replacement custody can change while Herdr is answering.
+function saveAreaObservations(run, original, observed, p) {
+  const fresh = readRun(run.runDir);
+  if (!fresh || fresh.runId !== run.runId || ended(fresh)) return;
+  const selected = [...(fresh.chats ?? [])].reverse().find(chat => chat.area === original.area);
+  // A replacement (or a newer observation) has custody of a different snapshot.
+  if (!selected || JSON.stringify(selected) !== JSON.stringify(original)) return;
+  for (const key of ['tabId', 'paneId', 'terminalId', 'session', 'resumedAt', 'startUnconfirmed']) {
+    if (Object.hasOwn(observed, key)) selected[key] = observed[key];
+    else delete selected[key];
+  }
+  writeRun(fresh, p);
+}
 async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
@@ -1578,6 +1592,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
   if (selected < 0) return fail(`Unknown area ${area}. Valid areas: ${run.areas.map(item => item.name).join(', ')}.`);
   if (selected < 0 || selected > run.area || area !== undefined && !chat) return fail(`The area ${area} has no recorded chat at or before the current area.`);
   const historical = selected < run.area;
+  const areaOriginal = area !== undefined && !newSession ? structuredClone(chat) : null;
   if (newSession && historical) return fail(`Select the current area ${run.areas[run.area].name} to start a new session; earlier areas cannot be replaced.`);
   if (newSession && !chat && (!run.chatReplacement || ['launched','rolledBack'].includes(run.chatReplacement.phase))) return fail('The current area has no saved chat to replace. Open it first.');
   const missing = missingHome(run, p.env);
@@ -1631,6 +1646,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
     p.say(`Opening the ${chat.area} chat in Herdr…`);
     const opened = await openChat({ run, chat }, p);
     if (opened.restartAvailable) {
+      if (areaOriginal) return fail(`The ${chat.area} chat has an unconfirmed missing tab. Inspect its saved identity.`);
       if (historical) return fail(`The historical ${chat.area} chat has an unconfirmed missing tab. Inspect its saved identity.`);
       run.abandonedChats = [...(run.abandonedChats ?? []), { ...chat, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
       run.chats = run.chats.filter(item => item !== chat);
@@ -1638,14 +1654,15 @@ async function openRunLocked({ ref, cwd, area, newSession = false, packageRoot =
       recordChatFailure(run, { code: 'chat_start_reset', message }, 'open', p);
       return fail(message);
     }
-    if (!historical) clearChatFailure(run);
-    writeRun(run, p);
+    if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
+    else { if (!historical) clearChatFailure(run); writeRun(run, p); }
     const where = `Herdr session pdd, tab "${chat.label}"`;
     return done([started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));
   } catch (error) {
     if (newSession) return fail(`Chat replacement ${run.chatReplacement?.phase ?? 'refused'} (${error.code ?? 'error'}: ${oneLine(error.message)}).${run.chatReplacement ? ` Retry: pdd workflow open ${run.number} --new` : ''}`);
-    if (historical) writeRun(run, p);
+    if (areaOriginal) saveAreaObservations(run, areaOriginal, chat, p);
+    else if (historical) writeRun(run, p);
     else recordChatFailure(run, error, chat ? 'open' : 'start', p);
     return fail(`pdd could not open the ${run.areas[selected].name} chat (${error.code ?? 'error'}: ${oneLine(error.message)}).`);
   }
