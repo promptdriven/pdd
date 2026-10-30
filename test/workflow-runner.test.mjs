@@ -141,6 +141,30 @@ async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   return f;
 }
 
+test('2698: runner exits 1 for bare-in-.git linked checkout before run, claim, allocation or add', async t => {
+  const f = await fixture(t, { agent: 'codex' }), primary = join(f.base, 'mixed'), common = join(primary, '.git');
+  f.git(f.source, 'clone', '--bare', f.source, common);
+  f.git(primary, 'remote', 'set-url', 'origin', 'https://github.com/example/project.git');
+  f.git(primary, 'update-ref', 'refs/remotes/origin/main', f.git(primary, 'rev-parse', 'main'));
+  const cwd = join(f.base, 'linked'); f.git(primary, 'worktree', 'add', '-b', 'linked', cwd, 'main');
+  const before = f.git(cwd, 'worktree', 'list', '--porcelain'), original = f.ports.execFile;
+  let adds = 0;
+  f.ports.execFile = (file, args, options) => {
+    if (file === 'git' && args[0] === 'worktree' && args[1] === 'add') adds++;
+    return original(file, args, options);
+  };
+  const out = await startRun({ name: 'small-change', issue: '17', agent: 'codex', base: 'main', cwd, packageRoot }, f.ports);
+  assert.equal(out.exitCode, 1); assert.equal(adds, 0);
+  for (const path of ['pdd/runs/17', 'pdd/worktree-assignments/runs', 'pdd/worktree-assignments/issues/17.json'])
+    assert.equal(existsSync(join(common, path)), false, path);
+  assert.equal(f.git(cwd, 'worktree', 'list', '--porcelain'), before);
+  assert.equal(f.git(primary, 'config', '--get', 'core.bare'), 'true');
+  assert.deepEqual(f.herdr.calls, []); assert.deepEqual(f.pushes, []); assert.deepEqual(f.prs, []);
+  for (const words of [/bare repository/i, /\.git/, /linked worktrees/i, /independent normal clone/i, /run.*workflow.*there/i])
+    assert.match(out.message, words);
+  assert.doesNotMatch(out.message, /core\.bare/i);
+});
+
 test('small-change: run exits at once, done reaches the gate, changes go to the same chat, approve opens a new chat, done verify opens the PR', async t => {
   const f = await fixture(t);
   const started = await f.run();
