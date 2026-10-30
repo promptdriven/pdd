@@ -1,7 +1,7 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c85c10a68973046f0ae46f6ef890ba44fc470ec144124645843ce1d8b343e5a6).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a73b0bf878903103691fef3cc20b7c7d00e3e7697256a145919fde04b0b7df50).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -80,27 +80,160 @@ export function gitFiles(root) {
 }
 
 const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
-const readText = (root, path) => readFileSync(join(root, path), 'utf8');
+// Auxiliary Story/title reads obey the same JSON inspection boundary as discovery.
+const readText = (root, path) => path.endsWith('.json')
+  ? discoveryBytes(root, path).toString('utf8') : readFileSync(join(root, path), 'utf8');
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
+const PREFIX_BYTES = 65_536;
+const scenarioSchema = value => typeof value === 'string' && value.startsWith('prompt-runtime.program-scenario');
+const oversizedMessage = test => `${test.path} is a PDD test but has ${test.size} bytes, over the ${LIMITS.test}-byte test-file allowance: split it into smaller test files.`;
+const requireEligibleTests = tests => {
+  const unsafe = tests.find(test => test.discoveryError);
+  if (unsafe) throw unsafe.discoveryError;
+  const oversized = tests.filter(test => test.size > LIMITS.test);
+  if (oversized.length) throw new PreflightError(4, oversized.map(oversizedMessage).join('\n'));
+};
+
+// Read complete values of actual root-object members only. A closed token can
+// establish identity without requiring the rest of the document to be present.
+function prefixIdentity(text) {
+  const identity = {};
+  let index = 0;
+  const whitespace = () => { while (index < text.length && /[ \t\r\n]/.test(text[index])) index++; };
+  const stringEnd = start => {
+    for (let end = start + 1; end < text.length; end++) {
+      if (text[end] === '\\') end++;
+      else if (text[end] === '"') return end + 1;
+    }
+    return null;
+  };
+  const valueEnd = start => {
+    const first = text[start];
+    if (first === '"') return stringEnd(start);
+    if (first === '{' || first === '[') {
+      const closes = [first === '{' ? '}' : ']'];
+      for (let end = start + 1; end < text.length; end++) {
+        const char = text[end];
+        if (char === '"') {
+          const next = stringEnd(end);
+          if (next === null) return null;
+          end = next - 1;
+        } else if (char === '{' || char === '[') closes.push(char === '{' ? '}' : ']');
+        else if (char === '}' || char === ']') {
+          if (char !== closes.pop()) return null;
+          if (!closes.length) return end + 1;
+        }
+      }
+      return null;
+    }
+    // Scalars need a visible delimiter; the end of a prefix is not one.
+    let end = start;
+    while (end < text.length && !/[ \t\r\n,}\]]/.test(text[end])) end++;
+    return end < text.length && end > start ? end : null;
+  };
+  whitespace();
+  if (text[index++] !== '{') return identity;
+  while (index < text.length) {
+    whitespace();
+    if (text[index] !== '"') break;
+    const keyEnd = stringEnd(index);
+    if (keyEnd === null) break;
+    let key, value;
+    try { key = JSON.parse(text.slice(index, keyEnd)); } catch { break; }
+    index = keyEnd;
+    whitespace();
+    if (text[index++] !== ':') break;
+    whitespace();
+    const end = valueEnd(index);
+    if (end === null) break;
+    try { value = JSON.parse(text.slice(index, end)); } catch { break; }
+    if (key === 'schema_version' || key === 'story_path') identity[key] = value;
+    index = end;
+    whitespace();
+    if (text[index++] !== ',') break;
+  }
+  return identity;
+}
+
+function discoveryStat(root, path) {
+  try { return statOf(join(root, path)); }
+  catch (error) { throw new PreflightError(4, `${path}: unreadable discovery file (${error.code || error.message}).`); }
+}
+
+// Snapshot a bounded regular-file read. Validate parents and the open descriptor
+// both before and after reading, so replacement or growth cannot expand the read.
+function discoveryBytes(root, path, stat = discoveryStat(root, path)) {
+  let fd;
+  try {
+    if (!stat) throw unstableSource;
+    const unsafe = () => new PreflightError(4, `${path}: unsafe discovery file (symbolic link ancestor or non-regular file).`);
+    if (!stat.isFile()) throw unsafe();
+    // A missing entry after an observed regular file is a change. Keep unsafe
+    // ancestors distinct: the shared capture helper returns null for both.
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parent = statOf(join(root, ...parts.slice(0, i)));
+      if (!parent) throw unstableSource;
+      if (!parent.isDirectory()) throw unsafe();
+    }
+    const before = statOf(join(root, path));
+    if (before && !before.isFile()) throw unsafe();
+    if (!sameStat(stat, before)) throw unstableSource;
+    fd = openSync(join(root, path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (!sameStat(stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
+    const length = Number(stat.size) > LIMITS.test ? PREFIX_BYTES : Number(stat.size);
+    const bytes = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const count = readSync(fd, bytes, offset, length - offset, offset);
+      if (!count) throw unstableSource;
+      offset += count;
+    }
+    if (!sameStat(stat, fstatSync(fd, { bigint: true })) || !sameStat(stat, inspectParentsAndStat(root, path))) throw unstableSource;
+    return bytes;
+  } catch (error) {
+    if (error instanceof PreflightError) throw error;
+    if (error === unstableSource) throw new PreflightError(5, `${path}: files changed during discovery; stop other edits and try again.`);
+    throw new PreflightError(4, `${path}: unreadable or unsafe discovery file (${error.code || error.message}).`);
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
-  const visible = new Set(), tests = [], stories = [];
+  const visible = new Set(), tests = [], stories = [], jsonTitles = new Map();
   for (const path of files) {
-    const stat = statOf(join(root, path));
-    if (!stat?.isFile()) continue;
-    visible.add(path);
-    if (path.endsWith('.json') && stat.size <= LIMITS.test) {
-      const text = readText(root, path);
-      if (!text.includes('prompt-runtime.program-scenario')) continue;
+    const stat = discoveryStat(root, path);
+    if (!stat) continue;
+    if (path.endsWith('.json')) {
+      // Discovery does not grant payload eligibility to nonregular entries.
+      // Use only their own metadata; never open or follow a small link/FIFO.
+      if (!stat.isFile() && stat.size <= BigInt(LIMITS.test)) continue;
+      let text;
+      try { text = discoveryBytes(root, path, stat).toString('utf8'); }
+      catch (error) { tests.push({ path, discoveryError: error }); continue; }
+      const size = Number(stat.size);
+      visible.add(path);
+      jsonTitles.set(path, titleOf(text));
+      if (size > LIMITS.test) {
+        const doc = prefixIdentity(text);
+        if (scenarioSchema(doc.schema_version)) tests.push({ path, size, doc });
+        continue;
+      }
       let doc;
-      try { doc = JSON.parse(text); } catch (error) { tests.push({ path, error: error.message }); continue; }
-      if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
-    } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
-      // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
-      const text = readText(root, path);
-      if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
+      try { doc = JSON.parse(text); }
+      catch (error) {
+        if (text.includes('prompt-runtime.program-scenario')) tests.push({ path, size, error: error.message });
+        continue;
+      }
+      if (scenarioSchema(doc?.schema_version)) tests.push({ path, size, doc });
+    } else if (stat.isFile()) {
+      visible.add(path);
+      if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
+        const text = readText(root, path);
+        if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
+      }
     }
   }
   for (const test of tests) {
@@ -108,7 +241,7 @@ export function findTests({ root, files = gitFiles(root) }) {
     const story = stories.find(item => item.path === storyPath);
     test.storyPath = storyPath;
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) ? titleOf(readText(root, storyPath)) : null) ?? test.story;
+    test.title = story?.title ?? (storyPath && visible.has(storyPath) ? (jsonTitles.has(storyPath) ? jsonTitles.get(storyPath) : titleOf(readText(root, storyPath))) : null) ?? test.story;
   }
   const named = new Set(tests.map(test => test.storyPath));
   const warnings = stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`);
@@ -117,7 +250,7 @@ export function findTests({ root, files = gitFiles(root) }) {
 
 // STORY words: a test path, a story path, a story name or a test file name. Returns {selected, unknown}.
 export function selectTests(found, words = []) {
-  if (!words.length) return { selected: [...found.tests], unknown: [] };
+  if (!words.length) { requireEligibleTests(found.tests); return { selected: [...found.tests], unknown: [] }; }
   const selected = new Set(), unknown = [];
   for (const raw of words) {
     const word = raw.replace(/^\.\//, '');
@@ -125,7 +258,13 @@ export function selectTests(found, words = []) {
     if (!hits.length) unknown.push(raw);
     for (const hit of hits) selected.add(hit);
   }
-  return { selected: found.tests.filter(test => selected.has(test)), unknown };
+  const rows = found.tests.filter(test => selected.has(test));
+  if (unknown.length) {
+    const unsafe = found.tests.find(test => test.discoveryError);
+    if (unsafe) throw unsafe.discoveryError;
+  }
+  requireEligibleTests(rows);
+  return { selected: rows, unknown };
 }
 
 const refusal = (code, section, message, extra = {}) => ({ code, section, message, ...extra });
@@ -415,22 +554,20 @@ function validNumericReview(row) {
     && !!row.reason.trim() && row.reason.length <= 1000 && !/[\r\n]/.test(row.reason);
 }
 function numericReviews(root, found, warnings) {
-  const path = join(root, REVIEW_FILE), stat = statOf(path);
-  if (!stat) return [];
   const ignore = () => { warnings.push(`Warning: ${REVIEW_FILE} is invalid, unreadable or not a Git-visible regular file; its numeric reviews are ignored.`); return []; };
-  if (!found.visible.has(REVIEW_FILE) || !stat.isFile() || stat.isSymbolicLink() || stat.size > 16n * 1024n) return ignore();
-  let fd;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const actual = fstatSync(fd);
-    if (!actual.isFile() || actual.size > 16 * 1024) return ignore();
-    const source = readFileSync(fd,'utf8');
-    if (Buffer.byteLength(source) > 16 * 1024) return ignore();
+    const stat = discoveryStat(root, REVIEW_FILE);
+    if (!stat) return [];
+    if (!found.visible.has(REVIEW_FILE) || !stat.isFile() || stat.size > 16n * 1024n) return ignore();
+    const source = discoveryBytes(root, REVIEW_FILE, stat).toString('utf8');
     const data = JSON.parse(source);
     if (!isObject(data) || Object.keys(data).length !== 2 || data.schema_version !== 'pdd.numeric-reviews.v1'
       || !Array.isArray(data.reviews) || data.reviews.length > 100 || !data.reviews.every(validNumericReview)) return ignore();
     return data.reviews;
-  } catch { return ignore(); } finally { if (fd !== undefined) closeSync(fd); }
+  } catch (error) {
+    if (error instanceof PreflightError && error.exitCode === 5) throw error;
+    return ignore();
+  }
 }
 const quantityWords = text => String(text ?? '').replace(/([a-z])([A-Z])/g,'$1 $2').toLowerCase().split(/[^a-z]+/).filter(Boolean);
 const aggregateWords = new Set(['total','combined','cumulative','aggregate','sum','cap','limit','budget']);
@@ -585,13 +722,14 @@ function checkTest(root, found, test, prompts) {
   return null;
 }
 
-// Rules P1-P10 for the selected tests. Returns rows and warnings; never throws for a test problem.
+// Rules P1-P10 for eligible selected tests. Discovery and size refusals stop before lint.
 export function preflight({ root, found, selected }) {
+  requireEligibleTests(selected);
   const prompts = new Map(), warnings = [];
   const reviews = numericReviews(root, found, warnings);
   const rows = selected.map(test => {
     const refused = checkTest(root, found, test, prompts);
-    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(readFileSync(join(root,test.path))) : null, reviews }),
+    const row = { test: test.path, story: test.story, title: test.title, refusals: refused ? [refused].flat() : [], warnings: numberWarnings(test.doc, { testPath: test.path, testSha: reviews.length ? sha256(discoveryBytes(root, test.path)) : null, reviews }),
       max_calls: defaultMaxCalls(test.doc), steps: Array.isArray(test.doc?.steps) ? test.doc.steps : [],
       criteria_total: Array.isArray(test.doc?.criteria) ? test.doc.criteria.length : 0, draft: false };
     row.draft = row.steps.some(step => prompts.get(step?.entry_path)?.interface?.status === 'draft');
@@ -879,8 +1017,11 @@ function captureOnce(root, { tests, appMap = null }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) add(path, SOURCE_CONFIG);
     }
-    const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
-    for (const path of selected) add(path, 'Selected test', 'test');
+    const selected = tests ?? selectTests(findTests({ root, files: names })).selected.map(test => test.path);
+    for (const path of selected) {
+      add(path, 'Selected test', 'test');
+      requireEligibleTests([{ path, size: payload.get(path).size }]);
+    }
     if (appMap) add(appMap, 'App map', 'app-map');
     for (let index = 0; index < queue.length; index++) {
       const { path, role } = queue[index], key = `${path}\0${role}`;
@@ -954,8 +1095,11 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
 export function whyNoTests(root, visible) {
   const files = [...visible].sort(), why = [];
   for (const path of files.filter(file => file.endsWith('.json') && file.split('/').slice(0, -1).includes('tests'))) {
+    const stat = discoveryStat(root, path);
+    if (!stat?.isFile() || stat.size > BigInt(LIMITS.test)) continue;
+    const text = discoveryBytes(root, path, stat).toString('utf8');
     let doc = null;
-    try { doc = JSON.parse(readText(root, path)); } catch { doc = null; }
+    try { doc = JSON.parse(text); } catch { /* Malformed JSON still gets authoring guidance. */ }
     if (doc?.schema_version !== TEST_SCHEMA) why.push(`${path} is not a PDD test file (it has no "schema_version": "${TEST_SCHEMA}"). See RUNBOOK.md §2.`);
   }
   for (const path of files.filter(file => file.endsWith('.prompt'))) why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
