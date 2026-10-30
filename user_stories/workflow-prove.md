@@ -2,7 +2,7 @@
 
 I can explicitly compare my committed regression test on the saved old code and committed new code, and see whether it detects the intended defect.
 
-Draft for person review; these proposed policies and expected values are not approved.
+The person approved this Story contract and its expected values. Runtime validation remains unjudged; prompt approval is recorded separately.
 
 ## Acceptance criteria
 

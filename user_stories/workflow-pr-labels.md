@@ -2,7 +2,7 @@
 
 I can read the defect, detection gap, proof and review at the top of either PR, and a warning-light-only change keeps the issue open.
 
-Draft for person review; these proposed policies and expected values are not approved.
+The person approved this Story contract and its expected values. Runtime validation remains unjudged; prompt approval is recorded separately.
 
 ## Acceptance criteria
 

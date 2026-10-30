@@ -2,7 +2,7 @@
 
 I can see which committed old-code comparison supports the code PR, including an honest unsuccessful, stale or unavailable result.
 
-Draft for person review; these proposed policies and expected values are not approved.
+The person approved this Story contract and its expected values. Runtime validation remains unjudged; prompt approval is recorded separately.
 
 ## Acceptance criteria
 
