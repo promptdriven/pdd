@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: c85c10a68973046f0ae46f6ef890ba44fc470ec144124645843ce1d8b343e5a6).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 80aaa367b391ac0a98051fcb3eee7053112d7a59243aa337e6966cf4c240948d).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { expandSource } from './contract-refs.mjs';
 
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000, test: 1_048_576 });
@@ -79,8 +80,12 @@ export function gitFiles(root) {
   return [...new Set(listed.stdout.toString('utf8').split('\0').filter(Boolean))].sort();
 }
 
-const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
-const readText = (root, path) => readFileSync(join(root, path), 'utf8');
+const statOf = path => { try { return lstatSync(path, { bigint: true }); } catch (error) { if (['ENOENT', 'ENAMETOOLONG'].includes(error.code)) return null; throw error; } };
+const readText = (root, path) => {
+  const stat=statOf(join(root,path));
+  sourceLimit([{path,size:Number(stat?.size ?? 0)}]);
+  return readFileSync(join(root,path),'utf8');
+};
 const storyName = path => basename(path).replace(/\.md$/, '');
 const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.slice(2).trim() || null;
 
@@ -358,13 +363,13 @@ export function interfaceSchemaProblems(iface) {
 // The prompt file of an entry: {path, text, blocks, interface, error}.
 export function readPrompt(root, visible, path) {
   if (typeof path !== 'string' || !path.endsWith('.prompt.md') || !visible.has(path)) return { path, error: 'entry-missing' };
-  const text = readText(root, path), blocks = interfaceBlocks(text);
+  const raw = sourceFilePort(root,visible).read({path}).content, prepared = preparedText(root,visible,path,raw,'prompt'), text = prepared.text, blocks = interfaceBlocks(text);
   if (!blocks.length) return { path, text, blocks, error: 'interface-missing' };
   if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
   let value;
   try { value = JSON.parse(blocks[0][1]); } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
   if (!isObject(value)) return { path, text, blocks, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
-  return { path, text, blocks, interface: value, prose: proseSha256(text) };
+  return { path, text, blocks, interface: value, prose: proseSha256(text), references:prepared.references };
 }
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
@@ -514,7 +519,11 @@ function promptSchemaRefusals(root, found, prompt, prompts, seen = new Set()) {
 }
 
 function checkTest(root, found, test, prompts) {
-  const doc = test.doc;
+  let doc = test.doc;
+  if (!test.error && isObject(doc)) {
+    const prepared = preparedText(root,found.visible,test.path,readText(root,test.path),'scenario');
+    try { doc = JSON.parse(prepared.text); } catch { /* Preserve ordinary malformed scenario handling. */ }
+  }
   if (test.error) return refusal('invalid-document', 'scenario', `${test.path} is not valid JSON: ${test.error}`);
   if (!isObject(doc)) return refusal('invalid-document', 'scenario', `${test.path} is not a JSON object.`);
   const missing = REQUIRED_KEYS.filter(key => !Object.hasOwn(doc, key)), extra = Object.keys(doc).filter(key => !TOP_KEYS.has(key));
@@ -610,6 +619,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
   for (const path of files) {
     if (!path.endsWith('.prompt.md') || !statOf(join(root, path))?.isFile()) continue;
     const text = readText(root, path), blocks = interfaceBlocks(text);
+    try { preparedText(root,new Set(files),path,text,'prompt'); }
+    catch (error) { result.refused.push({path,message:error.message}); continue; }
     if (!blocks.length) continue;
     if (blocks.length > 1) { result.refused.push({ path, message: `${path} has more than one Runtime interface block. Keep one.` }); continue; }
     const [start, end] = blocks[0].indices[1], body = blocks[0][1];
@@ -691,7 +702,7 @@ function sourcePath(raw, from) {
   if (typeof raw !== 'string' || !raw || raw.includes('\\') || /[\0-\x1f]/.test(raw) || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)
     || raw.split('/').includes('..')) throw sourceProblem(from, String(raw), 'must be a repository-relative file path with no traversal.');
   const path = posix.normalize(raw);
-  if (path === '.' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
+  if (path === '.' || path === '.git' || path.startsWith('.git/')) throw sourceProblem(from, raw, 'must be a repository-relative file path.');
   return path;
 }
 
@@ -827,47 +838,162 @@ function sourceLimit(files) {
   return total;
 }
 
-function captureOnce(root, { tests, appMap = null }) {
-  const names = gitFiles(root), visible = new Set(names), snapshots = new Map(), payload = new Map(), queue = [], visited = new Set();
-  function inspect(path, from) {
+function snapshotReader(root, diskVisible, beforeRead = () => {}) {
+  const snapshots = new Map();
+  let unstable = false;
+  function inspectRaw(path, from, allowMissing = false) {
+    path = sourcePath(path, from);
     if (snapshots.has(path)) return snapshots.get(path);
-    if (!visible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
     if (isSecretPath(path)) throw sourceProblem(from, path, ': the name looks like a secret. pdd never sends it.');
     const parts = path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const parent = parts.slice(0, i).join('/'), stat = statOf(join(root, parent));
       if (stat?.isSymbolicLink()) throw sourceProblem(from, path, `has a symbolic link ancestor (${parent}). pdd sends only regular files.`);
+      if (stat && !stat.isDirectory()) throw sourceProblem(from, path, `has a non-directory ancestor (${parent}).`);
     }
     const stat = statOf(join(root, path));
-    if (!stat) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
-    if (stat.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
-    if (!stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
-    const file = { path, stat, size: Number(stat.size) };
+    if (stat?.isSymbolicLink()) throw sourceProblem(from, path, ': a symbolic link. pdd sends only regular files.');
+    if (stat && !stat.isFile()) throw sourceProblem(from, path, ': a submodule, folder or other non-regular file. pdd sends only regular files.');
+    if (stat && !diskVisible.has(path)) throw sourceProblem(from, path, 'is not a Git-visible file. Add it to Git or correct the declared dependency.');
+    if (!stat && !allowMissing) throw sourceProblem(from, path, 'is not a Git-visible file on disk. Restore it or correct the declared dependency.');
+    const file = { path, stat, size: Number(stat?.size ?? 0) };
     snapshots.set(path, file);
     return file;
   }
   function bytes(file) {
     if (file.bytes) return file.bytes;
-    sourceLimit([...payload.values()]);
+    sourceLimit([file]);
+    beforeRead(file);
     let fd;
     try {
       fd = openSync(join(root, file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
-      if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) throw unstableSource;
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true }))) { unstable = true; throw unstableSource; }
       file.bytes = readFileSync(fd);
-      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) throw unstableSource;
+      if (!sameStat(file.stat, fstatSync(fd, { bigint: true })) || file.bytes.length !== file.size) { unstable = true; throw unstableSource; }
       return file.bytes;
     } catch (error) {
-      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw unstableSource;
+      if (['ENOENT', 'ELOOP', 'ENOTDIR'].includes(error.code)) { unstable = true; throw unstableSource; }
       throw error;
     } finally { if (fd !== undefined) closeSync(fd); }
   }
+  return { inspectRaw, bytes, snapshots, get unstable() { return unstable; } };
+}
+
+export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
+  const reader = snapshotReader(root, visible);
+  return {
+    stat({path}) {
+      const file = reader.inspectRaw(path, 'Source', true);
+      return { exists: !!file.stat, is_symlink: false, size: file.size };
+    },
+    read({path}) {
+      const file = reader.inspectRaw(path, 'Source');
+      if (!file.stat) throw sourceProblem('Source',path,'is missing.');
+      try { return { content: reader.bytes(file).toString('utf8') }; }
+      catch (error) { if (error === unstableSource) throw new PreflightError(5, `${path}: the file changed while pdd read it.`); throw error; }
+    },
+  };
+}
+
+function preparedText(root, visible, path, text, format) {
+  try { return expandSource({path,text,format},sourceFilePort(root,visible)); }
+  catch (error) {
+    if (error.code) throw new PreflightError(4, `${error.code}: ${error.message}`);
+    throw error;
+  }
+}
+
+function captureOnce(root, { tests, appMap = null, prepareSource }) {
+  const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
+  const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
+  let selecting = true;
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
+  const { inspectRaw, bytes, snapshots } = reader;
+  function inspect(path, from) {
+    if (overlay.has(path)) return overlay.get(path);
+    const file = inspectRaw(path, from);
+    if (!file.stat) throw sourceProblem(from, path, 'is missing. Restore it or correct the declared dependency.');
+    return file;
+  }
   function add(raw, from, role = 'context') {
     const path = sourcePath(raw, from), file = inspect(path, from);
-    if (!payload.has(path)) payload.set(path, file);
-    queue.push({ path, role });
+    for (const selected of payload.keys()) if (selected.startsWith(`${path}/`) || path.startsWith(`${selected}/`)) {
+      throw sourceProblem(from, path, `conflicts with selected file ${selected}.`);
+    }
+    if (!footprintPayload.has(path)) footprintPayload.set(path,file);
+    if (selecting && !payload.has(path)) payload.set(path, file);
+    if (visible.has(from)) {
+      if (!edges.has(from)) edges.set(from,new Set());
+      edges.get(from).add(path);
+    }
+    queue.push({ path, role, upload:selecting });
+  }
+  const referenceFiles = {
+    stat({path}) {
+      const file = overlay.get(path) ?? inspectRaw(path,'Reference',true);
+      return {exists:overlay.has(path) || !!file.stat,is_symlink:false,size:file.size};
+    },
+    read({path}) { return {content:bytes(inspect(path,'Reference')).toString('utf8')}; },
+  };
+  function prepare(file, format) {
+    if (effective.has(file.path)) return effective.get(file.path);
+    let expanded;
+    try { expanded = expandSource({path:file.path,text:bytes(file).toString('utf8'),format},referenceFiles); }
+    catch (error) {
+      if (reader.unstable || error === unstableSource) throw unstableSource;
+      if (error.code) throw new PreflightError(4, `${error.code}: ${error.message}`);
+      throw error;
+    }
+    const content = expanded.references.length ? Buffer.from(expanded.text,'utf8') : bytes(file);
+    const result = {...file,bytes:content,size:content.length};
+    effective.set(file.path,result); provenance.set(file.path,expanded.references);
+    footprintPayload.set(file.path,result);
+    if (selecting) payload.set(file.path,result);
+    return result;
   }
   const addStrings = (values, from, role) => { if (Array.isArray(values)) for (const path of values) if (typeof path === 'string') add(path, from, role); };
   try {
+    if (prepareSource !== undefined) {
+      if (typeof prepareSource !== 'function') throw new PreflightError(4, 'prepareSource must be a synchronous function.');
+      let active = true, prepared;
+      const raw = path => {
+        if (!active) throw new PreflightError(4, 'Preparation ports are valid only during prepareSource.');
+        return inspectRaw(sourcePath(path, 'prepareSource'), 'prepareSource', true);
+      };
+      try {
+        prepared = prepareSource({
+          readFile(path) {
+            const file = raw(path);
+            if (!file.stat) throw sourceProblem('prepareSource', path, 'is missing.');
+            return Buffer.from(bytes(file));
+          },
+          statFile(path) {
+            const file = raw(path);
+            return { exists: !!file.stat, is_symlink: false, size: file.size };
+          },
+        });
+      } finally { active = false; }
+      if (reader.unstable) throw unstableSource;
+      if (!Array.isArray(prepared)) throw new PreflightError(4, 'prepareSource must return an array of files synchronously.');
+      for (const output of prepared) {
+        if (!isObject(output) || !(typeof output.bytes === 'string' || output.bytes instanceof Uint8Array)) throw new PreflightError(4, 'prepareSource files need a path and Buffer, Uint8Array or UTF-8 string bytes.');
+        const path = sourcePath(output.path, 'prepareSource');
+        if (output.role !== undefined) {
+          if (output.role !== 'app-map' || prepared.filter(file => file.role === 'app-map').length !== 1) throw new PreflightError(4, 'prepareSource may mark only one app-map file.');
+          let map;
+          try { map = JSON.parse(Buffer.from(output.bytes).toString('utf8')); } catch { throw new PreflightError(4, 'prepareSource app-map must be valid JSON.'); }
+          if (!isObject(map) || map.schema_version !== 'prompt-runtime.app-map.v1') throw new PreflightError(4, 'prepareSource app-map must be a JSON v1 app map.');
+          appMap = path;
+        }
+        if (overlay.has(path)) throw sourceProblem('prepareSource', path, `duplicates prepared file ${path}.`);
+        for (const other of overlay.keys()) if (other.startsWith(`${path}/`) || path.startsWith(`${other}/`)) throw sourceProblem('prepareSource', path, `conflicts with prepared file ${other}.`);
+        inspectRaw(path, 'prepareSource', true);
+        const content = Buffer.from(output.bytes), file = { path, bytes: content, size: content.length };
+        overlay.set(path, file);
+        visible.add(path);
+      }
+      for (const path of overlay.keys()) add(path, 'prepareSource');
+    }
     if (visible.has(SOURCE_CONFIG)) {
       const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
       if (config.size > LIMITS.test) throw sourceProblem(SOURCE_CONFIG, '', 'must be at most 1 MiB.');
@@ -877,23 +1003,56 @@ function captureOnce(root, { tests, appMap = null }) {
         throw sourceProblem(SOURCE_CONFIG, '', 'must be valid JSON with only an include array.');
       }
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
-      for (const path of doc.include) add(path, SOURCE_CONFIG);
+      for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
-    const selected = tests ?? findTests({ root, files: names }).tests.map(test => test.path);
+    const selected = tests ?? [...new Set([
+      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
+      ...[...overlay.keys()].sort().filter(path => {
+      if (!path.endsWith('.json')) return false;
+      const file = overlay.get(path);
+      if (file.size > LIMITS.test) return false;
+      const text = bytes(file).toString('utf8');
+      if (!text.includes('prompt-runtime.program-scenario')) return false;
+      try { const version=JSON.parse(text)?.schema_version; return typeof version==='string' && version.startsWith('prompt-runtime.program-scenario'); } catch { return true; }
+    })])];
     for (const path of selected) add(path, 'Selected test', 'test');
-    if (appMap) add(appMap, 'App map', 'app-map');
-    for (let index = 0; index < queue.length; index++) {
-      const { path, role } = queue[index], key = `${path}\0${role}`;
+    if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
+    const storyTests = new Map();
+    let siblingsAdded = false;
+    for (let index = 0; index < queue.length || !siblingsAdded; index++) {
+      if (index === queue.length && !siblingsAdded) {
+        siblingsAdded = true; selecting = false;
+        const selectedStories = new Set(storyTests.keys());
+        const discovered=findTests({root,files:names}).tests.filter(test=>!overlay.has(test.path));
+        for (const [path,file] of overlay) {
+          if (!path.endsWith('.json') || file.size>LIMITS.test) continue;
+          try { const doc=JSON.parse(bytes(file).toString('utf8')); if (typeof doc?.schema_version==='string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) discovered.push({path,doc}); } catch {}
+        }
+        for (const test of discovered) {
+          if (!selectedStories.has(test.doc?.story_path)) continue;
+          if (!storyTests.get(test.doc.story_path).includes(test.path)) storyTests.get(test.doc.story_path).push(test.path);
+          add(test.path,'Story footprint','test');
+        }
+        if (index === queue.length) break;
+      }
+      const { path, role, upload } = queue[index], key = `${path}\0${role}\0${upload}`;
+      selecting = upload;
       if (visited.has(key)) continue;
       visited.add(key);
-      const file = payload.get(path);
+      let file = effective.get(path) ?? footprintPayload.get(path);
+      if (selecting) payload.set(path,file);
+      if (path.endsWith('.prompt.md')) file = prepare(file,'prompt');
+      else if (role === 'test') file = prepare(file,'scenario');
       if (role === 'test' || role === 'app-map' || path.endsWith('.prompt.md') || path.endsWith('.md')) {
         const text = bytes(file).toString('utf8');
         if (role === 'test') {
           let doc;
           try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
           if (!isObject(doc)) continue;
-          if (typeof doc.story_path === 'string') add(doc.story_path, path, 'story');
+          if (typeof doc.story_path === 'string') {
+            if (selecting) { if (!storyTests.has(doc.story_path)) storyTests.set(doc.story_path,[]); if (!storyTests.get(doc.story_path).includes(path)) storyTests.get(doc.story_path).push(path); }
+            add(doc.story_path, path, 'story');
+          }
           addStrings(doc.entry_paths, path);
           for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
           for (const item of Array.isArray(doc.context) ? doc.context : []) {
@@ -925,19 +1084,48 @@ function captureOnce(root, { tests, appMap = null }) {
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
     const entries = files.map(file => ({ path: file.path, bytes: bytes(file) }));
+    const rawPromptHashes = Object.fromEntries(files.filter(file=>file.path.endsWith('.prompt.md')).flatMap(file=>{
+      const original=inspectRaw(file.path,'Prompt snapshot',true);
+      return original.stat ? [[file.path,sha256(bytes(original))]] : [];
+    }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    const same = isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
+    for (const file of footprintPayload.values()) bytes(file);
+    const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
       const after = inspectParentsAndStat(root, file.path);
-      return sameStat(file.stat, after);
+      return file.stat === null ? after === null : sameStat(file.stat, after);
     });
-    return same ? { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total } : null;
-  } catch (error) { if (error === unstableSource) return null; throw error; }
+    if (!same) return null;
+    const stories = new Map();
+    for (const path of selected) {
+      let doc; try { doc = JSON.parse(bytes(payload.get(sourcePath(path,'Selected test'))).toString('utf8')); } catch { continue; }
+      if (typeof doc?.story_path !== 'string') continue;
+      if (!stories.has(doc.story_path)) stories.set(doc.story_path,{story_path:doc.story_path,tests:[],selected:new Set(shared)});
+      const story = stories.get(doc.story_path);
+      story.tests = storyTests.get(doc.story_path) ?? [path];
+      for (const sibling of story.tests) story.selected.add(sibling);
+    }
+    const footprints = [...stories.values()].map(story => {
+      const reached = new Set(), pending = [...story.selected];
+      for (let i=0;i<pending.length;i++) {
+        const path=pending[i]; if (reached.has(path)) continue;
+        reached.add(path); pending.push(...(edges.get(path) ?? []));
+      }
+      return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
+    });
+    return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
+      references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
+      raw_prompt_hashes:rawPromptHashes,
+      sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
+  } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
 }
 
 function inspectParentsAndStat(root, path) {
   const parts = path.split('/');
-  for (let i = 1; i < parts.length; i++) if (statOf(join(root, ...parts.slice(0, i)))?.isSymbolicLink()) return null;
+  for (let i = 1; i < parts.length; i++) {
+    const parent = statOf(join(root, ...parts.slice(0, i)));
+    if (parent && !parent.isDirectory()) return unstableSource;
+  }
   return statOf(join(root, path));
 }
 

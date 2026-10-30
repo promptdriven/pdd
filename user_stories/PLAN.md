@@ -13,6 +13,32 @@
 - [Seed a journey](product-journey-seed.md) — Runtime check: test/runtime/product-journey-seed.json
 - [Choose journey checks](product-choose-journeys.md) — Runtime check: test/runtime/product-choose-journeys.json
 - [Coffee journey](journeys/J1-coffee-pickup.md) — Runtime check: test/runtime/J1-coffee-pickup.json
+
+# Shared runtime admission (#2631)
+
+Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
+
+- [runtime-local-slots](runtime-local-slots.md) — [native cases](../test/runtime-admission/runtime-local-slots.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-local-queue](runtime-local-queue.md) — [native cases](../test/runtime-admission/runtime-local-queue.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-capacity-wait](runtime-capacity-wait.md) — [native cases](../test/runtime-admission/runtime-capacity-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-maintenance-wait](runtime-maintenance-wait.md) — [native cases](../test/runtime-admission/runtime-maintenance-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-restart-retry](runtime-restart-retry.md) — [native cases](../test/runtime-admission/runtime-restart-retry.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-jobs](runtime-jobs.md) — [scenario](../test/runtime/runtime-jobs.json). Runtime check: snapshot binding only; CLI/native effects NOT REPLAYED.
+
+Live maintenance/drain remains unverified until prompt-runtime #453 supplies a staging window. No runtime-server implementation belongs to this plan.
+
+# Shared records (#2629)
+
+Each Story has one case file. The expansion entries use actual file-resource
+ports; catalog/history, CLI, capture and write effects require native verification.
+
+- [shared-records](shared-records.md) — [scenario](../test/runtime/shared-records.json). Runtime check: expansion binding only.
+- [shared-seed](shared-seed.md) — [scenario](../test/runtime/shared-seed.json). Runtime check: expansion binding only.
+- [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status.json). Runtime check: native effects unbound.
+- [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift.json). Runtime check: CLI advice unbound.
+- [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync.json). Runtime check: native writes unbound.
+
+- [shared-source-limits](shared-source-limits.md) — [native cases](../test/shared-contracts/shared-source-limits.json). Runtime check: native read/allocation/archive effects unbound.
 5. [Keep my prepared run issue](product-issue-binding.md): durable issue identity before search indexing.
 6. [Reuse one product search](product-search-cache.md): one shared query and a short local snapshot across commands.
 7. [Continue when my account lookup is unavailable](product-unavailable-actor.md): untrusted claims cannot break product commands.

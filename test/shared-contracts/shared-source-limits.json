@@ -1,0 +1,75 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/shared-source-limits.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "A source file above 10,485,760 bytes is refused before its contents are read, including a raw file replaced for upload."
+    },
+    {
+      "id": "AC2",
+      "text": "A selected payload above 10,000 files or 10,485,760 total bytes is refused before reading the selection that exceeds its limit."
+    },
+    {
+      "id": "AC3",
+      "text": "A shared record graph that would expand beyond 10,485,760 bytes stops during expansion with a finite too-big error and no upload."
+    },
+    {
+      "id": "AC4",
+      "text": "A normal source and a source exactly at the read or expansion boundary remain eligible for the existing later validation and tar limits."
+    }
+  ],
+  "cases": [
+    {
+      "id": "normal",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4"
+      ],
+      "given": "small valid prompt/scenario and two shared records through sourceFilePort, readPrompt, captureSource and prepareSource readFile",
+      "required_observation": "normal bytes/provenance retained; synchronous entry still synchronous; native read spy sees only safe inputs"
+    },
+    {
+      "id": "sparse-oversize-before-read",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "synthetic selected dependency with sparse size 2147483649 bytes; separately 10485761-byte target through sourceFilePort, readPrompt and capture; separately oversized raw path replaced by prepareSource output",
+      "required_observation": "finite exit-4 too-big report before any native open/read of oversized path; no RangeError; resolver direct fake stat above limit gives contract-invalid before files.read; no upload/auth/model calls"
+    },
+    {
+      "id": "aggregate-before-read",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "two selected files with stat sizes 6291456 and 4194305 bytes; separately 10001 selected small paths; repeat an already selected path; separate reference-only inputs totaling above 10MiB with small selected leaf results",
+      "required_observation": "selected over-budget set refuses before its overflow read; repeated selected path counted once; total and largest files reported without contents; unselected reference raw totals alone do not refuse a fitting selected payload"
+    },
+    {
+      "id": "fanout-stop",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "synthetic eight-way schema reference DAG, seven levels, tiny authored files; projected fully expanded graph exceeds 10MiB; an early fitting branch and later overflowing branch; run public expandSource and captureSource",
+      "required_observation": "contract-invalid finite too-big error naming originating consumer/target; halt during branch expansion before any oversized intermediate value/snapshot/text allocation; no successful partial result or upload; no time-based pass criterion"
+    },
+    {
+      "id": "byte-boundaries",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "synthetic valid JSON source/record encoded to 10485759,10485760,10485761 UTF-8 bytes using padding within a string; repeat with multibyte text",
+      "required_observation": "first two fit read/expanded-value byte budget, last refuses; count UTF-8 bytes, not character count; separate aggregate effective-source and tar limits still apply"
+    },
+    {
+      "id": "file-count-boundaries",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "9999,10000,10001 unique selected small paths within byte budget, plus repeated selection of a previous path",
+      "required_observation": "first two fit selected-file count, 10001 refuses before selected read; repeated selected paths do not consume another count; no expanded or generated output bypasses selected limits"
+    }
+  ]
+}

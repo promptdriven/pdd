@@ -36,12 +36,12 @@ function tableCells(line) {
   if (cells.at(-1) === '') cells.pop();
   return cells.map(clean);
 }
-const rows = (text, section, file) => {
-  const body = text.split(/^##\s+/m).find(piece => piece.split(/\r?\n/, 1)[0].trim() === section);
-  if (!body) return [];
+const rows = (text, section, file, required = columns[section]) => {
+  const body = section === null ? text : text.split(/^##\s+/m).find(piece => piece.split(/\r?\n/, 1)[0].trim() === section);
+  if (!body) { if (section === null) invalid(`${file}: table is missing column ${required[0]}.`); return []; }
   const table = body.split(/\r?\n/).filter(line => /^\s*\|/.test(line)).map(tableCells);
   const heading = table.shift();
-  for (const column of heading ? columns[section] : []) if (!heading.includes(column)) invalid(`${file}: ${section} is missing column ${column}.`);
+  for (const column of heading || section === null ? required : []) if (!heading?.includes(column)) invalid(`${file}: ${section ?? 'table'} is missing column ${column}.`);
   return heading ? table.filter(row => !row.every(cell => /^:?-+:?$/.test(cell))).map(row => Object.fromEntries(heading.map((key, i) => [key, row[i] ?? '']))) : [];
 };
 const duplicate = (items, key, file) => { const seen = new Set(); for (const item of items) { if (!item[key] || seen.has(item[key])) invalid(`${file}: duplicate or empty ${key} ${item[key]}.`); seen.add(item[key]); } };
@@ -218,6 +218,10 @@ async function documents({ cwd }, p) {
   catch { invalid('product/map.md: cannot read the product map.'); }
   try { plan = await p.readFile(join(cwd, 'product/plan.md')); }
   catch (error) { if (error.code !== 'ENOENT') invalid('product/plan.md: cannot read the plan.'); }
+  return parseProductDocuments({ mapText: map, planText: plan });
+}
+export function parseProductDocuments({ mapText, planText = '' }) {
+  const map = String(mapText), plan = String(planText);
   const name = /^#\s+(.+?)(?::\s*map)?\s*$/m.exec(map)?.[1], size = /^Size:\s*(small|medium|large)\b/im.exec(map)?.[1].toLowerCase();
   if (!name || !size) invalid('product/map.md: name or Size is missing.');
   const mapRows = section => rows(map, section, 'product/map.md'), planRows = section => rows(plan, section, 'product/plan.md');
@@ -239,6 +243,11 @@ async function documents({ cwd }, p) {
   return { product: { name, size, parts, stories, journeys, runs, questions: mapRows('Questions').filter(row => !row.Answer || row.Answer === '-').map(row => row.Id) }, boundaries: planRows('Boundaries') };
 }
 export async function readProduct(input, given = {}) { return (await documents(input, portsFor(given))).product; }
+export function parseProductWorldWriters({ worldText }) {
+  const writers = rows(String(worldText), null, 'contracts/world.md', ['Key', 'Writer']).map(row => ({ key: row.Key, writer: row.Writer }));
+  for (const row of writers) if (!row.key || !row.writer) invalid(`contracts/world.md: declaration has an empty ${row.key ? 'Writer' : 'Key'}.`);
+  return writers;
+}
 const parse = text => { try { return JSON.parse(text); } catch { invalid('GitHub returned unreadable JSON.'); } };
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const canonicalPr = (url, repository, number) => {

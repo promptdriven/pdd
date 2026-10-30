@@ -1,0 +1,68 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-local-queue.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Each waiting job keeps one ticket in oldest-first order for the next free local slot."
+    },
+    {
+      "id": "AC2",
+      "text": "While I wait, pdd reports the local busy count, limit and number ahead of me."
+    },
+    {
+      "id": "AC3",
+      "text": "Interruption or the caller deadline removes my waiting ticket without submitting its job."
+    },
+    {
+      "id": "AC4",
+      "text": "A waiting ticket or claim abandoned for 60 seconds cannot block my turn when its process ID has been reused."
+    },
+    {
+      "id": "AC5",
+      "text": "Only the first waiting ticket competes for a free slot; twelve contenders with three slots make progress without a contention stall."
+    }
+  ],
+  "cases": [
+    {
+      "id": "fifo",
+      "given": "tickets created at 10,20,30; one slot frees",
+      "required_observation": "10 acquires, then 20, then 30; one ticket each"
+    },
+    {
+      "id": "equal-time",
+      "given": "two tickets share timestamp; reversed directory enumeration",
+      "required_observation": "stable ID tie order"
+    },
+    {
+      "id": "progress",
+      "given": "4 occupied slots, limit 4, two older live tickets",
+      "required_observation": "stderr reports 4 busy/of 4 and 2 ahead; JSON stdout stays valid"
+    },
+    {
+      "id": "dead-waiter",
+      "given": "oldest PID dead; later live waiter",
+      "required_observation": "dead waiting ticket removed; next live ticket eligible"
+    },
+    {
+      "id": "stop",
+      "given": "deadline/interrupt before claim and before POST",
+      "required_observation": "ticket removed, zero new sends"
+    },
+    {
+      "id": "reused-pid-waiter-and-claim",
+      "given": "oldest ticket, separately abandoned claim, has file refresh age 59999 then 60000 ms and a PID now belonging to an unrelated long-lived process",
+      "required_observation": "fresh case still owns its place/claim; at 60000 ms stale ownership is removed safely and next live waiter can acquire; no successor claim is deleted"
+    },
+    {
+      "id": "head-only-jitter",
+      "given": "three ordered tickets, occupied limit, claim contention and injected random values 0 and just below 1",
+      "required_observation": "only current head attempts acquisition claim; followers wait longer; repeated failures retain original ticket/time; retry delays are positive, bounded, varied by jitter and clipped to deadline"
+    },
+    {
+      "id": "twelve-contenders",
+      "given": "12 separate native processes launched together, shared limit 3, each holds its slot for 20 ms, existing native fixture limit 15 seconds",
+      "required_observation": "all 12 finish comfortably before the 15-second fixture timeout, measured peak active <=3, no busy failures or duplicated tickets; performance bound belongs to this controlled fixture, not a production hardware SLA"
+    }
+  ]
+}

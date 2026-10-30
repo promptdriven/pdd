@@ -1,0 +1,101 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/runtime-local-slots.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Ten parallel local checks with PDD_MAX_JOBS=3 all finish with at most 3 runtime jobs active at once."
+    },
+    {
+      "id": "AC2",
+      "text": "Checks, remote lint and Try setup share the local limit of 4 jobs by default across repositories and worktrees."
+    },
+    {
+      "id": "AC3",
+      "text": "pdd reuses a dead process's slot only after its runtime jobs are confirmed ended or after 30 minutes."
+    },
+    {
+      "id": "AC4",
+      "text": "Stopping a command preserves slots for dispatched jobs that have not been confirmed ended."
+    },
+    {
+      "id": "AC5",
+      "text": "Waiting tickets, active owners and claim locks refresh about every 5 seconds; after 60 seconds without refresh, a reused live process ID cannot keep them alive."
+    },
+    {
+      "id": "AC6",
+      "text": "SIGHUP and SIGTERM remove my waiting ticket and claim locks, while preserving dispatched jobs whose end is unconfirmed."
+    },
+    {
+      "id": "AC7",
+      "text": "Checking a dead owner never holds the local claim lock during a runtime read, and repeated checks reuse each job observation for about 15 seconds."
+    }
+  ],
+  "cases": [
+    {
+      "id": "ten-processes",
+      "given": "10 commands, limit 3, fake runtime tracks active jobs",
+      "required_observation": "all pass, measured maximum 3; no busy failure"
+    },
+    {
+      "id": "mixed-work",
+      "given": "several repos/worktrees; check batches, lint, Try setup",
+      "required_observation": "shared cap 4; no parent reservation deadlock; browser session lifetime takes no slot"
+    },
+    {
+      "id": "dead-owner",
+      "given": "dead PID; running, unknown, missing and wrong-ID receipts separately",
+      "required_observation": "keep reservation before 30 minutes"
+    },
+    {
+      "id": "reclaim",
+      "given": "same-ID terminal jobs, separately age 1800000 ms",
+      "required_observation": "reservation reusable; age 1799999 ms with running job remains occupied"
+    },
+    {
+      "id": "interrupt-deadline",
+      "given": "pending posted job, separately confirmed terminal and unsent job",
+      "required_observation": "retain pending; release ended/unsent; no extra dispatch"
+    },
+    {
+      "id": "heartbeat-live-owner",
+      "given": "fake clock and timers; waiting ticket, active reservation and held claim separately; live owner refreshes every 5000 ms for 65000 ms",
+      "required_observation": "each owned file stays fresh while owned, including during slow outside work; no premature owner expiry; stopping ownership cancels timers and does not recreate removed files; listing keeps exactly its existing public fields"
+    },
+    {
+      "id": "reused-pid-active",
+      "given": "active record with a stale heartbeat/file refresh and an unrelated live process at its PID; request running, unknown, missing, wrong-ID and unreadable separately; lease ages 1799999 and 1800000 ms",
+      "required_observation": "owner expires at 60000 ms without refresh despite live PID; active reservation retained at age 1799999 for every unconfirmed end; reclaim at 1800000; confirmed all-ended or unsent may reclaim earlier"
+    },
+    {
+      "id": "legacy-freshness",
+      "given": "existing waiting, active and claim records without explicit heartbeat metadata; file refresh age 59999 then 60000 ms; PID appears alive",
+      "required_observation": "file refresh supplies freshness; not expired at 59999, expired at 60000; expired active paid/unknown lease still obeys 30-minute/end rule; no indefinite PID-only ownership"
+    },
+    {
+      "id": "signals-retain-paid-lease",
+      "given": "separate child commands receive SIGHUP and SIGTERM while waiting, while holding a claim, and after a potentially dispatched request",
+      "required_observation": "remove only own waiting ticket and claim; no later ID recording or POST; preserve every uncertain dispatched active record and request ID; confirmed-ended/unsent release remains allowed"
+    },
+    {
+      "id": "probe-outside-lock",
+      "given": "dead active owner with one request; fake authenticated GET deliberately blocked; another admitted command records its request ID during the blocked probe",
+      "required_observation": "GET begins with no claim held; the other registration completes while probe is pending; no network request occurs inside any claim critical section"
+    },
+    {
+      "id": "dead-job-probe-cache",
+      "given": "one process repeatedly inspects the same dead owner/request at 0, 100, 14999 and 15000 ms; run running, unknown and thrown-read variants separately",
+      "required_observation": "one read through 14999 ms, next read eligible at 15000 ms; unknown/read failure never turns into ended; distinct origin/port, command or request ID does not reuse the observation"
+    },
+    {
+      "id": "probe-snapshot-race",
+      "given": "probe reports ended, but before reclamation the owner refreshes, another request ID is appended, or the record identity is replaced; variants separately",
+      "required_observation": "recheck under exclusion rejects each stale snapshot; no removal based on the old answer and no loss of new request ID or successor record"
+    },
+    {
+      "id": "exited-producer-force-color",
+      "given": "real child producer writes its PID through a plain string with FORCE_COLOR=3, records a request and exits; later acquisition reads running then ended",
+      "required_observation": "PID parse is a valid uncolored positive integer; actual producer exit is observed; retain running lease, reclaim only after ended or existing lease boundary"
+    }
+  ]
+}

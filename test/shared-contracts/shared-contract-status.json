@@ -1,0 +1,104 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/shared-contract-status.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The contract list names records, their owner files and their current prompt and test users."
+    },
+    {
+      "id": "AC2",
+      "text": "Changing a used shared record marks every Story using it stale since its last actual check."
+    },
+    {
+      "id": "AC3",
+      "text": "A different record in the same file leaves an unrelated Story in the same batch current."
+    },
+    {
+      "id": "AC4",
+      "text": "No actual check baseline is shown as not checked, and a legacy baseline is shown as unavailable."
+    },
+    {
+      "id": "AC5",
+      "text": "Lint and Try do not replace an actual check baseline."
+    },
+    {
+      "id": "AC6",
+      "text": "Listing contracts makes no runtime call and changes no source or history."
+    },
+    {
+      "id": "AC7",
+      "text": "Checking one test, all tests of the same Story or a larger batch leaves an unchanged Story current."
+    },
+    {
+      "id": "AC8",
+      "text": "Listing many records from one JSON file reads and parses that file once and leaves independent uses unchanged."
+    }
+  ],
+  "cases": [
+    {
+      "id": "catalog",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "Markdown descriptive section, heading with spaces, JSON schema node, unused record; two prompt users and one seeded test",
+      "required_observation": "list canonical targets, owner files, exact users and Stories; descriptive section omitted; unused record has no users"
+    },
+    {
+      "id": "all-users",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "actual Check for Stories A and B using record agent; edit agent; include a nested use",
+      "required_observation": "agent changed; A and B stale; check baseline remains its submitted value"
+    },
+    {
+      "id": "individual-footprint",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "A uses agent, B uses ticket in one Markdown file; both checked in one batch; edit agent only",
+      "required_observation": "A stale; B current; unrelated raw record bytes neither uploaded nor part of B fingerprint"
+    },
+    {
+      "id": "absent-legacy",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "one Story never checked; one historical receipt has no reference snapshots",
+      "required_observation": "not checked and baseline unavailable respectively; no invented changed record"
+    },
+    {
+      "id": "real-baseline",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "actual Check snapshot old; edit record; complete lint and Try; then an evaluated Check",
+      "required_observation": "lint/Try leave old baseline and stale status; later actual Check advances only its Story"
+    },
+    {
+      "id": "local-only",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "offline local catalog/history with auth/fetch/slot/write spies",
+      "required_observation": "all external and write counts 0; finite local output"
+    },
+    {
+      "id": "selection-independent-story",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "Story A has tests one.json and two.json using distinct prompts and dependency files; Story B has other.json; save actual A baseline from one.json, then list against all tests; repeat baseline from both A tests and A+B batch",
+      "required_observation": "A footprint has both A tests and their own closures and stays identical/current across selections; B dependencies absent from A; selected upload includes only selected tests; changing A second-test dependency makes A stale"
+    },
+    {
+      "id": "single-json-parse",
+      "criteria": [
+        "AC8"
+      ],
+      "given": "one synthetic JSON contract file containing 256 independent object-schema records plus used leaf pointers and repeated nested targets; repeat catalog with 512 records; use parser/read instrumentation on the existing public codec if present, no extra parser",
+      "required_observation": "each file read/parsed once per catalog operation; independent records and annotations do not mutate cached values; no complete-file parse per record; output catalog identities and values exact; no timing gate"
+    }
+  ]
+}
