@@ -228,3 +228,18 @@ test('2675: a warning sink failure releases recovered ownership before propagati
   await assert.rejects(client.acquireRuntimeBatchLock(folder, { onWarning: () => { throw new Error('sink failed'); } }), /sink failed/);
   assert.equal(existsSync(join(folder, 'batch.lock')), false);
 });
+
+
+test('2675: real batch ownership is removed after an exception and Ctrl-C', async t => {
+  const r = await fixture(t);
+  await assert.rejects(r.run({ '--retry': r.batch }, [], { gh: () => { throw new Error('auth probe failed'); } }), /auth probe failed/);
+  assert.equal(existsSync(join(r.folder, 'batch.lock')), false, 'auth failure releases the native lock');
+  let stop; const gate = r.holdCheck(), before = checks(r.fake).length;
+  const running = r.run({ '--retry': r.batch }, [], { onInterrupt: handler => { stop = handler; return () => {}; } });
+  await gate.entered.promise; stop(); gate.resume.resolve();
+  const result = await running; assert.equal(result.code, 3);
+  assert.equal(existsSync(join(r.folder, 'batch.lock')), false, 'Ctrl-C releases the native lock');
+  assert.equal(checks(r.fake).length - before, 1); assert.equal(read(r.file).rows[0].request_ids.length, 1);
+  passed(await r.run({ '--read': true }, [r.batch]));
+  assert.equal(checks(r.fake).length - before, 1);
+});
