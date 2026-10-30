@@ -1,4 +1,4 @@
-// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: 68313e4b676ff838b09af1845d07ee14048108cf2a9a1d3ca347eb546cff23f1).
+// Generated from prompts/cli/path-diagnostic.prompt.md (sha256: b3eeb7218fb2ce08a0cb650184459f46c1425cb1d987b1e14780efbb2228db6b).
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
@@ -19,7 +19,7 @@ function candidates(cwd, env) {
   return [...new Set(listed)].filter(executable);
 }
 
-// Only --version probes another executable; the guard prevents another Alpha from probing back.
+// Only --version probes another executable; the guard prevents another copy of this pdd from probing back.
 export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   if (env.PDD_PATH_PROBE === '1') return [];
   let version, running;
@@ -33,7 +33,7 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   const shadowed = selected && !isAlpha(selected);
   const conflict = shadowed || paths.some(path => !isAlpha(path));
   if (mode === 'version' && !conflict || mode === 'workflow' && !shadowed) return [];
-  let selectedVersion = `PDD Alpha ${version}`;
+  let selectedVersion = `pdd ${version}`;
   if (shadowed) {
     selectedVersion = 'version unavailable';
     try {
@@ -44,10 +44,10 @@ export function pathDiagnostic({ packageRoot, cwd, env, mode }) {
   }
   const absolute = `${quote(process.execPath)} ${quote(running)}`;
   const selection = selected ? `PATH selects: ${clean(selected)} (${selectedVersion}).` : 'PATH has no executable named pdd.';
-  if (mode === 'workflow') return [`${selection} Running PDD Alpha ${version}: ${clean(running)}. Use ${absolute}; activate environments before correcting PATH.`];
-  const lines = [`Running PDD Alpha ${version}: ${clean(running)}.`, ...paths.map((path, i) => `  PATH ${i + 1}: ${clean(path)}`), selection];
+  if (mode === 'workflow') return [`${selection} Running pdd ${version}: ${clean(running)}. Use ${absolute}; activate environments before correcting PATH.`];
+  const lines = [`Running pdd ${version}: ${clean(running)}.`, ...paths.map((path, i) => `  PATH ${i + 1}: ${clean(path)}`), selection];
   if (conflict || !selected) {
-    lines.push('Later environment activation (for example conda) can reorder PATH and shadow Alpha again.', `Use Alpha directly: ${absolute}`);
+    lines.push('Later environment activation (for example conda) can reorder PATH and shadow this pdd again.', `Use this pdd directly: ${absolute}`);
     const alpha = paths.find(path => basename(path) === 'pdd' && isAlpha(path));
     if (alpha) lines.push(`After environment activation, run: export PATH=${quote(dirname(alpha))}:"$PATH"; hash -r`);
   }

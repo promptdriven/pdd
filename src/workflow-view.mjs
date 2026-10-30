@@ -106,7 +106,7 @@ export async function viewRun({ ref, cwd }, ports = {}) {
     `Pending: ${pending}`, 'Workflow gate approval and code authorization are separate from prompt approval.',
     ...[...prompts].map(([path, state]) => `Prompt status: ${text(path)} — ${state}`),
     ...(array(run.pr).length ? run.pr.map(pr => `PR: ${text(pr.url)} (${text(pr.state ?? 'unknown')}, saved)`) : ['PRs: none recorded.']),
-    ...runtime.map(line => text(line)), ...(reports.length ? reports.map(url => `Report: ${text(url)}`) : ['Runtime reports: not recorded.']),
+    ...runtime.map(line => text(line)), ...(reports.length ? reports.map(url => `Report: ${text(url)}`) : ['Interpreter reports: not recorded.']),
     ...(tries.length ? tries.map(url => `Try: ${text(url)}`) : ['Try: not recorded.']),
     `Revision: ${revision?.trim() ?? 'unavailable'}; ${dirty === null ? 'working-tree state unavailable' : dirty ? 'uncommitted changes' : 'clean checkout'}.`,
     'Review links show current files; recorded approvals do not certify later edits.',

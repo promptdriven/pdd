@@ -117,7 +117,7 @@ async function requestText(req) {
 export async function openServe(context, test, sessionId, options) {
   const { ports, root, origin, identity } = context;
   const model = await context.runtime.send(`/v1/try/${sessionId}/model`, { method: 'GET' }, 30_000);
-  if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The runtime could not read this Try’s routes. It needs the Try doors server branch.'));
+  if (model.status !== 200 || !Array.isArray(model.json?.entries)) throw problem(502, cleanText(model.json?.error?.message || 'The interpreter could not read this Try’s routes. It needs the Try doors server branch.'));
   const routes = model.json.entries.filter(e => e.http).map(entry => ({ ...entry, route: entry.http }));
   const hasScreen = model.json.app_map === true;
   if (hasScreen && routes.some(e => ['GET', 'HEAD'].includes(e.route.method) && e.route.path === '/' || e.route.path.startsWith(SCREEN_PREFIX))) throw problem(502, 'This app map reserves GET/HEAD / and /__pdd/screen/; its HTTP routes conflict with the Screen.');
@@ -196,8 +196,8 @@ export async function openServe(context, test, sessionId, options) {
       ports.stderr?.write(`${label}: ${result.status} in ${Math.round((Date.now() - sentAt) / 1000)} s\n`);
     } catch (error) {
       if (error.tryUsage) { usage = error.tryUsage; latestUsage = usage; usageSource = 'runtime'; }
-      req.resume(); reply(error.httpStatus || 502, error.message || 'The runtime could not confirm this request.');
-      ports.stderr?.write(`${req.method} ${req.url.split('?')[0]}: ${error.httpStatus || 502} ${cleanText(error.message || 'The runtime could not confirm this request.')}\n`);
+      req.resume(); reply(error.httpStatus || 502, error.message || 'The interpreter could not confirm this request.');
+      ports.stderr?.write(`${req.method} ${req.url.split('?')[0]}: ${error.httpStatus || 502} ${cleanText(error.message || 'The interpreter could not confirm this request.')}\n`);
     }
     finally { if (counted) pending--; }
   });
