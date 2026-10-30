@@ -18,6 +18,11 @@ async function bounded(promise, label = 'gate', ms = 5000) {
 }
 const pause = ms => new Promise(done => setTimeout(done, ms));
 const checks = fake => fake.posts.filter(p => p.command === 'check');
+function forgetFixtureClaims(folder, ids) {
+  for (const name of readdirSync(folder).filter(name => name.endsWith('.dispatch.json'))) {
+    if (ids.includes(read(join(folder, name)).id)) fs.unlinkSync(join(folder, name));
+  }
+}
 async function fixture(t) {
   const setup = harbor(t); let delay = false, held = null;
   const fake = await fakeRuntime(t, async (e, f) => {
@@ -37,6 +42,7 @@ async function fixture(t) {
   const first = await run({}, ['place-order']); assert.equal(first.code, 0);
   const batch = first.json.batch, folder = join(setup.state, 'batches', batch), file = join(folder, 'batch.json');
   const saved = read(file);
+  forgetFixtureClaims(folder, saved.rows[0].request_ids);
   Object.assign(saved.rows[0], { phase: 'local', state: 'not_run', request_ids: [], eligible: true, can_retry: true, busy: true, retry_at: null });
   writeFileSync(file, JSON.stringify(saved)); delay = true;
   const holdCommand = command => { const current = { command, entered: deferred(), resume: deferred() }; held = current; t.after(() => current.resume.resolve()); return current; };
@@ -107,6 +113,7 @@ test('2675: a batch read holds ownership across its refresh and cannot overwrite
   const first = JSON.parse((await run()).out), folder = join(setup.state, 'batches', first.batch), file = join(folder, 'batch.json');
   const saved = read(file), old = saved.rows[0].request_ids[0];
   writeFileSync(join(folder, `${old}.json`), JSON.stringify(fake.check(old, 'running')));
+  forgetFixtureClaims(folder, saved.rows[1].request_ids);
   Object.assign(saved.rows[1], { state: 'not_run', phase: 'local', request_ids: [], eligible: true, busy: true, can_retry: true, retry_at: null });
   writeFileSync(file, JSON.stringify(saved)); gate = true;
   const reading = run({ '--read': true }, [first.batch]); await bounded(entered.promise, 'read entry');
@@ -193,6 +200,7 @@ test('2675: a process killed after dispatch leaves its ID recoverable without an
   const { ports } = portsFor(env);
   await client.runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true } }, ports);
   const batch = JSON.parse(ports.stdout.text).batch, folder = join(setup.state, 'batches', batch), file = join(folder, 'batch.json'), saved = read(file);
+  forgetFixtureClaims(folder, saved.rows[0].request_ids);
   Object.assign(saved.rows[0], { phase: 'local', state: 'not_run', request_ids: [], eligible: true, can_retry: true, busy: true, retry_at: null }); writeFileSync(file, JSON.stringify(saved));
   gate = true; const before = checks(fake).length;
   const owner = worker(t, { setup, env }, { '--retry': batch }); t.after(() => { owner.child.kill('SIGKILL'); resume.resolve(); });
