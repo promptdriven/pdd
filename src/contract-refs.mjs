@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: e300ba22f5830c148e07bc14cb48f198abc2a927defe23fd8c10da047ecdb2cd).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 92a844075d65a211c3f3b05bbe8537ca4cb45e30d73a28ad4227cb90f6cf18cc).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -239,7 +239,6 @@ function expand({ path: consumer, text, format }, files, documents) {
     const result = shallow(value);
     if (object(value.properties)) put(result,'properties',shallow(value.properties));
     schemaChildren(result, pointer, (child, childPointer) => schema(child, childPointer, chain, originating));
-    if (chain.length || references.size) bounded(result,chain.at(-1) ?? consumer,chain);
     return result;
   }
   function seed(value, pointer, chain = []) {

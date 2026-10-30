@@ -1,11 +1,11 @@
-// Generated from prompts/cli/contracts.prompt.md (sha256: 07d4ee96a1bdbfa178ca14eeb9c3e0bcb399e129fc5ff1ff4dec0e3fa4f79690).
+// Generated from prompts/cli/contracts.prompt.md (sha256: 1c5cada97541d80cfc581fcfdefd90b3759ec3b1c927afac79d0497605e65b6f).
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { catalogRecords, compareCopies, expandSource, planSync } from './contract-refs.mjs';
-import { captureSource, findTests, gitFiles, sourceFilePort } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, sourceFilePort, LIMITS } from './runtime-preflight.mjs';
 import { readContractHistory } from './runtime-client.mjs';
 
 const line = (stream,text) => stream.write(`${text}\n`);
@@ -21,12 +21,37 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
   const root=git.stdout.trim();
   try {
     const visible=new Set(gitFiles(root)), files=sourceFilePort(root,visible);
-    const sources=[...visible].sort().filter(path=>path.startsWith('contracts/') && /\.(?:md|json)$/.test(path)).map(path=>({path,text:files.read({path}).content}));
-    const prompts=[...visible].sort().filter(path=>path.endsWith('.prompt.md')).map(path=>({path,text:files.read({path}).content}));
+    const warnings = [];
+    const readDiscovered = path => {
+      if (files.stat({path}).size > LIMITS.bytes) { warnings.push(`${path}: discovery/catalog unavailable (too big; limit 10 MB).`); return []; }
+      return [{path,text:files.read({path}).content}];
+    };
+    const sources=[...visible].sort().filter(path=>path.startsWith('contracts/') && /\.(?:md|json)$/.test(path)).flatMap(readDiscovered);
+    const prompts=[...visible].sort().filter(path=>path.endsWith('.prompt.md')).flatMap(readDiscovered);
     const found=findTests({root,files:[...visible]});
-    const prepared=prompts.map(source=>({...source,...expandSource({...source,format:'prompt'},files)}));
-    const capture=captureSource(root,{tests:found.tests.map(test=>test.path)});
-    const references=[...prepared.flatMap(source=>source.references),...capture.references];
+    warnings.push(...found.warnings.map(warning=>warning.replace(/^Warning: /,'')));
+    const prepared=[];
+    for (const source of prompts) {
+      try { prepared.push({...source,...expandSource({...source,format:'prompt'},files)}); }
+      catch (error) { warnings.push(`${source.path}: current uses unavailable: ${finite(error)}`); }
+    }
+    // Listing has no selected runtime program. Isolate unavailable consumers so
+    // one unfinished sibling cannot hide every independent record and Story.
+    const stories=new Map(), selectedReferences=[];
+    for (const test of found.tests) {
+      if (stories.has(test.doc?.story_path) && !stories.get(test.doc.story_path).selectedUnavailable) continue;
+      try {
+        const captured=captureSource(root,{tests:[test.path]});
+        selectedReferences.push(...captured.references);
+        for (const story of captured.stories) stories.set(story.story_path,story);
+      } catch (error) {
+        const cause=finite(error); warnings.push(`${test.path}: footprint unavailable: ${cause}`);
+        if (typeof test.doc?.story_path==='string') stories.set(test.doc.story_path,{story_path:test.doc.story_path,tests:[test.path],selectedUnavailable:true,unavailable:[{path:test.path,cause}]});
+      }
+    }
+    const capture={stories:[...stories.values()]};
+    const references=[...prepared.flatMap(source=>source.references),...selectedReferences,...capture.stories.flatMap(story=>story.references ?? [])];
+    for (const warning of warnings) line(stderr,`Warning: ${warning}`);
     const catalog=catalogRecords(sources,references.map(ref=>ref.target));
     for (const warning of catalog.warnings) line(stderr,`Warning: ${warning}`);
     if (words[0]==='sync') {
@@ -84,10 +109,12 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
     for (const warning of history.warnings) line(stderr,`Warning: ${warning}`);
     for (const record of catalog.records) {
       const users=[...new Set(references.filter(ref=>ref.target===record.target).map(ref=>ref.consumer))].sort();
-      const stories=capture.stories.filter(story=>story.references.some(ref=>ref.target===record.target)).map(story=>story.story_path).sort();
-      line(stdout,`${record.target}  owner: ${record.path}  users: ${users.join(', ')||'none'}  Stories: ${stories.join(', ')||'none'}`);
+      const stories=capture.stories.filter(story=>story.references?.some(ref=>ref.target===record.target)).map(story=>story.story_path).sort();
+      const unknownUses=prepared.length<prompts.length, unknownStories=capture.stories.some(story=>story.unavailable?.length);
+      line(stdout,`${record.target}  owner: ${record.path}  users: ${users.join(', ')||(unknownUses?'unavailable':'none')}  Stories: ${stories.join(', ')||(unknownStories?'unavailable':'none')}`);
     }
     for (const story of capture.stories) {
+      if (story.unavailable?.length) { line(stdout,`${story.story_path}: footprint unavailable (${story.unavailable.map(item=>item.cause).join('; ')})`); continue; }
       const baseline=history.stories.find(row=>row.story_path===story.story_path);
       if (history.warnings.length) { line(stdout,`${story.story_path}: baseline unavailable`); continue; }
       if (!baseline || baseline.baseline==='not-checked') { line(stdout,`${story.story_path}: not checked`); continue; }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 01b7dbadbf880afeb24fe558e3bc9d0e0260c36493851a167d7df3e3c43f9129).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: bf491073d49fb8a2ae4155fa8c22bdf59eca02abc38eb65487c3cd6cf01a4561).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -91,7 +91,7 @@ const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.sl
 
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
-  const visible = new Set(), tests = [], stories = [];
+  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
   for (const path of files) {
     const stat = statOf(join(root, path));
     if (!stat?.isFile()) continue;
@@ -104,6 +104,7 @@ export function findTests({ root, files = gitFiles(root) }) {
       if (typeof doc?.schema_version === 'string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) tests.push({ path, doc });
     } else if (path.endsWith('.md') && path.split('/').slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(basename(path))) {
       // An index (PLAN.md, README.md) or a file with no acceptance criteria section is not a Story (2048 session, 0.1.6).
+      if (stat.size > LIMITS.bytes) { discoveryWarnings.push(`Warning: ${path}: discovery unavailable (too big; limit 10 MB).`); continue; }
       const text = readText(root, path);
       if (AC_HEADING.test(text)) stories.push({ path, name: storyName(path), title: titleOf(text) });
     }
@@ -113,10 +114,10 @@ export function findTests({ root, files = gitFiles(root) }) {
     const story = stories.find(item => item.path === storyPath);
     test.storyPath = storyPath;
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) ? titleOf(readText(root, storyPath)) : null) ?? test.story;
+    test.title = story?.title ?? (storyPath && visible.has(storyPath) && Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes ? titleOf(readText(root, storyPath)) : null) ?? test.story;
   }
   const named = new Set(tests.map(test => test.storyPath));
-  const warnings = stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`);
+  const warnings = [...discoveryWarnings, ...stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`)];
   return { visible, tests, stories, warnings };
 }
 
@@ -907,6 +908,8 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
+  const unavailable = new Map();
+  const markUnavailable = (path,error) => unavailable.set(path,{path,cause:String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000)});
   const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
@@ -1024,7 +1027,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         for (const test of discovered) {
           if (!selectedStories.has(test.doc?.story_path)) continue;
           if (!storyTests.get(test.doc.story_path).includes(test.path)) storyTests.get(test.doc.story_path).push(test.path);
-          add(test.path,'Story footprint','test');
+          try { add(test.path,'Story footprint','test'); } catch (error) { if (reader.unstable || error === unstableSource) throw error; markUnavailable(test.path,error); }
         }
         if (index === queue.length) break;
       }
@@ -1032,47 +1035,54 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       selecting = upload;
       if (visited.has(key)) continue;
       visited.add(key);
-      let file = effective.get(path) ?? footprintPayload.get(path);
-      if (selecting) payload.set(path,file);
-      if (path.endsWith('.prompt.md')) file = prepare(file,'prompt');
-      else if (role === 'test') file = prepare(file,'scenario');
-      if (role === 'test' || role === 'app-map' || path.endsWith('.prompt.md') || path.endsWith('.md')) {
-        const text = bytes(file).toString('utf8');
-        if (role === 'test') {
-          let doc;
-          try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
-          if (!isObject(doc)) continue;
-          if (typeof doc.story_path === 'string') {
-            if (selecting) { if (!storyTests.has(doc.story_path)) storyTests.set(doc.story_path,[]); if (!storyTests.get(doc.story_path).includes(path)) storyTests.get(doc.story_path).push(path); }
-            add(doc.story_path, path, 'story');
-          }
-          addStrings(doc.entry_paths, path);
-          for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
-          for (const item of Array.isArray(doc.context) ? doc.context : []) {
-            if (typeof item?.prompt_path === 'string') add(item.prompt_path, path);
-            addStrings(item?.paths, path);
-          }
-        } else if (role === 'app-map') {
-          let map;
-          try { map = JSON.parse(text); } catch { throw sourceProblem(path, '', 'must be valid app-map JSON.'); }
-          const walk = value => {
-            if (Array.isArray(value)) { for (const item of value) walk(item); return; }
-            if (!isObject(value)) return;
-            if (typeof value.prompt_path === 'string') add(value.prompt_path, path);
-            addStrings(value.stylesheets, path);
-            for (const key of ['screens', 'router', 'routes', 'handlers', 'handler', 'after']) walk(value[key]);
-          };
-          walk(map);
-        } else {
-          for (const raw of markdownContext(text)) { const context = contextPath(raw, path, visible); if (context) add(context, path); }
-          if (path.endsWith('.prompt.md')) {
-            for (const block of interfaceBlocks(text)) {
-              let doc;
-              try { doc = JSON.parse(block[1]); } catch { continue; }
-              for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') add(call.target, path);
+      try {
+        let file = effective.get(path) ?? footprintPayload.get(path);
+        if (selecting) payload.set(path,file);
+        if (path.endsWith('.prompt.md')) file = prepare(file,'prompt');
+        else if (role === 'test') file = prepare(file,'scenario');
+        if (role === 'test' || role === 'app-map' || path.endsWith('.prompt.md') || path.endsWith('.md')) {
+          const text = bytes(file).toString('utf8');
+          if (role === 'test') {
+            let doc;
+            try { doc = JSON.parse(text); } catch { continue; } // Format refusals belong to preflight or server lint.
+            if (!isObject(doc)) continue;
+            if (typeof doc.story_path === 'string') {
+              if (selecting) { if (!storyTests.has(doc.story_path)) storyTests.set(doc.story_path,[]); if (!storyTests.get(doc.story_path).includes(path)) storyTests.get(doc.story_path).push(path); }
+              add(doc.story_path, path, 'story');
+            }
+            addStrings(doc.entry_paths, path);
+            for (const step of Array.isArray(doc.steps) ? doc.steps : []) if (typeof step?.entry_path === 'string') add(step.entry_path, path);
+            for (const item of Array.isArray(doc.context) ? doc.context : []) {
+              if (typeof item?.prompt_path === 'string') add(item.prompt_path, path);
+              addStrings(item?.paths, path);
+            }
+          } else if (role === 'app-map') {
+            let map;
+            try { map = JSON.parse(text); } catch { throw sourceProblem(path, '', 'must be valid app-map JSON.'); }
+            const walk = value => {
+              if (Array.isArray(value)) { for (const item of value) walk(item); return; }
+              if (!isObject(value)) return;
+              if (typeof value.prompt_path === 'string') add(value.prompt_path, path);
+              addStrings(value.stylesheets, path);
+              for (const key of ['screens', 'router', 'routes', 'handlers', 'handler', 'after']) walk(value[key]);
+            };
+            walk(map);
+          } else {
+            for (const raw of markdownContext(text)) { const context = contextPath(raw, path, visible); if (context) add(context, path); }
+            if (path.endsWith('.prompt.md')) {
+              for (const block of interfaceBlocks(text)) {
+                let doc;
+                try { doc = JSON.parse(block[1]); } catch { continue; }
+                for (const call of Array.isArray(doc?.calls) ? doc.calls : []) if (typeof call?.target === 'string') add(call.target, path);
+              }
             }
           }
         }
+        // Footprint-only binary/plain inputs still need bounded bytes for hashes.
+        if (!selecting) bytes(file);
+      } catch (error) {
+        if (selecting || reader.unstable || error === unstableSource) throw error;
+        markUnavailable(path,error);
       }
     }
     const files = [...payload.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), total = sourceLimit(files);
@@ -1083,7 +1093,6 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     }));
     const tar = tarFiles(entries);
     if (tar.length > LIMITS.bytes) throw new PreflightError(4, `The source archive is ${formatSize(tar.length)}. The limit is 10 MB.`);
-    for (const file of footprintPayload.values()) bytes(file);
     const same = !reader.unstable && isDeepStrictEqual(gitFiles(root), names) && [...snapshots.values()].every(file => {
       const after = inspectParentsAndStat(root, file.path);
       return file.stat === null ? after === null : sameStat(file.stat, after);
@@ -1104,10 +1113,13 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
         const path=pending[i]; if (reached.has(path)) continue;
         reached.add(path); pending.push(...(edges.get(path) ?? []));
       }
+      const failures = [...reached].sort().filter(path=>unavailable.has(path)).map(path=>unavailable.get(path));
+      if (failures.length) return {story_path:story.story_path,tests:story.tests.sort(),unavailable:failures};
       return {story_path:story.story_path,tests:story.tests.sort(),files:[...reached].sort().filter(path=>footprintPayload.has(path)).map(path=>({path,sha256:sha256(bytes(footprintPayload.get(path)))})),references:[...reached].sort().flatMap(path=>provenance.get(path) ?? [])};
     });
     return { tar, sha256: sha256(tar), files: files.map(({ path, size }) => ({ path, size })), bytes: total,
       references:[...provenance.keys()].filter(path=>payload.has(path)).sort().flatMap(path=>provenance.get(path)), stories:footprints,
+      warnings:footprints.flatMap(story=>(story.unavailable ?? []).map(item=>`Warning: ${story.story_path}: footprint unavailable: ${item.cause}`)),
       raw_prompt_hashes:rawPromptHashes,
       sources:entries.map(file=>({path:file.path,bytes:Buffer.from(file.bytes)})) };
   } catch (error) { if (reader.unstable || error === unstableSource) return null; throw error; }
@@ -1150,6 +1162,7 @@ export function whyNoTests(root, visible) {
 export function sharedSourceFiles(root, visible) {
   const owners = new Map();
   for (const prompt of [...visible].filter(path => path.endsWith('.prompt.md')).sort()) {
+    if (Number(statOf(join(root,prompt))?.size ?? 0) > LIMITS.bytes) continue;
     const text = readText(root, prompt);
     for (const match of text.matchAll(/`([^`\s]+)`/g)) {
       const path = match[1].replace(/^\.\//, '');

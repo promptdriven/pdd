@@ -1030,6 +1030,7 @@ function runFiles(cwd, words, options, ports) {
   const tests = selected.map(test => test.path);
   const appMap = options['--app-map'] === undefined ? null : appMapFor(found, options['--app-map'], cwd, root, ports.stderr);
   const capture = ports.captureSource(root, { tests, appMap });
+  for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
   const other = otherFiles(capture.files, found), width = Math.max(0, ...capture.files.map(file => file.path.length));
   for (const file of capture.files) line(ports.stdout, `  ${file.path.padEnd(width)}  ${file.size} bytes`);
   line(ports.stdout, `${capture.files.length} files, ${formatSize(capture.bytes)} (${capture.bytes} bytes). ${other.length} of them are not prompt, story or test files.`);
@@ -1059,7 +1060,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
     for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
   } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
-  context.warnings = [...svgWarnings, ...found.warnings,...drift];
+  context.warnings = [...svgWarnings, ...found.warnings,...drift,...(capture.warnings ?? [])];
   if (!context.json) for (const warning of [...svgWarnings,...drift]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
@@ -1514,6 +1515,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   if (!rows.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(rows.filter(row => row.state === 'ready'), root, found.visible));
   const capture = ports.captureSource(root, { tests: selected.map(test => test.path), appMap: null });
+  context.warnings.push(...(capture.warnings ?? []));
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
@@ -1694,6 +1696,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       line(ports.stdout, renderText({ rows: [row], exitCode: 4 })); return 4;
     }
     const capture = ports.captureSource(root, { tests: [test.path], appMap }), note = otherNote(otherFiles(capture.files, found).length);
+    for (const warning of capture.warnings ?? []) line(ports.stderr, warning);
     const identity = signIn(ports.gh, context.store);
     Object.assign(context, { capture, identity, secrets: [identity.token], startedAt: ports.now(), deadline: ports.now() + TRY_MS, lint: { request_ids: [], state: null },
       batch: null, rows: [row], timeoutMin: TRY_MS / 60_000, head: null });
