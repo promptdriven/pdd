@@ -2,7 +2,7 @@
 name: pdd-bug
 description: Use when fixing PDD bugs, errors or wrong results. Reproduce, prompt/tests PR 1, code PR 2 if asked.
 metadata:
-  pdd-skills: 0.1.10
+  pdd-skills: 0.1.11
 ---
 
 # PDD bug

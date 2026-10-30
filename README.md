@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd#alpha -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.10`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.11`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -224,7 +224,7 @@ The skills and the other commands run on your computer.
 | `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a Try that you do not use, run `pdd try --stop STORY`. |
 | `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new`. |
-| `pdd --version` does not print `0.1.10` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.11` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
@@ -241,7 +241,7 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
 - [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the runtime can check.
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.10).
+- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.11).
 - [Contributing](CONTRIBUTING.md).
 
 ## License
