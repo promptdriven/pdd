@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 8436c3d5bff6cd7a3b98b090d39cad07592a3f6781496ea16eb4e3df65c3075c).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 52381f6889fdc1320aec1a91344fffa08610a711951ae5dd3b9a1bba9d50e59b).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext } = {}) {
+  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext, workflowProve, provePorts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -97,6 +97,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) {
         line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`);
         return 1;
+      }
+    }
+    case 'workflow-prove': {
+      if (!plan.options['--test'] || !plan.options['--expect']) {
+        line(stderr, 'pdd workflow prove requires nonblank --test and --expect.'); return 2;
+      }
+      try {
+        const module = workflowProve ?? await import('./workflow-prove.mjs');
+        const result = await module.proveRun({ ref: plan.operands[0], test: plan.options['--test'], expect: plan.options['--expect'], cwd }, provePorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid proof reply');
+        line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
+      } catch (error) {
+        line(stderr, `The pdd workflow command failed before it could report. Check pdd workflow status; nothing was retried.${reason(error)}`); return 1;
       }
     }
     case 'workflow-view': {

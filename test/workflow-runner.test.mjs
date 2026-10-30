@@ -473,7 +473,11 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr2.message, /pdd opens PR 2 now/); assert.match(pr2.message, /pull\/24/);
   assert.equal(f.prs.length, 2);
   assert.equal(f.prs[1].title, 'Use value two (code)'); assert.equal(f.prs[1].headRefName, `${run.branch}-code`); assert.equal(f.prs[1].baseRefName, run.branch);
-  assert.match(f.prs[1].body, /^Closes #17/); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
+  assert.equal(f.prs[1].body.split('\n')[0], 'Old-code proof: not run.');
+  assert.ok(f.prs[1].body.includes(`Static inventory only; tests were not run.\nTest inventory commits: ${run.baseSha.slice(0,7)} → ${f.git(run.root, 'rev-parse', 'HEAD').slice(0,7)}.`));
+  const inventoryAt = f.prs[1].body.indexOf('Tests vs base:'), issueAt = f.prs[1].body.indexOf('\nCloses #17\n');
+  assert.ok(f.prs[1].body.indexOf('Old-code proof: not run.') < inventoryAt && inventoryAt < issueAt);
+  assert.match(f.prs[1].body, /^Closes #17$/m); assert.match(f.prs[1].body, /builds on PR 1: https:\/\/github\.com\/example\/project\/pull\/23/); assert.match(f.prs[1].body, /# pass 4/);
   assert.doesNotMatch(f.prs[1].body, /Story and cases written/, 'PR 2 lists only the code area');
   record = f.record(); assert.equal(record.stage.id, 'merge'); assert.deepEqual(record.pr.map(pr => pr.number), [23, 24]);
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Next: Review and merge PR 1, then PR 2, on GitHub/);
@@ -665,7 +669,7 @@ test('pushing more commits to PR 1 at the code gate keeps the gate time, so the 
   assert.equal(code.exitCode, 0, code.message); assert.equal(requests[0].gateAskedAt, gateAt);
 });
 
-test('a first verify.md line that starts with ✗ goes to the top of the PR body', async t => {
+test('a first verify.md line that starts with ✗ stays directly below the lifted evidence', async t => {
   const f = await fixture(t);
   await f.run(); const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
@@ -674,7 +678,7 @@ test('a first verify.md line that starts with ✗ goes to the top of the PR body
   await stepDone({ step: 'change', summary: 'two', cwd: run.root }, f.agentPorts());
   writeFileSync(join(run.runDir, 'verify.md'), '\n✗ 2 vectors fail\n\n| case | result |\n|---|---|\n| a | different |\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'two cases still fail', cwd: run.root }, f.agentPorts()));
-  assert.equal(f.prs[0].body.split('\n')[0], '✗ 2 vectors fail'); assert.match(f.prs[0].body, /\| a \| different \|/);
+  assert.equal(f.prs[0].body.split('\n')[0],'Old-code proof: not run.');assert.match(f.prs[0].body,/Test inventory commits: [^\n]+\n✗ 2 vectors fail/); assert.match(f.prs[0].body, /\| a \| different \|/);
 });
 
 // Seen with a CLI tester: the chat asked a question in the middle of a step, status still said "the agent works",
@@ -1808,7 +1812,7 @@ test('PRBODY4: a huge verify.md keeps the PR body under 60,000 characters with i
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'one case fails', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
   assert.ok([...body].length <= 60_000, String([...body].length));
-  assert.equal(body.split('\n')[0], '✗ 1 vectors fail');
+  assert.equal(body.split('\n')[0],'Old-code proof: not run.');assert.match(body,/Test inventory commits: [^\n]+\n✗ 1 vectors fail/);
   for (const kept of ['| 1500 | 4 | 5 | different ✗ |', 'Proved (bounded): 0..999.', '- Output (3000 lines): not shown here.', 'Case 1500: expected 4, got 5 ✗ (failed)'])
     assert.ok(body.includes(kept), kept);
   assert.match(body, /_The full verify report has \d{3},\d{3} characters, more than a PR description can hold \(GitHub's limit is 65,536\)\. This is a summary: its first \d+ lines; \d+ more lines are not shown, and 1 of them reports a failure\. The PR author has the full report: verify\.md in the run folder\._/);
@@ -1973,7 +1977,7 @@ test('2530: opted-in code publication marks missing structured evidence BLOCKED 
   const out=await stepDone({step:'verify',summary:'PASS: all tests and replay passed',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2,'a blocked evidence review can still publish');
-  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
   assert.match(f.prs[1].body,/replay-evidence.json/);
   assert.match(f.prs[1].body,/validates structure and identity/);
   assert.ok(f.record().replayBaseline,'original vectors were anchored before code');
@@ -1992,14 +1996,23 @@ async function replayManifest(f,run,vector) {
 }
 
 test('2530: valid replay and real assertion failures both publish with canonical status',async t=>{
-  for(const outcome of ['pass','fail']){
+  for(const scenario of ['pass','fail-with-warning','fail']){
+    const outcome=scenario==='pass'?'pass':'fail';
     const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    if(scenario==='fail-with-warning')writeFileSync(join(run.runDir,'verify.md'),'✗ 1 vector still fails\n');
     const manifest=await replayManifest(f,run,vector);manifest.checks[0].outcome=outcome;manifest.counts.pass=outcome==='pass'?1:0;manifest.counts.fail=outcome==='fail'?1:0;
     writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
     const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
     assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
-    if(outcome==='fail')assert.match(f.prs[1].body,/^✗ 1 replay assertions fail/);
+    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n✗ 1 replay assertions fail/);
+    if(scenario==='fail-with-warning'){
+      const inventory=f.prs[1].body.indexOf('Tests vs base:');
+      const warning=f.prs[1].body.indexOf('✗ 1 vector still fails');
+      const replay=f.prs[1].body.indexOf('Code replay: FAIL');
+      assert.ok(f.prs[1].body.startsWith('Old-code proof: not run.\n')&&inventory>0&&warning>inventory&&warning<replay,
+        'the evidence block stays first, then the test inventory, then the verify warning, then Code replay');
+    }
   }
 });
 
@@ -2009,17 +2022,17 @@ test('2530: vector edits after prompt-space approval cannot replace the saved or
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/Original vectors changed/);
   assert.deepEqual(f.record().replayBaseline,original);
 });
 
 test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{
   const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
-  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Code replay: PASS/);
+  await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/);
   writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
   const out=await stepDone({step:'verify',summary:'PASS again',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
-  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);assert.match(f.prs[1].body,/stale/);
   assert.ok(f.prs[1].body.includes(`<!-- pdd-workflow:${run.runId}:code -->`));
   assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
@@ -2032,7 +2045,7 @@ test('2530: failed description downgrade prevents pushing new source with an old
   const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>file==='gh'&&args[0]==='pr'&&args[1]==='edit'?{stdout:'',stderr:'description permission denied',code:1}:original(file,args,options);
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,1);assert.match(out.message,/description permission denied/);
-  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Code replay: PASS/,'unchanged remote source still has its valid report');
+  assert.equal(f.pushes.length,pushes);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/,'unchanged remote source still has its valid report');
 });
 
 test('2530: failed final description update leaves a pushed code PR publication-pending',async t=>{
@@ -2064,7 +2077,7 @@ test('2530: a failed push leaves an existing code PR pending and never restores 
     };
     const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,1,out.message);assert.match(out.message,/push rejected/);
-    assert.match(f.prs[1].body,/^Code replay: BLOCKED.*Publication pending/);
+    assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*Publication pending/);
   }
 });
 
@@ -2111,7 +2124,7 @@ test('2553: legacy single-vector baseline cannot publish PASS after another scen
   const out = await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
   assert.equal(out.exitCode,0,out.message);
   assert.equal(f.prs.length,2);
-  assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
   assert.doesNotMatch(f.prs[1].body,/Replay evidence is stale/);
   assert.deepEqual(f.record().replayBaseline,original,'code publication cannot repin saved originals');
 });
@@ -2179,7 +2192,7 @@ for(const failure of ['listing','missing','malformed']) {
     assert.ok(manifest.source.sha256);
     writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
     const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED/);
+    assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED/);
     assert.match(f.record().replayEvidence.reason,/inventory is unavailable/);
     assert.match(result.message,/Code replay: BLOCKED/);
   });
@@ -2198,11 +2211,11 @@ test('2553: an open code PR update guards newly added scenarios and preserves th
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   assert.equal((await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts())).exitCode,0);
-  assert.match(f.prs[1].body,/^Code replay: PASS/);
+  assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: PASS/);
   writeFileSync(join(run.root,'tests/refund.json'),JSON.stringify(vector));
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
   const result=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());
-  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Code replay: BLOCKED.*refund\.json/);
+  assert.equal(result.exitCode,0,result.message);assert.match(f.prs[1].body,/^Old-code proof: [^\n]+\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\nCode replay: BLOCKED.*refund\.json/);
   assert.deepEqual(f.record().replayBaseline,saved);assert.equal(f.edits.filter(n=>n===f.prs[1].number).length,2);
 });
 
