@@ -12,6 +12,12 @@ one newline. Preserve other commands and their existing dispatch and effects.
 
 ## Dependencies
 
+- [Contract commands](contracts.prompt.md): required generation and verification
+  context for local list/sync dispatch; the syntax-only Runtime entry does not
+  bind these native effects.
+
+- [Runtime slots](runtime-slots.prompt.md): required generation/verification context for local jobs dispatch. The existing syntax-only Runtime entry does not bind its native filesystem effects.
+
 - [Argument parser](argument-parser.prompt.md) is required for authoring,
   generation, runtime, verification and testing: it owns command validation and
   exact input-error messages. The CLI owns only their stream and exit handling.
@@ -40,6 +46,10 @@ authentication or runtime-client import belongs to these routes.
 
 The first help line is exactly `PDD: prompt-driven development for your coding agent.` Help lists the catalog forms, then says: `Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).` (Codex calls a skill with `$name`, Claude Code with `/name`); `workflow run` starts the first area chat in Herdr session pdd and exits; the person approves each area, and pdd pushes the branch and opens a real PR after the last step; pdd never merges. Help is exit 0 and local, with no runner, network or auth effects.
 
+## Local jobs
+
+For `runtime-jobs`, dynamically import [runtime slots](runtime-slots.prompt.md), pass the injected env/stdout/stderr to runJobs and return its exit code. Permit an injected slots module for native tests. No repository, gh, fetch, skill discovery, PATH probing or workflow runner is needed. Parsing remains catalog-owned. A listing failure prints one finite cause and returns5.
+
 ## Runtime commands
 
 For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd}, {stdout, stderr})` unchanged.
@@ -66,13 +76,22 @@ exit code as the result fields below. This transport does not change that
 function's signature. Invalid syntax is resolved locally before any dependency
 with external effects is invoked; no runtime resource is needed for that path.
 
+## Local contract commands
+
+For `contracts` and `contracts-sync`, dynamically import
+[contract commands](contracts.prompt.md), allowing an injected contracts module
+for native tests. Call runContracts with words [] or ['sync'], parsed options unchanged,
+cwd and env/stdout/stderr; return its exit code. Do not do runtime authentication,
+slot admission, skill discovery or PATH probing here. A thrown error prints one
+finite local cause and returns 5. Catalog owns all syntax.
+
 <details>
 <summary>Runtime interface</summary>
 
 ```json
 {
   "status": "draft",
-  "prose_sha256": "6e68535d72f33a2e881cc2c577a41e040067b77e6b37202034aa1977168fab2d",
+  "prose_sha256": "e0739467264b14befe501627d01130d5bbf3808d4433093498ca1086fc302b5d",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
