@@ -9,7 +9,7 @@ import {setupProject} from '../src/project-setup.mjs';
 import {setupWithWorkflowAgent} from '../src/workflow-setup.mjs';
 const fixture=state=>async agent=>{
  const value=state[agent];
- if(value==='missing')throw Object.assign(Error('synthetic private command path'),{code:'ENOENT'});
+ if(value==='missing')throw Object.assign(Error('synthetic private command path'),{code:'ENOENT',executableMissing:true});
  return agent==='codex'?{code:value==='ready'?0:1,stdout:'',stderr:value==='ready'?'Logged in using ChatGPT':'Not logged in'}
  :{code:value==='ready'?0:1,stdout:JSON.stringify({loggedIn:value==='ready'}),stderr:''};
 };
@@ -31,7 +31,7 @@ for(const result of [undefined,-1,256,'0',new Error('private credentials')])test
  assert.equal(code,1);assert.equal(calls,1);assert.doesNotMatch(text.join(''),/credentials/);
 });
 test('2451 no setup action means no auth process, no throw and no claimed success',async()=>{
- const code=await setupWithWorkflowAgent({}, {run:()=>assert.fail('no status command'),stderr:{write(){}}});assert.equal(code,1);
+ let calls=0;const code=await setupWithWorkflowAgent({}, {run:async()=>{calls++;return {code:0,stdout:'Logged in',stderr:''};},stderr:{write(){}}});assert.equal(code,1);assert.equal(calls,0);
 });
 
 // Exercise the existing setup writers behind the admission boundary, in scratch folders only.
@@ -58,4 +58,12 @@ for (const ready of [false,true]) test(`2451 setup admission before real skill/p
  assert.equal(existsSync(join(home,'.claude')),false);
  assert.equal(await setupWithWorkflowAgent(options,ports),0);
  assert.equal(readFileSync(file,'utf8'),text);assert.equal(statSync(file).mtimeMs,modified);
+});
+
+test('2451 API-key-configured Codex admits setup when Claude is missing',async()=>{
+ let calls=0;const code=await setupWithWorkflowAgent({}, {run:async agent=>{
+  if(agent==='claude')throw Object.assign(Error('synthetic missing'),{code:'ENOENT',executableMissing:true});
+  return {code:0,stdout:'',stderr:'API key configured - sk-proj-***ABCDE\nAuthentication is checked when you send a request.'};
+ },stderr:{write:s=>assert.fail('no private status output: '+s)},setup:async({agent})=>{assert.equal(agent,'codex');calls++;return 0;}});
+ assert.equal(code,0);assert.equal(calls,1);
 });

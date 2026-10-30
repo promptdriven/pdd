@@ -24,9 +24,10 @@ test('2451 guidance distinguishes installation, sign-in and an unknown status',(
  const out=chooseWorkflowAgent({codex:'signed_out',claude:'signed_out'});
  assert.deepEqual(out.message.split('\n'),['Codex is not signed in. Run: codex login','Claude Code is not signed in. Run: claude auth login']);
  assert.match(chooseWorkflowAgent({codex:'unavailable',claude:'missing',requested:'codex'}).message,/codex login status/);
+ assert.match(chooseWorkflowAgent({codex:'missing',claude:'unavailable',requested:'claude'}).message,/claude auth status/);
 });
 test('2451 invalid explicit choice refuses without a process call',async()=>{
- const reply=await checkWorkflowAgents({requested:'other'},{run:()=>assert.fail('no native command')});assert.equal(reply.ok,false);
+ let calls=0;const reply=await checkWorkflowAgents({requested:'other'},{run:async()=>{calls++;return {code:0,stdout:'Logged in',stderr:''};}});assert.equal(reply.ok,false);assert.equal(calls,0);
 });
 const response=(code,stdout='',stderr='')=>({code,stdout,stderr});
 test('2451 native status commands preserve the exact caller configuration and use no model/interactive command',async()=>{
@@ -37,11 +38,14 @@ test('2451 native status commands preserve the exact caller configuration and us
  }});
  assert.deepEqual(result,{ok:true,agent:'claude',message:''});
  assert.deepEqual(calls.map(c=>[c.command,c.args]),[['codex',['login','status']],['claude',['auth','status']]]);
- for(const {options} of calls){assert.equal(options.env,env);assert.equal(options.cwd,'/scratch/project');assert.equal(options.input,'');assert.equal(options.maxBytes,16384);}
+ for(const {options} of calls){assert.equal(options.env,env);assert.equal(options.cwd,'/scratch/project');assert.equal(options.input,'');assert.equal(options.maxBytes,16384);assert.equal(options.timeoutMs,10000);}
  assert.doesNotMatch(JSON.stringify(result),/private|exposed/);
 });
 for(const [name,agent,result,ready] of [
  ['Codex stderr login','codex',response(0,'','Logged in using ChatGPT'),true],
+ ['Codex API key configured','codex',response(0,'','API key configured - sk-proj-***ABCDE\nAuthentication is checked when you send a request.'),true],
+ ['Codex contradictory markers','codex',response(0,'Logged in','Not logged in'),false],
+ ['Codex exit2 negative','codex',response(2,'','Not logged in'),false],
  ['Codex negative success','codex',response(0,'Not logged in'),false],
  ['Codex nonzero success','codex',response(1,'Logged in'),false],
  ['Codex unrelated output','codex',response(0,'hello'),false],
@@ -51,6 +55,7 @@ for(const [name,agent,result,ready] of [
  ['Claude malformed','claude',response(0,'not JSON'),false],
  ['Claude nonzero true','claude',response(1,'{"loggedIn":true}'),false],
  ['Claude valid false','claude',response(1,'{"loggedIn":false}'),false],
+ ['Claude exit0 false','claude',response(0,'{"loggedIn":false}'),false],
 ])test(`2451 probe: ${name}`,async()=>{
  const calls=[];const reply=await checkWorkflowAgents({requested:agent},{run:async(...args)=>{calls.push(args);return result;}});
  assert.equal(reply.ok,ready);assert.equal(calls.length,1);assert.equal(calls[0][0],agent);
@@ -61,7 +66,7 @@ test('2451 a failed optional process does not veto a signed-in agent; private di
   if(agent==='codex')throw Object.assign(Error('private credential path'),{code:'EACCES'});
   return response(0,'{"loggedIn":true}');
  }});assert.deepEqual(reply,{ok:true,agent:'claude',message:''});
- const absent=await checkWorkflowAgents({}, {run:async()=>{throw Object.assign(Error('private token'),{code:'ENOENT'});}});
+ const absent=await checkWorkflowAgents({}, {run:async()=>{throw Object.assign(Error('private token'),{code:'ENOENT',executableMissing:true});}});
  assert.equal(absent.ok,false);assert.match(absent.message,/Install Codex or Claude Code first/);assert.doesNotMatch(absent.message,/private|token/);
 });
 test('2451 real process port runs only scratch status stubs, honoring a custom Claude config folder',async t=>{
@@ -72,4 +77,21 @@ test('2451 real process port runs only scratch status stubs, honoring a custom C
  writeFileSync(join(bin,'claude'),`#!${process.execPath}\nconst fs=require('node:fs');if(process.argv.slice(2).join(' ')!=='auth status')process.exit(99);process.stdout.write(JSON.stringify({loggedIn:fs.existsSync(process.env.CLAUDE_CONFIG_DIR+'/signed-in')}));\n`,{mode:0o755});
  const result=await checkWorkflowAgents({cwd:root,env:{HOME:home,CLAUDE_CONFIG_DIR:config,PATH:bin}});
  assert.deepEqual(result,{ok:true,agent:'claude',message:''});
+});
+
+test('2451 two default probes start together; Codex retains precedence regardless of completion',async()=>{
+ let started=0;const pending=[];
+ const result=checkWorkflowAgents({}, {run:async agent=>{started++;return new Promise(resolve=>pending.push(()=>resolve(agent==='codex'?response(0,'Logged in'):response(0,'{"loggedIn":true}'))));}});
+ await Promise.resolve();assert.equal(started,2,'both probes start before either finishes');
+ pending.reverse().forEach(resolve=>resolve());assert.equal((await result).agent,'codex');
+});
+test('2451 uncertain ENOENT evidence does not claim installation missing',async()=>{
+ for(const error of [Object.assign(Error('private cwd'),{code:'ENOENT'}),Object.assign(Error('private interpreter'),{code:'ENOENT',executableMissing:false})]){
+  const reply=await checkWorkflowAgents({requested:'codex'},{run:async()=>{throw error;}});
+  assert.equal(reply.ok,false);assert.match(reply.message,/could not be checked/);assert.doesNotMatch(reply.message,/not installed|private/);
+ }
+});
+test('2451 Claude false on exit0 gives sign-in, Codex exit2 negative gives status guidance',async()=>{
+ const claude=await checkWorkflowAgents({requested:'claude'},{run:async()=>response(0,'{"loggedIn":false}')});assert.match(claude.message,/Run: claude auth login/);
+ const codex=await checkWorkflowAgents({requested:'codex'},{run:async()=>response(2,'','Not logged in')});assert.match(codex.message,/Run: codex login status/);
 });
