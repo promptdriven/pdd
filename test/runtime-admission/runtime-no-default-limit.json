@@ -28,7 +28,15 @@
     },
     {
       "id": "AC7",
-      "text": "All uploads of one packed source share one immutable source Blob, keeping identical source bytes and distinct request IDs without an upload or job cap."
+      "text": "All uploads of one packed source share one immutable source Blob, keeping identical source bytes and distinct request IDs without a default job cap."
+    },
+    {
+      "id": "AC8",
+      "text": "At most 8 unanswered Check POSTs by default or 2 with PDD_MAX_UPLOADS=2; all 20 selected checks are sent while accepted jobs may still run."
+    },
+    {
+      "id": "AC9",
+      "text": "Invalid PDD_MAX_UPLOADS warns once and falls back to 8; GET and server jobs are unlimited and upload admission is per process."
     }
   ],
   "cases": [
@@ -90,7 +98,19 @@
       "id": "shared-source-blob",
       "criterion_id": "AC7",
       "given": "Seven selected checks and preliminary lint upload the same packed source; fetch and multipart source boundary observed",
-      "required_observation": "All multipart bodies reuse one source Blob, source.tar bytes/type stay exact and request IDs remain distinct, with no upload cap."
+      "required_observation": "All multipart bodies reuse one source Blob, source.tar bytes/type stay exact and request IDs remain distinct, within the independent per-process upload setting."
+    },
+    {
+      "id": "upload-reply-boundary",
+      "criterion_id": "AC8",
+      "given": "20 selected checks; hold first 8 POST replies (2 for explicit2), then release one reply as queued while GET terminal replies remain gated",
+      "required_observation": "No POST above the upload setting before a reply; next POST starts after one reply while accepted work still runs; release remaining gates and all20 finish exactly once."
+    },
+    {
+      "id": "invalid-upload-fallback",
+      "criterion_id": "AC9",
+      "given": "Repeat 20-check gated POST scenario with PDD_MAX_UPLOADS=0; separately empty, negative, fraction, whitespace, text and unsafe integer; leading-zero positive decimal is valid",
+      "required_observation": "Invalid value warns once and permits at most8 unanswered POSTs; GETs proceed independently; all20 sent once."
     }
   ]
 }
