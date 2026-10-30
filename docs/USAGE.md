@@ -327,7 +327,7 @@ For all workflows:
 
 - The verify step runs in a fresh subagent that did not write the code.
 - verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. When a runtime check ran, the body starts with its `Runtime check` lines and report links. Runtime report links expire after 7 days.
+- The PR body has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Runtime check` lines and report links. Runtime report links expire after 7 days.
 - pdd does not run the tests itself. Read the test output in the PR before you merge.
 - pdd never merges. You review and merge on GitHub.
 

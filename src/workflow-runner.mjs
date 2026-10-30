@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: ee3f1ef63ddb2d32c1fd173e20f2a248498f990daaaba8fe54c94b0ebcd1b587).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-p
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
+import { collectTestInventory } from './workflow-inventory.mjs';
 import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -546,11 +547,19 @@ function prBody(run, area, env, drafts = [], tests = true) {
   const report = reports[0] ?? null, noted = report || (change && hasReportLink(change, env));
   const runtime = checked ? [...runtimeTop(checked), ...reports] : [];
   const replay = area.replay_evidence === REPLAY_POLICY ? [formatReplayEvidence(run.replayEvidence ?? readReplayEvidence(run)), ''] : [];
-  const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...runtime];
+  const inventory = run.testInventory && label !== 'PR 1' ? [run.testInventory.text.trimEnd(), ...(run.testInventory.saved ? [] : ['warning: The full test inventory report was not saved.']), inventoryCommits(run.testInventory)] : [];
+  const top = [...replay, ...failing, ...(verdict ? [verdict] : []), ...(change ? [hasReportLink(change, env) ? `${change} (report links expire after 7 days)` : change] : []), ...inventory, ...runtime];
   const body = text => hideLocalPaths([...top, ...(top.length ? [''] : []), ...head, ...(drafts.length ? ['', draftLine(drafts)] : []), '', `Made with \`pdd workflow run ${run.workflow}\`.`, '', '## Steps', ...lines,
     ...(!noted && hasReportLink([...lines, verify ?? ''].join('\n'), env) ? ['', 'Runtime report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   return verify === null ? body(null) : body(verifyFit(hideLocalPaths(verify, run), BODY_BUDGET - characters(body('')), env));
+}
+
+const commitSha = value => /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
+function inventoryCommits(inventory) {
+  return commitSha(inventory.baseSha) && commitSha(inventory.headSha)
+    ? `Test inventory commits: ${inventory.baseSha.slice(0,7)} → ${inventory.headSha.slice(0,7)}.`
+    : 'Test inventory commits: unavailable.';
 }
 
 // Commit leftovers, then push to the area's PR or open it. Returns a failure result, or null when the PR is there.
@@ -562,6 +571,29 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'add', '-A');
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
+  }
+  const codePr = label !== 'PR 1';
+  if (codePr) {
+    let baseSha = '', headSha = '', result;
+    try {
+      headSha = (await rawGit(p,run.root,'rev-parse','--verify','HEAD^{commit}')).trim();
+      if (!commitSha(headSha)) {headSha='';throw Error('Invalid head commit');}
+      const ref = `refs/remotes/origin/${run.baseBranch}`;
+      await rawGit(p,run.root,'fetch','origin',`refs/heads/${run.baseBranch}:${ref}`);
+      const fetched = (await rawGit(p,run.root,'rev-parse','--verify',`${ref}^{commit}`)).trim();
+      if (!commitSha(fetched)) throw Error('Invalid fetched commit');
+      baseSha = (await rawGit(p,run.root,'merge-base',headSha,fetched)).trim();
+      if (!commitSha(baseSha)) {baseSha='';throw Error('Invalid merge base');}
+      result = await collectTestInventory({cwd:run.root,baseSha,headSha},p.commandPorts);
+    } catch {
+      const text = 'Tests vs base: unavailable ("snapshot unavailable").\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\nStatic inventory only; tests were not run.\n';
+      result = {available:false,reason:'snapshot unavailable',text,details:text};
+    }
+    run.testInventory = {text:result.text,baseSha,headSha,saved:false};
+    try {
+      writeFileSync(join(run.runDir,'test-inventory.json'), JSON.stringify({...result,baseSha,headSha,saved:true},null,2)+'\n');
+      run.testInventory.saved = true;
+    } catch { lines.push('warning: The full test inventory report was not saved to test-inventory.json in the run folder.'); }
   }
   const opted = area.replay_evidence === REPLAY_POLICY;
   if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
@@ -584,11 +616,19 @@ async function publishAreaPr(run, area, p, lines, retry) {
     }
     p.say(`Pushing ${run.branch} to ${label}…`);
     try {
-      const reply = await p.execFile('git', ['push', 'origin', `HEAD:refs/heads/${run.branch}`], { cwd: run.root });
+      const reply = await p.execFile('git', ['push', 'origin', `${codePr && /^[a-f\d]{40,64}$/i.test(run.testInventory.headSha) ? run.testInventory.headSha : 'HEAD'}:refs/heads/${run.branch}`], { cwd: run.root });
       if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'git push failed'), {stderr:reply.stderr, code:reply.code});
     }
     catch (error) { return fail([...lines, `git push to ${run.branch} failed (${causeOf(error)}). Check the network and gh auth, then ${retry}.`].join('\n')); }
     if (opted) {const failed=await editReplay(markedReplayBody(run.replayEvidence),true);if(failed)return failed;}
+    else if (codePr) {
+      try {
+        const reply=await p.execFile('gh',['pr','edit',existing.url,'--body-file','-'],{cwd:run.root,input:markedReplayBody()});
+        if(reply.code !== undefined && reply.code !== 0) throw Object.assign(Error('gh pr edit failed'),{stderr:reply.stderr,code:reply.code});
+      } catch(error) {
+        lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${causeOf(error)}); ${retry}.`);
+      }
+    }
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p);
     lines.push(`Pushed the new commits to ${label}.`);
     return null;
