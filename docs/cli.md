@@ -149,3 +149,5 @@ See [Build a whole product](build-a-whole-product.md).
 `pdd try --product [--parts PARTS] [--journey JOURNEY]` opens selected product parts together. PARTS is a comma-separated list; omitted means every part. The plan's After every tap chain follows each executable tap. Output distinguishes operation count from the forty-call Runtime ceiling.
 
 `pdd check --journeys [JOURNEY]` checks root journey Stories. J1 matches J1-order, never J10-order. Ambiguous journey scenarios require an explicit test choice for Try. Seeds merge base, selected part seeds, then the journey’s explicit set (or literal initial_world); conflicting world writers refuse before upload.
+
+Bare `pdd try --product` uses the sole root journey scenario as its request skeleton when available, while its starting world comes from product and part seeds. Multiple candidates require an explicit Story/test choice. With no journeys it uses ordinary test selection; `--journey` explicitly applies that journey’s start overrides.
