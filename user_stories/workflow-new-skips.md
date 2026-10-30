@@ -14,4 +14,4 @@ Skips are differences between the exact resolved comparison commits, including x
 
 ## Review status
 
-Revised draft for review, not checked or approved. The original four synthetic cases and all expected checks remain unchanged; historical passes apply to the prior approved contract. Native regression proof must cover each new skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.
+Revised draft for review, not checked or approved. The original four synthetic cases retain their inputs, criteria and step identities; two report strings received explicitly reviewed @-escaping updates. Across the three Stories, the 31 other expected checks remain unchanged. Historical passes apply to the prior approved contract. Native regression proof must cover each new skip form, repeated suite names, unchanged suite markers, suite/test identity separation and xit's count. The supplied snapshots do not prove Git, process transport, macOS fixture ownership or publication effects.
