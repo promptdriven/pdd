@@ -22,7 +22,7 @@
         "is_symlink": false
       },
       "/project/product/plan.md": {
-        "content": "# Plan\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
         "is_symlink": false
       },
       "/project/contracts/world.md": {
@@ -62,7 +62,7 @@
         "is_symlink": false
       },
       "/conflict/product/plan.md": {
-        "content": "# Plan\n## After every tap\n1. prompts/server.prompt.md#forward\n",
+        "content": "# Plan\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| phone-1 | phone | 1 | P01 | - |\n\n## After every tap\n1. prompts/server.prompt.md#forward\n",
         "is_symlink": false
       },
       "/conflict/contracts/world.md": {
