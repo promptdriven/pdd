@@ -21,6 +21,14 @@
     {
       "id": "AC5",
       "text": "With no cap, remote lint and Try setup proceed past existing active leases and older waiting tickets without a local-slot wait; request records, ownership and uncertain-job evidence remain intact."
+    },
+    {
+      "id": "AC6",
+      "text": "With no cap, dead or stale owners leave no safely reclaimable tickets or leases behind; fresh live owners and recent uncertain job evidence stay protected, without network probes or admission waiting."
+    },
+    {
+      "id": "AC7",
+      "text": "All uploads of one packed source share one immutable source Blob, keeping identical source bytes and distinct request IDs without an upload or job cap."
     }
   ],
   "cases": [
@@ -65,6 +73,24 @@
       "criterion_id": "AC5",
       "given": "Omitted/Infinity limit with already expired deadline or interruption; separately stop at immediate active record creation in explicit lint",
       "required_observation": "Return null before file effects when already stopped; stop after active creation registers no request and makes no POST, removes own unsent reservation, preserves foreign uncertain evidence."
+    },
+    {
+      "id": "uncapped-busy-window-one",
+      "criterion_id": "AC4",
+      "given": "No cap; three selected checks; first accepted stays running, two peers confirmed busy with Retry-After 7",
+      "required_observation": "All three initial POSTs occur, no busy retry while accepted work runs, exit 3 at caller deadline; accepted ID is never replayed."
+    },
+    {
+      "id": "uncapped-passive-cleanup",
+      "criterion_id": "AC6",
+      "given": "No cap; expired waiting/unsent/30-minute leases, fresh live old lease, recent dead uncertain lease; changed snapshot or heartbeat during cleanup",
+      "required_observation": "Only safely reclaimable unchanged expired records disappear; no sleep, runtime probe or waiting line. Preserve changed/refreshed records and recent uncertain evidence; contention cannot delay admission."
+    },
+    {
+      "id": "shared-source-blob",
+      "criterion_id": "AC7",
+      "given": "Seven selected checks and preliminary lint upload the same packed source; fetch and multipart source boundary observed",
+      "required_observation": "All multipart bodies reuse one source Blob, source.tar bytes/type stay exact and request IDs remain distinct, with no upload cap."
     }
   ]
 }

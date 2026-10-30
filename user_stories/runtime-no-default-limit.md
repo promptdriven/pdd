@@ -9,6 +9,8 @@ I can send all my selected checks and let the server decide capacity, while choo
 3. An invalid PDD_MAX_JOBS value prints one warning line per command and imposes no cap.
 4. A confirmed busy refusal honors Retry-After and existing minimum waits, retries only the unstarted check with a new request ID, reduces the check dispatch window to 1 and never replays accepted work.
 5. With no cap, remote lint and Try setup proceed past existing active leases and older waiting tickets without a local-slot wait; request records, ownership and uncertain-job evidence remain intact.
+6. With no cap, dead or stale owners leave no safely reclaimable tickets or leases behind; fresh live owners and recent uncertain job evidence stay protected, without network probes or admission waiting.
+7. All uploads of one packed source share one immutable source Blob, keeping identical source bytes and distinct request IDs without an upload or job cap.
 
 ## Rules to check
 
