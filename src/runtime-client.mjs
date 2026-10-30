@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c6672385bb051688c30dece7f47f5b295b67379dad67c0f40478121d5f336c21).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 364c3da485b5955c6e4321899650434fec53c3355e81a5ed67ddd8a6db51e087).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -306,11 +306,14 @@ function queueProgress(context, answer) {
     if (context.queueLines.get(answer.id) !== message) { line(context.ports.stderr, message); context.queueLines.set(answer.id, message); }
   }
 }
+const localMaintenanceEnd = until => new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+}).format(new Date(until));
 function maintenanceNotice(context, verdict, reply) {
   const details = reply.json?.error?.details ?? reply.json?.maintenance ?? {};
   const until = Date.parse(details.until);
   if (Number.isFinite(until) && until > context.ports.now()) verdict.wait = Math.max(verdict.wait, until - context.ports.now());
-  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${new Date(until).toISOString()}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
+  line(context.ports.stderr, `The runtime is in maintenance${Number.isFinite(until) ? ` until ${localMaintenanceEnd(until)}` : ''} (${cleanText(details.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
 }
 async function waitBudget(context, wait, deadline = context.deadline) {
   if (context.interrupted || context.ports.now() >= deadline) return false;
@@ -327,7 +330,7 @@ async function capacityReady(context, deadline) {
     if (reply.status === 200 && isObject(reply.json) && Object.hasOwn(reply.json, 'maintenance')) {
       const maintenance = reply.json.maintenance, until = Date.parse(maintenance?.until);
       if (!Number.isFinite(until) || until <= context.ports.now()) return true;
-      const when = new Date(until).toISOString();
+      const when = localMaintenanceEnd(until);
       line(context.ports.stderr, `The runtime is in maintenance until ${when} (${cleanText(maintenance.reason, context.secrets) || 'maintenance'}). pdd waits, then continues.`);
       if (!await waitBudget(context, until - context.ports.now(), deadline)) return false;
     } else {
