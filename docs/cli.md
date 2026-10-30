@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.10, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.11, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd check`, `pdd try` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For agent-driven Try runs, use `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -62,7 +62,7 @@ Setup also reports the running pdd executable and version, the `pdd` paths in or
 
 - A new Try defaults to 400 calls. Both `pdd check --max-calls N` and `pdd try --max-calls N` accept 1 through 1000. Checks default to 12 calls per step, at least 18 and at most 1000. Choose at least three times your worst-case estimate.
 - In a terminal, `pdd check` waits until every check ends. Without a terminal (an agent), it waits at most 90 seconds, then prints the table and `Still running. Read the results later with: pdd check --read BATCH`. `--timeout MIN` sets the limit in both cases.
-- Checks keep at most five submitted, unfinished jobs in flight. Confirmed zero-execution queue refusals mean busy, not a test failure: pdd honors the retry delay, reduces its window and tries at most three times per test within the command wait. `--read` can continue original checks held for pending lint after the saved lint passes, using identical selected source, owner and call ceilings; other reads send no work; `--retry BATCH` recovers only unstarted work with identical source and confirmed lint.
+- Local pdd processes share a runtime job limit (`PDD_MAX_JOBS`, default 4) across repositories and worktrees. Checks, remote lint and Try setup wait their turn. When the runtime is busy and confirms that your job did not start, pdd waits and tries again until your wait ends. It shows how many jobs are ahead of you. After a saved lint passes, `--read` can start the original checks that were waiting for it, using the same files, owner and call limits. `--retry BATCH` retries checks confirmed never started, using the same files after lint passes. See [waiting for capacity](lint-capacity.md) for recovery and restart handling.
 - Offline-only work uses `pdd check --lint --local`, local authoring review, `pdd check --files` and `pdd check --fill-hash`. It is not a server lint pass. Factories can bind through interface v2 instances; ports and SQL, blob and compute resources cover declared simulation. Native effects stay unbound; see [Runtime boundaries](runtime-boundaries.md).
 - Running `pdd try STORY` for a paused Try explicitly reopens the same session before showing its link. Its original expiry and remaining call allowance stay in force; an unconfirmed reopen is nonzero.
 - A `draft` prompt can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
@@ -100,8 +100,9 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 | Command | What it does |
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
-| `pdd --version` | Print the version, `0.1.10`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.11`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
+| `pdd jobs` | List active slots and waiting runtime jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or runtime call |
 
 ## Run from a source checkout
 
@@ -115,7 +116,7 @@ npm test
 
 You need Node.js 22 or newer. The package has no dependencies and no build step. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-When lint capacity is busy, Check, lint and Try use [bounded lint-slot retries](lint-capacity.md).
+Check, remote lint and Try setup share [local slots and capacity waiting](lint-capacity.md). Local waiting, maintenance and runtime queue time all use the existing caller wait. Try keeps its five-minute setup allowance and 90-second agent lint wait; it adds no timeout flag.
 
 `pdd try [STORY] --cli [--shell] [--max-calls N] [--new]`
 
@@ -140,6 +141,44 @@ Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI co
 `workflow prove` leaves the saved run base unchanged. Fresh worktrees have no installed dependencies; include required installation in `--test`. The command inherits your environment and network access, and shares the repository’s Git refs and config, just like tests run by hand. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both snapshots before exit 130, 143 or 129. Only positively owned stale proof worktrees with inactive owners are recovered; unrelated worktrees are left alone.
 
 Remote lint shares the Check caller wait, including `--timeout`, with no separate lint limit. Recovery of a saved lint-held Check has a fresh finite wait (`--timeout`, otherwise 90 seconds), retains the saved runtime origin and dispatches each original check at most once. Standalone lint reads never send checks.
+
+Before sending work, pdd asks whether the runtime has room. During announced maintenance, it shows the end time and reason, then waits within the same deadline. If the runtime does not offer this information, pdd uses the reply to the submission instead. A queued job keeps its ID while pdd shows its place. If the runtime confirms that a check ended because the service restarted, pdd tries that check once more and saves both attempts and their usage. If a reply is lost or the outcome is uncertain for another reason, pdd reads the original job without sending it again.
+
+## Shared records
+
+| Command | What it does |
+|---|---|
+| `pdd contracts` | List shared records in working files, their prompt/test users, changed records and Stories needing a new check. Local; no runtime calls |
+| `pdd contracts sync [--write]` | Preview replacing inline copies with references. `--write` applies unambiguous proposals and adopts the shared shape; ambiguous matches warn and stay unchanged |
+
+Use `{"$contract":"contracts/phone-server.md#order_in"}` in a Runtime schema.
+The Markdown section has a `### order_in` heading and one JSON code block;
+headings with spaces also accept their normal heading fragment. JSON records use
+`{"$contract":"contracts/records.json#/defs/order"}`. Local `title` and
+`description` may accompany a reference; other constraint siblings are refused.
+Use `"initial_world":{"$seed":"contracts/seed-world.json","set":{"/orders":[]}}`
+for a shared starting world. Paths are relative to the repository root. Set
+pointers apply in written order to a fresh world and may add an object's final
+key; their parents must exist. Expected values and literal inputs stay literal.
+
+Check, lint and Try use expanded schemas/worlds, including uploaded bytes. A
+missing target stops before upload. Real schema `$ref` remains refused. Explicit
+`pdd check --lint` skips inline schemas with fewer than three fields. It advises
+about a differing copy only when the shared record has at least four fields and
+the copy has the same fields or one extra/missing field. Equal three-field copies
+can still move to references. Required-field lists and enum alternatives compare
+without order; arrays inside literal values keep their order. Advice does not
+fail a check. Expanded uploads keep the original JSON layout and key order.
+Sync changes only selected schema values and an approved-to-draft status, using
+an atomic file replacement that refuses concurrent edits and unsafe paths. Listing uses actual Check
+history, never lint as a check; no baseline is shown as not checked/unavailable.
+Only Stories using a changed record become stale because of that record. A
+Story stays current when you check one of its tests or include it in a larger
+batch without changing its files.
+
+`pdd approve` still approves prompt prose; it does not cover shared contract
+contents. Editing a contract never approves a prompt. Sync writes that edit an
+approved interface set it to draft; review the preview and approve it as usual.
 
 ## Product plans
 
