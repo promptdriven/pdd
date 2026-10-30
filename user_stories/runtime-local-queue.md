@@ -14,6 +14,8 @@ I can see my place while other local agents use the runtime.
 
 The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission; the [client prompt](../prompts/cli/runtime-client.prompt.md) owns deadline, transport, restart and no-replay rules. Never turn missing evidence into permission to dispatch.
 
+A forward wall-clock jump of more than 60 seconds before my next heartbeat cannot erase my own waiting ticket or change its identity, original order or ability to take the next slot. Other abandoned owners remain reclaimable. Contention checks prove oldest-first progress, the active limit and eventual completion with a generous watchdog; a busy runner must not fail merely for exceeding a small elapsed-time target.
+
 ## Native cases for the code step
 
 [Requirement-derived native cases](../test/runtime-admission/runtime-local-queue.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
