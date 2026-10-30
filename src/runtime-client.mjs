@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
@@ -150,74 +150,58 @@ class StateStore {
 
 // Native boundary: exclusive ownership covers a whole batch operation, not one save.
 // The short claim serializes dead-owner recovery with creation. Never expire a live PID.
-export async function acquireRuntimeBatchLock(folder, { signal, timeoutMs = 30_000 } = {}) {
+export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } = {}) {
   const lock = join(folder, 'batch.lock'), claim = `${lock}.claim`;
-  const deadline = Date.now() + Math.max(0, Math.min(30_000, timeoutMs));
-  const failure = code => Object.assign(new Error(code), { code, lock, claim });
-  let waited = false;
-  for (;;) {
-    if (waited && signal?.aborted) throw failure('BATCH_LOCK_INTERRUPTED');
-    let gate, owner;
-    try { gate = openSync(claim, 'wx', 0o600); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    if (gate !== undefined) {
-      try {
-        writeFileSync(gate, String(process.pid)); fsyncSync(gate);
-        let available = false;
-        try {
-          const stat = lstatSync(lock);
-          const text = stat.isFile() ? readFileSync(lock, 'utf8') : '';
-          const pid = /^[1-9][0-9]*$/.test(text) ? Number(text) : NaN;
-          if (Number.isSafeInteger(pid) && pid > 0) {
-            try { process.kill(pid, 0); }
-            catch (error) {
-              if (error.code === 'ESRCH') { unlinkSync(lock); available = true; }
-              // EPERM and other uncertain answers are never permission to steal.
-            }
-          }
-        } catch (error) { if (error.code === 'ENOENT') available = true; else throw error; }
-        if (available) {
-          const fd = openSync(lock, 'wx', 0o600);
-          try {
-            owner = fstatSync(fd);
-            writeFileSync(fd, String(process.pid)); fsyncSync(fd);
-          } catch (error) { unlinkSync(lock); owner = undefined; throw error; }
-          finally { closeSync(fd); }
+  const owner = { pid: process.pid, host: hostname(), started_at: new Date().toISOString() };
+  const readOwner = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+  const busy = record => Object.assign(new Error('BATCH_LOCK_BUSY'), { code: 'BATCH_LOCK_BUSY', owner: record });
+  let gate;
+  try { gate = openSync(claim, 'wx', 0o600); }
+  catch (error) { if (error.code === 'EEXIST') throw busy(readOwner(lock) ?? readOwner(claim)); throw error; }
+  let owned, stale;
+  try {
+    writeFileSync(gate, JSON.stringify(owner)); fsyncSync(gate);
+    let available = false;
+    try {
+      const stat = lstatSync(lock), previous = stat.isFile() ? readOwner(lock) : null;
+      if (previous?.host === owner.host && Number.isSafeInteger(previous.pid) && previous.pid > 0) {
+        try { process.kill(previous.pid, 0); }
+        catch (error) {
+          if (error.code === 'ESRCH') { unlinkSync(lock); available = true; stale = previous; }
+          // EPERM and other uncertain answers are never permission to steal.
         }
-      } finally { closeSync(gate); unlinkSync(claim); }
-    }
-    if (owner) {
-      let released = false;
-      return () => {
-        if (released) return; released = true;
-        try {
-          const current = lstatSync(lock);
-          if (current.dev === owner.dev && current.ino === owner.ino) unlinkSync(lock);
-        } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      };
-    }
-    if (signal?.aborted) throw failure('BATCH_LOCK_INTERRUPTED');
-    if (Date.now() >= deadline) throw failure('BATCH_LOCK_BUSY');
-    waited = true;
-    await new Promise(done => {
-      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); done(); };
-      const timer = setTimeout(finish, Math.min(50, Math.max(0, deadline - Date.now())));
-      signal?.addEventListener('abort', finish, { once: true });
-      if (signal?.aborted) finish();
-    });
-  }
+      }
+      if (!available) throw busy(previous);
+    } catch (error) { if (error.code === 'ENOENT') available = true; else throw error; }
+    const fd = openSync(lock, 'wx', 0o600);
+    try {
+      owned = fstatSync(fd); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd);
+    } catch (error) { unlinkSync(lock); owned = undefined; throw error; }
+    finally { closeSync(fd); }
+  } finally { closeSync(gate); unlinkSync(claim); }
+  let released = false;
+  const release = () => {
+    if (released) return; released = true;
+    try {
+      const current = lstatSync(lock);
+      if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(lock);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
+  try { if (stale) onWarning(`Warning: recovered an abandoned batch lock from dead pid ${stale.pid} on ${stale.host}.`); }
+  catch (error) { release(); throw error; }
+  return release;
 }
 
 async function ownBatch(context, name) {
   if (context.releaseBatch) return;
-  const timeoutMs = Math.max(0, Math.min(30_000, (context.deadline ?? Infinity) - context.ports.now()));
   try {
-    context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { signal: context.signal, timeoutMs });
+    context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { onWarning: text => line(context.ports.stderr, text) });
   } catch (error) {
-    if (error instanceof Stop) throw error;
-    if (error.code === 'BATCH_LOCK_INTERRUPTED') throw new Stop(3, `Stopped waiting for batch ${name}. Read it with: pdd check --read ${name}`);
-    if (error.code === 'BATCH_LOCK_BUSY') throw new Stop(3, `Another command is using batch ${name}. Nothing was sent. Read it later with: pdd check --read ${name}. If ${join(context.folder, 'batch.lock.claim')} was abandoned, verify no command is using this batch before removing that guard file.`);
-    throw new Stop(5, `Could not lock batch ${name} (${error.code ?? 'state error'}). Nothing was sent.`);
+    if (error.code === 'BATCH_LOCK_BUSY') {
+      const owner = error.owner;
+      throw new Stop(2, `Another pdd check command is using batch ${name} (pid ${owner?.pid ?? 'unverified'}, host ${owner?.host ?? 'unverified'}, since ${owner?.started_at ?? 'unverified'}); wait for it, then run pdd check --read ${name}.`);
+    }
+    throw new Stop(2, `Could not lock batch ${name} (${error.code ?? 'state error'}). Nothing was sent.`);
   }
 }
 
