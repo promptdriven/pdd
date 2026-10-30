@@ -178,26 +178,60 @@ test('leases: a later live reader releases terminal check/lint reservations with
   }
 });
 
-test('admission: remote lint, Check and Try setup in different repos share the default four slots', async t => {
-  const setups = Array.from({ length: 5 }, () => harbor(t)); let active = 0, peak = 0; const jobs = new Map();
-  const fake = await fakeRuntime(t, (e, f) => {
+test('admission: remote lint, Check and Try setup in different repos share the default four slots', { timeout: 180_000 }, async t => {
+  const setups = Array.from({ length: 5 }, () => harbor(t)); let active = 0, peak = 0;
+  const jobs = new Map(), completed = new Set(), pending = [];
+  let release;
+  const terminalReplies = new Promise(done => { release = done; });
+  const fake = await fakeRuntime(t, async (e, f) => {
     if (e.command) {
-      active++; peak = Math.max(peak, active); jobs.set(e.request.requestId, e.command);
+      assert.equal(jobs.has(e.request.requestId), false, 'each command posts one unique request');
+      active++; peak = Math.max(peak, active); assert.ok(active <= 4, 'default capacity is never exceeded');
+      jobs.set(e.request.requestId, e.command);
       return { status: 202, json: f.job(e.request.requestId, e.command, 'queued') };
     }
     if (e.url.endsWith('/tests')) return { status: 200, json: { tests: [] } };
     if (e.url.endsWith('/approvals')) return { status: 200, json: { approvals: [] } };
     const id = e.url.split('/').at(-1), kind = jobs.get(id); assert.ok(kind);
-    jobs.delete(id); active--;
+    await terminalReplies;
+    if (!completed.has(id)) { completed.add(id); active--; }
+    assert.ok(active >= 0 && active <= 4);
     return { status: 200, json: kind === 'lint' ? f.lint(id) : kind === 'try' ? f.tryJob(id) : f.check(id) };
   });
-  const results = await Promise.all(setups.map((setup, i) => {
+  const start = i => {
+    const setup = setups[i];
     const made = makePorts({ ...setup, state: setups[0].state }, fake, { now: Date.now, sleep: ms => new Promise(done => setTimeout(done, ms)), pollMs: 20 });
     return i < 2 ? runTry({ cwd: setup.repo, words: ['place-order'], options: { '--no-open': true, '--no-wait': true } }, made.ports)
       : runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--json': true, ...(i === 2 ? { '--lint': true } : {}) } }, made.ports);
-  }));
-  assert.deepEqual(results, [0, 0, 0, 0, 0]); assert.equal(active, 0); assert.equal(peak, 4);
-  assert.equal((await listRuntimeJobs({ stateDir: setups[0].state, origin: fake.origin })).jobs.length, 0);
+  };
+  const waitFor = async predicate => {
+    const deadline = Date.now() + 60_000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, 'capacity barrier watchdog expired');
+      await new Promise(done => setTimeout(done, 20));
+    }
+  };
+  try {
+    // Terminal replies stay closed while the first four callers fill capacity.
+    pending.push(...Array.from({ length: 4 }, (_, i) => start(i)));
+    await waitFor(() => active === 4);
+    pending.push(start(4));
+    let snapshot;
+    await waitFor(async () => {
+      snapshot = (await listRuntimeJobs({ stateDir: setups[0].state, origin: fake.origin })).jobs;
+      return snapshot.some(row => row.state === 'waiting');
+    });
+    assert.equal(active, 4); assert.equal(fake.posts.length, 4, 'the fifth caller waits without a POST');
+    assert.equal(snapshot.filter(row => row.state === 'active').length, 4);
+    assert.deepEqual(snapshot.filter(row => row.state === 'active').flatMap(row => row.request_ids).sort(), [...jobs.keys()].sort());
+    assert.deepEqual(snapshot.filter(row => row.state === 'waiting').map(row => row.request_ids), [[]]);
+    release();
+    assert.deepEqual(await Promise.all(pending), [0, 0, 0, 0, 0]);
+    assert.equal(active, 0); assert.equal(peak, 4); assert.equal(completed.size, 9); assert.equal(jobs.size, 9);
+    assert.deepEqual([...jobs.values()].sort(), ['check', 'check', 'lint', 'lint', 'lint', 'lint', 'lint', 'try', 'try']);
+    assert.equal(fake.posts.length, 9);
+    assert.equal((await listRuntimeJobs({ stateDir: setups[0].state, origin: fake.origin })).jobs.length, 0);
+  } finally { release(); await Promise.allSettled(pending); }
 });
 
 test('admission: invalid PDD_MAX_JOBS warns and keeps a usable default', async t => {
