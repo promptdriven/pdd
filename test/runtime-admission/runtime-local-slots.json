@@ -63,6 +63,21 @@
       "required_observation": "each owned file stays fresh while owned, including during slow outside work; no premature owner expiry; stopping ownership cancels timers and does not recreate removed files; listing keeps exactly its existing public fields"
     },
     {
+      "id": "foreign-predecessor-registration",
+      "given": "native temporary files and a genuine acquired active reservation; replace its file before registration with a same-ID/PID active record whose kind, started_at or complete ordered request_ids differs, separately each field, request-list reordering and combined; also vary pid or state; retain the original reservation reference; use native default heartbeat timers in a separate check",
+      "required_observation": "registration throws finite local-state-unavailable and leaves foreign bytes, request IDs and refresh time unchanged; a later heartbeat cannot refresh or adopt the replacement; validation occurs under the existing claim immediately before the update; no POST is authorized"
+    },
+    {
+      "id": "owned-transitions-and-legacy-reference",
+      "given": "native acquisition promotes its waiting record, then request IDs paid-one, paid-two, paid-one are registered through separately resolved native ports; separately register and release a valid saved/adopted reference to an existing active record without a local acquisition; also retain existing injected-files callers",
+      "required_observation": "valid registration succeeds, request IDs remain [paid-one,paid-two] in order and the original live heartbeat still refreshes after the writes; promotion remains owned; plain id/directory references and existing port bindings need no new token or local-owner gate; ended false stops refreshes and preserves the uncertain lease"
+    },
+    {
+      "id": "foreign-predecessor-cleanup",
+      "given": "native acquired reservation replaced by a same-ID/PID foreign active record before ended true release, ended false release, or synchronized SIGINT/SIGHUP/SIGTERM cleanup; separately ended false release retains the original record, then a foreign replacement precedes ended true on the same returned reservation object; separately replace an owned waiting ticket or claim before its cleanup",
+      "required_observation": "each old owner stops its refresh work and removes its listeners without unlinking, modifying or refreshing the foreign replacement; a changed/replaced claim cannot authorize admission or registration and its foreign successor survives cleanup; same-object ownership evidence survives ended false without retaining released references or restarting heartbeats; confirmation about the original job never releases the replacement; ordinary own ended/unsent cleanup still works"
+    },
+    {
       "id": "reused-pid-active",
       "given": "active record with a stale heartbeat/file refresh and an unrelated live process at its PID; request running, unknown, missing, wrong-ID and unreadable separately; lease ages 1799999 and 1800000 ms",
       "required_observation": "owner expires at 60000 ms without refresh despite live PID; active reservation retained at age 1799999 for every unconfirmed end; reclaim at 1800000; confirmed all-ended or unsent may reclaim earlier"

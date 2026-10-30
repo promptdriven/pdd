@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: b2dc6d24adb7ff48863483a8b85af885d48800339a098cd2c7155fca4a396536).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: 147c1ce2915c2369030716c75f3de0e288e90a79057d5484023b41a68b640974).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -35,12 +35,7 @@ let claimSequence = 0;
 // cannot unlink a successor, unlike deleting and recreating a shared lock path.
 function nativeFilePort(ports) {
   const heldClaims = new Map(), owned = new Map();
-  const remember = (path, record) => {
-    owned.set(path, nativeSnapshotKey(record));
-    // Request registration resolves its own native port. Advance the live
-    // acquisition's snapshot too, without retaining ownership after release.
-    owners.get(path)?.[rememberNativeOwnership]?.(path, record);
-  };
+  const remember = (path, record) => owned.set(path, nativeSnapshotKey(record));
   const actual = path => path.endsWith('/claim.json') ? heldClaims.get(path) : path;
   const files = {
     [rememberNativeOwnership]: (path, record) => owned.set(path, nativeSnapshotKey(record)),
@@ -90,8 +85,11 @@ function nativeFilePort(ports) {
       renameSync(temporary, path); remember(path, record); files.touch(path);
     },
     modifiedAt(path) {
+      const claim = path.endsWith('/claim.json');
       path = actual(path); if (!path) return null;
-      try { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Slot record is not a regular file'); return stat.mtimeMs; }
+      try { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Slot record is not a regular file');
+        if (claim && nativeSnapshotKey(readRecord(path)) !== owned.get(path)) return null;
+        return stat.mtimeMs; }
       catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     },
     touch(path) {
@@ -104,8 +102,12 @@ function nativeFilePort(ports) {
     unlink(path) {
       const resolved = actual(path); if (!resolved) return;
       if (path.endsWith('/claim.json')) heldClaims.delete(path);
+      const identity = owned.get(resolved);
       owned.delete(resolved);
-      try { unlinkSync(resolved); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      try {
+        if (resolved.endsWith('.lock') && identity !== undefined && nativeSnapshotKey(readRecord(resolved)) !== identity) return;
+        unlinkSync(resolved);
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
     },
   };
   return files;
@@ -118,7 +120,7 @@ function defaults(given = {}) {
   return ports;
 }
 const nativeFiles = nativeFilePort({ now: Date.now, randomUUID, isAlive: alive });
-const owners = new Map(), probes = new Map();
+const owners = new Map(), reservationOwners = new WeakMap(), probes = new Map();
 let claimSections = 0;
 const claimWaiters = new Set();
 function leaveClaim() { if (--claimSections === 0) { for (const done of claimWaiters) done(); claimWaiters.clear(); } }
@@ -231,7 +233,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   if (ended()) return null;
   if (!await ports.files.exclusiveCreate(path, ticket)) throw unavailable(new Error('Duplicate slot identity'));
   let acquired = false, activeTicket = null, last = '', failures = 0;
-  const owner = { posted: false, pulse: null, [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
+  const owner = { posted: false, pulse: null, snapshot: snapshotKey(ticket), [rememberNativeOwnership]: ports.files[rememberNativeOwnership] };
   const interruptOwner = () => {
     cancelled = true;
     if (!owner.posted) void removeUnsent();
@@ -288,11 +290,12 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
             && ownWaiting(currentJobs.filter(row => row.state === 'waiting').sort(order)[0])) {
             activeTicket = { ...ticket, state: 'active', started_at: ports.now() };
             await ports.files.writeAtomic(path, activeTicket);
+            owner.snapshot = snapshotKey(activeTicket);
             return true;
           }
           return false;
         });
-        if (attempt.value) { acquired = true; return { id, directory }; }
+        if (attempt.value) { acquired = true; const reservation = { id, directory }; reservationOwners.set(reservation, owner); return reservation; }
         failures++;
       }
       if (message !== last) { ports.say(message); last = message; }
@@ -316,9 +319,18 @@ export async function recordRuntimeRequest(reservation, requestId, given = {}) {
         if (ended()) return false;
         const row = (await rows(ports.files, reservation.directory)).find(row => row.id === reservation.id);
         if (ended() || !await ownsClaim()) return false;
+        const owner = reservationOwners.get(reservation) ?? owners.get(path);
+        if (owner && (!row || snapshotKey(row) !== owner.snapshot)) {
+          owner.pulse.stop();
+          throw unavailable(new Error('Runtime reservation ownership changed'));
+        }
         if (!row || row.state !== 'active') throw unavailable(new Error('Missing runtime reservation'));
-        if (!row.request_ids.includes(requestId)) await ports.files.writeAtomic(path, { ...row, request_ids: [...row.request_ids, requestId] });
-        const owner = owners.get(path); if (owner) owner.posted = true;
+        if (!row.request_ids.includes(requestId)) {
+          const next = { ...row, request_ids: [...row.request_ids, requestId] };
+          await ports.files.writeAtomic(path, next);
+          if (owner) { owner.snapshot = snapshotKey(next); owner[rememberNativeOwnership]?.(path, next); }
+        }
+        if (owner) owner.posted = true;
       });
       if (result.claimed) return result.value !== false;
       const remaining = ports.deadline === undefined ? Infinity : Math.max(0, ports.deadline - ports.now());
@@ -328,9 +340,16 @@ export async function recordRuntimeRequest(reservation, requestId, given = {}) {
 }
 export async function releaseRuntimeSlot(reservation, { ended }, given = {}) {
   if (!reservation) return;
-  const path = join(reservation.directory, `${reservation.id}.json`), owner = owners.get(path);
-  if (owner) { owner.pulse.stop(); await owner.pulse.pending(); owners.delete(path); }
-  if (ended) await defaults(given).files.unlink(path);
+  const path = join(reservation.directory, `${reservation.id}.json`), owner = reservationOwners.get(reservation) ?? owners.get(path);
+  if (owner) { owner.pulse.stop(); await owner.pulse.pending(); if (owners.get(path) === owner) owners.delete(path); }
+  if (ended) {
+    const ports = defaults(given);
+    if (owner) {
+      const row = (await rows(ports.files, reservation.directory)).find(row => row.id === reservation.id);
+      if (!row || snapshotKey(row) !== owner.snapshot) return;
+    }
+    await ports.files.unlink(path);
+  }
 }
 export async function listRuntimeJobs(options, ports = {}) {
   const jobs = await rows(ports.files ?? nativeFiles, directoryFor(options));
