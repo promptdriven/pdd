@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inventoryModule } from './workflow-inventory-replay-helper.mjs';
+import { codeLiteral as span } from './workflow-inventory-code-spans-oracle.mjs';
 
 // Story-derived finite models, not a second parser. Source is rendered from
 // named cases and line lists; expected identities and deltas use those models.
@@ -19,7 +20,7 @@ const quote = value => {
     (/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(char)
       ? `\\u${char.codePointAt(0).toString(16).padStart(4, '0')}` : char)).join('');
 };
-const label = item => quote(item.name) + (item.occurrence > 1 ? ` [${item.occurrence}]` : '');
+const label = item => span(item.name) + (item.occurrence > 1 ? ` [${item.occurrence}]` : '');
 const identify = cases => cases.map((item, index) => ({
   ...item, occurrence: 1 + cases.slice(0, index).filter(previous => previous.name === item.name).length,
 }));
@@ -79,11 +80,11 @@ function expectedReport(path, oldCases, newCases) {
     if (previous) {
       for (const [oldLine, newLine] of assertionDelta(previous.assertions ?? [], item.assertions ?? [])) {
         assertions.push(`Changed assertions in kept tests: ${quote(path)} ${label(item)} ${
-          oldLine === undefined ? '(added)' : quote(oldLine)} → ${newLine === undefined ? '(removed)' : quote(newLine)}.`);
+          oldLine === undefined ? '(added)' : span(oldLine)} → ${newLine === undefined ? '(removed)' : span(newLine)}.`);
       }
     }
     for (const line of introduced(previous?.skips ?? [], item.skips ?? [])) {
-      skips.push(`New skips: ${quote(path)} ${label(item)} ${quote(line)}.`);
+      skips.push(`New skips: ${quote(path)} ${label(item)} ${span(line)}.`);
     }
   }
   return [...lines, ...(assertions.length ? assertions : ['Changed assertions in kept tests: none.']),
@@ -178,7 +179,7 @@ test('formal bounded Story laws: occurrence identity, exact assertion LCS, skip 
     assert.equal(report.details, full);
     assert.ok([...report.text].length <= 12000);
     assert.ok(report.text.endsWith(disclaimer));
-    assert.ok(!/[<>|`\u202a-\u202e\u2066-\u2069]/u.test(report.text));
+    assert.ok(!/[<>|`\u202a-\u202e\u2066-\u2069]/u.test(report.text.split(span(name)).join('')));
     if ([...full].length <= 12000) assert.equal(report.text, full);
     else {
       assert.match(report.text, /Inventory details omitted: \d+ lines;(?: \d+ file summaries omitted;)? full report: test-inventory.json in the run folder\./);
@@ -281,7 +282,7 @@ test('formal revised suite identities are independent of child test occurrences'
     // identities deliberately collide by name, but remain separate owners.
     const cases = suites => suites.map(suite => ({ name: suite.name }));
     const expected = expectedReport('test/suites.js', cases(before), cases(after)).replace('New skips: none.\n',
-      skips.length ? skips.map(owner => `New skips: ${quote('test/suites.js')} suite ${label(owner)} ${quote(declaration(owner))}.\n`).join('') : 'New skips: none.\n');
+      skips.length ? skips.map(owner => `New skips: ${quote('test/suites.js')} suite ${label(owner)} ${span(declaration(owner))}.\n`).join('') : 'New skips: none.\n');
     const report = analyzeTestChanges({ files: [{ oldPath: 'test/suites.js', newPath: 'test/suites.js',
       before: source(before), after: source(after) }] });
     assert.equal(report.available, true);
@@ -346,11 +347,11 @@ test('formal revised availability and strict assertion cap preserve healthy evid
     const oldCases = [{ name: 'large', assertions: Array(oldCount).fill(line) }, ...before];
     const newCases = [{ name: 'large', assertions: Array(newCount).fill(line) }, ...after];
     const capped = oldCount * newCount > 1000000;
-    const largeChanges = capped ? [`Changed assertions in kept tests: ${quote(path)} "large" unavailable ("too many assertion lines to compare").`]
-      : Array(Math.abs(oldCount - newCount)).fill(`Changed assertions in kept tests: ${quote(path)} "large" ${
-        oldCount > newCount ? quote(line) : '(added)'} → ${oldCount > newCount ? '(removed)' : quote(line)}.`);
+    const largeChanges = capped ? [`Changed assertions in kept tests: ${quote(path)} ${span("large")} unavailable ("too many assertion lines to compare").`]
+      : Array(Math.abs(oldCount - newCount)).fill(`Changed assertions in kept tests: ${quote(path)} ${span("large")} ${
+        oldCount > newCount ? span(line) : '(added)'} → ${oldCount > newCount ? '(removed)' : span(line)}.`);
     const healthyLines = expectedReport(path, before, after).trimEnd().split('\n');
-    healthyLines[0] = `Tests vs base: ${quote(path)} 3 → 2 tests. Removed: 1 ("gone").`;
+    healthyLines[0] = `Tests vs base: ${quote(path)} 3 → 2 tests. Removed: 1 (${span("gone")}).`;
     healthyLines.splice(1, 0, ...largeChanges);
     const report = analyzeTestChanges({ files: [{ oldPath: path, newPath: path, before: js(oldCases), after: js(newCases) }] });
     assert.equal(report.available, true);

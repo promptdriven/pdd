@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: c165ecc598ca0e5609a0005d1b14316fb2234c7c56f2931566c05ce3d8a16c3c).
+// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: 4ce8058ac05b5762e4088f8043325d2b0d053a7e170f9ae2e8bca73f5c46dcfe).
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -8,8 +8,15 @@ const BLOB_REASONS = ['candidate blob exceeds 1 MiB', 'binary candidate blob', '
 const DISCLAIMER = 'Static inventory only; tests were not run.';
 const sha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const size = value => [...value].length;
-const quoted = value => JSON.stringify(value).replace(/[\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
-  .replace(/[&<>`|:@#]/g, c => `&#${c.charCodeAt(0)};`);
+const jsonLiteral = value => JSON.stringify(value).replace(/[\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const quoted = value => jsonLiteral(value).replace(/[&<>`|:@#]/g, c => `&#${c.charCodeAt(0)};`);
+const codeLiteral = value => {
+  const literal = jsonLiteral(value);
+  let longest = 0;
+  for (const match of literal.matchAll(/`+/g)) longest = Math.max(longest, match[0].length);
+  const fence = '`'.repeat(longest + 1);
+  return fence + literal + fence;
+};
 const unavailable = reason => {
   const text = `Tests vs base: unavailable (${quoted(reason)}).\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\n${DISCLAIMER}\n`;
   return { available: false, reason, text, details: text };
@@ -207,7 +214,7 @@ function cases(source, lang) {
   return found;
 }
 const key = entry => JSON.stringify([entry.name,entry.occurrence]);
-const label = entry => `${quoted(entry.name)}${entry.occurrence > 1 ? ` [${entry.occurrence}]` : ''}`;
+const label = entry => `${codeLiteral(entry.name)}${entry.occurrence > 1 ? ` [${entry.occurrence}]` : ''}`;
 // One bounded suffix table, then earliest old/new matches for each LCS suffix.
 function common(a,b) {
   if (!a.length || !b.length) return [];
@@ -286,8 +293,8 @@ export function analyzeTestChanges({files}) {
     summaries.push(prefix+(removed.length?`${removed.length}.`:'none.'));
     for(const current of newCases){const previous=oldMap.get(JSON.stringify([current.suite,key(current)]));
       if(previous&&!current.suite&&previous.assertions.length*current.assertions.length>1000000)assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} unavailable ("too many assertion lines to compare").`);
-      else if(previous&&!current.suite)for(const [oldLine,newLine] of assertionChanges(previous.assertions,current.assertions)) assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} ${oldLine===null?'(added)':quoted(oldLine)} → ${newLine===null?'(removed)':quoted(newLine)}.`);
-      for(const line of introduced(previous?.markers??[],current.markers))skips.push(`New skips: ${path} ${current.suite?'suite ':''}${label(current)} ${quoted(line)}.`);
+      else if(previous&&!current.suite)for(const [oldLine,newLine] of assertionChanges(previous.assertions,current.assertions)) assertions.push(`Changed assertions in kept tests: ${path} ${label(current)} ${oldLine===null?'(added)':codeLiteral(oldLine)} → ${newLine===null?'(removed)':codeLiteral(newLine)}.`);
+      for(const line of introduced(previous?.markers??[],current.markers))skips.push(`New skips: ${path} ${current.suite?'suite ':''}${label(current)} ${codeLiteral(line)}.`);
     }
   }
   if(!counts.length){counts.push('Tests vs base: none.');summaries.push(counts[0]);}

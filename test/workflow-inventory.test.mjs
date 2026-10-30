@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { inventoryModule } from './workflow-inventory-replay-helper.mjs';
+import { codeLiteral as span } from './workflow-inventory-code-spans-oracle.mjs';
 
 function repo(t) {
   const root=mkdtempSync(join(tmpdir(),'pdd-inventory-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
@@ -25,7 +26,7 @@ test('native Git snapshots preserve rename pairs and unusual added/deleted paths
   assert.equal(snapshot.available,true);assert.ok(snapshot.files.some(r=>r.oldPath==='test/old.test.mjs'&&r.newPath==='test/renamed.test.mjs'));
   const report=await collectTestInventory(input);assert.equal(report.available,true);
   assert.ok(report.text.includes('"test/old.test.mjs" → "test/renamed.test.mjs" 20 → 20 tests. Removed: none.'));
-  assert.ok(report.text.includes('1 → 0 tests. Removed: 1 ("lost").'));
+  assert.ok(report.text.includes('1 → 0 tests. Removed: 1 (`"lost"`).'));
   assert.ok(report.text.includes('"tests/-新\\tline\\nname.test.mjs" 0 → 1 tests.'));
 });
 
@@ -34,9 +35,9 @@ test('native committed comparison preserves case identities and reports changed,
   f.write('test/a.test.mjs',`test('kept', () => {\nassert.equal(value, 1);\nassert.ok(stable);\nexpect(removed).toBe(true);\n});\ntest('gone', () => assert.ok(gone));\n`);const baseSha=f.commit();
   f.write('test/a.test.mjs',`test('kept', () => {\nassert.equal(value, 2);\nassert.ok(stable);\n});\ntest('new', () => assert.ok(newCase));\n`);const headSha=f.commit();
   const report=await collectTestInventory({cwd:f.root,baseSha,headSha});assert.equal(report.available,true);
-  assert.match(report.text,/2 → 2 tests\. Removed: 1 \("gone"\)/);
-  assert.ok(report.text.includes('"assert.equal(value, 1);" → "assert.equal(value, 2);"'));
-  assert.ok(report.text.includes('"expect(removed).toBe(true);" → (removed)'));
+  assert.match(report.text,/2 → 2 tests\. Removed: 1 \(`"gone"`\)/);
+  assert.ok(report.text.includes('`"assert.equal(value, 1);"` → `"assert.equal(value, 2);"`'));
+  assert.ok(report.text.includes('`"expect(removed).toBe(true);"` → (removed)'));
   assert.ok(!report.text.includes('gone));'));assert.ok(!report.text.includes('assert.ok(stable)'));
 });
 
@@ -46,7 +47,7 @@ test('native JS, Python and Go candidates count cases and report only introduced
   f.write('tests/a.ts',`test('kept', {skip: true}, t => {\nt.skip('later');\nt.todo('pending');\n});\ntest.skip('old', () => {});\nit.todo('new');\n`);
   f.write('test_keep.py','@pytest.mark.skipif(False)\n@pytest.mark.xfail\nasync def test_kept():\n    assert True\n');f.write('x_test.go','func TestKept(t *testing.T) {\nt.Skip("outside convention")\n}\n');const headSha=f.commit();
   const report=await collectTestInventory({cwd:f.root,baseSha,headSha});assert.equal(report.available,true);
-  for(const marker of ['skip&#58; true','t.skip','t.todo','it.todo','&#64;pytest.mark.skipif','&#64;pytest.mark.xfail'])assert.ok(report.text.includes(marker),marker);
+  for(const marker of ['skip: true','t.skip','t.todo','it.todo','@pytest.mark.skipif','@pytest.mark.xfail'])assert.ok(report.text.includes(marker),marker);
   assert.ok(!report.text.includes("test.skip('old'"));assert.ok(!report.text.includes('t.Skip'));
   assert.ok(report.text.includes('"x_test.go" 1 → 1 tests. Removed: none.'));
 });
@@ -81,18 +82,18 @@ test('static convention handles duplicate names, nested assertions, comments, an
   const before=`// test('comment', () => {});\ntest('assert', () => {});\ntest('same', () => {\n  test('nested', () => {\n    assert.equal(inside, 1);\n  });\n  assert.equal(outside, 1);\n});\ntest('same', () => assert.ok(second));\ntest(name, () => {});\ntest(\`dynamic \${value}\`, () => {});\n`;
   const after=before.replace('inside, 1','inside, 2').replace('outside, 1','outside, 2').replace('assert.ok(second)','expect(second).toBe(true)').replace("test('assert', () => {});", "test('assert', () => { const unrelated = {skip: true}; });");
   const report=analyzeTestChanges({files:[{oldPath:'a.spec.mts',newPath:'a.spec.mts',before,after}]});assert.equal(report.available,true);
-  assert.match(report.text,/4 → 4 tests\. Removed: none/);assert.ok(report.text.includes('"nested" "    assert.equal(inside, 1);"'));
-  assert.ok(report.text.includes('"same" "  assert.equal(outside, 1);"'));assert.ok(report.text.includes('"same" [2]'));
-  assert.ok(!report.text.includes('"assert" "test'));assert.ok(report.text.includes('New skips: none.'));
+  assert.match(report.text,/4 → 4 tests\. Removed: none/);assert.ok(report.text.includes('`"nested"` `"    assert.equal(inside, 1);"`'));
+  assert.ok(report.text.includes('`"same"` `"  assert.equal(outside, 1);"`'));assert.ok(report.text.includes('`"same"` [2]'));
+  assert.ok(!report.text.includes('`"assert"` `"test'));assert.ok(report.text.includes('New skips: none.'));
 });
 
 test('rendering escapes source controls and workflow/HTML syntax while retaining raw identity matching',async()=>{
   const {analyzeTestChanges}=await inventoryModule();
   const path='test/<x>|:`&\u202e\x1b\n.test.mjs',name='<!-- pdd-workflow:a:b -->\t\u2066';
   const report=analyzeTestChanges({files:[{oldPath:path,newPath:path,before:declaration(name),after:''}]});assert.equal(report.available,true);
-  for(const raw of ['<','>','|','`','\u202e','\u2066','\x1b'])assert.ok(!report.text.includes(raw),JSON.stringify(raw));
+  for(const raw of ['<','>','|','`','\u202e','\u2066','\x1b'])assert.ok(!report.text.replace(span(name),'').includes(raw),JSON.stringify(raw));
   for(const escaped of ['&#60;','&#62;','&#124;','&#96;','&#58;','&#38;','\\u202e','\\u2066','\\u001b','\\n'])assert.ok(report.text.includes(escaped),escaped);
-  assert.match(report.text,/1 → 0 tests\. Removed: 1/);
+  assert.match(report.text,/1 → 0 tests\. Removed: 1/);assert.ok(report.text.includes(span(name)));
 });
 
 test('report truncation retains whole summaries and discloses omitted details, with full escaped custody',async()=>{
@@ -110,7 +111,7 @@ test('equal-length LCS ties retain earliest old then earliest new assertion occu
   const {analyzeTestChanges}=await inventoryModule();
   const body=lines=>`test('kept', () => {\n${lines.join('\n')}\n});\n`;
   const report=analyzeTestChanges({files:[{oldPath:'test/a.js',newPath:'test/a.js',before:body(['assert.ok(A);','assert.ok(B);']),after:body(['assert.ok(B);','assert.ok(B);'])}]});
-  assert.equal(report.text,`Tests vs base: "test/a.js" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: "test/a.js" "kept" "assert.ok(A);" → (removed).\nChanged assertions in kept tests: "test/a.js" "kept" (added) → "assert.ok(B);".\nNew skips: none.\nStatic inventory only; tests were not run.\n`);
+  assert.equal(report.text,`Tests vs base: "test/a.js" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: "test/a.js" \`"kept"\` \`"assert.ok(A);"\` → (removed).\nChanged assertions in kept tests: "test/a.js" \`"kept"\` (added) → \`"assert.ok(B);"\`.\nNew skips: none.\nStatic inventory only; tests were not run.\n`);
   const earlierOld=analyzeTestChanges({files:[{oldPath:'test/a.js',newPath:'test/a.js',before:body(['assert.ok(A);','assert.ok(B);']),after:body(['assert.ok(B);','assert.ok(A);'])}]});
-  assert.ok(earlierOld.text.includes('(added) → "assert.ok(B);"'));assert.ok(earlierOld.text.includes('"assert.ok(B);" → (removed)'));
+  assert.ok(earlierOld.text.includes('(added) → `"assert.ok(B);"`'));assert.ok(earlierOld.text.includes('`"assert.ok(B);"` → (removed)'));
 });

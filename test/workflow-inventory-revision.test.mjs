@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { inventoryModule } from './workflow-inventory-replay-helper.mjs';
+import { codeLiteral as span } from './workflow-inventory-code-spans-oracle.mjs';
 
 const body = (name,lines) => `test(${JSON.stringify(name)}, () => {\n${lines.join('\n')}\n});\n`;
 const pair = (path,before,after,extra={}) => ({oldPath:path,newPath:path,before,after,...extra});
@@ -14,9 +15,9 @@ const reasons = ['candidate blob exceeds 1 MiB','binary candidate blob','non-UTF
 const categories = ['Tests vs base:','Changed assertions in kept tests:','New skips:'];
 function preservesHealthy(report) {
   assert.equal(report.available,true);assert.equal(report.reason,'');
-  assert.ok(report.details.includes('"test/healthy.js" 2 → 1 tests. Removed: 1 ("gone").'));
-  assert.ok(report.details.includes('"assert.equal(value, 1);" → "assert.equal(value, 2);"'));
-  assert.ok(report.details.includes('"kept" "t.skip(\\"pending\\");"'));
+  assert.ok(report.details.includes('"test/healthy.js" 2 → 1 tests. Removed: 1 (`"gone"`).'));
+  assert.ok(report.details.includes('`"assert.equal(value, 1);"` → `"assert.equal(value, 2);"`'));
+  assert.ok(report.details.includes('`"kept"` `"t.skip(\\"pending\\");"`'));
 }
 function unavailablePair(report,path,reason) {
   for(const category of categories)assert.ok(report.details.includes(`${category} ${JSON.stringify(path)} unavailable (${JSON.stringify(reason)}).`));
@@ -88,10 +89,10 @@ test('revision assertion cap preserves each other category and case and finishes
   const before=body('large',old)+healthy.before,changed=body('large',after)+healthy.after;
   const start=performance.now(),report=analyzeTestChanges({files:[pair('test/healthy.js',before,changed)]}),elapsed=performance.now()-start;
   assert.ok(elapsed<2000,`2000-line cap took ${elapsed} ms`);
-  assert.equal(report.available,true);assert.ok(report.text.includes('"large" unavailable ("too many assertion lines to compare").'));
-  assert.ok(report.text.includes('3 → 2 tests. Removed: 1 ("gone").'));
-  assert.ok(report.text.includes('"kept" "assert.equal(value, 1);" → "assert.equal(value, 2);"'));
-  assert.ok(report.text.includes('"kept" "t.skip(\\"pending\\");"'));
+  assert.equal(report.available,true);assert.ok(report.text.includes('`"large"` unavailable ("too many assertion lines to compare").'));
+  assert.ok(report.text.includes('3 → 2 tests. Removed: 1 (`"gone"`).'));
+  assert.ok(report.text.includes('`"kept"` `"assert.equal(value, 1);"` → `"assert.equal(value, 2);"`'));
+  assert.ok(report.text.includes('`"kept"` `"t.skip(\\"pending\\");"`'));
 });
 
 test('revision exact million-cell LCS boundary compares normally with quadratic work and preserved tie ordering',async()=>{
@@ -100,10 +101,10 @@ test('revision exact million-cell LCS boundary compares normally with quadratic 
   const old=Array.from({length:1000},(_,i)=>`assert.ok(v${i});`),after=old.slice(0,500).flatMap(line=>[line,'assert.ok(inserted);']);
   const start=performance.now(),report=analyzeTestChanges({files:[pair('test/boundary.js',body('kept',old),body('kept',after))]}),elapsed=performance.now()-start;
   assert.equal(report.available,true);assert.ok(!report.details.includes('unavailable'));assert.ok(elapsed<2000,`million-cell comparison took ${elapsed} ms`);
-  assert.ok(report.details.includes('(added) → "assert.ok(inserted);"'));
-  assert.ok(report.details.includes('"assert.ok(v999);" → (removed)'));
+  assert.ok(report.details.includes('(added) → `"assert.ok(inserted);"`'));
+  assert.ok(report.details.includes('`"assert.ok(v999);"` → (removed)'));
   const over=analyzeTestChanges({files:[pair('test/boundary.js',body('kept',old),body('kept',[...after,'assert.ok(last);']))]});
-  assert.ok(over.details.includes('"kept" unavailable ("too many assertion lines to compare").'));
+  assert.ok(over.details.includes('`"kept"` unavailable ("too many assertion lines to compare").'));
 });
 
 test('revision skip forms retain suite occurrence identity independently of tests and never count a suite as a test',async t=>{
@@ -112,21 +113,21 @@ test('revision skip forms retain suite occurrence identity independently of test
   const after=`describe.skip('same', () => {\n  test('same', () => {});\n});\ndescribe.skip('same', () => {});\ntest('strings', {skip: 'flaky'}, () => {});\ntest('double', {skip: "why"}, () => {});\ntest('template', {skip: \`later\`}, () => {});\nxit('disabled', () => {});\n`;
   const file=pair('test/skips.js',before,after),report=analyzeTestChanges({files:[file]});
   assert.equal(report.available,true);assert.ok(report.text.includes('5 → 5 tests. Removed: none.'));
-  assert.ok(report.text.includes('New skips: "test/skips.js" suite "same" "describe.skip'));
-  assert.ok(!report.text.includes('suite "same" [2]'));
-  for(const name of ['strings','double','template','disabled'])assert.ok(report.text.includes(`New skips: "test/skips.js" "${name}"`));
+  assert.ok(report.text.includes('New skips: "test/skips.js" suite `"same"` `"describe.skip'));
+  assert.ok(!report.text.includes('suite `"same"` [2]'));
+  for(const name of ['strings','double','template','disabled'])assert.ok(report.text.includes(`New skips: "test/skips.js" ${span(name)}`));
   assert.equal((report.text.match(/^New skips:/gm)||[]).length,5);
   assert.ok(!report.text.includes('Changed assertions in kept tests: "test/skips.js" suite'));
   const unchanged=analyzeTestChanges({files:[pair('test/skips.js',after,after)]});assert.ok(unchanged.text.includes('New skips: none.'));
   const quotedReasons=analyzeTestChanges({files:[pair('test/skips.js','',`test('ordinary', {skip: 'flaky'}, () => {});\ntest('function-reason', {skip: 'function failed'}, () => {});\ntest('arrow-reason', {skip: 'later => now'}, () => {});\n`)]});
-  for(const name of ['ordinary','function-reason','arrow-reason'])assert.ok(quotedReasons.text.includes(`New skips: "test/skips.js" "${name}"`),quotedReasons.text);
+  for(const name of ['ordinary','function-reason','arrow-reason'])assert.ok(quotedReasons.text.includes(`New skips: "test/skips.js" ${span(name)}`),quotedReasons.text);
   assert.equal((quotedReasons.text.match(/^New skips:/gm)||[]).length,3);
   const negatives=analyzeTestChanges({files:[pair('test/skips.js','',`test('empty', {skip: ''}, () => {});\ntest('dynamic', {skip: reason}, () => {});\ntest('concat', {skip: 'reason' + dynamic}, () => {});\ntest('template-concat', {skip: \`reason\` + expression}, () => {});\ntest('expression', {skip: \`why \${reason}\`}, () => {});\ntest('true-and', {skip: true && condition}, () => {});\ntest('true-or', {skip: true || condition}, () => {});\ntest('true-ternary', {skip: true ? x : y}, () => {});\ntest('todo-and', {todo: true && condition}, () => {});\ntest('body-option', () => { consume({skip: true}); });\n`)]});assert.ok(negatives.text.includes('New skips: none.'),negatives.text);
   for(const option of ['skip: true','todo: true',"skip: 'function failed'",'skip: "later => now"','skip: `later`'])for(const context of ["reason: 'todo: true,'",'timeout: {skip: true}', 'context: (() => ({todo: true}))()'])for(const options of [`${context}, ${option}`,`${option}, ${context}`]){
     const report=analyzeTestChanges({files:[pair('test/skips.js','',`test('direct', {${options}}, () => {});\n`)]});
     assert.equal(report.available,true);assert.ok(report.details.includes('0 → 1 tests. Removed: none.'));
     assert.equal((report.details.match(/^New skips:/gm)||[]).length,1);
-    assert.ok(report.details.includes('New skips: "test/skips.js" "direct" '),report.details);
+    assert.ok(report.details.includes('New skips: "test/skips.js" `"direct"` '),report.details);
   }
   // Only direct declaration options supply markers. These unrelated strings,
   // nested values, callback data and body objects all retain ordinary tests.
@@ -161,8 +162,9 @@ test('revision Python body skips are reported and source mentions, issue links a
   const {analyzeTestChanges}=await inventoryModule();
   const report=analyzeTestChanges({files:[pair('test/@owner#12.js',body('@owner #2570',[]),''),pair('test_skip.py','def test_kept():\n    pass\n','@pytest.mark.xfail\ndef test_kept():\n    pytest.skip("@owner #12")\n')]});
   assert.equal(report.available,true);
-  for(const value of ['"test/&#64;owner&#35;12.js"','"&#64;owner &#35;2570"','"&#64;pytest.mark.xfail"','pytest.skip(\\"&#64;owner &#35;12\\")'])assert.ok(report.text.includes(value),value);
-  assert.ok(!report.text.includes('@'));assert.ok(!/#\d/.test(report.text.replace(/&#\d+;/g,'')));
+  for(const value of ['"test/&#64;owner&#35;12.js"',span('@owner #2570'),span('@pytest.mark.xfail'),span('    pytest.skip("@owner #12")')])assert.ok(report.text.includes(value),value);
+  const outsideSpans=report.text.replace(span('@owner #2570'),'').replace(span('@pytest.mark.xfail'),'').replace(span('    pytest.skip("@owner #12")'),'');
+  assert.ok(!outsideSpans.includes('@'));assert.ok(!/#\d/.test(outsideSpans.replace(/&#\d+;/g,'')));
   assert.equal((report.text.match(/^New skips:/gm)||[]).length,2);
 });
 
@@ -223,19 +225,19 @@ test('manual revision native callback ownership preserves inline and nested mult
   assert.equal(report.available,true);assert.ok(report.details.includes('8 → 8 tests. Removed: none.'));
   const changes=report.details.split('\n').filter(line=>line.startsWith('Changed assertions in kept tests:'));
   assert.equal(changes.length,5);
-  for(const name of ['arrow','async','function','outer','inner'])assert.equal(changes.filter(line=>line.startsWith(`Changed assertions in kept tests: "test/owners.js" "${name}" `)).length,1,report.details);
+  for(const name of ['arrow','async','function','outer','inner'])assert.equal(changes.filter(line=>line.startsWith(`Changed assertions in kept tests: "test/owners.js" ${span(name)} `)).length,1,report.details);
   // Inline marker lines changed with their assertions; the exact-line marker
   // rule reports those two lines as new, while multiline markers are unchanged.
   const introduced=report.details.split('\n').filter(line=>line.startsWith('New skips:'));
   assert.equal(introduced.length,2);
-  for(const name of ['arrow','function'])assert.equal(introduced.filter(line=>line.startsWith(`New skips: "test/owners.js" "${name}" `)).length,1,report.details);
+  for(const name of ['arrow','function'])assert.equal(introduced.filter(line=>line.startsWith(`New skips: "test/owners.js" ${span(name)} `)).length,1,report.details);
   assert.ok(!report.details.includes('outsideold')&&!report.details.includes('outsidenew'));
   // Adding this source introduces all four genuine body markers, with their
   // innermost owners, while neither no-body declaration gains one.
   const added=await collectTestInventory({cwd:f.root,baseSha:emptySha,headSha});
   const skips=added.details.split('\n').filter(line=>line.startsWith('New skips:'));
   assert.equal(skips.length,4,added.details);
-  for(const name of ['arrow','function','outer','inner'])assert.equal(skips.filter(line=>line.startsWith(`New skips: "test/owners.js" "${name}" `)).length,1,added.details);
+  for(const name of ['arrow','function','outer','inner'])assert.equal(skips.filter(line=>line.startsWith(`New skips: "test/owners.js" ${span(name)} `)).length,1,added.details);
 });
 
 // Complete assertion lines belong to real callback bodies even when a regular
@@ -259,7 +261,7 @@ for(const kind of ['expression arrow','block arrow','function'])test(`manual reg
   execFileSync(process.execPath,['--check',join(f.root,'test/regex.mjs')]);
   f.write('test/regex.mjs','// dirty worktree is not the committed comparison\n');
   const report=await collectTestInventory({cwd:f.root,baseSha,headSha});
-  const quote=line=>JSON.stringify(line).replace(/[&<>`|:@#]/g,c=>`&#${c.charCodeAt(0)};`);
+  const quote=span;
   const expected=[`Tests vs base: "test/regex.mjs" ${rows.length} → ${rows.length} tests. Removed: none.`,
     ...rows.map(row=>`Changed assertions in kept tests: "test/regex.mjs" ${quote(row.name)} ${quote(row.before)} → ${quote(row.after)}.`),
     'New skips: none.','Static inventory only; tests were not run.',''].join('\n');

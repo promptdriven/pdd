@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stepDone } from '../src/workflow-runner.mjs';
+import { inventoryModule } from './workflow-inventory-replay-helper.mjs';
+import { codeLiteral as span } from './workflow-inventory-code-spans-oracle.mjs';
 import { readRun, writeRun } from '../src/workflow-runs.mjs';
 
 const exec = promisify(callbackExec);
@@ -72,7 +74,7 @@ function proveCurrent(f,report) {
 test('small-change publication commits first, pushes to a real bare remote and places current inventory before runtime evidence',async t=>{
   const f=fixture(t);writeFileSync(join(f.root,'test/a.mjs'),changed);
   const result=await f.done('Runtime check: ✓ 1/1 criteria');assert.equal(result.exitCode,0,result.message);
-  assert.match(f.prs[0].body,/Tests vs base: "test\/a.mjs" 2 → 2 tests. Removed: 1 \("gone"\)/);
+  assert.match(f.prs[0].body,/Tests vs base: "test\/a.mjs" 2 → 2 tests. Removed: 1 \(`"gone"`\)/);
   const inventoryAt=f.prs[0].body.indexOf('Test inventory commits:'),runtimeAt=f.prs[0].body.indexOf('Runtime check:');
   assert.ok(inventoryAt>=0&&inventoryAt<runtimeAt);
   proveCurrent(f,artifact(f));assert.equal(artifact(f).saved,true);assert.ok(artifact(f).details.includes('assert.equal(value, 1)'));
@@ -184,7 +186,8 @@ test('revision unrelated fetched base reports merge-base failure without a saved
   assert.ok(f.prs[0].body.includes('Test inventory commits: unavailable.'));assert.equal(f.record().baseSha,f.baseSha);
 });
 
-test('revision default subprocess path sends create and refresh bodies to a gh stand-in on stdin with real Git pushes',async t=>{
+async function defaultProcessProof(t, hostile = false) {
+  if (hostile) await inventoryModule();
   const f=fixture(t),commands=join(f.root,'..','commands'),state=join(f.root,'..','gh-state.json');mkdirSync(commands);
   const writeExecutable=(name,source)=>{const path=join(commands,name);writeFileSync(path,`#!${process.execPath}\n${source}`);chmodSync(path,0o755);};
   // This executable only routes network addresses; every Git result is produced
@@ -215,10 +218,24 @@ else if(args[1]==='create'||args[1]==='edit'){
   const moduleUrl=new URL('../src/workflow-runner.mjs',import.meta.url).href;
   const driver=`const {stepDone}=await import(${JSON.stringify(moduleUrl)});const result=await stepDone({cwd:${JSON.stringify(f.root)},step:'formal',summary:'native stdin proof'},{stateDir:${JSON.stringify(f.ports.stateDir)}});console.log(JSON.stringify(result));`;
   const env={...process.env,PATH:`${commands}:${process.env.PATH}`};
-  writeFileSync(join(f.root,'test/a.mjs'),changed);
+  const name='  `@octocat #17 Closes #17``  ';
+  const newAssertion='assert.equal(value, 2); // @octocat Closes #17 &<>|: ```  \r';
+  const marker=`test.skip(${JSON.stringify(name)}, () => {}); // \t\u0001\u202e  \r`;
+  const source=hostile?changed.replace('assert.equal(value, 2);',newAssertion)+marker+'\n':changed;
+  writeFileSync(join(f.root,'test/a.mjs'),source);
   const created=JSON.parse((await exec(process.execPath,['--input-type=module','-e',driver],{env})).stdout);assert.equal(created.exitCode,0,created.message);
   let proof=JSON.parse(readFileSync(state,'utf8'));assert.equal(proof.bodies.length,1);assert.equal(proof.bodies[0].source,'-');assert.match(proof.prs[0].body,/^Tests vs base:/);
-  assert.ok(proof.prs[0].body.includes('"gone"'));assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));
+  assert.ok(proof.prs[0].body.includes('`"gone"`'));assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));
+  if(hostile){
+    assert.ok(proof.bodies[0].body.includes(span(newAssertion)));
+    assert.ok(proof.bodies[0].body.includes(span(name)));
+    assert.ok(proof.bodies[0].body.includes(span(marker)));
+    if(process.env.PDD_INVENTORY_RENDER_EVIDENCE){
+      mkdirSync(process.env.PDD_INVENTORY_RENDER_EVIDENCE,{recursive:true});
+      writeFileSync(join(process.env.PDD_INVENTORY_RENDER_EVIDENCE,'default-process-body.md'),proof.bodies[0].body);
+      writeFileSync(join(process.env.PDD_INVENTORY_RENDER_EVIDENCE,'default-process-inventory.json'),JSON.stringify(artifact(f),null,2)+'\n');
+    }
+  }
   const before=f.remoteHead();writeFileSync(join(f.root,'test/a.mjs'),`test('current', () => {});\n`);
   const refreshed=JSON.parse((await exec(process.execPath,['--input-type=module','-e',driver],{env})).stdout);assert.equal(refreshed.exitCode,0,refreshed.message);
   proof=JSON.parse(readFileSync(state,'utf8'));assert.deepEqual(proof.bodies.map(row=>row.action),['create','edit']);
@@ -226,4 +243,7 @@ else if(args[1]==='create'||args[1]==='edit'){
   assert.ok(proof.bodies[1].body.includes(`Test inventory commits: ${f.baseSha.slice(0,7)} → ${f.remoteHead().slice(0,7)}.`));
   assert.notEqual(f.remoteHead(),before);assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));
   assert.deepEqual(Object.keys(f.record().testInventory).sort(),['baseSha','headSha','saved','text']);
-});
+}
+
+test('revision default subprocess path sends create and refresh bodies to a gh stand-in on stdin with real Git pushes',t=>defaultProcessProof(t));
+test('code-span default subprocess publication carries hostile JSON payloads through gh stdin',t=>defaultProcessProof(t,true));
