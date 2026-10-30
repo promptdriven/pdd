@@ -17,10 +17,10 @@ Each area is one main chat. Step briefs are in `steps/`.
 
 ## Rules
 
-- The main chat coordinates and talks with the person. It does not write code.
-- Use fresh subagents for steps; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait once, long time-out; no small follow-ups.
-- Before verify/formal/review, close finished subagents if supported. Try a fresh checker first; only on startup failure reuse one that wrote NO code in this run.
-- No eligible checker: STOP. Write `Not checked: <step> (agent limit)` in its run file for the PR. Tell the person: continue in a NEW session, `pdd workflow open <N>`. No verdict or done for unrun checks.
+- The main chat coordinates and talks with the person; no code or checks.
+- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait with one long time-out; no small follow-ups.
+- Checks: fresh first. Only verify/formal may reuse after startup failure; agent wrote no code, tests or prompts in this run.
+- Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - At a gate, show the result, ask the person, and stop. For changes, revise here and ask again. Outside a run, open a PR only if the person says yes; in a run, pdd does. Never merge.
 - Write each link as its full URL (`https://…`), never as a linked word.
 - Before an optional step, ask the person and wait for the answer. In a run, run `<pdd> workflow ask` first.
