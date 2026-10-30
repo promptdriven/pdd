@@ -22,17 +22,17 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 - At gates show results, ask the person, stop; revise and ask again. Outside runs PRs need the person's yes; in runs pdd opens them. Never merge.
 - Use full URLs (`https://…`).
 - Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". In a run, run `<pdd> workflow ask` first.
-- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer: "You can also open it now with `pdd try <story>` before the check." End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
-- Before PR 1, show the `Runtime check` line(s) with the report link(s) and the Try link, if any. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
+- At the story gate, start with one verdict line, then the details: "Verdict: the bug is in the PROMPT (its check fails on the issue's case).", "Verdict: the prompt is right; the bug is only in the CODE." or "Verdict: no prompt covers this yet; the bug can only be in the code." Give the full paths of the Story files. For issue-only prompts, offer "adopt PDD for this module" later. You may offer: "You can also open it now with `pdd simulate <story>` before the check." End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
+- Before PR 1, show the `Runtime check` line(s) with the report link(s) and the Simulator link, if any. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
 - On verify/formal failure or review must-fixes, go back to build in a new subagent, at most 2 times. 2 repair rounds after initial review: fresh build, verify, formal, then fresh review. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; start a fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
 - `.ui.svg`: layout in reproduce, build, verify (RUNBOOK §13).
-- A person decides expected values. Never change a test to make it pass. Outside code (databases, files, network, clocks, randomness, programs): runtime-faked ports; no direct calls (pdd-prompting RUNBOOK §21).
+- A person decides expected values. Never change a test to make it pass. Outside code (databases, files, network, clocks, randomness, programs): injected ports; no direct calls (RUNBOOK §21).
 
 ## Try tools
 
-If asked: `try_open`, `try_state`, `try_run` with input, `try_check`, `try_save_case`. Runs use Try budget and show in Try page history. Review saved cases with the person, never as approved expected values.
+If asked: `try_open`, `try_state`, `try_run` with input, `try_check`, `try_save_case`. Runs spend AI calls and show in Simulator history. Review saved cases with the person, never as approved expected values.
 
 ## In a run
 
