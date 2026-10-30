@@ -97,7 +97,11 @@ for (const retry of [false, true]) test(`CONTINUATION native table: concurrent r
   assert.equal(new Set(paid(r).map(e => e.request.scenario)).size, 2);
   const final = await recovery(r, batch);
   assert.equal(final.code, 0); assert.equal(final.clock.uuids, 0);
-  for (const reply of replies) assert.deepEqual(reply.json.rows.map(row => row.request_id).sort(), final.json.rows.map(row => row.request_id).sort());
+  assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
+  for (const reply of replies) {
+    if (reply.code === 3) { assert.equal(reply.json, null); assert.match(reply.ports.stderr.text, /pdd check --read/); }
+    else assert.deepEqual(reply.json.rows.map(row => row.request_id).sort(), final.json.rows.map(row => row.request_id).sort());
+  }
 });
 
 test('CONTINUATION native table: lost POST and repeated recovery preserve ID and unknown usage', async t => {
@@ -460,7 +464,7 @@ test('CONTINUATION preservation: concurrent legacy capacity retries adopt claims
   writeFileSync(join(folder, lintId + '.json'), JSON.stringify(r.f.lint(lintId)));
   writeFileSync(join(folder, oldId + '.admission.json'), JSON.stringify({ dispatch: 'not_started', error: { code: 'check-queue-full', details: { retryable: true, retry_after: 1 } } }));
   const replies = await Promise.all([recovery(r, batch, true), recovery(r, batch, true)]);
-  assert.equal(paid(r).length, 1); assert.ok(replies.every(reply => reply.code === 0));
+  assert.equal(paid(r).length, 1); assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
   const final = saved(r, batch).doc.rows[0];
   assert.deepEqual(final.request_ids, [oldId, paid(r)[0].request.requestId]);
 });
@@ -536,7 +540,12 @@ test('CONTINUATION: two real CLI read processes send the original held check exa
   const replies = await Promise.all([child(), child()]);
   assert.equal(paid(r).length, 1);
   const id = paid(r)[0].request.requestId;
-  for (const reply of replies) { assert.equal(reply.code, 0, reply.stderr); assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id); }
+  assert.ok(replies.some(reply => reply.code === 0), 'at least one CLI owns recovery');
+  for (const reply of replies) {
+    assert.ok([0, 3].includes(reply.code), reply.stderr);
+    if (reply.code === 3) { assert.equal(reply.stdout, ''); assert.match(reply.stderr, /pdd check --read/); }
+    else assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id);
+  }
   assert.deepEqual(saved(r, batch).doc.rows[0].request_ids, [id]);
   const repeat = await recovery(r, batch); assert.equal(repeat.code, 0); assert.equal(repeat.clock.uuids, 0);
   assert.equal(repeat.json.rows[0].request_id, id); assert.equal(paid(r).length, 1);

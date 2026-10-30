@@ -1,11 +1,11 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b1a8e400407f8d92b5939ac07a2b001e999a6e3fe838b7c23cdb42ad553279fc).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4476903115a68b1a7fbddb360eef4a6b7ca318edf2a9d4fecfe319021494f0ed).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
   preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
@@ -61,7 +61,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -87,7 +87,7 @@ function withDefaults(ports) {
 }
 
 function repoRoot(cwd) {
-  const found = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+  const found = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (found.status !== 0 || !found.stdout.trim()) throw new Stop(2, 'pdd check and pdd try work in a Git repository. Run them inside your project.');
   return found.stdout.trim();
 }
@@ -146,6 +146,92 @@ class StateStore {
   repoKey(root) { return createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 16); }
   repo(root) { return this.read(join(this.folder('repos'), `${this.repoKey(root)}.json`)) ?? { root: realpathSync(root), last_batch: null, tries: {} }; }
   saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
+}
+
+// Native boundary: one owner from the fresh batch load through the final saves.
+export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } = {}) {
+  const lock = join(folder, 'batch.lock');
+  const owner = { pid: process.pid, host: hostname(), started_at: new Date().toISOString() };
+  const problem = (code, path, record) => Object.assign(new Error(code), { code, lock: path, owner: record });
+  const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino;
+  const warnRelease = (path, error) => {
+    try { onWarning(`Warning: could not release batch lock ${cleanText(path, [], { paths: false })} (${cleanText(error.code ?? 'state error')}).`); } catch { /* cleanup cannot replace the command outcome */ }
+  };
+  let abandoned;
+  function snapshot(path) {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isFile()) throw problem('BATCH_LOCK_INVALID', path, null);
+    try { return { stat, record: JSON.parse(readFileSync(path, 'utf8')) }; }
+    catch (error) { if (error.code === 'ENOENT') throw error; throw problem('BATCH_LOCK_INVALID', path, null); }
+  }
+  function publish(path) {
+    // A hard link publishes the complete fsynced inode with exclusive EEXIST semantics.
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    let fd;
+    try {
+      fd = openSync(temporary, 'wx', 0o600); chmodSync(temporary, 0o600);
+      writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd);
+      const owned = fstatSync(fd, { bigint: true }); closeSync(fd); fd = undefined;
+      linkSync(temporary, path);
+      return owned;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+      try { unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+  function claim(path) {
+    let owned;
+    try { owned = publish(path); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let before, previous;
+      try { ({ stat: before, record: previous } = snapshot(path)); }
+      catch (readError) { if (readError.code === 'ENOENT') return claim(path); throw readError; }
+      if (previous?.host !== owner.host || !Number.isSafeInteger(previous.pid) || previous.pid < 1
+        || typeof previous.started_at !== 'string' || !Number.isFinite(Date.parse(previous.started_at))) throw problem('BATCH_LOCK_INVALID', path, previous);
+      let dead = false;
+      try { process.kill(previous.pid, 0); }
+      catch (pidError) {
+        if (pidError.code === 'ESRCH') dead = true;
+        else if (pidError.code !== 'EPERM') throw problem('BATCH_LOCK_INVALID', path, previous);
+      }
+      if (!dead) throw problem('BATCH_LOCK_BUSY', path, previous);
+      const releaseGuard = claim(`${path}.recover.${previous.pid}`);
+      try {
+        let current;
+        try { current = snapshot(path); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        if (current && sameFile(before, current.stat) && isDeepStrictEqual(previous, current.record)) {
+          unlinkSync(path); if (path === lock) abandoned = previous;
+        }
+        return claim(path);
+      } finally { releaseGuard(); }
+    }
+    let released = false;
+    return () => {
+      if (released) return; released = true;
+      try {
+        const current = snapshot(path);
+        if (sameFile(owned, current.stat) && isDeepStrictEqual(owner, current.record)) unlinkSync(path);
+      } catch (error) { if (error.code !== 'ENOENT') warnRelease(path, error); }
+    };
+  }
+  const release = claim(lock);
+  try { if (abandoned) onWarning(`Warning: recovered an abandoned batch lock from dead pid ${abandoned.pid} on ${abandoned.host}.`); }
+  catch (error) { release(); throw error; }
+  return release;
+}
+
+async function ownBatch(context, name) {
+  if (context.releaseBatch) return;
+  try {
+    context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { onWarning: text => line(context.ports.stderr, text) });
+    context.lockedBatch = name;
+  } catch (error) {
+    const owner = error.owner, label = value => cleanText(value ?? 'unverified').slice(0, 120);
+    if (error.code === 'BATCH_LOCK_BUSY') throw new Stop(3, `Another pdd check command is using batch ${name} (pid ${label(owner?.pid)}, host ${label(owner?.host)}, since ${label(owner?.started_at)}); run pdd check --read ${name} after it ends.`);
+    if (error.code === 'BATCH_LOCK_INVALID') throw new Stop(2, `Lock file ${cleanText(error.lock ?? join(context.folder, 'batch.lock'), [], { paths: false })} has an unverifiable owner (host ${label(owner?.host)}). Delete it only if no pdd command is running on that host, then run the command again.`);
+    throw new Stop(2, `Could not lock batch ${name} (${cleanText(error.code ?? 'state error')}). Nothing was sent.`);
+  }
 }
 
 function signIn(gh, store) {
@@ -247,7 +333,7 @@ function checkCapacity(answer) {
 }
 function markBusy(context, row, wait) {
   Object.assign(row, { state: context.reading ? 'not_run' : 'waiting', busy: true, can_retry: true, calls: 0, refusals: [],
-    checks: null, criteria: null, all_checks: [], failed_checks: [], why: null,
+    checks: null, criteria: null, all_checks: [], failed_checks: [], why: null, next_step: null,
     retry_at: context.reading && Number.isFinite(row.retry_at) ? row.retry_at : context.ports.now() + wait, note: { code: 'check-busy', message: 'The runtime is busy. No checks ran for this attempt. Retry this batch later.' } });
   if (!context.reading) context.checkWindow = 1;
 }
@@ -277,7 +363,9 @@ function judgePost(reply, id, command, secrets) {
   if (reply.status === 503 && /^(?:pool-low-room|pool-copy-[a-z-]+|github-unavailable)$/.test(error?.code ?? '')) return { kind: 'not_run', note: note('Try again later.') };
   if ([400, 413, 415, 422].includes(reply.status) && error?.code) {
     return { kind: 'refused', refusal: { code: cleanText(error.code, secrets), section: null, message: cleanText(error.message, secrets) || null,
-      engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null, hint: null } };
+      engine_message: reply.json.details ? cleanText(JSON.stringify(reply.json.details), secrets) : null,
+      ...(reply.status === 422 ? { reason: cleanText(error.reason, secrets) || null, fix: cleanText(error.fix, secrets) || null,
+        hint: cleanText(error.hint, secrets) || null, cause: cleanText(error.cause, secrets) || null } : { hint: null }) } };
   }
   const said = cleanText(error?.message, secrets);
   return { kind: 'unknown', why: `The runtime answered HTTP ${reply.status}${said ? `: ${said.replace(/\.$/, '')}` : ''}.` };
@@ -383,15 +471,24 @@ function addHints(row, root, visible) {
   }
 }
 
+// State owns the verdict; discard only the exact generic failure explanation.
+function noVerdictAdvice(answer, view) {
+  const why = view.why;
+  return { why: why && why !== 'Checks failed.' ? why : null,
+    next_step: checkCapacity(answer) === null ? view.next_step : null };
+}
+
 function applyAnswer(row, answer, context) {
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
+  const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
   Object.assign(row, { state: view.state, checks: view.checks, criteria: view.criteria, failed_checks: view.failed_checks, all_checks: view.all_checks,
     refusals: view.refusals, calls: view.calls, requested_model: view.requested_model, report_url: view.report_url ?? row.report_url,
-    server_seconds: view.server_seconds, time_limit: view.time_limit,
-    why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : view.state === 'unknown' ? view.why ?? row.why : null,
+    server_seconds: view.server_seconds, time_limit: view.time_limit, known_calls: view.known_calls, unknown_calls: view.unknown_calls,
+    why: failed ? view.why ?? firstDiagnosis?.diagnosis?.why ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.why ?? (view.state === 'unknown' && row.lost && row.why !== 'Checks failed.' ? row.why : null) : null,
     who: failed ? view.who ?? firstDiagnosis?.diagnosis?.who ?? null : null,
-    next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : null,
+    next_step: failed ? view.next_step ?? firstDiagnosis?.diagnosis?.next_step ?? null : ['refused', 'not_run', 'unknown'].includes(view.state) ? advice.next_step : null,
+    rerun: view.rerun ?? row.rerun,
     engine_sha: view.engine_sha, provider: view.provider,
     draft: view.draft ?? row.draft });
   const wait = checkCapacity(answer);
@@ -427,7 +524,7 @@ function batchRecord(context) {
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
-      phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
+      phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
       engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
@@ -453,7 +550,7 @@ function adoptClaims(context, row) {
     }
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
-      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true });
+      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null, next_step: null, busy: false, can_retry: false });
     }
   }
 }
@@ -473,10 +570,11 @@ async function postJob(context, path, command, request, row, timeoutMs) {
   const id = request.requestId;
   if (context.interrupted) return { kind: 'not_sent' };
   context.store.posted(context.folder, id);
-  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.calls = 'unknown'; }
+  if (row) { row.request_ids.push(id); row.sent_at ??= context.ports.now(); row.state = 'sending'; row.phase = 'server'; row.calls = 'unknown'; row.post_verdict = 'uncertain'; }
   saveBatch(context);
   const reply = await context.runtime.post(path, request, context.capture.tar, timeoutMs);
   const verdict = judgePost(reply, id, command, context.secrets);
+  if (row) row.post_verdict = verdict.kind;
   if (verdict.answer) saveAnswer(context, id, verdict.answer);
   if (verdict.admission) context.store.write(join(context.folder, `${id}.admission.json`), verdict.admission);
   return verdict;
@@ -618,7 +716,8 @@ async function checkBatch(context, rows) {
   const lint = await runLint(context);
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
-  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', ...extra }); };
+  const lintView = noVerdictAdvice(lint.answer, projectAnswer(lint.answer ?? {}, { origin: context.origin, secrets: context.secrets }));
+  const notSent = (state, extra) => { for (const row of sendable) Object.assign(row, { state, calls: 0, phase: 'lint', why: lintView.why, next_step: lintView.next_step, ...extra }); };
   if (context.interrupted) { notSent('not_run', { note: { code: null, message: 'Stopped before sending.' } }); return; }
   if (lint.kind === 'pending') {
     context.lintPending = true;
@@ -635,7 +734,7 @@ async function checkBatch(context, rows) {
     notSent('not_run', { note: { code: null, message: 'The lint result is unknown, so pdd sent no checks.' } });
     return;
   }
-  for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem] });
+  for (const [row, problem] of verdicts) Object.assign(row, { state: 'refused', phase: 'lint', refusals: [problem], why: lintView.why, next_step: lintView.next_step });
   const toSend = sendable.filter(row => row.state === 'ready');
   line(ports.stderr, `${verdicts.size ? `Lint refused ${verdicts.size} of ${sendable.length} tests.` : 'Lint passed.'} Sent ${toSend.length} check${toSend.length === 1 ? '' : 's'} `
     + `at ${clock(ports.now())}: ${context.capture.files.length} files, ${formatSize(context.capture.bytes)}${context.otherNote ? ` ${context.otherNote}` : ''}.`);
@@ -735,7 +834,7 @@ function runFiles(cwd, words, options, ports) {
 }
 
 // pdd check --lint: only the server's lint (0 AI calls) on the captured files.
-// Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
+// Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
 async function runLintOnly(context, cwd, words, options, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root);
@@ -743,6 +842,43 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
+  const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
+  const prompts = new Map();
+  const limitsFor = (path, seen) => {
+    if (typeof path !== 'string' || seen.has(path)) return [];
+    seen.add(path);
+    if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
+    const prompt = prompts.get(path);
+    if (!prompt.interface) return [];
+    const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
+      ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
+      .map(problem => ({code:problem.code,section:problem.pointer,path,message:`${path} ${problem.pointer} ${problem.rule}`,hint:problem.hint}));
+    return [...own,...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).flatMap(call => limitsFor(call?.target,seen))];
+  };
+  const limitRows = rows.map(row => {
+    const seen = new Set();
+    return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+  });
+  if (limitRows.some(row => row.refusals.length)) {
+    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+    const problems = [];
+    for (const problem of refusedRows.flatMap(row => row.refusals)) {
+      if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
+    }
+    const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
+    if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
+      coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
+    else {
+      for (const problem of problems) {
+        line(ports.stderr, `${problem.code}  ${problem.message}`);
+        if (problem.hint) line(ports.stderr, problem.hint);
+      }
+      for (const row of refusedRows) line(ports.stdout, `  ${row.test}  ${row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}` : 'not run'}`);
+      line(ports.stdout,summary);
+      line(ports.stdout,coverageText(context.coverage));
+    }
+    return 4;
+  }
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
   context.warnings = [...svgWarnings, ...found.warnings];
@@ -752,8 +888,9 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
     intent: 'lint-only', agentLimit: options['--timeout'] === undefined && !ports.interactive, secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin });
   context.folder = context.store.folder('batches', batch);
-  saveBatch(context);
   setRelease(interruptible(context));
+  await ownBatch(context, batch);
+  saveBatch(context);
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context, true);
   if (lint.kind === 'pending') { Object.assign(context.lint, { state: lint.answer.state, pending: true });
@@ -815,6 +952,7 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
 
 function runFillHash(root, ports) {
   const result = fillHashes({ root });
+  for (const { message } of result.warnings) line(ports.stdout, `Warning: ${message}`);
   for (const { path } of result.filled) line(ports.stdout, `Filled prose_sha256: ${path}`);
   for (const { message } of result.refused) line(ports.stdout, `Refused: ${message}`);
   for (const { path } of result.stale) line(ports.stdout, `Stale: ${path} is approved, but ${STALE_HINT}.`);
@@ -850,16 +988,17 @@ async function readUnsentLint(context, rows) {
     answer = read.kind === 'state' ? read.answer : null;
     if (answer) saveAnswer(context, id, answer);
   }
+  const lintView = noVerdictAdvice(answer, projectAnswer(answer ?? {}, { origin: context.origin, secrets: context.secrets }));
   const unknown = () => {
     Object.assign(lint, { state: answer?.state ?? 'unknown', pending: false, unknown: true });
     context.lintUnknown = true;
-    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], why: lintView.why, next_step: lintView.next_step,
       note: { code: null, message: 'The lint result is unknown, so pdd sent no checks.' } });
   };
   if (['queued', 'running'].includes(answer?.state)) {
     Object.assign(lint, { state: answer.state, pending: true, unknown: false });
     context.lintPending = true;
-    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [],
+    for (const row of held) Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], why: lintView.why, next_step: lintView.next_step,
       note: { code: 'lint-pending', message: pendingLintMessage(context, answer) } });
     return;
   }
@@ -872,7 +1011,7 @@ async function readUnsentLint(context, rows) {
   Object.assign(lint, { state: answer.state, pending: false, unknown: false });
   for (const row of held) {
     const problem = verdicts?.get(row);
-    Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], note: null });
+    Object.assign(row, { state: 'not_run', calls: 0, phase: 'lint', refusals: [], why: lintView.why, next_step: lintView.next_step, note: null });
     if (problem || (!verdicts && !busy && refusals.length)) {
       Object.assign(row, { state: 'refused', refusals: problem ? [problem] : refusals });
     } else {
@@ -952,6 +1091,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const name = batchWord ?? store.repo(root).last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd check first.');
   context.folder = join(store.dir, 'batches', name);
+  if (!statOrNull(join(context.folder, 'batch.json'))) throw new Stop(2, `No saved batch ${name}.`);
+  await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
@@ -960,7 +1101,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
     capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
-  const rows = saved.rows.map(row => ({ ...row, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
+  const rows = saved.rows.map(row => ({ ...row, why: ['refused', 'not_run', 'unknown'].includes(row.state) && row.why === 'Checks failed.' ? null : row.why, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
   const candidates = rows.filter(row => heldForLint(row));
   // Preserve the producer's original evidence before refresh can normalize unsent usage.
   const evidence = candidates.map(row => ({ row, hadCalls: Object.hasOwn(row, 'calls'), calls: row.calls }));
@@ -971,8 +1112,10 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     if (row.request_ids.length) row.state = 'unknown';
     else Object.assign(row, { state: 'not_run', calls: 0, phase: 'local', note: { code: null, message: 'pdd stopped before sending this check.' } });
   }
-  const reads = rows.filter(row => row.request_ids?.length && row.phase === 'server' && ['queued', 'running', 'unknown'].includes(row.state)).length;
-  if (reads && !quiet) line(ports.stderr, `Reading ${reads} result${reads === 1 ? '' : 's'} from the PDD runtime…`);
+  // A final POST refusal has no run receipt. Legacy rows retain their final verdict,
+  // but stale busy flags are not evidence that an allocated ID was unstarted.
+  const finalPost = (row, answer) => !answer && (['refused', 'not_run', 'stop'].includes(row.post_verdict)
+    || (!row.post_verdict && (row.state === 'refused' || (row.state === 'not_run' && !row.busy && !row.can_retry))));
   await readUnsentLint(context, rows);
   for (const item of evidence) {
     if (item.row.request_ids.length || item.row.dispatchIncomplete) item.row.calls = 'unknown';
@@ -984,7 +1127,8 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   await continueHeld(context, candidates, saved);
   await eachLimited(rows, MAX_READS, async row => {
     const id = row.request_ids.at(-1);
-    if (!id || row.phase !== 'server') return;
+    if (!id) return;
+    row.phase = 'server';
     const admission = store.read(join(context.folder, `${id}.admission.json`));
     if (admission?.dispatch === 'not_started') {
       const wait = capacityDelay(admission.error);
@@ -993,12 +1137,18 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     const answer = store.read(join(context.folder, `${id}.json`));
     // Local terminal receipts remain available even when another row used the network wait.
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
+    if (finalPost(row, answer)) return;
+    if (row.final && (ports.now() >= (context.deadline ?? Infinity) || context.interrupted)) return;
+    // A verified open receipt stays open when another row consumed this wait.
+    if ((ports.now() >= (context.deadline ?? Infinity) || context.interrupted)
+      && answer && sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer.state)) { applyAnswer(row, answer, context); return; }
+    // Polling an open cache is not evidence that its saved advice came from a lost read.
+    if (!row.lost && (row.state !== 'unknown' || row.lost === false)) row.why = null;
+    Object.assign(row, { state: 'unknown', calls: 'unknown', checks: null, criteria: null, failed_checks: [], all_checks: [], busy: false, can_retry: false, note: null, lost: true });
     if (ports.now() >= (context.deadline ?? Infinity) || context.interrupted) return;
-    if (['queued', 'running', 'unknown'].includes(row.state)) {
-      row.lost = true;
-      await readRow(context, row, context.deadline);
-      if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
-    } else if (answer) applyAnswer(row, answer, context);
+    if (!quiet) line(ports.stderr, 'Reading 1 result from the PDD runtime…');
+    await readRow(context, row, context.deadline);
+    if (row.state === 'unknown' && row.lost) row.why ??= 'pdd could not read this run yet.';
   });
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
@@ -1019,7 +1169,7 @@ async function runRetry(context, name, options) {
   Object.assign(context, { capture, reading: false, timeoutMin: timeout });
   for (const row of selected) row.state = row.retry_at > ports.now() ? 'waiting' : 'ready';
   if (selected.length) line(ports.stderr, `Retrying ${selected.length} unstarted check${selected.length === 1 ? '' : 's'}…`);
-  if (selected.length) await runScheduledChecks(context, rows, selected);
+  await runScheduledChecks(context, rows, selected);
   saveBatch(context);
   return printResult(context, rows);
 }
@@ -1034,6 +1184,25 @@ async function runRequest(context, id) {
   if (read.kind === 'state') applyAnswer(row, read.answer, context);
   else row.why = read.unreachable ?? read.why ?? (read.kind === 'auth' ? AUTH_TEXT : 'pdd could not read this run.');
   return printResult(context, [row], { recovery: `pdd check --request '${id}'` });
+}
+
+// Refresh only caches owned by this exact repository, runtime and signed-in account.
+function refreshCheckBatches(context, identity, origin, id, answer) {
+  const { store, root } = context, batches = join(store.dir, 'batches');
+  let names;
+  try { names = readdirSync(batches); } catch { return; }
+  for (const name of names.filter(name => BATCH.test(name))) {
+    try {
+      const folder = join(batches, name), saved = store.read(join(folder, 'batch.json'));
+      if (!saved || saved.root !== root || saved.origin !== origin || saved.login !== identity.login
+        || String(saved.user_id) !== String(identity.userId)) continue;
+      if (!saved.rows?.some(row => row.request_ids?.includes(id))) continue;
+      const cached = store.read(join(folder, `${id}.json`));
+      if (sameJob(cached, id, 'check') && ['passed', 'failed', 'refused'].includes(cached.state)
+        && !['passed', 'failed', 'refused'].includes(answer.state)) continue;
+      store.write(join(folder, `${id}.json`), answer);
+    } catch { /* A cache failure must not hide an authoritative read or other caches. */ }
+  }
 }
 
 // A read is observation only; it does not replay the call or settle backend accounting.
@@ -1054,6 +1223,7 @@ async function runCallRead(context, id) {
     Object.assign(context, { origin, secrets: [identity.token] });
     const row = { test: '-', story: '-', title: '-', phase: 'server', request_ids: [id], state: 'unknown', refusals: [], warnings: [] };
     applyAnswer(row, answer, context);
+    refreshCheckBatches(context, identity, origin, id, answer);
     return printResult(context, [row], { recovery: `pdd check --read ${id}` });
   }
   const state = answer?.state ?? 'unknown', exitCode = exitCodeFor([{ state }]);
@@ -1139,7 +1309,12 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
       return error.exitCode;
     }
     throw error;
-  } finally { release(); }
+  } finally {
+    try { context.releaseBatch?.(); }
+    catch (error) {
+      try { line(ports.stderr, `Warning: could not release batch ${context.lockedBatch ?? context.batch ?? 'ownership'} (${cleanText(error.code ?? 'state error')}).`); } catch { /* preserve the command outcome */ }
+    } finally { release(); }
+  }
 }
 
 async function runBatch(context, cwd, words, options, setRelease) {
@@ -1166,14 +1341,15 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.otherNote = otherNote(otherFiles(capture.files, found).length);
   const identity = signIn(ports.gh, context.store);
   const startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     intent: 'check', head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
+  setRelease(interruptible(context));
+  await ownBatch(context, batch);
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, rows);
   saveBatch(context);
