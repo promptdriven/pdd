@@ -8,6 +8,11 @@ const encode = value => value instanceof JsonNumber ? value.text : Array.isArray
 const clone = value => parse(encode(value));
 export { parse as parseJsonValue, encode as stringifyJsonValue };
 export const isJsonNumber = value => value instanceof JsonNumber;
+export function jsonNumberIdentity(value) {
+  if (value instanceof JsonNumber) return numericIdentity(value.text);
+  if (typeof value === 'number' && Number.isFinite(value)) return numericIdentity(JSON.stringify(value));
+  throw new TypeError('Expected a JSON numeric atom or finite number.');
+}
 const put = (value, key, item) => Object.defineProperty(value, key, { value: item, enumerable: true, configurable: true, writable: true });
 const escape = key => key.replace(/~/g, '~0').replace(/\//g, '~1');
 const fragment = title => title.toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s+/g, '-');

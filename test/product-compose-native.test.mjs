@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { composeProductTry } from '../src/product-composition.mjs';
 import { checkInput } from '../src/runtime-preflight.mjs';
-import { isJsonNumber, parseJsonValue, stringifyJsonValue } from '../src/contract-refs.mjs';
+import { isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from '../src/contract-refs.mjs';
 
 function fixture() {
   const files = structuredClone(JSON.parse(readFileSync(new URL('./runtime/product-compose-try.json', import.meta.url))).initial_world.files);
@@ -31,6 +31,10 @@ test('lossless shared JSON facilities preserve numeric atoms and own keys', () =
   assert.equal(isJsonNumber({ text: '4' }), false);
   assert.equal(stringifyJsonValue(value), text);
   assert.throws(() => parseJsonValue('{'), SyntaxError);
+  assert.equal(jsonNumberIdentity(parseJsonValue('1.00e3')), jsonNumberIdentity(1000));
+  assert.equal(jsonNumberIdentity(parseJsonValue('-0.000')), jsonNumberIdentity(-0));
+  assert.notEqual(jsonNumberIdentity(parseJsonValue('9007199254740993')), jsonNumberIdentity(parseJsonValue('9007199254740992')));
+  for (const value of [null, true, '1', {}, NaN, Infinity]) assert.throws(() => jsonNumberIdentity(value), TypeError);
 });
 
 test('joined map preserves separate state and typed scratch through replacement', () => {
@@ -120,4 +124,35 @@ test('wildcard priority preserves covered and identical rules and refuses unrepr
   assert.equal(readMap(same.compose()).handlers.filter(rule => rule.screen === 'phone/menu').length, 1);
   f.editMap('phone', map => { map.handlers[1].match = { name: 'primary' }; });
   assert.throws(() => f.compose(), error => error.code === 'invalid-product-map' && /wildcard priority/.test(error.message));
+});
+
+test('matcher priority uses exact numeric identity and Python Boolean/number equality recursively', () => {
+  for (const [wildcard, exact] of [['1', '1.0'], ['true', '1'], ['false', '-0'], ['[true,{"x":1,"y":2}]', '[1,{"y":2.0,"x":1.00}]']]) {
+    const f = fixture();
+    f.editMap('phone', map => {
+      map.handlers[0].match = { value: 'WILDCARD_VALUE' };
+      const direct = structuredClone(map.handlers[0]); direct.screen = 'menu'; direct.match.value = 'EXACT_VALUE';
+      direct.handler.operation = 'render'; direct.input = {}; map.handlers.push(direct);
+    });
+    const file = f.files['/project/app/maps/phone.json'];
+    file.content = file.content.replace('"WILDCARD_VALUE"', wildcard).replace('"EXACT_VALUE"', exact);
+    const handlers = readMap(f.compose()).handlers.filter(rule => rule.screen === 'phone/menu');
+    assert.equal(handlers.length, 1, `${wildcard}/${exact}`);
+    assert.equal(handlers[0].handler.operation, 'render');
+  }
+});
+
+test('next-screen resolution prefers a literal local slash ID, then selected qualified targets', () => {
+  const f = fixture();
+  f.editMap('phone', map => { map.handlers[0].next.screen = 'barista/menu'; });
+  f.editMap('barista', map => { map.handlers[0].next.screen = 'phone/menu'; });
+  const map = readMap(f.compose());
+  assert.equal(map.handlers.find(rule => rule.screen === 'phone/menu').next.screen, 'barista/menu');
+  assert.equal(map.handlers.find(rule => rule.screen === 'barista/menu').next.screen, 'phone/menu');
+  assert.throws(() => f.compose({ parts: ['phone'] }), error => error.code === 'invalid-product-map' && /barista\/menu/.test(error.message));
+  f.editMap('phone', map => { map.screens.push({ ...map.screens[0], id: 'barista/menu' }); });
+  assert.equal(readMap(f.compose()).handlers.find(rule => rule.screen === 'phone/menu').next.screen, 'phone/barista/menu');
+  assert.equal(readMap(f.compose({ parts: ['phone'] })).handlers[0].next.screen, 'phone/barista/menu');
+  f.editMap('phone', map => { map.handlers[0].next.screen = 'missing/counter'; });
+  assert.throws(() => f.compose(), error => error.code === 'invalid-product-map' && /missing\/counter/.test(error.message));
 });

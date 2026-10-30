@@ -2,13 +2,22 @@
 import { basename, join } from 'node:path';
 import { checkInput, interfaceBlocks, PreflightError, selectTests } from './runtime-preflight.mjs';
 import { parseProductDocuments, parseProductWorldWriters } from './product.mjs';
-import { expandSource, isJsonNumber, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
+import { expandSource, isJsonNumber, jsonNumberIdentity, parseJsonValue, stringifyJsonValue } from './contract-refs.mjs';
 
 const fail = (code, message) => { throw Object.assign(Error(message), { code }); };
 const badMap = message => fail('invalid-product-map', message);
 const escape = value => value.replace(/~/g, '~0').replace(/\//g, '~1');
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !isJsonNumber(value);
 const ref = path => ({ $ref: path });
+
+function matcherEqual(a, b) {
+  if (a === b) return true;
+  const numeric = value => isJsonNumber(value) || typeof value === 'number' || typeof value === 'boolean';
+  if (numeric(a) && numeric(b)) return jsonNumberIdentity(typeof a === 'boolean' ? Number(a) : a) === jsonNumberIdentity(typeof b === 'boolean' ? Number(b) : b);
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((value, index) => matcherEqual(value, b[index]));
+  return plain(a) && plain(b) && Object.keys(a).length === Object.keys(b).length
+    && Object.entries(a).every(([key, value]) => Object.hasOwn(b, key) && matcherEqual(value, b[key]));
+}
 
 function scopeTemplate(value, part) {
   if (Array.isArray(value)) return value.map(item => scopeTemplate(item, part));
@@ -25,18 +34,18 @@ function scopedHandlers(handlers, screen, encode) {
     const rules = applicable.filter(rule => rule.kind === kind);
     if (!rules.some(rule => rule.screen === '*') || !rules.some(rule => rule.screen === screen)) { output.push(...rules); continue; }
     const entries = value => Object.entries(value);
-    const compatible = (a, b) => entries(a).every(([key, value]) => !Object.hasOwn(b, key) || encode(value) === encode(b[key]));
-    const covers = (a, b) => entries(a).every(([key, value]) => Object.hasOwn(b, key) && encode(value) === encode(b[key]));
+    const compatible = (a, b) => entries(a).every(([key, value]) => !Object.hasOwn(b, key) || matcherEqual(value, b[key]));
+    const covers = (a, b) => entries(a).every(([key, value]) => Object.hasOwn(b, key) && matcherEqual(value, b[key]));
     const behavior = rule => encode(Object.fromEntries(entries(rule).filter(([key]) => !['screen', 'match'].includes(key))));
-    const conditions = new Map(rules.map(rule => [encode(rule.match), rule.match]));
-    const queue = [...conditions.values()];
+    const conditions = [], queue = [];
+    const addCondition = match => { if (!conditions.some(prior => matcherEqual(prior, match))) { conditions.push(match); queue.push(match); } };
+    for (const rule of rules) addCondition(rule.match);
     for (let index = 0; index < queue.length; index++) for (const rule of rules) {
       const match = queue[index];
       if (!compatible(match, rule.match)) continue;
-      const merged = { ...match, ...rule.match }, key = encode(merged);
-      if (!conditions.has(key)) { conditions.set(key, merged); queue.push(merged); }
+      addCondition({ ...match, ...rule.match });
     }
-    const compiled = [...conditions.values()].map(match => {
+    const compiled = conditions.map(match => {
       const eligible = rules.filter(rule => covers(rule.match, match));
       eligible.sort((a, b) => Number(a.screen === screen) - Number(b.screen === screen) || Object.keys(a.match).length - Object.keys(b.match).length);
       return { ...eligible.at(-1), match };
@@ -67,6 +76,9 @@ function joinMaps(product, parts, maps, chain, encode) {
     properties[scratch] = { type: 'object', properties: slots, required: Object.keys(slots), additionalProperties: false };
   }
   const stateKeys = Object.keys(initial);
+  const allScreens = maps.flatMap((map, index) => (Array.isArray(map.screens) ? map.screens : []).map(screen => `${parts[index]}/${screen.id}`));
+  const globalIds = new Set(allScreens);
+  if (globalIds.size !== allScreens.length) badMap('Selected parts produce duplicate qualified screen IDs.');
   const joined = { schema_version: 'prompt-runtime.app-map.v1', name: product.name,
     initial_screen: `${parts[0]}/${maps[0].initial_screen}`, initial_route: maps[0].initial_route,
     initial_state: initial, state_schema: { type: 'object', properties, required: stateKeys, additionalProperties: false },
@@ -98,8 +110,8 @@ function joinMaps(product, parts, maps, chain, encode) {
       for (const handler of scopedHandlers(map.handlers, target, encode)) {
         const next = { ...handler.next };
         if (next.screen !== null && next.screen !== undefined) {
-          if (!ids.has(next.screen)) badMap(`app/maps/${part}.json has an unknown next screen.`);
-          next.screen = screenId(next.screen);
+          if (ids.has(next.screen)) next.screen = screenId(next.screen);
+          else if (!globalIds.has(next.screen)) badMap(`app/maps/${part}.json: next screen ${next.screen} is neither local nor a screen in the selected product parts.`);
         }
         const after = (handler.after ?? []).map(operation => {
           if (typeof operation.bind !== 'string' || !operation.bind.startsWith('/')) badMap(`app/maps/${part}.json has an invalid after binding.`);

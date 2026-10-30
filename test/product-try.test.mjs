@@ -63,6 +63,8 @@ test('product Try uploads one map and merged world through the ordinary scenario
   const map = JSON.parse(extract(post.tar, request.app_map));
   assert.deepEqual(map.screens.map(screen => screen.id), ['phone/menu', 'server/status', 'barista/board']);
   assert.equal(map.handlers[0].after.length, 2);
+  assert.equal(map.handlers.find(rule => rule.screen === 'phone/menu').next.screen, 'barista/board');
+  assert.equal(map.handlers.find(rule => rule.screen === 'barista/board').next.screen, 'phone/menu');
   assert.match(result.err, /up to 3 operations \(limit 40 calls per tap\)/);
   assert.equal(readFileSync(join(setup.repo, 'tests/J1.json'), 'utf8'), setup.authored);
   assert.equal(existsSync(join(setup.repo, request.app_map)), false);
@@ -73,6 +75,10 @@ test('product Try uploads one map and merged world through the ordinary scenario
   assert.equal(changed.code, 4, changed.err);
   assert.equal(fake.posts.length, 2);
   assert.equal(fake.deletes.length, 0);
+  const closedSubset = await open(setup, fake, { '--product': true, '--parts': 'phone,barista' });
+  assert.equal(closedSubset.code, 4, closedSubset.err);
+  assert.match(closedSubset.err, /setup changed/);
+  assert.equal(fake.posts.length, 2);
 });
 
 test('explicit journey provides its world last and changed mode preserves an open session', async t => {
