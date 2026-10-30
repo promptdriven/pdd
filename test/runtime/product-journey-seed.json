@@ -181,7 +181,7 @@
       "action": "port.write",
       "world_pointer": "/requests",
       "result_template": {
-        "json": "{\"items\":[{\"number\":81,\"body\":\"<!-- pdd-product: run=phone-1 -->\",\"state\":\"OPEN\",\"user\":{\"login\":\"project-member\"},\"author_association\":\"MEMBER\",\"created_at\":\"2026-10-01T00:00:00Z\"}],\"total_count\":1,\"incomplete_results\":false}"
+        "json": "{\"items\": [{\"number\": 81, \"body\": \"<!-- pdd-product: run=phone-1 -->\", \"state\": \"OPEN\", \"user\": {\"login\": \"project-member\"}, \"author_association\": \"MEMBER\", \"created_at\": \"2026-10-01T00:00:00Z\", \"repository_url\": \"https://api.github.com/repos/example/coffee\", \"url\": \"https://api.github.com/repos/example/coffee/issues/81\", \"html_url\": \"https://github.com/example/coffee/issues/81\"}], \"total_count\": 1, \"incomplete_results\": false}"
       }
     },
     "github.timelinePage": {
@@ -189,6 +189,51 @@
       "world_pointer": "/requests",
       "result_template": {
         "json": "[]"
+      }
+    },
+    "github.issueByNumber": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"number\": 81, \"body\": \"<!-- pdd-product: run=phone-1 -->\", \"state\": \"OPEN\", \"user\": {\"login\": \"project-member\"}, \"author_association\": \"MEMBER\", \"created_at\": \"2026-10-01T00:00:00Z\", \"repository_url\": \"https://api.github.com/repos/example/coffee\", \"url\": \"https://api.github.com/repos/example/coffee/issues/81\", \"html_url\": \"https://github.com/example/coffee/issues/81\"}"
+      }
+    },
+    "github.currentActor": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": "{\"login\":\"project-member\"}"
+      }
+    },
+    "productState.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "json": null
+      }
+    },
+    "productState.write": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {}
+    },
+    "productState.lock": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "handle": "product-state-lock"
+      }
+    },
+    "productState.unlock": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {}
+    },
+    "clock.now": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "milliseconds": 100000
       }
     }
   },
