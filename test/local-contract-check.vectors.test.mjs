@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {checkWarnings} from './helpers/local-contract-warnings.mjs';
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const vectors = JSON.parse(fs.readFileSync(join(root, 'test/shared-contracts/local-contract-check.json'), 'utf8'));
 
@@ -130,11 +132,18 @@ for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, async 
     for (const diagnostic of vector.expected.diagnostics) {
       assert.ok(lines.some(line => line.length <= 8000 && line.includes(diagnostic.file) && line.includes(diagnostic.record) && line.includes(diagnostic.field) && (diagnostic.kind !== 'unavailable' || /unavailable/i.test(line))), JSON.stringify(diagnostic));
     }
-    if (Object.hasOwn(vector.expected,'skipped_files')) {
-      let jsonOut='';
-      const code=runContracts({words,options:{...options,'--json':true},cwd},{env:{...process.env,PDD_STATE_DIR:state},stdout:{write:s=>{jsonOut+=s;}},stderr:{write:()=>{}}});
-      assert.equal(code,vector.expected.exit_code);
-      assert.deepEqual(JSON.parse(jsonOut).skipped_files,vector.expected.skipped_files);
+    if (Object.hasOwn(vector.expected,'skipped_files') || Object.hasOwn(vector.expected,'warnings')) {
+      let jsonOut='', jsonErr='';
+      const again=observe({state,symlinkTarget});
+      try {
+        const code=runContracts({words,options:{...options,'--json':true},cwd},{env:{...process.env,PDD_STATE_DIR:state},stdout:{write:s=>{jsonOut+=s;}},stderr:{write:text=>{jsonErr+=text;}}});
+        assert.equal(code,vector.expected.exit_code);
+        const facts=JSON.parse(jsonOut);
+        if (Object.hasOwn(vector.expected,'skipped_files')) assert.deepEqual(facts.skipped_files,vector.expected.skipped_files);
+        if (Object.hasOwn(vector.expected,'warnings')) checkWarnings(facts.warnings,vector.expected.warnings,stdout);
+        assert.equal(jsonErr,'');
+        for (const [key,value] of Object.entries(vector.expected.calls)) assert.equal(again.calls[key],value,`JSON calls.${key}`);
+      } finally { again.restore(); }
     }
     for (const [key, value] of Object.entries(vector.expected.calls)) {
       assert.ok(Object.hasOwn(observed.calls, key), `Not replayed: calls.${key}`);
@@ -144,7 +153,7 @@ for (const vector of vectors.cases) test(`local contracts: ${vector.id}`, async 
     for (const [key, label] of [['checked_records', 'records?'], ['checked_world_values', 'world[ -]values?']]) {
       if (Object.hasOwn(vector.expected, key)) assert.match(stdout, new RegExp(`(?:${vector.expected[key]}\\s+${label}|${label}\\s*[:=]\\s*${vector.expected[key]})`, 'i'), key);
     }
-    const mapped = new Set(['exit_code', 'diagnostics', 'calls', 'source_bytes_unchanged', 'checked_records', 'checked_world_values', 'skipped_files']);
+    const mapped = new Set(['exit_code', 'diagnostics', 'calls', 'source_bytes_unchanged', 'checked_records', 'checked_world_values', 'skipped_files', 'warnings']);
     for (const key of Object.keys(vector.expected)) assert.ok(mapped.has(key), `Not replayed: expected.${key}`);
   } finally { fs.rmSync(sandbox, {recursive: true, force: true}); }
 });

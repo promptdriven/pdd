@@ -247,7 +247,12 @@ function checkContracts(root,{stdout,stderr,json = false}) {
         tableKind = table.headings.includes('Key') ? 'Key' : 'Path';
         for (const cells of table.values) {
           const get = name => cells[table.headings.indexOf(name)] ?? '';
-          const raw = get(tableKind), actors = unquote(get('Writer')).split(/,|\band\b|\//).map(unquote).filter(Boolean), target = unquote(get('Schema'));
+          const raw = get(tableKind), target = unquote(get('Schema'));
+          const labels = unquote(get('Writer')).split(',')
+            .filter((piece,index) => !index || !/^(through|via|using|by)\b/i.test(unquote(piece)))
+            .flatMap(piece => piece.split(/\s+and\s+|[\/&;]/)).map(unquote).filter(Boolean);
+          const initial = labels.some(label => /^(test data|seed|initial world)$/i.test(label));
+          const actors = labels.filter(label => !/^(test data|seed|initial world)$/i.test(label));
           const quoted = [...raw.matchAll(/`([^`]*)`/g)].map(match => match[1]);
           const keys = tableKind === 'Path' && quoted.length ? quoted : [unquote(raw)];
           for (const key of keys) {
@@ -260,9 +265,10 @@ function checkContracts(root,{stdout,stderr,json = false}) {
             const canonical = target ? select(target,worldPath,'Schema',target) : null;
             const old = rows.get(pointer);
             if (old?.canonical && canonical && old.canonical !== canonical) report(worldPath,key,'Schema','conflicting schema mappings');
-            if (!old) rows.set(pointer,{key,tokens,actors:new Set(actors),canonical,explicit:!!target,evidence:[table.headings.map((heading,index) => ({heading,text:cells[index] ?? ''}))]});
+            if (!old) rows.set(pointer,{key,tokens,actors:new Set(actors),initial,canonical,explicit:!!target,evidence:[table.headings.map((heading,index) => ({heading,text:cells[index] ?? ''}))]});
             else {
               for (const actor of actors) old.actors.add(actor);
+              old.initial ||= initial;
               old.evidence.push(table.headings.map((heading,index) => ({heading,text:cells[index] ?? ''})));
               old.explicit ||= !!target;
               if (!old.canonical && canonical) old.canonical = canonical;
@@ -276,7 +282,7 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       authorities.add(ref.target);
       if (!selected.has(ref.target)) selected.set(ref.target,{file:ref.target.split('#')[0],field:'',record:ref.target,expanded:ref.value_json});
     }
-    for (const row of rows.values()) if (row.actors.size !== 1) report(worldPath,row.key,'Writer','declare exactly one unique writer');
+    for (const row of rows.values()) if (row.actors.size > 1 || !row.actors.size && !row.initial) report(worldPath,row.key,'Writer','declare exactly one unique writer');
     const annotations = new Set(['enum','const','default','examples','title','description','format']);
     const markers = new Set([...schemaKeywordNames(),'$contract'].filter(key => !annotations.has(key)));
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && jsonNumberText(value) === null;
@@ -370,14 +376,27 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       warnings.push({kind:'declared-record-disagreement',records,message:`Declared records ${records.join(' and ')} have the same fields but different shapes`});
     }
     const unknownKeys=[...rows].filter(([,row]) => !row.canonical && !row.explicit).map(([pointer]) => pointer).sort();
-    if (unknownKeys.length) warnings.push({kind:'world-schema-missing',file:worldPath,world_keys:unknownKeys,message:`${unknownKeys.length} world keys have no schema; their seed values were not checked`});
+    if (unknownKeys.length) warnings.push({kind:'world-schema-missing',file:worldPath,world_keys:unknownKeys,message:unknownKeys.length === 1 ? '1 world key has no schema; its seed value was not checked' : `${unknownKeys.length} world keys have no schema; their seed values were not checked`});
     const compared = compareCopies(prompts,catalog.records.filter(record => authorities.has(record.target)));
     for (const match of compared.matches) if (match.kind === 'near') for (const difference of match.differences) report(match.path,match.target,difference.split(':')[0],difference,false,{source_pointer:match.source_pointer,target:match.target});
     for (const warning of compared.warnings) report(warning.split(' ')[0],warning,'',warning,true);
     if (hasWorld && hasSeed) {
       try {
-        if (tableKind === 'Key') for (const key of Object.keys(seedWorld ?? {})) {
-          if (![...rows.values()].some(row => row.tokens[0] === key)) report(seedPath,key,`/${escape(key)}`,'present seed key has no writer declaration');
+        const concrete = [...rows.values()].filter(row => !row.tokens.some(token => /<[^>]+>/.test(token)));
+        const uncovered = [];
+        const coverage = (value,tokens,candidates) => {
+          if (candidates.some(row => row.tokens.length === tokens.length)) return;
+          const children = object(value) || Array.isArray(value) ? Object.entries(value) : [];
+          if (tokens.length && (!candidates.length || !children.length)) {
+            uncovered.push(`/${tokens.map(escape).join('/')}`);
+            return;
+          }
+          for (const [key,child] of children) coverage(child,[...tokens,key],candidates.filter(row => row.tokens[tokens.length] === key));
+        };
+        coverage(seedWorld,[],concrete);
+        if (uncovered.length) {
+          const world_keys = [...new Set(uncovered)].sort();
+          warnings.push({kind:'world-writer-missing',file:seedPath,world_keys,message:`${world_keys.length} world ${world_keys.length === 1 ? 'key has' : 'keys have'} no writer declaration: ${world_keys.join(', ')}`});
         }
         for (const [pointer,row] of rows) {
           const {key,tokens} = row;
