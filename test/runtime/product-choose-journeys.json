@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Journey selection includes only root journey Stories in discovery order."
+      "text": "Checking journeys selects only the journeys in my project\u2019s root journey folder, in their listed order."
     },
     {
       "id": "AC2",
-      "text": "J1 selects J1-order without selecting J10 or a nested example."
+      "text": "Choosing J1 selects J1-order and leaves out J10 and nested examples."
     },
     {
       "id": "AC3",
-      "text": "An ambiguous J1 token refuses with invalid-journey."
+      "text": "If J1 names more than one journey, I get a clear request to choose one."
     }
   ],
   "initial_world": {},

@@ -4,11 +4,11 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Ordering a medium latte forwards one waiting ticket to the barista."
+      "text": "Ordering a medium latte gives the barista one waiting ticket."
     },
     {
       "id": "AC2",
-      "text": "After the barista marks the ticket done, the phone shows Ready."
+      "text": "After the barista marks my ticket done, my phone shows Ready."
     }
   ],
   "initial_world": {

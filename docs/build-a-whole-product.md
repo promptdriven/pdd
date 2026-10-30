@@ -80,3 +80,5 @@ start or hide unrelated ready runs.
 Journey J1 is the final run after the three parts. Use its normal Story checks
 and the whole-product Try to test the path across parts. Status tracks journeys
 separately from each part's Stories.
+
+A composed map may navigate directly between parts with a qualified `next.screen`, such as `barista/board`. A target first matches a screen ID local to the current part, even if that local ID contains a slash; otherwise it must name a selected product screen. Select all parts needed by explicit navigation targets. In coffee pickup, Order on the phone opens the barista board; Done returns to the phone, where the background work has made the order Ready.
