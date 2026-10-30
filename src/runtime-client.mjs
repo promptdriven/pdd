@@ -163,7 +163,7 @@ export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } =
       if (error.code !== 'EEXIST') throw error;
       let before, previous;
       try {
-        before = lstatSync(path);
+        before = lstatSync(path, { bigint: true });
         previous = before.isFile() ? JSON.parse(readFileSync(path, 'utf8')) : null;
       } catch (readError) { if (readError.code === 'ENOENT') return claim(path); throw busy(null); }
       if (previous?.host !== owner.host || !Number.isSafeInteger(previous.pid) || previous.pid < 1
@@ -175,19 +175,19 @@ export async function acquireRuntimeBatchLock(folder, { onWarning = () => {} } =
       const releaseGuard = claim(`${path}.recover.${previous.pid}`);
       try {
         let current;
-        try { current = lstatSync(path); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+        try { current = lstatSync(path, { bigint: true }); } catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
         if (current && sameFile(before, current)) { unlinkSync(path); if (path === lock) abandoned = previous; }
         return claim(path);
       } finally { releaseGuard(); }
     }
     let owned;
-    try { owned = fstatSync(fd); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); }
+    try { owned = fstatSync(fd, { bigint: true }); writeFileSync(fd, JSON.stringify(owner)); fsyncSync(fd); }
     catch (error) { unlinkSync(path); throw error; }
     finally { closeSync(fd); }
     let released = false;
     return () => {
       if (released) return; released = true;
-      try { if (sameFile(owned, lstatSync(path))) unlinkSync(path); }
+      try { if (sameFile(owned, lstatSync(path, { bigint: true }))) unlinkSync(path); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     };
   }
