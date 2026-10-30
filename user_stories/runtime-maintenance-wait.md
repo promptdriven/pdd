@@ -4,8 +4,8 @@ I can leave a command waiting during announced maintenance and continue afterwar
 
 ## Acceptance criteria
 
-1. Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its end and reason before rechecking.
-2. When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait.
+1. Before submission, pdd reads authenticated runtime capacity and waits through announced maintenance, showing its local end time with the zone and its reason before rechecking.
+2. When the server confirms that maintenance prevented a job from starting, pdd uses the same maintenance wait and notice.
 3. A runtime without the capacity endpoint can still accept work under its ordinary submission rules.
 4. Maintenance waiting obeys the caller deadline and interruption.
 5. Authentication, access and unrelated service errors retain their existing handling.
