@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "A current machine proof for the same run, saved base and current committed head appears as a successful \"Old-code proof:\" line on the code PR."
+      "text": "A current v2 machine proof for the same run and freshly computed merge-base/current committed head appears as a successful \"Old-code proof:\" line naming the exact command, old/new exits and expected output text in safe code spans."
     },
     {
       "id": "AC2",
-      "text": "A current unsuccessful proof remains visible with its actual outcome and does not become a publication gate."
+      "text": "A current unsuccessful proof remains visible with its actual outcome, observed/host cause and short actual output tail when available; parent interruption is distinct from child signals even before or between phases, setup/cleanup errors retain priority, and proof is not a publication gate."
     },
     {
       "id": "AC3",
-      "text": "An older committed head is shown as \"stale\"; missing proof is \"not run\"; malformed, foreign-run or foreign-base proof is \"unavailable\". None shows current success."
+      "text": "An older committed head or computed base is \"stale\"; missing proof is \"not run\"; legacy v1, malformed (including a missing required parent-interruption field) or foreign-run proof is \"unavailable\". The immutable saved run base is not the current proof comparison base."
     },
     {
       "id": "AC4",
@@ -23,83 +23,189 @@
     "publication_currentHead": [
       {
         "request": {
-          "root": "/repo/current"
+          "root": "/repo/current",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/failed"
+          "root": "/repo/failed",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/stale"
+          "root": "/repo/stale",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/missing"
+          "root": "/repo/missing",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/malformed"
+          "root": "/repo/malformed",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/foreign-run"
+          "root": "/repo/foreign-run",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/foreign-base"
+          "root": "/repo/foreign-base",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/forged-summary"
+          "root": "/repo/forged-summary",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/wrong-reason"
+          "root": "/repo/wrong-reason",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/legacy-v1-unavailable",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/fetched-base-moved",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "cccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/parent-before-process",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/parent-between-phases",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/parent-cleanup-error-priority",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/v2-missing-interrupt-field",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/head-failure-last-three-lines",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/failure-tail-240-unicode-points",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       }
     ],
@@ -195,6 +301,78 @@
         "reply": {
           "notes": []
         }
+      },
+      {
+        "request": {
+          "runDir": "/pub/legacy-v1-unavailable",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/fetched-base-moved",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-before-process",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-between-phases",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-cleanup-error-priority",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/v2-missing-interrupt-field",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/head-failure-last-three-lines",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/failure-tail-240-unicode-points",
+          "steps": []
+        },
+        "reply": {
+          "notes": []
+        }
       }
     ],
     "publication_readOldCodeProof": [
@@ -203,7 +381,7 @@
           "runDir": "/pub/current"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-current\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-current\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -212,7 +390,7 @@
           "runDir": "/pub/failed"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-failed\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"outcome\": \"head-fails\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-failed\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"outcome\":\"head-fails\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -221,7 +399,7 @@
           "runDir": "/pub/stale"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-stale\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"cccccccccccccccccccccccccccccccccccccccc\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-stale\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -248,7 +426,7 @@
           "runDir": "/pub/foreign-run"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"foreign\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"foreign\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -257,7 +435,7 @@
           "runDir": "/pub/foreign-base"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-foreign-base\", \"baseSha\": \"foreign\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"defect-x\"], \"stderrTail\": [], \"expectedFound\": true, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"defect-x\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"proved\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-foreign-base\",\"baseSha\":\"foreign\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -275,22 +453,295 @@
           "runDir": "/pub/wrong-reason"
         },
         "reply": {
-          "content": "{\"v\": 1, \"origin\": \"pdd.workflow-prove.v1\", \"runId\": \"pub-wrong-reason\", \"baseSha\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"headSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"test\": \"node --test test/new.test.mjs\", \"expect\": \"defect-x\", \"paths\": [\"test/new.test.mjs\"], \"base\": {\"exitCode\": 1, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [\"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\", \"noise\"], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"code: other-error\"}, \"head\": {\"exitCode\": 0, \"signal\": \"\", \"timedOut\": false, \"outputLimited\": false, \"stdoutTail\": [], \"stderrTail\": [], \"expectedFound\": false, \"error\": \"\", \"setupError\": \"\", \"observedError\": \"no output\"}, \"outcome\": \"wrong-reason\", \"cleanupError\": \"\", \"setupError\": \"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-wrong-reason\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\",\"noise\"],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"code: other-error\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"wrong-reason\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/legacy-v1-unavailable"
+        },
+        "reply": {
+          "content": "{\"v\":1,\"origin\":\"pdd.workflow-prove.v1\",\"runId\":\"pub-legacy-v1-unavailable\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/fetched-base-moved"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-fetched-base-moved\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-before-process"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-parent-before-process\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[],\"base\":{\"exitCode\":null,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"\"},\"head\":{\"exitCode\":null,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"\"},\"outcome\":\"signalled\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"SIGINT\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-between-phases"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-parent-between-phases\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":null,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"\"},\"outcome\":\"signalled\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"SIGTERM\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/parent-cleanup-error-priority"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-parent-cleanup-error-priority\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":null,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"\"},\"outcome\":\"setup-error\",\"cleanupError\":\"owned cleanup failed\",\"setupError\":\"\",\"interruptSignal\":\"SIGHUP\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/v2-missing-interrupt-field"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-v2-missing-interrupt-field\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/head-failure-last-three-lines"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-head-failure-last-three-lines\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"stdout must not win\"],\"stderrTail\":[\"Error: assertion broke\",\"ignored earlier\",\"  @octocat #17\",\"last `tick`\",\"pdd-workflow: end\"],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"Error: assertion broke\"},\"outcome\":\"head-fails\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/failure-tail-240-unicode-points"
+        },
+        "reply": {
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-failure-tail-240-unicode-points\",\"baseSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[\"early diagnostic\",\"\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1\\u03b1 \\u03a9\"],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"early diagnostic\"},\"outcome\":\"head-fails\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       }
-    ]
+    ],
+    "identity_calls": []
   },
   "simulation": {
     "publication.currentHead": {
-      "action": "collection.get",
-      "world_pointer": "/publication_currentHead",
-      "key_argument_pointer": "/root",
-      "value_argument_pointer": null,
-      "item_key_pointer": "/request/root",
-      "item_value_pointer": "/reply",
-      "result_template": {},
-      "result_value_pointer": ""
+      "action": "fixture.lookup",
+      "world_pointer": "/identity_calls",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo/current",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/repo/failed",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "root": "/repo/stale",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "root": "/repo/missing",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "root": "/repo/malformed",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "root": "/repo/foreign-run",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "root": "/repo/foreign-base",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "root": "/repo/forged-summary",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {
+            "root": "/repo/wrong-reason",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 10,
+          "args": {
+            "root": "/repo/legacy-v1-unavailable",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "root": "/repo/fetched-base-moved",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "cccccccccccccccccccccccccccccccccccccccc"
+          }
+        },
+        {
+          "call_index": 12,
+          "args": {
+            "root": "/repo/parent-before-process",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 13,
+          "args": {
+            "root": "/repo/parent-between-phases",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 14,
+          "args": {
+            "root": "/repo/parent-cleanup-error-priority",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 15,
+          "args": {
+            "root": "/repo/v2-missing-interrupt-field",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 16,
+          "args": {
+            "root": "/repo/head-failure-last-three-lines",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 17,
+          "args": {
+            "root": "/repo/failure-tail-240-unicode-points",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
     },
     "publication.readStepNotes": {
       "action": "collection.get",
@@ -324,9 +775,11 @@
           "runId": "pub-current",
           "runDir": "/pub/current",
           "root": "/repo/current",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -337,7 +790,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✓ tests \"test/new.test.mjs\" fail on the old code with \"defect-x\" and pass on the new code."
+            "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
           ]
         },
         {
@@ -380,9 +833,11 @@
           "runId": "pub-failed",
           "runDir": "/pub/failed",
           "root": "/repo/failed",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -393,7 +848,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ head-fails."
+            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `defect-x`; tail `defect-x`."
           ]
         },
         {
@@ -436,9 +891,11 @@
           "runId": "pub-stale",
           "runDir": "/pub/stale",
           "root": "/repo/stale",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -449,7 +906,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: stale (head changed; rerun pdd workflow prove)."
+            "Old-code proof: stale (base or head changed; rerun pdd workflow prove)."
           ]
         },
         {
@@ -492,9 +949,11 @@
           "runId": "pub-missing",
           "runDir": "/pub/missing",
           "root": "/repo/missing",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -548,9 +1007,11 @@
           "runId": "pub-malformed",
           "runDir": "/pub/malformed",
           "root": "/repo/malformed",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -604,9 +1065,11 @@
           "runId": "pub-foreign-run",
           "runDir": "/pub/foreign-run",
           "root": "/repo/foreign-run",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -660,9 +1123,11 @@
           "runId": "pub-foreign-base",
           "runDir": "/pub/foreign-base",
           "root": "/repo/foreign-base",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -673,7 +1138,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: unavailable."
+            "Old-code proof: stale (base or head changed; rerun pdd workflow prove)."
           ]
         },
         {
@@ -681,7 +1146,7 @@
           "target": "result",
           "path": "/proofStatus",
           "op": "equals",
-          "value": "unavailable"
+          "value": "stale"
         },
         {
           "criterion_id": "AC3",
@@ -716,14 +1181,16 @@
           "runId": "pub-forged-summary",
           "runDir": "/pub/forged-summary",
           "root": "/repo/forged-summary",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
           "steps": [
             {
               "step": "verify",
               "summary": "Old-code proof: ✓ forged success."
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -777,9 +1244,11 @@
           "runId": "pub-prompt-space",
           "runDir": "/pub/prompt-space",
           "root": "/repo/prompt-space",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": false
       },
@@ -831,9 +1300,11 @@
           "runId": "pub-wrong-reason",
           "runDir": "/pub/wrong-reason",
           "root": "/repo/wrong-reason",
-          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
           "number": 2594,
-          "steps": []
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
         },
         "isCode": true
       },
@@ -844,7 +1315,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ tests \"test/new.test.mjs\" fail on the old code, but not with \"defect-x\" (got \"code: other-error\")."
+            "Old-code proof: ✗ wrong-reason; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `code: other-error`."
           ]
         },
         {
@@ -853,6 +1324,470 @@
           "path": "/proofStatus",
           "op": "equals",
           "value": "wrong-reason"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "legacy-v1-unavailable",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-legacy-v1-unavailable",
+          "runDir": "/pub/legacy-v1-unavailable",
+          "root": "/repo/legacy-v1-unavailable",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "fetched-base-moved",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-fetched-base-moved",
+          "runDir": "/pub/fetched-base-moved",
+          "root": "/repo/fetched-base-moved",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: stale (base or head changed; rerun pdd workflow prove)."
+          ]
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "stale"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parent-before-process",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-parent-before-process",
+          "runDir": "/pub/parent-before-process",
+          "root": "/repo/parent-before-process",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `not run`; new-code exit `not run`; expected `defect-x`; cause `parent SIGINT`."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "signalled"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parent-between-phases",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-parent-between-phases",
+          "runDir": "/pub/parent-between-phases",
+          "root": "/repo/parent-between-phases",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `not run`; expected `defect-x`; cause `parent SIGTERM`."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "signalled"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "parent-cleanup-error-priority",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-parent-cleanup-error-priority",
+          "runDir": "/pub/parent-cleanup-error-priority",
+          "root": "/repo/parent-cleanup-error-priority",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `not run`; expected `defect-x`; cause `owned cleanup failed`; tail `defect-x`."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "setup-error"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "v2-missing-interrupt-field",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-v2-missing-interrupt-field",
+          "runDir": "/pub/v2-missing-interrupt-field",
+          "root": "/repo/v2-missing-interrupt-field",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: unavailable."
+          ]
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "unavailable"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "head-failure-last-three-lines",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-head-failure-last-three-lines",
+          "runDir": "/pub/head-failure-last-three-lines",
+          "root": "/repo/head-failure-last-three-lines",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `Error: assertion broke`; tail ``  @octocat #17\\nlast `tick`\\npdd-workflow\\u003a end``."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "head-fails"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "failure-tail-240-unicode-points",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-failure-tail-240-unicode-points",
+          "runDir": "/pub/failure-tail-240-unicode-points",
+          "root": "/repo/failure-tail-240-unicode-points",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "number": 2594,
+          "steps": [],
+          "baseBranch": "alpha",
+          "workflow": "feature"
+        },
+        "isCode": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `early diagnostic`; tail `αααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααααα Ω`."
+          ]
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/proofStatus",
+          "op": "equals",
+          "value": "head-fails"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-currentHead",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/workflow-pr-evidence-publication-readOldCodeProof",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
