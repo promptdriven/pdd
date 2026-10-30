@@ -106,7 +106,7 @@ test('revision exact million-cell LCS boundary compares normally with quadratic 
   assert.ok(over.details.includes('"kept" unavailable ("too many assertion lines to compare").'));
 });
 
-test('revision skip forms retain suite occurrence identity independently of tests and never count a suite as a test',async()=>{
+test('revision skip forms retain suite occurrence identity independently of tests and never count a suite as a test',async t=>{
   const {analyzeTestChanges}=await inventoryModule();
   const before=`describe('same', () => {\n  test('same', () => {});\n});\ndescribe.skip('same', () => {});\ntest('strings', () => {});\ntest('double', () => {});\ntest('template', () => {});\nit('disabled', () => {});\n`;
   const after=`describe.skip('same', () => {\n  test('same', () => {});\n});\ndescribe.skip('same', () => {});\ntest('strings', {skip: 'flaky'}, () => {});\ntest('double', {skip: "why"}, () => {});\ntest('template', {skip: \`later\`}, () => {});\nxit('disabled', () => {});\n`;
@@ -122,6 +122,39 @@ test('revision skip forms retain suite occurrence identity independently of test
   for(const name of ['ordinary','function-reason','arrow-reason'])assert.ok(quotedReasons.text.includes(`New skips: "test/skips.js" "${name}"`),quotedReasons.text);
   assert.equal((quotedReasons.text.match(/^New skips:/gm)||[]).length,3);
   const negatives=analyzeTestChanges({files:[pair('test/skips.js','',`test('empty', {skip: ''}, () => {});\ntest('dynamic', {skip: reason}, () => {});\ntest('concat', {skip: 'reason' + dynamic}, () => {});\ntest('template-concat', {skip: \`reason\` + expression}, () => {});\ntest('expression', {skip: \`why \${reason}\`}, () => {});\ntest('true-and', {skip: true && condition}, () => {});\ntest('true-or', {skip: true || condition}, () => {});\ntest('true-ternary', {skip: true ? x : y}, () => {});\ntest('todo-and', {todo: true && condition}, () => {});\ntest('body-option', () => { consume({skip: true}); });\n`)]});assert.ok(negatives.text.includes('New skips: none.'),negatives.text);
+  for(const option of ['skip: true','todo: true',"skip: 'function failed'",'skip: "later => now"','skip: `later`'])for(const context of ["reason: 'todo: true,'",'timeout: {skip: true}', 'context: (() => ({todo: true}))()'])for(const options of [`${context}, ${option}`,`${option}, ${context}`]){
+    const report=analyzeTestChanges({files:[pair('test/skips.js','',`test('direct', {${options}}, () => {});\n`)]});
+    assert.equal(report.available,true);assert.ok(report.details.includes('0 → 1 tests. Removed: none.'));
+    assert.equal((report.details.match(/^New skips:/gm)||[]).length,1);
+    assert.ok(report.details.includes('New skips: "test/skips.js" "direct" '),report.details);
+  }
+  // Only direct declaration options supply markers. These unrelated strings,
+  // nested values, callback data and body objects all retain ordinary tests.
+  const unrelated=[
+    ...['timeout','todo','reason'].flatMap(key=>["'",'"','`'].flatMap(quote=>['skip: true,','todo: true,'].map(data=>`{${key}: ${quote}${data}${quote}}, () => {}`))),
+    `{timeout: 'skip: "reason",'}, () => {}`,
+    `{timeout: "prefix \\" skip: true, suffix"}, () => {}`,
+    `{timeout: {skip: true}}, () => {}`,
+    `{timeout: [{todo: true}]}, () => {}`,
+    `{timeout: consume({skip: 'reason'})}, () => {}`,
+    `{timeout: (() => ({todo: true}))()}, () => {}`,
+    `{skip: {skip: true}}, () => {}`,
+    `{todo: {skip: 'reason'}}, () => {}`,
+    `{context() { consume({skip: true}); }}, () => {}`,
+    `{timeout: 10 /* skip: true, */}, () => {}`,
+    `consume({skip: true}), () => {}`,
+    `options, {skip: true}`,
+    `({skip: value = true}) => {}`,
+    `function ({todo: value = true}) { consume({skip: true}); }`,
+    `() => { consume({skip: 'reason'}); }`,
+  ];
+  const f=repository(t),ordinaryBefore=unrelated.map((_,i)=>`test('ordinary-${i}', () => {});`).join('\n')+'\n';
+  const ordinaryAfter=unrelated.map((args,i)=>`test('ordinary-${i}', ${args});`).join('\n')+'\n';
+  f.write('test/options.js',ordinaryBefore);const baseSha=f.commit();f.write('test/options.js',ordinaryAfter);const headSha=f.commit();
+  const {collectTestInventory}=await inventoryModule();
+  const expected=`Tests vs base: "test/options.js" ${unrelated.length} → ${unrelated.length} tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n`;
+  assert.equal(analyzeTestChanges({files:[pair('test/options.js',ordinaryBefore,ordinaryAfter)]}).details,expected);
+  assert.equal((await collectTestInventory({cwd:f.root,baseSha,headSha})).details,expected);
 });
 
 test('revision Python body skips are reported and source mentions, issue links and decorators are escaped',async()=>{

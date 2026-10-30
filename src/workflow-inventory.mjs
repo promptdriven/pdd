@@ -45,23 +45,44 @@ function literal(source) {
   }
   return null;
 }
-// Callback-looking words inside a quoted option value remain part of that value.
-function declarationOptions(source) {
-  for (let at = 0; at < source.length; at++) {
-    if (["'", '"', '`'].includes(source[at])) {
-      const quote = source[at];
+// Only the direct properties of the second-argument object are options.
+// Keep quoted data and nested expressions opaque while separating properties.
+function declarationSkip(source) {
+  const opening = /^\s*,\s*\{/.exec(source);
+  if (!opening) return false;
+  const properties = [], nesting = [];
+  let property = '';
+  for (let at = opening[0].length; at < source.length; at++) {
+    const c = source[at];
+    if (["'", '"', '`'].includes(c)) {
+      const start = at;
       for (at++; at < source.length; at++) {
         if (source[at] === '\\') at++;
-        else if (source[at] === quote) break;
+        else if (source[at] === c) break;
       }
-    } else if (source.startsWith('=>', at) || /^function\b/.test(source.slice(at, at + 9))) return source.slice(0, at);
-  }
-  return source;
-}
-function stringSkip(options) {
-  for (const match of options.matchAll(/\bskip\s*:\s*/g)) {
-    const source = options.slice(match.index + match[0].length), value = literal(source);
-    if (value?.name && /^\s*[,}]/.test(source.slice(value.end))) return true;
+      if (at >= source.length) return false;
+      property += source.slice(start, at + 1);
+    } else if (source.startsWith('//', at)) return false;
+    else if (source.startsWith('/*', at)) {
+      const end = source.indexOf('*/', at + 2);
+      if (end < 0) return false;
+      property += ' '; at = end + 1;
+    } else if ('([{'.includes(c)) { nesting.push(c); property += c; }
+    else if (c === '}' && !nesting.length) {
+      if (!/^\s*[,)]/.test(source.slice(at + 1))) return false;
+      properties.push(property);
+      return properties.some(part => {
+        const match = /^\s*(skip|todo)\s*:\s*(.*?)\s*$/.exec(part);
+        if (!match) return false;
+        if (match[2] === 'true') return true;
+        const value = match[1] === 'skip' ? literal(match[2]) : null;
+        return Boolean(value?.name && value.end === match[2].length);
+      });
+    } else if (')]}'.includes(c)) {
+      if (nesting.pop() !== {')':'(',']':'[','}':'{'}[c]) return false;
+      property += c;
+    } else if (c === ',' && !nesting.length) { properties.push(property); property = ''; }
+    else property += c;
   }
   return false;
 }
@@ -95,7 +116,7 @@ function cases(source, lang) {
     const identity = JSON.stringify([suite,name]);
     const occurrence = (occurrences.get(identity) ?? 0) + 1; occurrences.set(identity,occurrence);
     const body = lang === 'js' ? tail.match(/(?:=>|function\b[^{}]*\{)(.*)/)?.[1] ?? '' : line;
-    const entry = { name, occurrence, suite, at, end, body, options: declarationOptions(tail), assertions: [], markers: [] };
+    const entry = { name, occurrence, suite, at, end, body, optionSkip: declarationSkip(tail), assertions: [], markers: [] };
     if (lang === 'py') for (let i = at - 1; i >= 0 && /^\s*@/.test(lines[i]); i--) {
       if (/^\s*@pytest\.mark\.(?:skip|skipif|xfail)\b/.test(lines[i])) entry.markers.unshift(lines[i]);
     }
@@ -109,7 +130,7 @@ function cases(source, lang) {
     if (!owner) continue;
     const content = lang === 'js' && at === owner.at ? owner.body : line;
     if (/\b(?:assert|expect)\b/.test(content)) owner.assertions.push(line);
-    if (lang === 'js' && ((at === owner.at && (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit)\s*\(/.test(line) || /\b(?:skip|todo)\s*:\s*true\s*[,}]/.test(owner.options) || stringSkip(owner.options))) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
+    if (lang === 'js' && ((at === owner.at && (/^\s*(?:(?:test|it)\.(?:skip|todo)|xit)\s*\(/.test(line) || owner.optionSkip)) || /\bt\.(?:skip|todo)\s*\(/.test(content))) owner.markers.push(line);
     if (lang === 'py' && /\bpytest\.skip\s*\(/.test(content)) owner.markers.push(line);
   }
   return found;
