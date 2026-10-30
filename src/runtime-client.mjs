@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 48ba4133ba022d986bef8cd282489f89690b99e82a22a5f261d00a49fb6645cd).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 4d8028e106d1fbae03e90f4ee27d467309f454b00b132ebea63c4fb4731871e2).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -464,7 +464,7 @@ function adoptClaims(context, row) {
     }
     if (!row.request_ids.includes(claim.id)) {
       row.request_ids.push(claim.id);
-      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null });
+      Object.assign(row, { state: 'unknown', phase: 'server', calls: 'unknown', lost: true, note: null, why: null, next_step: null, busy: false, can_retry: false });
     }
   }
 }
@@ -1012,6 +1012,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
     // Local terminal receipts remain available even when another row used the network wait.
     if (answer && ['passed', 'failed', 'refused'].includes(answer.state) && sameJob(answer, id, 'check')) { applyAnswer(row, answer, context); return; }
     if (finalPost(row, answer)) return;
+    if (row.final && (ports.now() >= (context.deadline ?? Infinity) || context.interrupted)) return;
     // A verified open receipt stays open when another row consumed this wait.
     if ((ports.now() >= (context.deadline ?? Infinity) || context.interrupted)
       && answer && sameJob(answer, id, 'check') && ['queued', 'running'].includes(answer.state)) { applyAnswer(row, answer, context); return; }
