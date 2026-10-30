@@ -16,7 +16,7 @@ function fixture() {
   for (const part of ['phone', 'barista']) put(`app/maps/${part}.json`, {
     schema_version: 'prompt-runtime.app-map.v1', name: part, initial_screen: 'home', initial_route: null,
     initial_state: { selected: part }, state_schema: { type: 'object', properties: { selected: { type: 'string' } }, required: ['selected'], additionalProperties: false }, synthetic: false,
-    screens: [{ id: 'home', prompt_path: `prompts/${part}/view.prompt.md`, operation: 'render', source: 'result', format: 'html', input: {}, result_pointer: '/html' }],
+    screens: [{ id: 'home', prompt_path: `prompts/${part}/view.prompt.md`, operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' }],
     router: null, routes: [], stylesheets: [], handlers: [{ screen: 'home', kind: 'click', match: {}, handler: { prompt_path: `prompts/${part}/view.prompt.md`, operation: 'tap' }, input: {}, next: { kind: 'screen', screen: 'home', route_pointer: null }, state: { selected: part } }],
   });
   const compose = (input = {}, overrides = {}) => composeProductTry({ root: '/project', ...input }, {
