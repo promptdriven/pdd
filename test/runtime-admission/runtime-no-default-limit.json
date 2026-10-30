@@ -32,11 +32,11 @@
     },
     {
       "id": "AC8",
-      "text": "At most 8 unanswered Check POSTs by default or 2 with PDD_MAX_UPLOADS=2; all 20 selected checks are sent while accepted jobs may still run."
+      "text": "With 20 selected checks, at most 8 source POSTs await replies by default, or 2 with PDD_MAX_UPLOADS=2; all 20 are sent, and an answered POST frees a place while accepted jobs still run."
     },
     {
       "id": "AC9",
-      "text": "Invalid PDD_MAX_UPLOADS warns once and falls back to 8; GET and server jobs are unlimited and upload admission is per process."
+      "text": "An invalid PDD_MAX_UPLOADS warns once and uses 8; the upload setting is per process and never limits GET reads or server jobs."
     }
   ],
   "cases": [
