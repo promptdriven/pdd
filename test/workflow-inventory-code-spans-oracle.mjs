@@ -14,7 +14,10 @@ export function jsonLiteral(value) {
   return result + '"';
 }
 export function codeLiteral(value) {
-  const payload = jsonLiteral(value);
+  let payload = '';
+  for (const char of jsonLiteral(value)) {
+    payload += char === ':' && payload.endsWith('pdd-workflow') ? '\\u003a' : char;
+  }
   let fence = '`';
   while (payload.includes(fence)) fence += '`';
   return fence + payload + fence;

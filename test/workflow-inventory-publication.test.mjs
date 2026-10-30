@@ -15,12 +15,12 @@ const initial=`test('keep', () => {\nassert.equal(value, 1);\n});\ntest('gone', 
 const changed=`test('keep', () => {\nassert.equal(value, 2);\n});\ntest.todo('later');\n`;
 // Git is never stubbed. Only network addressing for real push/ls-remote is
 // routed to a disposable local bare repository; identity reads see GitHub.
-function fixture(t,{workflow='small-change',opted=false,promptPr=false}={}) {
+function fixture(t,{workflow='small-change',opted=false,promptPr=false,before=initial}={}) {
   const directory=realpathSync(mkdtempSync(join(tmpdir(),'pdd-inventory-pr-')));t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const root=join(directory,'checkout'),remote=join(directory,'remote.git');mkdirSync(root);
   const git=(...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8'}).trim();
   git('init','--bare','-q',remote);git('init','-q','-b','main');git('config','user.email','test@example.invalid');git('config','user.name','Inventory Test');
-  git('remote','add','origin','https://github.com/example/project.git');mkdirSync(join(root,'test'));writeFileSync(join(root,'test/a.mjs'),initial);git('add','.');git('commit','-qm','base');
+  git('remote','add','origin','https://github.com/example/project.git');mkdirSync(join(root,'test'));writeFileSync(join(root,'test/a.mjs'),before);git('add','.');git('commit','-qm','base');
   const baseSha=git('rev-parse','HEAD');git('push','-q',remote,'main');git('update-ref','refs/remotes/origin/main',baseSha);
   git('checkout','-qb','prompt');writeFileSync(join(root,'prompt.txt'),'published prompt\n');git('add','.');git('commit','-qm','prompt');const promptSha=git('rev-parse','HEAD');git('push','-q',remote,'prompt');git('update-ref','refs/remotes/origin/prompt',promptSha);
   git('checkout','-qb','topic');
@@ -186,9 +186,18 @@ test('revision unrelated fetched base reports merge-base failure without a saved
   assert.ok(f.prs[0].body.includes('Test inventory commits: unavailable.'));assert.equal(f.record().baseSha,f.baseSha);
 });
 
-async function defaultProcessProof(t, hostile = false) {
-  if (hostile) await inventoryModule();
-  const f=fixture(t),commands=join(f.root,'..','commands'),state=join(f.root,'..','gh-state.json');mkdirSync(commands);
+async function defaultProcessProof(t, hostile = false, markers = false) {
+  if (hostile || markers) await inventoryModule();
+  const removed='  `<!-- pdd-workflow:removed:code --> pdd-workflow:repeat:code``  ';
+  const kept='pdd-workflow:kept:code PDD-workflow:upper:code';
+  const suite='pdd-workflow:suite:code pdd-workflow:again:code';
+  const oldLine='  assert.equal(value, "pdd-workflow:old:code pdd-workflow:again:code"); // \t\u0001\u202e  \r';
+  const nextLine='  assert.equal(value, "pdd-workflow:new:code pdd-workflow:again:code"); // ` `` @octocat Closes #17 &<>|:  \r';
+  const skipLine='  t.skip("pdd-workflow:skip:code pdd-workflow:again:code"); // \r';
+  const suiteLine=`describe.skip(${JSON.stringify(suite)}, () => {});`;
+  const markerBefore=`test(${JSON.stringify(removed)}, () => {});\ntest(${JSON.stringify(kept)}, () => {\n${oldLine}\n});\ndescribe(${JSON.stringify(suite)}, () => {});\n`;
+  const markerAfter=`test(${JSON.stringify(kept)}, () => {\n${nextLine}\n${skipLine}\n});\n${suiteLine}\n`;
+  const f=fixture(t,{before:initial+(markers?markerBefore:'')}),commands=join(f.root,'..','commands'),state=join(f.root,'..','gh-state.json');mkdirSync(commands);
   const writeExecutable=(name,source)=>{const path=join(commands,name);writeFileSync(path,`#!${process.execPath}\n${source}`);chmodSync(path,0o755);};
   // This executable only routes network addresses; every Git result is produced
   // by /usr/bin/git over the fixture's real checkout and bare remote.
@@ -221,7 +230,7 @@ else if(args[1]==='create'||args[1]==='edit'){
   const name='  `@octocat #17 Closes #17``  ';
   const newAssertion='assert.equal(value, 2); // @octocat Closes #17 &<>|: ```  \r';
   const marker=`test.skip(${JSON.stringify(name)}, () => {}); // \t\u0001\u202e  \r`;
-  const source=hostile?changed.replace('assert.equal(value, 2);',newAssertion)+marker+'\n':changed;
+  const source=(hostile?changed.replace('assert.equal(value, 2);',newAssertion)+marker+'\n':changed)+(markers?markerAfter:'');
   writeFileSync(join(f.root,'test/a.mjs'),source);
   const created=JSON.parse((await exec(process.execPath,['--input-type=module','-e',driver],{env})).stdout);assert.equal(created.exitCode,0,created.message);
   let proof=JSON.parse(readFileSync(state,'utf8'));assert.equal(proof.bodies.length,1);assert.equal(proof.bodies[0].source,'-');assert.match(proof.prs[0].body,/^Tests vs base:/);
@@ -236,6 +245,22 @@ else if(args[1]==='create'||args[1]==='edit'){
       writeFileSync(join(process.env.PDD_INVENTORY_RENDER_EVIDENCE,'default-process-inventory.json'),JSON.stringify(artifact(f),null,2)+'\n');
     }
   }
+  if(markers){
+    const body=proof.bodies[0].body,report=artifact(f);
+    const expected=`Tests vs base: "test/a.mjs" 4 → 3 tests. Removed: 2 (${span('gone')}, ${span(removed)}).\nChanged assertions in kept tests: "test/a.mjs" ${span('keep')} ${span('assert.equal(value, 1);')} → ${span('assert.equal(value, 2);')}.\nChanged assertions in kept tests: "test/a.mjs" ${span(kept)} ${span(oldLine)} → ${span(nextLine)}.\nNew skips: "test/a.mjs" ${span('later')} ${span("test.todo('later');")}.\nNew skips: "test/a.mjs" ${span(kept)} ${span(skipLine)}.\nNew skips: "test/a.mjs" suite ${span(suite)} ${span(suiteLine)}.\nStatic inventory only; tests were not run.\n`;
+    assert.equal(report.available,true);assert.equal(report.details,expected);assert.equal(report.text,expected);
+    assert.ok(body.startsWith(expected));
+    assert.equal((body.match(/pdd-workflow:/g)??[]).length,1,'only the canonical raw ownership prefix survives');
+    assert.equal((body.match(/<!-- pdd-workflow:inventory-run:code -->/g)??[]).length,1);
+    assert.deepEqual([...report.details.matchAll(/(`+)("(?:[^"\\]|\\.)*")\1(?!`)/g)].map(match=>JSON.parse(match[2])),[
+      'gone',removed,'keep','assert.equal(value, 1);','assert.equal(value, 2);',kept,oldLine,nextLine,'later',"test.todo('later');",kept,skipLine,suite,suiteLine,
+    ]);
+    if(process.env.PDD_INVENTORY_RENDER_EVIDENCE){
+      mkdirSync(process.env.PDD_INVENTORY_RENDER_EVIDENCE,{recursive:true});
+      writeFileSync(join(process.env.PDD_INVENTORY_RENDER_EVIDENCE,'default-process-marker-body.md'),body);
+      writeFileSync(join(process.env.PDD_INVENTORY_RENDER_EVIDENCE,'default-process-marker-inventory.json'),JSON.stringify(report,null,2)+'\n');
+    }
+  }
   const before=f.remoteHead();writeFileSync(join(f.root,'test/a.mjs'),`test('current', () => {});\n`);
   const refreshed=JSON.parse((await exec(process.execPath,['--input-type=module','-e',driver],{env})).stdout);assert.equal(refreshed.exitCode,0,refreshed.message);
   proof=JSON.parse(readFileSync(state,'utf8'));assert.deepEqual(proof.bodies.map(row=>row.action),['create','edit']);
@@ -243,7 +268,14 @@ else if(args[1]==='create'||args[1]==='edit'){
   assert.ok(proof.bodies[1].body.includes(`Test inventory commits: ${f.baseSha.slice(0,7)} → ${f.remoteHead().slice(0,7)}.`));
   assert.notEqual(f.remoteHead(),before);assert.equal(f.remoteHead(),f.git('rev-parse','HEAD'));
   assert.deepEqual(Object.keys(f.record().testInventory).sort(),['baseSha','headSha','saved','text']);
+  if(markers){
+    assert.equal((proof.bodies[1].body.match(/pdd-workflow:/g)??[]).length,1);
+    assert.equal((proof.bodies[1].body.match(/<!-- pdd-workflow:inventory-run:code -->/g)??[]).length,1);
+    assert.ok(proof.bodies[1].body.includes(span(kept)),'refresh safely reports removal of a marker-containing kept name');
+    assert.equal(artifact(f).details.includes('pdd-workflow:'),false);
+  }
 }
 
 test('revision default subprocess path sends create and refresh bodies to a gh stand-in on stdin with real Git pushes',t=>defaultProcessProof(t));
 test('code-span default subprocess publication carries hostile JSON payloads through gh stdin',t=>defaultProcessProof(t,true));
+test('marker-prefix default subprocess publication preserves one canonical marker and recoverable JSON through real Git and gh stdin',t=>defaultProcessProof(t,false,true));

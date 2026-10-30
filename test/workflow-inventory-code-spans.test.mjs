@@ -15,6 +15,40 @@ const hostile = ['@octocat', '#17', 'Closes #17', '&<>|:', '"\\', '\t\r\b\f\u000
 const names = hostile.flatMap(value => [0, 1, 2, 3, 8, 32].flatMap(length =>
   ['', ' ', '  '].map(space => space + '`'.repeat(length) + value + '`'.repeat(length) + space)));
 
+test('marker-prefix finite model escapes every exact prefix across all report owners and recovers JSON identity', async t => {
+  const { analyzeTestChanges } = await inventoryModule();
+  const prefixes = [
+    '<!-- pdd-workflow:removed:code --> pdd-workflow:again:code',
+    'pdd-workflow:pdd-workflow:tail:code PDD-workflow:upper:code pdd-Workflow:mixed:code',
+    'pdd-workflow:no-suffix pdd-workflow: pdd-workflow :untouched :ordinary',
+  ];
+  let cases = 0;
+  for (const prefix of prefixes) for (const length of [0, 1, 8, 32]) for (const edge of ['', ' ', '  ']) for (const mode of ['changed', 'removed', 'added']) {
+    const name = edge + '`'.repeat(length) + prefix + ' &<>| @octocat Closes #17 \t\r\u0001\u0085\u202e' + '`'.repeat(length) + edge;
+    const oldLine = `  assert.ok(old); // ${name}  \r`, newLine = `  expect(next); // ${name}  \r`;
+    const suiteBefore = `describe(${JSON.stringify(name)}, () => {});\n`;
+    const suiteMarker = `describe.skip(${JSON.stringify(name)}, () => {}); // ${name}  \r`;
+    const testMarker = `test.skip(${JSON.stringify(name)}, () => {}); // ${name}  \r`;
+    const before = declaration(name).repeat(2) + body(name + ' kept', mode === 'added' ? [] : [oldLine]) + suiteBefore.repeat(2);
+    const after = body(name + ' kept', mode === 'removed' ? [] : [newLine]) + testMarker + '\n' + (suiteMarker + '\n').repeat(2);
+    const report = analyzeTestChanges({ files: [file(before, after)] });
+    // The newly skipped declaration keeps the first duplicate; the second is removed.
+    const expected = `Tests vs base: "test/safe.mjs" 3 → 2 tests. Removed: 1 (${span(name)} [2]).\nChanged assertions in kept tests: "test/safe.mjs" ${span(name + ' kept')} ${mode === 'added' ? '(added)' : span(oldLine)} → ${mode === 'removed' ? '(removed)' : span(newLine)}.\nNew skips: "test/safe.mjs" ${span(name)} ${span(testMarker)}.\nNew skips: "test/safe.mjs" suite ${span(name)} ${span(suiteMarker)}.\nNew skips: "test/safe.mjs" suite ${span(name)} [2] ${span(suiteMarker)}.\n${disclaimer}`;
+    assert.equal(report.available, true);
+    assert.equal(report.details, expected, JSON.stringify({ prefix, length, edge, mode }));
+    assert.equal(report.text, expected);
+    assert.equal(report.details.includes('pdd-workflow:'), false);
+    const payloads = [...report.details.matchAll(/(`+)("(?:[^"\\]|\\.)*")\1(?!`)/g)];
+    assert.deepEqual(payloads.map(match => JSON.parse(match[2])), [name, name + ' kept', ...(mode === 'added' ? [] : [oldLine]), ...(mode === 'removed' ? [] : [newLine]), name, testMarker, name, suiteMarker, name, suiteMarker]);
+    for (const [, fence, payload] of payloads) {
+      assert.ok(!payload.includes('&#'), 'source characters stay literal inside code spans');
+      assert.ok(!payload.includes(fence), 'fence exceeds every interior run');
+    }
+    cases++;
+  }
+  t.diagnostic(`marker-prefix model: ${cases} reports across removed/kept/suite names, assertion sides and skip lines`);
+});
+
 test('code-span finite removals preserve every literal and duplicate suffix over 144 hostile names', async t => {
   const { analyzeTestChanges } = await inventoryModule();
   for (const name of names) {

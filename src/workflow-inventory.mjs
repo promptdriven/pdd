@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: 4ce8058ac05b5762e4088f8043325d2b0d053a7e170f9ae2e8bca73f5c46dcfe).
+// Generated from prompts/cli/workflow-inventory.prompt.md (sha256: b7409ec03bc368797def415b308791235617599ed0048c307196e15ccac8a8a0).
 import { execFile as callbackExec } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -11,7 +11,7 @@ const size = value => [...value].length;
 const jsonLiteral = value => JSON.stringify(value).replace(/[\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const quoted = value => jsonLiteral(value).replace(/[&<>`|:@#]/g, c => `&#${c.charCodeAt(0)};`);
 const codeLiteral = value => {
-  const literal = jsonLiteral(value);
+  const literal = jsonLiteral(value).replaceAll('pdd-workflow:', 'pdd-workflow\\u003a');
   let longest = 0;
   for (const match of literal.matchAll(/`+/g)) longest = Math.max(longest, match[0].length);
   const fence = '`'.repeat(longest + 1);
