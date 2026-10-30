@@ -1995,14 +1995,23 @@ async function replayManifest(f,run,vector) {
 }
 
 test('2530: valid replay and real assertion failures both publish with canonical status',async t=>{
-  for(const outcome of ['pass','fail']){
+  for(const scenario of ['pass','fail-with-warning','fail']){
+    const outcome=scenario==='pass'?'pass':'fail';
     const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+    if(scenario==='fail-with-warning')writeFileSync(join(run.runDir,'verify.md'),'✗ 1 vector still fails\n');
     const manifest=await replayManifest(f,run,vector);manifest.checks[0].outcome=outcome;manifest.counts.pass=outcome==='pass'?1:0;manifest.counts.fail=outcome==='fail'?1:0;
     writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
     const out=await stepDone({step:'verify',summary:'tests ran',cwd:run.root},f.agentPorts());
     assert.equal(out.exitCode,0,out.message);assert.equal(f.prs.length,2);
     assert.match(f.prs[1].body,new RegExp(`Code replay: ${outcome.toUpperCase()}`));
-    if(outcome==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n✗ 1 replay assertions fail/);
+    if(scenario==='fail')assert.match(f.prs[1].body,/^Old-code proof: not run\.\nTests vs base:[\s\S]*?Test inventory commits: [^\n]+\n✗ 1 replay assertions fail/);
+    if(scenario==='fail-with-warning'){
+      const inventory=f.prs[1].body.indexOf('Tests vs base:');
+      const warning=f.prs[1].body.indexOf('✗ 1 vector still fails');
+      const replay=f.prs[1].body.indexOf('Code replay: FAIL');
+      assert.ok(f.prs[1].body.startsWith('Old-code proof: not run.\n')&&inventory>0&&warning>inventory&&warning<replay,
+        'the evidence block stays first, then the test inventory, then the verify warning, then Code replay');
+    }
   }
 });
 
