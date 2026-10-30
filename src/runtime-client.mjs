@@ -13,6 +13,7 @@ import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
 import { compareScreen, formatScreenComparison } from './screen-compare.mjs';
+import { selectJourneys } from './product-composition.mjs';
 
 // The one place in pdd that names the PDD runtime address; PDD_RUNTIME_URL overrides it.
 export const DEFAULT_RUNTIME_URL = 'https://runtime.promptdriven.ai';
@@ -946,6 +947,14 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
   const context = { ports, json: options['--json'] === true, details: options['--details'] === true, interrupted: false, warnings: [] };
   let release = () => {};
   try {
+    if (options['--journeys'] !== undefined) {
+      if (options['--journeys'] !== true || words.length > 1 || ['--read', '--retry', '--fill-hash', '--request', '--screen', '--drawing'].some(key => options[key] !== undefined)) throw new Stop(2, 'Use pdd check --journeys [JOURNEY] with normal check options.');
+      const { found, normalized } = localSetup(cwd, words);
+      try { words = selectJourneys(found.tests.map(test => ({ testPath: test.path, storyPath: test.storyPath })), normalized[0]); }
+      catch (error) { throw new Stop(2, error.message); }
+      if (!words.length) throw new Stop(2, 'No journey tests found under user_stories/journeys/.');
+      options = { ...options }; delete options['--journeys'];
+    }
     // Local modes dispatch before repository runtime state, origin or sign-in.
     if (options['--screen'] !== undefined || options['--drawing'] !== undefined) {
       if (!options['--screen'] || !options['--drawing'] || words.length || Object.keys(options).some(name => !['--screen', '--drawing', '--json'].includes(name))) throw new Stop(2, 'Use pdd check --screen URL --drawing PATH [--json], without other options or Stories.');

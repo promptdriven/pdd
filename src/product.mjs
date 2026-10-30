@@ -74,6 +74,10 @@ async function documents({ cwd }, p) {
   catch { invalid('product/map.md: cannot read the product map.'); }
   try { plan = await p.readFile(join(cwd, 'product/plan.md')); }
   catch (error) { if (error.code !== 'ENOENT') invalid('product/plan.md: cannot read the plan.'); }
+  return parseProductDocuments({ mapText: map, planText: plan });
+}
+export function parseProductDocuments({ mapText, planText = '' }) {
+  const map = String(mapText), plan = String(planText);
   const name = /^#\s+(.+?)(?::\s*map)?\s*$/m.exec(map)?.[1], size = /^Size:\s*(small|medium|large)\b/im.exec(map)?.[1].toLowerCase();
   if (!name || !size) invalid('product/map.md: name or Size is missing.');
   const mapRows = section => rows(map, section, 'product/map.md'), planRows = section => rows(plan, section, 'product/plan.md');
