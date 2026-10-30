@@ -435,7 +435,7 @@
           "runDir": "/pub/foreign-base"
         },
         "reply": {
-          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-foreign-base\",\"baseSha\":\"foreign\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
+          "content": "{\"v\":2,\"origin\":\"pdd.workflow-prove.v2\",\"runId\":\"pub-foreign-base\",\"baseSha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"headSha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"test\":\"node --test test/new.test.mjs\",\"expect\":\"defect-x\",\"paths\":[\"test/new.test.mjs\"],\"base\":{\"exitCode\":1,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[\"defect-x\"],\"stderrTail\":[],\"expectedFound\":true,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"defect-x\"},\"head\":{\"exitCode\":0,\"signal\":\"\",\"timedOut\":false,\"outputLimited\":false,\"stdoutTail\":[],\"stderrTail\":[],\"expectedFound\":false,\"error\":\"\",\"setupError\":\"\",\"observedError\":\"no output\"},\"outcome\":\"proved\",\"cleanupError\":\"\",\"setupError\":\"\",\"interruptSignal\":\"\"}",
           "error": ""
         }
       },
@@ -1468,7 +1468,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `not run`; new-code exit `not run`; expected `defect-x`; cause `parent SIGINT`."
+            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `parent SIGINT`."
           ]
         },
         {
@@ -1526,7 +1526,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `not run`; expected `defect-x`; cause `parent SIGTERM`."
+            "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `parent SIGTERM`."
           ]
         },
         {
@@ -1584,7 +1584,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `not run`; expected `defect-x`; cause `owned cleanup failed`; tail `defect-x`."
+            "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `owned cleanup failed`; tail `defect-x`."
           ]
         },
         {
