@@ -341,7 +341,7 @@ function limitProblems(iface) {
   const add = (code, pointer, rule, hint) => out.push({code,pointer,rule,hint});
   const shapeHint = 'Fix limits: use exactly "max_steps" and "max_model_calls", each an integer of at least 1.';
   if (!isObject(iface) || !Object.hasOwn(iface, 'limits')) {
-    add('invalid-interface', '/limits', 'has no limits object.', shapeHint);
+    add('invalid-interface', '/limits', 'has no limits object.', 'Add "limits": {"max_steps": 1, "max_model_calls": 1}.');
     return out;
   }
   const limits = iface.limits;
@@ -350,14 +350,14 @@ function limitProblems(iface) {
     return out;
   }
   for (const key of Object.keys(limits)) if (!keys.includes(key)) {
-    add('invalid-limits', `/limits/${pointerOf([key]).slice(1)}`, 'is not an allowed limit field.', shapeHint);
+    add('invalid-limits', `/limits/${pointerOf([key]).slice(1)}`, 'is not an allowed limit field.', `Remove the extra limits key ${JSON.stringify(key)}; use exactly "max_steps" and "max_model_calls", each an integer of at least 1.`);
   }
   for (const key of keys) {
     const token = numberSources.get(limits)?.get(key);
     const integer = typeof limits[key] === 'number' && (token === undefined ? Number.isInteger(limits[key]) && limits[key] >= 1
       : /^-?(?:0|[1-9]\d*)$/.test(token) && BigInt(token) >= 1n);
     if (!Object.hasOwn(limits, key) || !integer) {
-      add('invalid-limits', `/limits/${key}`, 'must be an integer JSON literal of at least 1.', `Fix limits.${key}: set an integer of at least 1 (for example 1), without a decimal point or exponent.`);
+      add('invalid-limits', `/limits/${key}`, Object.hasOwn(limits, key) ? 'must be an integer JSON literal of at least 1.' : 'is missing; must be an integer JSON literal of at least 1.', `Fix limits.${key}: set an integer of at least 1 (for example 1), without a decimal point or exponent.`);
     }
   }
   return out;
