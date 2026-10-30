@@ -1147,13 +1147,14 @@ function requestSnapshot(run, p) {
     const entries = readDeliveryJournal(run, p).requests;
     return { requests: entries.filter(entry => entry.kind === 'change' && entry.state === 'delivered')
       .map(entry => ({ id: entry.id, text: entry.text, area: entry.area, deliveredAt: entry.deliveredAt ?? null, ackedAt: entry.ackedAt ?? null, ackSummary: entry.ackSummary ?? null })),
-      inFlightRequests: [] };
+      inFlightRequests: entries.filter(entry => entry.inFlight).map(({ id, text, area, paneId }) => ({ id, text, area, paneId })) };
   } catch { return { requests: null, inFlightRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
 }
+const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Original area ${entry.area}, pane ${entry.paneId}. Check the original chat; type the request there if absent. pdd will not automatically resend it.`;
 function requestLines(snapshot, { openOnly = false } = {}) {
   if (snapshot.requestWarning) return [snapshot.requestWarning];
-  return snapshot.requests.filter(entry => !openOnly || entry.ackedAt == null).map(entry =>
-    `${uptakeReceipt(entry)} Area ${entry.area}: ${entry.text}`);
+  return [...snapshot.requests.filter(entry => !openOnly || entry.ackedAt == null).map(entry =>
+    `${uptakeReceipt(entry)} Area ${entry.area}: ${entry.text}`), ...snapshot.inFlightRequests.map(protectedRequestAdvice)];
 }
 function doneWithRequests(result, run, p) {
   if (result.exitCode !== 0) return result;
@@ -1222,7 +1223,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
   const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
   const uncertain = () => fail(`Your request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
-  const progress = () => fail(`Delivery to the original ${area.name} chat is in progress or needs inspection. Check the original chat: pdd workflow open ${run.number}.`);
+  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
   const already = () => done(`Your request was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted)}` : ''}`);
   const failure = sent => {
     if (sent.uncertain) return uncertain();
@@ -1248,10 +1249,10 @@ export async function changeRun({ ref, text, cwd }, ports) {
     if (accepted.state === 'delivered') return already();
     let warnings = queue.some(entry => entry.state === 'uncertain'), sentAccepted = false;
     if (accepted.state === 'uncertain') return uncertain();
-    if (accepted.inFlight) return progress();
+    if (accepted.inFlight) return progress(accepted);
     for (const entry of queue) {
       if (entry.state === 'uncertain') continue;
-      if (entry.inFlight) return entry.id === accepted.id ? progress() : fail(`An earlier delivery to the ${area.name} chat is in progress. ${kept}`);
+      if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
         : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id)}`;
@@ -1298,7 +1299,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
         });
       } catch { return fail('Could not save the submission acknowledgement. Check the original chat before retrying; delivery may be uncertain.'); }
       if (!claimed && observed.state === 'delivered') { if (entry.id === accepted.id) { accepted = observed; return already(); } continue; }
-      if (!claimed && observed.inFlight) return entry.id === accepted.id ? progress() : fail(`An earlier delivery to the ${area.name} chat is in progress. ${kept}`);
+      if (!claimed && observed.inFlight) return progress(observed);
       if (observed.state === 'uncertain') { if (entry.id === accepted.id) return uncertain(); warnings = true; continue; }
       if (claimed && sent.ok && entry.id === accepted.id) { sentAccepted = true; accepted = observed; }
       if (!sent.ok) { const result = failure(sent); return warnings ? { ...result, message: `${result.message}\n${warning}` } : result; }
@@ -1306,7 +1307,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
     if (!sentAccepted) {
       const saved = await deliveryJournal(run, p, journal => ({ ...journal.requests.find(item => item.id === accepted.id) }));
       if (saved.state === 'delivered') { accepted = saved; return already(); }
-      if (saved.inFlight) return progress();
+      if (saved.inFlight) return progress(saved);
       if (saved.state === 'uncertain') return uncertain();
       return failure({ code: 'chat_target_changed' });
     }
