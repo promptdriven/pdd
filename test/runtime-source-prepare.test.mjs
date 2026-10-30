@@ -64,6 +64,12 @@ test('PREPARE default discovery uses effective replaced and virtual scenario byt
   assert.ok(capture.files.some(file => file.path === 'generated/test.json'));
   assert.ok(capture.files.some(file => file.path === STORY));
   assert.equal(extract(capture.tar, ORDER).toString(), '{}');
+  for (const schema_version of [1,{},null]) {
+    const opaque=JSON.stringify({schema_version,note:'prompt-runtime.program-scenario',story_path:'literal-not-a-dependency.md'});
+    const only=captureSource(repo,{prepareSource:()=>[{path:'opaque.json',bytes:opaque},{path:ORDER,bytes:'{}'},{path:'tests/unknown-item.json',bytes:'{}'}]});
+    assert.equal(extract(only.tar,'opaque.json').toString(),opaque);
+    assert.equal(only.files.some(file=>file.path==='literal-not-a-dependency.md'),false);
+  }
 });
 
 test('PREPARE raw ports copy buffers/stats and leave input files out of payload', t => {

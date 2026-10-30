@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext, runtimeSlots } = {}) {
+  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext, runtimeSlots, contracts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -137,6 +137,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-jobs':
       try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
       catch (error) { line(stderr, `Local runtime jobs could not be read.${reason(error)}`); return 5; }
+    case 'contracts': case 'contracts-sync':
+      try {
+        const commands = contracts ?? await import('./contracts.mjs');
+        return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
+      } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {
