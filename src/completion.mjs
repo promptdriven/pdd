@@ -1,5 +1,5 @@
-// Generated from prompts/cli/completion.prompt.md (sha256: 87889cfcf98de7338d5ec37ae6b12b84feacff7aac2f284a39a376e8c4740171).
-import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
+// Generated from prompts/cli/completion.prompt.md (sha256: 76fe63a3f27e51d4f14f7500649195bd22dffc72ac2df59abf5cd4950f79d2a8).
+import { NAMES, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {
   if (!map.has(key)) map.set(key, new Set());
@@ -59,7 +59,7 @@ export function renderCompletion(shell) {
       '_pdd_complete() {',
       '  local current="${COMP_WORDS[COMP_CWORD]}" choices',
       '  case "${COMP_WORDS[1]}:${COMP_WORDS[COMP_CWORD-1]}" in', bashValues, '  esac',
-      '  if [[ $COMP_CWORD == 3 && ${COMP_WORDS[1]} == workflow && ${COMP_WORDS[2]} == run ]]; then',
+      `  if [[ $COMP_CWORD == 3 && \${COMP_WORDS[1]} == workflow && \${COMP_WORDS[2]} == ${NAMES.start} ]]; then`,
       `    choices="$(${definitionNames})"`,
       '    COMPREPLY=( $(compgen -W "$choices" -- "$current") ); return',
       '  fi',
@@ -84,7 +84,7 @@ export function renderCompletion(shell) {
     '_pdd() {',
     '  local -a choices',
     '  case "${words[2]}:${words[CURRENT-1]}" in', zshValues, '  esac',
-    '  if [[ $CURRENT == 4 && $words[2] == workflow && $words[3] == run ]]; then',
+    `  if [[ $CURRENT == 4 && $words[2] == workflow && $words[3] == ${NAMES.start} ]]; then`,
     `    local names="$(${definitionNames})"`,
     '    choices=(${=names}); _describe "PDD workflow" choices; return',
     '  fi',

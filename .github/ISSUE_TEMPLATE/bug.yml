@@ -1,4 +1,4 @@
-name: Report a problem with pdd v2
+name: Report a problem with pdd
 description: The pdd command, a PDD skill, the PDD runtime or the docs fails or gives a wrong result.
 title: "[alpha] "
 labels: ["alpha"]
@@ -6,9 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form for a problem with pdd v2 (version 0.1.x). [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md) explains each field. Agents follow the same guide.
+        Use this form for a problem with pdd 0.1.10 or newer. [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md) explains each field. Agents follow the same guide.
 
-        - Run `pdd --version`. It must print `0.1.` and a number. `pdd, version 0.0.` and a number is the retired Python pdd. Do not report it here. Install pdd v2 from the [README](https://github.com/promptdriven/pdd#install).
+        - Run `pdd --version`. It must print `0.1.` and a number. `pdd, version 0.0.` and a number is the Python pdd (0.0.x). It is retired. Do not report it here. Install pdd from the [README](https://github.com/promptdriven/pdd#install).
         - Search the [open issues](https://github.com/promptdriven/pdd/issues) first. If an issue has the same problem, add a comment to it.
         - In the title, write what fails for you, in your words. Do not write a guessed cause.
         - Write one problem in each issue. Never paste tokens, Try links, private repo links or personal data.

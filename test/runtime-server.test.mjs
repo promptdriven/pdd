@@ -678,13 +678,13 @@ test('RUNTIME-SERVER15: an answer from another engine build gives a warning', as
   const engine = sha => fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: sha } } : f.normal(entry));
   const result = await check(setup, await engine('eae2202a0123456789'), ['place-order']);
   assert.equal(result.code, 0);
-  assert.match(result.out, /Warning: the runtime engine is eae2202a0123, but pdd's local checks copy engine eae2202a68d0\. The engine stays the judge\./);
+  assert.match(result.out, /Warning: the interpreter engine is eae2202a0123, but pdd's local checks copy engine eae2202a68d0\. The engine stays the judge\./);
   const old = await check(setup, await engine('7b03d3ea8cc047ed0c58905075321e59e62b02f1'), ['place-order']);
-  assert.match(old.out, /Warning: the runtime engine is 7b03d3ea8cc0, but pdd's local checks copy engine eae2202a68d0\./);
+  assert.match(old.out, /Warning: the interpreter engine is 7b03d3ea8cc0, but pdd's local checks copy engine eae2202a68d0\./);
   // The local rules were checked to match engine eae2202a (Oct 27): its full or short sha gives no warning.
   for (const sha of [null, 'eae2202a68d00ab762fcbbf1eba0d8607a132a15', 'eae2202a68d0']) {
     const same = await check(setup, sha ? await engine(sha) : await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order']);
-    assert.doesNotMatch(same.out, /runtime engine is/, String(sha));
+    assert.doesNotMatch(same.out, /engine is [0-9a-f]/, String(sha));
   }
 });
 
@@ -900,7 +900,7 @@ test('RUNTIME-REFUSAL1: a refusal with #379 fields shows the reason, where and f
 test('RUNTIME-SERVER21: the engine-build warning prints once a day for each engine sha', async t => {
   const setup = harbor(t);
   const fake = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? { status: 200, json: { ...f.check(entry.url.split('/').at(-1)), engine_sha: '7b03d3ea8cc047ed' } } : f.normal(entry));
-  const warned = /runtime engine is 7b03d3ea8cc0/;
+  const warned = /interpreter engine is 7b03d3ea8cc0/;
   assert.match((await check(setup, fake, ['place-order'])).out, warned);
   assert.doesNotMatch((await check(setup, fake, ['place-order'])).out, warned);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
@@ -996,7 +996,7 @@ test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross
 });
 
 const NOT_INVITED = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'This GitHub login is not on the invite list.' } };
-const INVITE_LINE = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+const INVITE_LINE = 'Your GitHub login octo is not on the PDD interpreter invite list yet. Ask the PDD team to add you.';
 
 // Wrong: a person who is not invited sees a table of failures or a retry hint instead of one plain line (invite list, Oct 27).
 test('RUNTIME-INVITE1: 403 not-invited is one plain line, exit 5, and no check is sent', async t => {
@@ -1031,7 +1031,7 @@ test('RUNTIME-CLOUD1: 403 no-cloud-access stops at once with the sign-up line in
     [{ code: 'no-cloud-access', message: NO_CLOUD_SAID }, NO_CLOUD_SAID],
     // The server shim for pdd 0.1.9: a top-level update-required over error.code no-cloud-access is the access answer.
     [{ code: 'update-required', message: 'Sign up at https://promptdriven.ai/login with GitHub.', ...refusedBody({ code: 'no-cloud-access', message: NO_CLOUD_SAID }) }, NO_CLOUD_SAID],
-    [refusedBody({ code: 'no-cloud-access' }), /does not have PDD runtime access yet\. Sign up at https:\/\/promptdriven\.ai\/login with GitHub/]]) {
+    [refusedBody({ code: 'no-cloud-access' }), /does not have PDD interpreter access yet\. Sign up at https:\/\/promptdriven\.ai\/login with GitHub/]]) {
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? { status: 403, json } : f.normal(entry));
     for (const options of [{}, { '--lint': true }]) {
       const result = await check(setup, fake, [], options), why = JSON.stringify({ json, options });
@@ -1076,8 +1076,8 @@ test('RUNTIME-CLOUD3: update-required still says to update pdd, and not-invited 
   for (const [reply, said] of [[{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /^Please update pdd\.$/m],
     [{ status: 426, json: { code: 'update-required', error: { code: 'update-required', message: 'Please update pdd now.' } } }, /^Please update pdd now\.$/m],
     [{ status: 426, json: { code: 'update-required' } }, /^Please update pdd: npm install -g github:promptdriven\/pdd$/m],
-    [NOT_INVITED, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m],
-    [{ status: 403, json: refusedBody({ code: 'not-invited', message: 'not invited', details: { login: 'octo' } }) }, /^Your GitHub login octo is not on the PDD runtime invite list yet\./m]]) {
+    [NOT_INVITED, /^Your GitHub login octo is not on the PDD interpreter invite list yet\./m],
+    [{ status: 403, json: refusedBody({ code: 'not-invited', message: 'not invited', details: { login: 'octo' } }) }, /^Your GitHub login octo is not on the PDD interpreter invite list yet\./m]]) {
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
     const result = await check(setup, fake, [], { '--lint': true });
     assert.equal(result.code, 5, String(said)); assert.match(result.err, said); assert.equal(fake.gets.length, 0);
@@ -1179,7 +1179,7 @@ test('RUNTIME-LINT2: --lint keeps the capture checks, exit 5 answers and option 
   const secret = await check(setup, quiet, [], { '--lint': true });
   assert.equal(secret.code, 4); assert.match(secret.err, /deploy\.pem: the name looks like a secret/); assert.equal(quiet.posts.length, 0);
   const clean = harbor(t);
-  for (const [reply, said] of [[{ status: 403, json: { code: 'not-invited', login: 'octo' } }, /octo is not on the PDD runtime invite list/],
+  for (const [reply, said] of [[{ status: 403, json: { code: 'not-invited', login: 'octo' } }, /octo is not on the PDD interpreter invite list/],
     [{ status: 426, json: { code: 'update-required', message: 'Please update pdd.' } }, /Please update pdd\./],
     [{ status: 503, json: { error: { code: 'pool-low-room', message: 'The runtime model account has too little room for this job. Try again later.' } } }, /too little room/]]) {
     const fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? reply : f.normal(entry));
