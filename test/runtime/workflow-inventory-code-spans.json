@@ -13,6 +13,10 @@
     {
       "id": "AC3",
       "text": "New suite and test skip entries use the same code-span format, preserve leading and trailing spaces, and show carriage returns, controls and bidirectional formatting characters as JSON escapes."
+    },
+    {
+      "id": "AC4",
+      "text": "Names and source lines containing \"pdd-workflow:\" show every matching prefix colon as \"\\u003a\" inside their code spans, so the exact text can be recovered without becoming a workflow marker; later colons and different capitalization stay unchanged."
     }
   ],
   "initial_world": {},
@@ -132,6 +136,45 @@
           "path": "/details",
           "op": "equals",
           "value": "Tests vs base: \"test/safe.test.mjs\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/safe.test.mjs\" suite ```\" `@octocat #17`` \"``` ```\"describe.skip(' `@octocat #17`` ', () => {\"```.\nNew skips: \"test/safe.test.mjs\" `\" Closes #17 \"` ````\"test.skip(' Closes #17 ', () => {}); // \\t\\u0001\\u202e &<>|: ```  \\r\"````.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "workflow-marker-prefixes-in-code-spans",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/markers.test.mjs",
+            "newPath": "test/markers.test.mjs",
+            "before": "describe('pdd-workflow:suite:code', () => {\ntest('<!-- pdd-workflow:removed:code --> pdd-workflow:repeat:code', () => {});\ntest('pdd-workflow:kept:code PDD-workflow:upper:code', () => {\n  assert.equal(value, \"pdd-workflow:old:code pdd-workflow:again:code\");\n});\n});\n",
+            "after": "describe.skip('pdd-workflow:suite:code', () => {\ntest('pdd-workflow:kept:code PDD-workflow:upper:code', () => {\n  assert.equal(value, \"pdd-workflow:new:code pdd-workflow:again:code\");\n  t.skip(\"pdd-workflow:skip:code pdd-workflow:again:code\");\n});\n});\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/markers.test.mjs\" 2 → 1 tests. Removed: 1 (`\"<!-- pdd-workflow\\u003aremoved:code --> pdd-workflow\\u003arepeat:code\"`).\nChanged assertions in kept tests: \"test/markers.test.mjs\" `\"pdd-workflow\\u003akept:code PDD-workflow:upper:code\"` `\"  assert.equal(value, \\\"pdd-workflow\\u003aold:code pdd-workflow\\u003aagain:code\\\");\"` → `\"  assert.equal(value, \\\"pdd-workflow\\u003anew:code pdd-workflow\\u003aagain:code\\\");\"`.\nNew skips: \"test/markers.test.mjs\" suite `\"pdd-workflow\\u003asuite:code\"` `\"describe.skip('pdd-workflow\\u003asuite:code', () => {\"`.\nNew skips: \"test/markers.test.mjs\" `\"pdd-workflow\\u003akept:code PDD-workflow:upper:code\"` `\"  t.skip(\\\"pdd-workflow\\u003askip:code pdd-workflow\\u003aagain:code\\\");\"`.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/markers.test.mjs\" 2 → 1 tests. Removed: 1 (`\"<!-- pdd-workflow\\u003aremoved:code --> pdd-workflow\\u003arepeat:code\"`).\nChanged assertions in kept tests: \"test/markers.test.mjs\" `\"pdd-workflow\\u003akept:code PDD-workflow:upper:code\"` `\"  assert.equal(value, \\\"pdd-workflow\\u003aold:code pdd-workflow\\u003aagain:code\\\");\"` → `\"  assert.equal(value, \\\"pdd-workflow\\u003anew:code pdd-workflow\\u003aagain:code\\\");\"`.\nNew skips: \"test/markers.test.mjs\" suite `\"pdd-workflow\\u003asuite:code\"` `\"describe.skip('pdd-workflow\\u003asuite:code', () => {\"`.\nNew skips: \"test/markers.test.mjs\" `\"pdd-workflow\\u003akept:code PDD-workflow:upper:code\"` `\"  t.skip(\\\"pdd-workflow\\u003askip:code pdd-workflow\\u003aagain:code\\\");\"`.\nStatic inventory only; tests were not run.\n"
         }
       ],
       "model": "gpt-6.1-sol"
