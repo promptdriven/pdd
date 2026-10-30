@@ -151,3 +151,5 @@ See [Build a whole product](build-a-whole-product.md).
 `pdd check --journeys [JOURNEY]` checks root journey Stories. J1 matches J1-order, never J10-order. Ambiguous journey scenarios require an explicit test choice for Try. Seeds merge base, selected part seeds, then the journey’s explicit set (or literal initial_world); conflicting world writers refuse before upload.
 
 Bare `pdd try --product` uses the sole root journey scenario as its request skeleton when available, while its starting world comes from product and part seeds. Multiple candidates require an explicit Story/test choice. With no journeys it uses ordinary test selection; `--journey` explicitly applies that journey’s start overrides.
+
+Product map composition preserves each part’s handler priority. Some overlapping exact-screen and wildcard rules cannot be represented by the current Runtime map; Try explains unsupported wildcard priority and refuses that map. Wildcard-only maps and faithfully representable mixed rules remain supported.
