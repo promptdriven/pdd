@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 6f6c423d3ecf597840a53569291b158d5cd784e93237abe521b9ad152f768fbe).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 93f68103f304e9d35e93c9e4f5fc25db1332ea3e7c2438b407cce7d1552fcaa6).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
@@ -77,8 +77,8 @@ const routes = [
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
   { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
     forms: [form('pdd jobs', 'List active and waiting runtime jobs on this machine without contacting the runtime.')] },
-  { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
-    forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
+  { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [{name:'--check',kind:'flag'}],
+    forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.'), form('pdd contracts --check', 'Check local shared schemas, agreement and seed-world values; no runtime calls.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
     forms: [form('pdd contracts sync [--write]', 'Show proposed changes for moving schema copies to references; apply only with --write. No runtime calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],

@@ -1,10 +1,10 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7b9caaaaf83776bdb49a91728870abc73918233b1452136b95739d14426db581).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { expandSource } from './contract-refs.mjs';
+import { expandSource, parseJsonValue, jsonNumberText, jsonValuesEqual } from './contract-refs.mjs';
 
 export const TEST_SCHEMA = 'prompt-runtime.program-scenario.v1';
 export const LIMITS = Object.freeze({ bytes: 10_485_760, files: 10_000, test: 1_048_576 });
@@ -1345,4 +1345,157 @@ export function sharedSourceFiles(root, visible) {
 export function otherFiles(files, found) {
   const known = new Set([...found.tests.map(test => test.path), ...found.stories.map(story => story.path)]);
   return files.filter(file => !file.path.endsWith('.prompt.md') && !known.has(file.path));
+}
+
+export function schemaKeywordNames() {
+  return [...new Set([...Object.values(SCHEMA_FIELDS).flat(), 'oneOf', ...SCHEMA_FORBIDDEN])];
+}
+
+// The native facade preserves lossless trees; only established predicates are
+// projected into the existing concrete checker. P9 retains its advisory mode.
+export function validateContract(args) {
+  const decode = name => {
+    if (typeof args?.[name] !== 'string') throw new TypeError(`${name} must be JSON text`);
+    try { return parseJsonValue(args[name]); } catch { throw new TypeError(`${name} must contain valid JSON`); }
+  };
+  const schema = decode('schema_json');
+  const supplied = Object.hasOwn(args, 'value_json'), value = supplied ? decode('value_json') : undefined;
+  const result = {schema_problems: [], value_problems: [], unproved: []};
+  const numeric = item => jsonNumberText(item);
+  const integerToken = text => {
+    const match = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(text);
+    const digits = match[1] + (match[2] ?? '');
+    return /^0+$/.test(digits) || BigInt(match[3] ?? '0') - BigInt((match[2] ?? '').length) + BigInt(/0*$/.exec(digits)[0].length) >= 0n;
+  };
+  const stable = item => {
+    const text = numeric(item); if (text === null) return true;
+    const number = Number(text);
+    return Number.isFinite(number) && (!integerToken(text) || Number.isSafeInteger(number))
+      && jsonValuesEqual(item, parseJsonValue(JSON.stringify(number)));
+  };
+  const project = item => {
+    const text = numeric(item);
+    if (text !== null) return stable(item) ? Number(text) : integerToken(text) ? (text.startsWith('-') ? -1 : 1) : 0.5;
+    if (Array.isArray(item)) return item.map(project);
+    if (isObject(item)) return Object.fromEntries(Object.entries(item).map(([key,child]) => [key,project(child)]));
+    return item;
+  };
+  const equality = (a,b) => {
+    const left = numeric(a), right = numeric(b);
+    if (left !== null || right !== null) {
+      if (left === null || right === null) return 'miss';
+      return !stable(a) || !stable(b) ? 'unknown' : jsonValuesEqual(a,b) ? 'match' : 'miss';
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 'miss';
+      const states = a.map((child,index) => equality(child,b[index]));
+      return states.includes('miss') ? 'miss' : states.includes('unknown') ? 'unknown' : 'match';
+    }
+    if (isObject(a) || isObject(b)) {
+      if (!isObject(a) || !isObject(b)) return 'miss';
+      const keys = Object.keys(a);
+      if (keys.length !== Object.keys(b).length || keys.some(key => !Object.hasOwn(b,key))) return 'miss';
+      const states = keys.map(key => equality(a[key],b[key]));
+      return states.includes('miss') ? 'miss' : states.includes('unknown') ? 'unknown' : 'match';
+    }
+    return jsonValuesEqual(a,b) ? 'match' : 'miss';
+  };
+  // Schema-node checks share the canonical validator. Literal duplicate checks
+  // use the lossless identity rather than a projected number's representation.
+  const schemaCheck = (node, pointer) => {
+    const projected = project(node), problems = [];
+    if (isObject(projected)) {
+      // Check all schema rules with the actual enum separately below.
+      if (Object.hasOwn(projected,'enum') && !Object.hasOwn(projected,'oneOf')) delete projected.enum;
+      if (Array.isArray(projected.oneOf)) projected.oneOf = projected.oneOf.map((_,index) => ({type:'string',title:String(index)}));
+      if (projected.type === 'object' && isObject(projected.properties)) projected.properties = Object.fromEntries(Object.keys(projected.properties).map(key => [key,{type:'string'}]));
+      if (projected.type === 'array' && Object.hasOwn(projected,'items')) projected.items = {type:'string'};
+    }
+    schemaRules(projected,pointer,problems);
+    result.schema_problems.push(...problems);
+    if (!isObject(node) || numeric(node) !== null) return;
+    const add = rule => result.schema_problems.push({code:'graph-schema-invalid',pointer,rule});
+    if (Object.hasOwn(node,'enum')) {
+      if (!Array.isArray(node.enum) || !node.enum.length) add('"enum" must be a list of at least one value.');
+      else if (node.enum.some((item,index) => node.enum.slice(0,index).some(other => jsonValuesEqual(item,other)))) add('"enum" has the same value twice.');
+      else if (node.enum.some(item => !typeMatches(project(item),node.type))) add('"enum" has a value of the wrong type.');
+    }
+    if (Array.isArray(node.oneOf)) {
+      if (node.oneOf.some((item,index) => node.oneOf.slice(0,index).some(other => jsonValuesEqual(item,other)))) add('"oneOf" has the same schema twice.');
+      node.oneOf.forEach((child,index) => schemaCheck(child,`${pointer}/oneOf/${index}`));
+    } else {
+      if (node.type === 'object' && isObject(node.properties)) for (const [key,child] of Object.entries(node.properties)) schemaCheck(child,`${pointer}/properties${pointerOf([key])}`);
+      if (node.type === 'array' && Object.hasOwn(node,'items')) schemaCheck(node.items,`${pointer}/items`);
+    }
+  };
+  schemaCheck(schema,'');
+  if (!supplied || result.schema_problems.length) return result;
+  const visit = (item,node,tokens) => {
+    const pointer = pointerOf(tokens), problems = [], unknown = [];
+    const bad = rule => problems.push({code:'invalid-input',pointer,rule});
+    const unsure = rule => unknown.push({code:'contract-validation-unavailable',pointer,rule});
+    if (Array.isArray(node.oneOf)) {
+      const runs = node.oneOf.map(variant => visit(item,variant,tokens));
+      const fits = runs.filter(run => !run.problems.length && !run.unknown.length).length;
+      if (fits > 1) bad('fits more than one allowed shape (oneOf).');
+      else if (runs.some(run => !run.problems.length && run.unknown.length)) unsure('oneOf membership is unavailable for an unproved alternative.');
+      else if (!fits) bad('does not fit any allowed shape (oneOf).');
+      return {problems,unknown};
+    }
+    const plain = project(item), local = {...project(node)};
+    for (const key of COUNT_FIELDS) if (Object.hasOwn(node,key) && !stable(node[key])) {
+      delete local[key];
+      if ((node.type === 'string' && ['minLength','maxLength'].includes(key)) || (node.type === 'array' && ['minItems','maxItems'].includes(key)) || (node.type === 'object' && ['minProperties','maxProperties'].includes(key))) unsure(`${key} order is unavailable for numeric precision or range.`);
+    }
+    // Child membership, equality and numerical evidence are judged below; all
+    // remaining type/structural/length predicates use the existing checker.
+    for (const key of ['items','oneOf','enum','const','uniqueItems','pattern',...BOUND_FIELDS,'multipleOf']) delete local[key];
+    if (isObject(local.properties)) local.properties = Object.fromEntries(Object.keys(local.properties).map(key => [key,{}]));
+    const rawProblems = [], warnings = [];
+    schemaProblems(plain,local,tokens,rawProblems,warnings);
+    problems.push(...rawProblems.map(({tokens,rule}) => ({code:'invalid-input',pointer:pointerOf(tokens),rule})));
+    if (!typeMatches(plain,node.type)) return {problems,unknown};
+    if (Object.hasOwn(node,'const')) {
+      const state = equality(item,node.const);
+      if (state === 'unknown') unsure('const equality is unavailable for numeric precision or range.');
+      else if (state === 'miss') bad('does not equal const.');
+    }
+    if (Array.isArray(node.enum)) {
+      const states = node.enum.map(choice => equality(item,choice));
+      if (!states.includes('match')) {
+        if (states.includes('unknown')) unsure('enum equality is unavailable for numeric precision or range.');
+        else bad('is not an enum alternative.');
+      }
+    }
+    if (node.uniqueItems === true && Array.isArray(item)) {
+      const states = item.flatMap((child,index) => item.slice(0,index).map(other => equality(child,other)));
+      if (states.includes('match')) bad('has the same item twice; uniqueItems requires distinct values.');
+      if (states.includes('unknown')) unsure('uniqueItems equality is unavailable for numeric precision or range.');
+    }
+    if (numeric(item) !== null) {
+      for (const key of [...BOUND_FIELDS,'multipleOf']) if (Object.hasOwn(node,key)) {
+        if (!stable(item) || !stable(node[key])) { unsure(`${key} is unavailable for numeric precision or range.`); continue; }
+        const operand = Number(numeric(node[key])), number = Number(numeric(item));
+        if (key === 'multipleOf') {
+          if (!Number.isSafeInteger(number) || !Number.isSafeInteger(operand)) unsure('multipleOf arithmetic is unavailable for these operands.');
+          else if (BigInt(number) % BigInt(operand) !== 0n) bad(`is not a multiple of ${operand}.`);
+          continue;
+        }
+        const out = []; schemaProblems(number,{type:node.type,[key]:operand},tokens,out,[]);
+        problems.push(...out.map(({rule}) => ({code:'invalid-input',pointer,rule})));
+      }
+    }
+    if (typeof item === 'string' && typeof node.pattern === 'string') {
+      const pattern = portablePattern(node.pattern,item);
+      if (!pattern) unsure('pattern membership is unavailable for this syntax or input.');
+      else if (!pattern.test(item)) bad(`does not match pattern ${node.pattern}.`);
+    }
+    const merge = run => { problems.push(...run.problems); unknown.push(...run.unknown); };
+    if (Array.isArray(item) && isObject(node.items)) item.forEach((child,index) => merge(visit(child,node.items,[...tokens,String(index)])));
+    if (isObject(item) && numeric(item) === null && isObject(node.properties)) for (const [key,child] of Object.entries(item)) if (Object.hasOwn(node.properties,key)) merge(visit(child,node.properties[key],[...tokens,key]));
+    return {problems,unknown};
+  };
+  const evidence = visit(value,schema,[]);
+  result.value_problems.push(...evidence.problems); result.unproved.push(...evidence.unknown);
+  return result;
 }

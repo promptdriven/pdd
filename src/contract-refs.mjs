@@ -1,4 +1,4 @@
-// Generated from prompts/cli/contract-refs.prompt.md (sha256: 92a844075d65a211c3f3b05bbe8537ca4cb45e30d73a28ad4227cb90f6cf18cc).
+// Generated from prompts/cli/contract-refs.prompt.md (sha256: 0258f39481d2dd73d9360729036ec9ca5ea5f6c8aee1401a059e8a440dc0c777).
 // Numbers remain tokens until serialization, including values outside binary64.
 class JsonNumber { constructor(text) { this.text = text; Object.freeze(this); } }
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof JsonNumber);
@@ -422,3 +422,12 @@ export function planSync(sources, matches) {
   }
   return { edits, warnings };
 }
+
+// Native consumers share the existing lossless tree and literal identity.
+export function parseJsonValue(text) {
+  if (typeof text !== 'string') throw new TypeError('JSON text must be a string');
+  return parse(text);
+}
+export function stringifyJsonValue(value) { return render(value); }
+export function jsonNumberText(value) { return value instanceof JsonNumber ? value.text : null; }
+export function jsonValuesEqual(a,b) { return identity(a) === identity(b); }
