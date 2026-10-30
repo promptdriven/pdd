@@ -66,7 +66,7 @@ pdd never merges.
 
 ## Help forms
 
-Help prints exactly these lines, in this order. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix.
+Help prints the lines below in order, with the catalog-derived insertion specified here. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix. Immediately after the view line, insert the `workflow.open` route's help form and description from the [catalog public routes](command-catalog.prompt.md#public-routes), using the same line format.
 
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
@@ -82,7 +82,6 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
   pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
-  pdd workflow open ISSUE  Focus or attach the current area chat; resume it if its session ended.
   pdd  Show local commands.
   pdd --help  Show local commands.
   pdd -h  Show local commands.
