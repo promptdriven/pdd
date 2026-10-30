@@ -5,7 +5,7 @@ When the runtime is busy and confirms that lint did not start, `pdd check`,
 
 > The server is busy. Waiting for a lint slot…
 
-Pdd follows the server's requested delay and keeps trying until your wait ends.
+pdd follows the server's requested delay and keeps trying until your wait ends.
 There is no fixed number of attempts. It keeps the same selected files and saves
 every request ID. Check and remote lint use `--timeout` when you set it; otherwise
 an agent waits 90 seconds and a terminal Check has no limit. Try keeps its
@@ -29,28 +29,39 @@ batch that you can read with `pdd check --read BATCH`, without repeating lint.
 The read shows the latest result and any prompt problems the runtime found.
 
 After saved lint passes, a normal Check can start its original checks that were
-waiting for lint. Pdd verifies the same owner and selected files, keeps the
+waiting for lint. pdd verifies the same owner and selected files, keeps the
 original runtime address and call limits, and starts each check at most once,
 even if reads overlap or stop halfway through. The read waits for `--timeout`,
-or 90 seconds by default. Reading standalone lint never starts checks. Pdd also
+or 90 seconds by default. Reading standalone lint never starts checks. pdd also
 leaves checks alone if they were already sent or their history is uncertain.
 A missing or mismatched reply never counts as a pass.
 
 Checks, remote lint and new Try setup have no default local cap. All selected
 jobs can proceed without waiting for a local slot. Set `PDD_MAX_JOBS` to a
-positive safe decimal integer to share that cap across local pdd processes,
-repositories and worktrees. Use digits without a sign, whitespace or leading
+positive safe decimal integer to share that cap across repositories and
+worktrees among local pdd processes that set it. Use digits without a sign, whitespace or leading
 zero. Invalid values warn once per command and use no cap. With a cap, waiting
 jobs take turns in the order they arrived; progress shows how many slots are
 busy and how many jobs are ahead of you. `pdd jobs` lists active and waiting
 local jobs, including uncapped jobs, without contacting the runtime or signing in.
 
+Check source uploads use at most 8 unanswered POSTs at once per pdd process.
+Set `PDD_MAX_UPLOADS` to a positive safe decimal integer (leading zeros are
+allowed); invalid values warn once and use 8. Each answered POST or transport
+failure frees its place while server jobs continue running; GET reads use no
+upload places. This laptop upload setting protects your own connection from
+the 90-second POST timeout, and is not a server limit. It uses no shared job-slot
+queue.
+
 Slot records live under `$PDD_STATE_DIR/slots/<runtime host>/` (the default state
 directory is `~/.pdd/runtime`). The host and optional port are safely encoded in
 the folder name. A job that may still be running keeps its slot after your
-command stops waiting. If its local process dies, pdd reuses the slot only after
-all recorded jobs are confirmed ended or after 30 minutes. A process ending
-does not prove that the runtime job ended.
+command stops waiting. On new admissions, pdd removes expired owners' waiting
+tickets and unsent records, and their active leases after 30 minutes. A live
+owner expires after 60 seconds without a refresh. Fresh live records and recent
+uncertain jobs remain. Uncapped cleanup uses local evidence only and skips
+contested cleanup; capped admission can also confirm that every recorded job
+ended. A process ending does not prove that the runtime job ended.
 
 Before sending work, pdd asks whether the runtime has room. During announced
 maintenance, it shows the end time and reason, waits, then asks again. It also

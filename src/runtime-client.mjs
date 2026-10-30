@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 67f0f7bc670b11e40b49a0e4c68536922ca9248927196f921eb78a689cd3a9e8).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9e0ec7db21586e79f421915378dc9136d54556e53eca7bf758ec7eacccd9f28e).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -325,7 +325,7 @@ const AUTH_TEXT = 'The PDD runtime did not accept your GitHub login (HTTP 401). 
 
 // HTTP to the runtime. The token stays in this object and in request headers only.
 class Runtime {
-  constructor({ origin, token, ports, signal }) { Object.assign(this, { origin, token, ports, signal }); }
+  constructor({ origin, token, ports, signal }) { Object.assign(this, { origin, token, ports, signal }); this.sources = new WeakMap(); }
   async send(path, init, ms) {
     if (this.signal?.aborted) return { lost: true };
     const controller = new AbortController(), stop = () => controller.abort();
@@ -343,7 +343,9 @@ class Runtime {
   post(path, request, tar, timeoutMs = this.ports.postMs) {
     const form = new FormData();
     form.set('request', new Blob([JSON.stringify(request)], { type: 'application/json' }), 'request.json');
-    form.set('source', new Blob([tar], { type: 'application/x-tar' }), 'source.tar');
+    let source = this.sources.get(tar);
+    if (!source) { source = new Blob([tar], { type: 'application/x-tar' }); this.sources.set(tar, source); }
+    form.set('source', source, 'source.tar');
     return this.send(path, { method: 'POST', body: form }, timeoutMs);
   }
   get(id, timeoutMs = GET_MS) { return this.send(`/v1/runs/${id}`, { method: 'GET' }, timeoutMs); }
@@ -444,6 +446,15 @@ function localLimit(context) {
   if (/^[1-9][0-9]*$/.test(String(raw)) && Number.isSafeInteger(value)) return context.localLimit = value;
   line(context.ports.stderr, 'Warning: PDD_MAX_JOBS must be a positive safe integer; using no local cap.');
   return context.localLimit = Infinity;
+}
+function uploadLimit(context) {
+  if (context.uploadLimit !== undefined) return context.uploadLimit;
+  const raw = context.ports.env.PDD_MAX_UPLOADS;
+  if (raw === undefined) return context.uploadLimit = 8;
+  const value = Number(raw);
+  if (/^[0-9]+$/.test(String(raw)) && Number.isSafeInteger(value) && value > 0) return context.uploadLimit = value;
+  line(context.ports.stderr, 'Warning: PDD_MAX_UPLOADS must be a positive safe integer; using 8 uploads.');
+  return context.uploadLimit = 8;
 }
 function slotPorts(context, deadline = context.deadline) {
   const { ports } = context;
@@ -1077,7 +1088,22 @@ async function runScheduledChecks(context, rows, toSend) {
   const { ports } = context;
   context.checkWindow ??= localLimit(context);
   for (const row of toSend) row.attempts = 0;
-  const pendingSends = new Map();
+  const pendingSends = new Map(), uploads = uploadLimit(context);
+  // Refill on a POST's settlement even while the polling loop awaits GETs.
+  // Waiting rows stay outside admission and dispatch-claim allocation.
+  const pumpSends = () => {
+    if (context.interrupted || context.readStop || context.stopped || context.sendError || ports.now() >= context.deadline) return;
+    const active = rows.filter(occupiesSlot).length;
+    const available = Math.max(0, Math.min(uploads - pendingSends.size, context.checkWindow - active - pendingSends.size));
+    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
+      && (!row.retry_at || ports.now() >= row.retry_at));
+    for (const row of eligible.slice(0, available)) {
+      const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => {
+        pendingSends.delete(row); pumpSends();
+      });
+      pendingSends.set(row, pending);
+    }
+  };
   let waitingShown = -1, shownAt = ports.now();
   const sentAt = shownAt;
   const readable = row => isOpen(row) && ports.now() < (row.lost ? row.read_until ?? context.deadline : context.deadline);
@@ -1085,13 +1111,8 @@ async function runScheduledChecks(context, rows, toSend) {
   while (!context.interrupted && !context.readStop) {
     // Never count an uncertain dispatched job as a free slot, even if it cannot currently be read.
     const active = rows.filter(occupiesSlot).length;
-    const eligible = toSend.filter(row => !pendingSends.has(row) && ['ready', 'waiting'].includes(row.state)
-      && (!row.retry_at || ports.now() >= row.retry_at));
     if (!context.stopped && ports.now() < context.deadline && active < context.checkWindow) {
-      for (const row of eligible.slice(0, Math.max(0, context.checkWindow - active - pendingSends.size))) {
-        const pending = sendCheck(context, row).catch(error => { context.sendError ??= error; }).finally(() => pendingSends.delete(row));
-        pendingSends.set(row, pending);
-      }
+      pumpSends();
       // Admission can wait while previously dispatched rows continue to be read.
       if (!active && pendingSends.size) await Promise.race(pendingSends.values());
       else await new Promise(done => setImmediate(done));

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-slots.prompt.md (sha256: d31bfb098d506637631f3e1ab5b8e9de178abfe1c7326a6da112bdc0f0558ede).
+// Generated from prompts/cli/runtime-slots.prompt.md (sha256: f75a525acf557257061221da4a36e662fe2d3f4d46318a26562d47e5de9097a8).
 import { chmodSync, closeSync, lstatSync, mkdirSync, linkSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync, fsyncSync, utimesSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -189,7 +189,7 @@ async function observe(result, ports, ended, deadline, stopWaiting) {
     off();
   }
 }
-async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket) {
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting, waitingTicket, passive = false) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
@@ -199,7 +199,7 @@ async function inspect(directory, origin, ports, ended, deadline, stopWaiting, w
     const path = join(directory, `${row.id}.json`), modified = await freshness(ports, path);
     if (!expired(ports, row, modified)) continue;
     let reclaim = row.state === 'waiting' || !row.request_ids.length || ports.now() - row.started_at >= LEASE_MS;
-    if (!reclaim) {
+    if (!reclaim && !passive) {
       const states = [];
       for (const id of row.request_ids) {
         if (ended()) break;
@@ -249,6 +249,19 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = Infinity, k
   owners.set(path, owner);
   try {
     if (uncapped) {
+      // Only local expiry evidence is available here. In particular, a recent
+      // uncertain paid lease must not trigger a runtime read or hold admission.
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; }, ticket, true);
+      if (snapshots.length && !ended()) await locked(directory, ports, async ownsClaim => {
+        const currentJobs = await rows(ports.files, directory);
+        for (const item of snapshots) {
+          if (ended() || !await ownsClaim()) break;
+          const row = currentJobs.find(row => row.id === item.row.id), file = join(directory, `${item.row.id}.json`);
+          const modified = await freshness(ports, file);
+          if (row && snapshotKey(row) === item.key && modified === item.modified && expired(ports, row, modified) && await ownsClaim())
+            await ports.files.unlink(file);
+        }
+      });
       if (ended()) return null;
       acquired = true;
       const reservation = { id, directory }; reservationOwners.set(reservation, owner); return reservation;
