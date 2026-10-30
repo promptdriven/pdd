@@ -93,6 +93,8 @@ are added to the test and dependency selection. Included Markdown and prompts al
 The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
 Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
 
+With no tests, no test-candidate hints and no Story operand, `pdd check --lint` checks existing source with 0 AI calls; warnings stay visible, and source-only `--retry` only reads the saved lint.
+
 ## 3. Schema rules
 
 These rules apply to every `input_schema` and `result_schema`, to each resource `arguments_schema` and `result_schema`,
