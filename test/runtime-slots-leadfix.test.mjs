@@ -57,6 +57,7 @@ test('heartbeat-live-owner: waiting, active and held claim refresh on the timer;
   for (let i = 0; i < 13; i++) await active.tick();
   assert.equal(active.times.get(join(active.directory, 'claim.json')), 130_000);
   unblock(); assert.equal(await recording, true);
+  active.ports.files.listRecords = realList;
   await releaseRuntimeSlot(lease, { ended: false }, active.ports);
   assert.equal(active.intervals.size, 0); const touched = active.touches.length; await active.tick(); assert.equal(active.touches.length, touched);
   assert.equal(active.data.get(join(active.directory, `${lease.id}.json`)).request_ids[0], 'paid');
