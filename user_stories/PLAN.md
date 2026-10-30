@@ -89,6 +89,10 @@ The seven workflow Stories retain their separately approved contracts and all 28
 
 - [I see complete local contract evidence](local-contract-evidence.md) — `test/shared-contracts/local-contract-evidence.json`; Runtime check: Not run (native local command, no server call).
 
+## Optional local interpreter limit (#2704)
+
+- [Send selected jobs without a default limit](runtime-no-default-limit.md) — [native cases](../test/runtime-admission/runtime-no-default-limit.json). Runtime check: NOT REPLAYED; native shared-process admission and dispatch barriers require Node tests.
+
 ## PDD names (#2701)
 
 1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.

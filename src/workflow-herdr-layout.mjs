@@ -1,15 +1,21 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: bc53737cd846eee054ff419192eba55a50e3b96d81a63d30bc40db5677cf4d6e).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 92e0ee4aba9889a91af99bae5714b0b5bd35ec22587157a8f7b1d9d617a92710).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lookupRepositoryParent } from './workflow-worktree.mjs';
 
 export const PDD_HERDR_SESSION = 'pdd';
 const problem = code => Object.assign(new Error(code), {code});
 const directoryFor = ports => ports.directory ?? join(homedir(), '.local', 'state', 'pdd', 'herdr-layout');
 const id = value => typeof value === 'string' && value.length > 0;
+function repositoryEntry(registry, key, commonDir) {
+  const matches=registry.repositories.filter(r=>r.key===key&&r.commonDir===commonDir);
+  if(matches.length>1)throw problem('layout_allocation_uncertain');
+  return matches[0];
+}
+const checkoutLabel = repo => `${repo.repository}@${createHash('sha256').update(repo.commonDir).digest('hex').slice(0,12)}`;
 async function ensureDirectory(directory) {
   await mkdir(directory, {recursive:true,mode:0o700});
   if (!(await lstat(directory)).isDirectory()) throw problem('invalid_layout_directory');
@@ -97,7 +103,7 @@ export async function openHerdrRunLayout(input, ports) {
   const parent=await lookupRepositoryParent({cwd:invokingSource,repository:input.repository,commonDir},ports);
   if(parent.state!=='ready')throw problem('repository_parent_unverified');
   const sourceRoot=parent.root,key=input.repository.toLowerCase(),name=input.repository.split('/')[1];
-  let repo=registry.repositories.find(r=>r.key===key);
+  let repo=repositoryEntry(registry,key,commonDir);
   const pending=registry.runs.find(r=>r.runId===input.runId);
   const runLabel=`${name}#${input.issueNumber} ${input.workflowName}`;
   if(pending && (pending.commonDir!==commonDir || pending.cwd!==cwd ||
@@ -128,20 +134,24 @@ export async function openHerdrRunLayout(input, ports) {
   }
   if(repo) {
     if(repo.phase!=='ready')throw problem('layout_allocation_uncertain');
-    if(repo.commonDir!==commonDir)throw problem('repository_checkout_changed');
     await ownedRepository(rows,repo,command);
   } else {
     const clashes=registry.repositories.filter(r=>r.repository.split('/')[1].toLowerCase()===name.toLowerCase());
-    const label=clashes.length||rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
+    let label=rows.some(w=>w.label?.toLowerCase()===name.toLowerCase())?input.repository:name;
+    if(rows.some(w=>w.label===label)&&registry.repositories.some(r=>r.key===key&&r.commonDir!==commonDir))
+      label=checkoutLabel({repository:input.repository,commonDir});
     if(rows.some(w=>w.label===label))throw problem('repository_label_unavailable');
-    for(const other of clashes) {
+    for(const other of clashes.filter(r=>r.key!==key)) {
       if(other.phase!=='ready')throw problem('layout_allocation_uncertain');
       const existing=await ownedRepository(rows,other,command);
       if(existing.label!==other.repository) {
-        if(rows.some(w=>w.workspace_id!==other.workspaceId&&w.label===other.repository))throw problem('repository_label_unavailable');
+        const qualified=rows.some(w=>w.workspace_id!==other.workspaceId&&w.label===other.repository)?checkoutLabel(other):other.repository;
+        if(existing.label===qualified)continue;
+        if(rows.some(w=>w.workspace_id!==other.workspaceId&&w.label===qualified))throw problem('repository_label_unavailable');
         await checkpoint();
-        const renamed=await command(['workspace','rename',other.workspaceId,other.repository]);
-        if(renamed.id!=='cli:workspace:rename'||renamed.result?.type!=='workspace_info'||renamed.result?.workspace?.workspace_id!==other.workspaceId||renamed.result?.workspace?.label!==other.repository)throw problem('repository_rename_unconfirmed');
+        const renamed=await command(['workspace','rename',other.workspaceId,qualified]);
+        if(renamed.id!=='cli:workspace:rename'||renamed.result?.type!=='workspace_info'||renamed.result?.workspace?.workspace_id!==other.workspaceId||renamed.result?.workspace?.label!==qualified)throw problem('repository_rename_unconfirmed');
+        existing.label=qualified;
       }
     }
     repo={key,repository:input.repository,sourceRoot,commonDir,phase:'intent'};registry.repositories.push(repo);
@@ -205,8 +215,8 @@ export async function closeHerdrRunLayout({runId,cwd,layout}, ports) {
 // Returns true when it closed or was already gone; a workspace still in use (more tabs or panes, or open runs) stays.
 export async function closeHerdrRepoLayoutIfIdle({repository,commonDir}, ports) {
   const directory=directoryFor(ports),registry=await readRegistry(directory),{command,checkpoint}=ports;
-  const repo=registry.repositories.find(r=>r.key===String(repository).toLowerCase());
-  if(!repo||repo.phase!=='ready'||repo.commonDir!==commonDir)return false;
+  const repo=repositoryEntry(registry,String(repository).toLowerCase(),commonDir);
+  if(!repo||repo.phase!=='ready')return false;
   if(registry.runs.some(r=>r.repoWorkspaceId===repo.workspaceId&&r.phase!=='closed'))return false;
   const rows=await inventory(command);
   if(rows.some(w=>w.workspace_id===repo.workspaceId)) {
