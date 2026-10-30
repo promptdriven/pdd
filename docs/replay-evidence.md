@@ -135,7 +135,7 @@ named `replay`, put its definition in `.agents/skills/pdd-replay/workflow.json`:
 Give the declaration to the workflow you selected:
 
 ```sh
-pdd workflow run replay 123 --adopt-corpus /path/to/approval.json
+pdd workflow start replay 123 --adopt-corpus /path/to/approval.json
 ```
 
 The first area can be the code area. Adoption supplies its original vector anchor
@@ -173,4 +173,4 @@ authenticate the asserted human authorization. The person is responsible for its
 truth. Adoption proves content identity only. Agents still execute the original
 cases and record public operations, mutation controls and formal results.
 
-The declaration parent folder is resolved with realpath, so symlinked ancestors (including macOS temporary folders) are supported. The final declaration must remain a regular single-link file; final symlinks and hardlinks are refused. Scratch folders also use their real paths. Native refusals include a bounded cleaned cause without private absolute paths, credentials or Try URLs.
+The declaration parent folder is resolved with realpath, so symlinked ancestors (including macOS temporary folders) are supported. The final declaration must remain a regular single-link file; final symlinks and hardlinks are refused. Scratch folders also use their real paths. Native refusals include a bounded cleaned cause without private absolute paths, credentials or Simulate URLs.

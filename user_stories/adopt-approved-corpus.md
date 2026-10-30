@@ -12,7 +12,7 @@ I can start a fresh workflow using the exact complete declared regression corpus
 
 ## Rules to check
 
-Draft command: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`.
+Draft command: `pdd workflow start feature 2640 --adopt-corpus approved-corpus.json`.
 The declaration identifies one immutable same-repository approved commit and entry
 prompts and a nonempty unique list of at most 200 canonical scenario paths, and
 explicitly asserts human authorization covering that complete declared inventory
@@ -24,7 +24,7 @@ invalidate reused authorization. Missing or malformed declarations fail closed.
 An external assertion is attributed evidence, not independently authenticated approval.
 A declaration under a symlinked folder is accepted after resolving that folder;
 a final symlink or hardlink is refused. Native failures show a useful cleaned single
-line without private paths or Try links. Declaration refusals identify the 200-path
+line without private paths or Simulate links. Declaration refusals identify the 200-path
 limit, missing scenarios key, duplicate path or noncanonical path, with the relevant
 repo-relative path retained. A missing declared scenario names its approved/current
 source and repo-relative path, even after worktree deletion. A failed startup fetch
@@ -43,7 +43,7 @@ content before code entry/publication; changed requirements need ordinary approv
 
 ## Verification boundary
 
-The runtime cases exercise the real adoption helper with a supplied native snapshot
+The interpreter cases exercise the real adoption helper with a supplied native snapshot
 port. They do not prove Git enumeration, raw-byte hashing, file safety, dependency
 closure resolution, CLI dispatch, persistence or lifecycle freeze. The code area must
 exercise those paths with real temporary repositories, including declared subset/extra rows, unrelated malformed fixture scenarios,
@@ -54,5 +54,5 @@ PR adoption provenance even when blocked, one scan after the publication commit,
 newline changes, an unlisted second scenario entry prompt, changed transitive
 dependencies, scenario context and Story changes, selected-base vs dirty caller
 content, allocated-worktree races, removed external declarations and publication
-retries. No runtime
-check or Try has run in this Story area; CLI-only Try was declined.
+retries. No interpreter
+test or Simulate has run in this Story area; CLI-only Simulate was declined.

@@ -102,7 +102,7 @@ for (const vector of vectors.cases) test(`BUSY-WAIT ${vector.id}`, async t => {
       const r = await fixture(t, { capacity: () => kind === '404' ? absent() : kind === 'absent' ? { status: 200, json: { maintenance: null } } : kind === 'malformed' ? full('bad', -1) : { status: 503, json: { error: { code: 'unrecognized' } } },
         answer: (e, f, n) => ({ status: 200, headers: { 'retry-after': '1' }, json: n === 1 ? busy(f, e.request.requestId) : pass(f, e.request.requestId) }) });
       const result = await r.run(); completed(result); assert.equal(r.times.length, 2); assert.ok(r.times[1] >= 10_000 && r.times[1] < 60_000); history(r, result);
-      assert.ok((result.err.match(/Warning: runtime capacity could not be read/g) ?? []).length <= 1);
+      assert.ok((result.err.match(/Warning: interpreter capacity could not be read/g) ?? []).length <= 1);
     }); return;
   }
   if (vector.id === 'short-deadline') {

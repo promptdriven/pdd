@@ -1,16 +1,16 @@
-# PDD runtime runbook
+# PDD interpreter runbook
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-## 1. What the runtime is
+## 1. What the PDD interpreter is
 
-The runtime runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
-The runtime checks the **prompt**, not the code. The repo's own tests check the code.
+The PDD interpreter runs a prompt as a program. There is no code: an AI reads the `*.prompt.md` file and acts as the program.
+The interpreter checks the **prompt**, not the code. The repo's own tests check the code.
 You need a GitHub login (`gh auth status`). A check sends relevant source selected from Git-visible files (max 10 MiB and 10,000 files).
-`pdd check --files` lists the selected files and byte sizes without a network call (section 2). Never put secrets in the repo.
+`pdd test --files` lists the selected files and byte sizes without a network call (section 2). Never put secrets in the repo.
 
-The order of work: story → prompt (`"status": "draft"`) → test → `pdd check --fill-hash` → `pdd check <story>` →
-offer `pdd try <story>` → the person tries it and approves → PR 1 with the one-line result (section 15).
+The order of work: story → prompt (`"status": "draft"`) → test → `pdd test --fill-hash` → `pdd test <story>` →
+offer `pdd simulate <story>` → the person tries it and approves → PR 1 with the one-line result (section 15).
 Read section 3 (schema rules) and section 8 (check paths) before the first check. Most failed first checks start there.
 When the person asks you to report a problem with pdd itself, follow
 [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).
@@ -41,10 +41,10 @@ The block of Harbor Coffee's `place_order` (schemas cut):
  "calls": [], "resources": [], "limits": {"max_steps": 4, "max_model_calls": 2}, "conventions": []}
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
-- Do not write `prose_sha256`: `pdd check --fill-hash` fills it.
+- Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
 - To approve a prompt, the person runs `pdd approve <path>` (agents never set approved). It shows the interface in
   plain words and asks y/n. An approved story at a workflow gate is not an approved prompt.
-- To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd check --fill-hash` and ask the
+- To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
   person to run `pdd approve <path>` again.
 
 **The story** has one line for each criterion. Number from 1. Use straight quotes (`"`), not curly quotes. Text copied
@@ -81,8 +81,8 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
 **Scoped uploads.** A check selects its tests, their stories, entry prompts and explicit test context. It recursively
 follows prompt call targets, local links in `## Dependencies` and Markdown images in selected Markdown files.
 A selected app map adds its prompt paths and stylesheets. Unrelated repository files are not uploaded.
-`pdd check --files [STORY...]` lists exactly which files the same selection uploads, with byte sizes and no network
-call. With no Story, it selects all discovered tests. Add `--app-map PATH` to inspect the selection for a Try map.
+`pdd test --files [STORY...]` lists exactly which files the same selection uploads, with byte sizes and no network
+call. With no Story, it selects all discovered tests. Add `--app-map PATH` to inspect the selection for the Simulator's app map.
 
 For extra source, put an include list in the repository root's `pdd-source.json`:
 ```json
@@ -96,8 +96,8 @@ Secret-looking names, symlinks (including symlink ancestors), missing files and 
 ## 3. Schema rules
 
 These rules apply to every `input_schema` and `result_schema`, to each resource `arguments_schema` and `result_schema`,
-and to an app map's `state_schema`. Today the runtime reports only one broken rule at a time, often with `"path": null`
-and no field name. So check every schema against ALL the rules before the first `pdd check`.
+and to an app map's `state_schema`. Today the interpreter reports only one broken rule at a time, often with `"path": null`
+and no field name. So check every schema against ALL the rules before the first `pdd test`.
 
 1. The top of each schema is `"type": "object"`.
 2. Every object has `properties`, `required` and `"additionalProperties": false`. With no fields: `"properties": {}, "required": []`.
@@ -118,7 +118,7 @@ within `[-9007199254740991, 9007199254740991]`, or ±(2^53−1). An out-of-range
 names the bad bound's JSON Pointer (for example `/properties/count/maximum`), the declared bound (`bound_text`)
 and the supported range (`supported_integer_range`).
 
-For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Try form shows
+For an optional input field, leave it out of `required`. Do not use `oneOf` with `null` for it: the Simulator's form shows
 `oneOf` only as a raw JSON box, and pdd cannot check that input before it sends. A correct schema (`read` is optional):
 ```json
 {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "read": {"type": "boolean"},
@@ -128,7 +128,7 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
 
 ## 4. Expected values
 
-- Expected values come from the story and the person. Never take them from a run, a Try or the code.
+- Expected values come from the story and the person. Never take them from a run, a simulation or the code.
 - If the story allows two answers, ask the person. Example: "every 10th coffee free" gives $4.95 off, but
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
 - A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.
@@ -140,7 +140,7 @@ result path and Story criterion. Confirm that both quantities agree with the Sto
 expected value. Calls, world assertions and count checks do not get this advice.
 
 For a reviewed difference that remains ambiguous, record a rationale in the Git-visible repository-root file
-`pdd-numeric-reviews.json`. This acknowledges only that advisory; it changes no test or Runtime assertion:
+`pdd-numeric-reviews.json`. This acknowledges only that advisory; it changes no test or interpreter assertion:
 ```json
 {"schema_version":"pdd.numeric-reviews.v1","reviews":[
   {"test_path":"tests/budget.json","test_sha256":"<current test SHA-256>","step_id":"usage","criterion_id":"AC8",
@@ -151,7 +151,7 @@ Get the full test hash with `shasum -a 256 tests/budget.json`. Every identity fi
 test bytes, step, criterion, target, path and value. The reason must be nonblank and one line (at most 1000 characters).
 A changed test invalidates its review. The file allows at most 100 reviews and 16 KiB; invalid metadata warns and
 suppresses nothing. It is local authoring metadata and is not automatically uploaded. Exact criterion-text checks
-and all Runtime checks stay in force.
+and all interpreter checks stay in force.
 
 ## 5. Saved data
 
@@ -199,7 +199,7 @@ Mark both schemas with the `cli` convention. `argv` goes in. `exit_code`, `stdou
 "conventions": [{"path": "/entries/0/input_schema", "convention": "cli"}, {"path": "/entries/0/result_schema", "convention": "cli"}]
 ```
 - Input: one item for each word, as a shell splits them. `todo add Walk the dog` is `{"argv": ["add", "Walk", "the", "dog"]}`.
-- An optional string `stdin` property receives piped UTF-8 text. Program exit code 125 is reserved for `pdd try` wrapper failures; use another code for program errors.
+- An optional string `stdin` property receives piped UTF-8 text. Program exit code 125 is reserved for `pdd simulate` wrapper failures; use another code for program errors.
 - Write the rule "Every line written to `stdout` or `stderr` ends with one newline." in the prose.
   Expected text includes the last newline: `"Added #4: Walk the dog\n"`. An empty stream is `""`.
 
@@ -255,31 +255,31 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
-- `pdd check` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the runtime maximum.
-- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a Check or Try. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
-- A new `pdd try` requests a session budget of 400 calls. `pdd try STORY --max-calls 600` chooses a different ceiling when starting a new Try. The CLI cannot raise an existing Try’s ceiling; `--new` starts fresh saved data. The output shows the runtime-confirmed total and remaining calls. Reusing a Try without this option keeps its current budget.
+- `pdd test` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
+- **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws and all the moves you plan to try. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
+- A new `pdd simulate` requests a session budget of 400 calls. `pdd simulate STORY --max-calls 600` chooses a different ceiling when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new` starts fresh saved data. The output shows the interpreter-confirmed total and remaining calls. Reusing a simulation without this option keeps its current budget.
 - Too few calls left gives the refusal `repository-graph-catalog-error`. It is not a prompt error. The interface `limits` do not set this budget.
 - **Worst case of a step:** 1, plus for each entry in its prompt's `calls`: `max_calls` × (worst case of the called
   prompt + 1). Calls belong to the whole prompt (section 8), so every operation of the prompt has this worst case.
   `checkout` → `pricing` with `max_calls: 1`: 1 + 1 × 2 = 3. `game` → `board` with `max_calls: 30`: 1 + 30 × 2 = 61.
-  When one step's worst case is bigger than `--max-calls` (at most 1000), the runtime refuses the whole test before it
+  When one step's worst case is bigger than `--max-calls` (at most 1000), the interpreter refuses the whole test before it
   starts: `run-admission-failed`, 0 AI calls. So keep `max_calls` small (section 18).
-- **A Try page allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
+- **The Simulator allows 40 AI calls for each tap.** A screen or key whose prompt's worst case is over 40 never
   opens: refused at 0 calls. A screen prompt that calls another prompt with a high `max_calls` hits this fast
   (`game` → `board` with `max_calls: 30` is 61 per tap). Keep the screen prompt's chain small: one call with a whole
   list (section 18), not many calls.
 - **Check small first.** A schema refusal costs 0 AI calls. A wrong check path costs the full run: one cost 34 calls.
   - In a new project, check the story with the fewest steps first. Check the others only after it passes.
   - Start a new test with few steps: often one step for each criterion is enough. Add more cases after it passes.
-  - After a failure, check only that story again (`pdd check <story>`), not all stories.
+  - After a failure, check only that story again (`pdd test <story>`), not all stories.
   - Before a check of more than 5 steps, tell the person the likely cost: about 4 AI calls for each step.
 
-## 11. `pdd check`
+## 11. `pdd test`
 
-`pdd check --fill-hash` fills the hash of draft prompts. `pdd check` checks every test at the same time.
-`pdd check place-order` checks one story. `pdd check --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
-Before you send a check, run `pdd check --lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
-`pdd check --lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
+`pdd test --fill-hash` fills the hash of draft prompts. `pdd test` checks every test at the same time.
+`pdd test place-order` checks one story. `pdd test --read` reads the last results again. `--fill-hash` sends nothing. A saved `--read` may continue original checks held for lint after it passes, using identical source, owner and call ceilings; other reads send nothing.
+Before you send a check, run `pdd lint` to find format problems (0 AI calls). Exit 0 means finished and passed; queued/running lint exits 3 with its saved read command. Never import pdd's source.
+`pdd lint [STORY…]` sends the files to the server's lint only. It makes no AI call, and it prints every problem
 the server finds.
 pdd checks the files on this computer first. Then it sends one check for each test. It shows one table (story, test,
 result, checks, time), the AI calls and a report link for each test. Anyone with a report link can open it.
@@ -287,21 +287,21 @@ A failed check shows the criterion, the path, the expected value and the answer:
 The report preview shows the first 256 characters of a longer string followed by `…`. The check still compares
 the full value exactly. Preview clipping and sensitive-value redaction do not shorten the value being checked.
 A draft prompt is checked too. Its row and its report say DRAFT. A DRAFT pass is not an approval.
-In a person's terminal, `pdd check` waits until every check ends and prints `Still running: …` every 30 s. In an
-agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd check --read` about every
+In a person's terminal, `pdd test` waits until every check ends and prints `Still running: …` every 30 s. In an
+agent's shell it returns after about 90 s with `Still running` and the batch; then run `pdd test --read` about every
 minute, doing other work in between, until every Story has a result. Never send the same check again.
-Before `pdd check` or `pdd try`, tell the person in one line what you run and that it can take a few minutes. pdd prints
-a progress line on stderr before each slow step (lint, upload, the queue, the Try setup). When it fails, it says what
+Before `pdd test` or `pdd simulate`, tell the person in one line what you run and that it can take a few minutes. pdd prints
+a progress line on stderr before each slow step (lint, upload, the queue, the simulation setup). When it fails, it says what
 failed, the real reason and what to do next: pass that line on as it is.
 
 | Exit | Result | What to do |
 |---|---|---|
-| 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a Try. |
+| 0 | passed | Put the one-line result in the PR (section 15). If it says DRAFT, offer a simulation. |
 | 1 | failed | Find the cause first ("After a ✗" below). Fix only what the evidence shows. A person decides expected values. |
 | 4 | refused | Nothing was judged (`no verdict ·`): a file breaks a rule, or the AI service failed. Read the reason and the next step under the line. When the reason names a file rule, fix that file (table below); for an AI-service cause, change no file. If a fix changes an expected value, ask the person. |
 | 5 | not run | Sign-in, network, server busy or no AI room. Run `gh auth status`. Wait, then run again. If it stays, tell the person. |
-| 3 | unknown or still running | Run `pdd check --read` about every minute until every Story has a result. Never send the check again. |
-| 2 | command error | Wrong command or story name. Run `pdd check --help`. |
+| 3 | unknown or still running | Run `pdd test --read` about every minute until every Story has a result. Never send the check again. |
+| 2 | command error | Wrong command or story name. Run `pdd test --help`. |
 
 **After a ✗ (exit 1).** Find the real cause first, then fix it. Never send the same files again to get another answer.
 1. Read pdd's `Why:`, `Next:` and `Rerun:` lines when pdd prints them. Open "Debug this step" on the report. Read the
@@ -321,7 +321,7 @@ failed, the real reason and what to do next: pass that line on as it is.
 
 4. At most 2 fix rounds for the same ✗. Then stop, and tell the person what you tried.
 
-- After a send timeout, pdd prints `pdd check --read <batch>`. Keep reading with it. A slow job can show up 4 minutes later.
+- After a send timeout, pdd prints the `--read` command with the batch. Keep reading with `pdd test --read <batch>`. A slow job can show up 4 minutes later.
 - A `possible numeric mismatch` is advisory. Confirm the quantities against the Story and prompt; retain a correct
   expected value. Section 4 explains scoped review rationales. The count of files sent that are not prompt, Story
   or test files is an informational note.
@@ -340,29 +340,29 @@ failed, the real reason and what to do next: pass that line on as it is.
 | `graph-provider-failure` | The AI service failed. No verdict: pdd prints `no verdict ·` (✗ only when another check failed, in this Story or another Story) | Tell the person, with its AI calls. The person may send it again. Never send it again on your own. |
 | `graph-uncertain-child-dispatch` | One AI call did not answer. No verdict. Your test is fine | Same as `graph-provider-failure`. |
 
-## 12. `pdd try` and Save as test
+## 12. `pdd simulate` and Save as test
 
-`pdd try place-order` makes a Try link and opens it in the browser. Opening costs 0 AI calls. While it works (about a minute), pdd
-prints a progress line on stderr for each step. It ends with:
-`Try ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, or with: pdd try --stop place-order`
-- A draft prompt can be tried. The person tries it before they approve. Show the Try link only to the person.
+`pdd simulate place-order` makes a Simulator link and opens it in the browser. Opening costs 0 AI calls. While it works (about a minute), pdd
+prints a progress line on stderr for each step. It ends with a line such as
+`Try ready for "Place a coffee order": <link> (open in your browser). It ends in 24 hours, …`. To stop it before that, run `pdd simulate --stop place-order`.
+- A draft prompt can be tried. The person tries it before they approve. Show the Simulator link only to the person.
   Never write it into a file, PR, issue or shared channel: anyone with the link can use it.
 - Ask the person: "Did it do what you expect?" Wait for the answer before you open PR 1. If the person is not at this
-  computer, run `pdd try <story> --no-open` and give the link in the chat.
-- A Try needs at least the worst case of its biggest operation, plus 1. For `checkout`: 3 + 1 = 4 AI calls.
-  An action that fails with `session-action-failed` at 0 AI calls means the calls ran out: run `pdd try --new <story>`.
-- In a Try, the same input again is answered from the cache, at 0 AI calls. An error answer is not cached.
-- A Try pauses after 15 minutes with no clicks. `pdd try <story>` reopens it at 0 AI calls. It does not send changed
-  files or a new app map: for that, run `pdd try <story> --new`. Connecting Ask your agent or a CLI/HTTP door requires matching uploaded prompts; if a prompt changed, start a fresh Try with `--new`.
+  computer, run `pdd simulate <story> --no-open` and give the link in the chat.
+- A simulation needs at least the worst case of its biggest operation, plus 1. For `checkout`: 3 + 1 = 4 AI calls.
+  An action that fails with `session-action-failed` at 0 AI calls means the calls ran out: run `pdd simulate --new <story>`.
+- In a simulation, the same input again is answered from the cache, at 0 AI calls. An error answer is not cached.
+- A simulation pauses after 15 minutes with no clicks. `pdd simulate <story>` reopens it at 0 AI calls. It does not send changed
+  files or a new app map: for that, run `pdd simulate <story> --new`. Connecting Ask your agent or a CLI/HTTP door requires matching uploaded prompts; if a prompt changed, start a fresh simulation with `--new`.
 
 **Save as test.** Only the person saves a case. Never save one yourself. pdd adds each saved case as a new step to the
 story's test file and prints `added to tests/<file> as step <id>`. It makes a new file only when the story has none.
-- The Try page may say "Save this file in your project as `tests/<name>.json`" and warn about unchecked criteria.
-  Ignore that. Do not make a second file: `pdd try` adds the case to the story's test file.
-- With terminal stdout, `pdd try` connects Ask your agent, keeps waiting and adds saved cases as they come. `--no-wait` skips the connection.
-- When you (an agent) run `pdd try`, it reads the saved cases once and returns, so it never blocks you. After the person
-  says "I saved some cases", run `pdd try <story>` again to add them. An explicit `--agent NAME` connects even without a terminal and waits until Ctrl-C. Keep its private owner chat link out of shared messages.
-Then make sure that every criterion still has a check, and run `pdd check <story>`.
+- The Simulator may say "Save this file in your project as `tests/<name>.json`" and warn about unchecked criteria.
+  Ignore that. Do not make a second file: `pdd simulate` adds the case to the story's test file.
+- With terminal stdout, `pdd simulate` connects Ask your agent, keeps waiting and adds saved cases as they come. `--no-wait` skips the connection.
+- When you (an agent) run `pdd simulate`, it reads the saved cases once and returns, so it never blocks you. After the person
+  says "I saved some cases", run `pdd simulate <story>` again to add them. An explicit `--agent NAME` connects even without a terminal and waits until Ctrl-C. Keep its private owner chat link out of shared messages.
+Then make sure that every criterion still has a check, and run `pdd test <story>`.
 
 ## 13. Give your app a screen (app map)
 
@@ -370,15 +370,15 @@ Then make sure that every criterion still has a check, and run `pdd check <story
 
 When a screen prompt links a `.ui.svg`, that drawing is authoritative for its visible parts, words, spatial order, stable ids and named state. It is a comparison reference, not an optional illustration. Prose and drawing must describe the same parts; prose owns behavior and the sources of dynamic values. Declare the state and viewport beside the view and name each region/control id in the appearance rules. Mark unowned surroundings `data-context-only="true"` or class `context-only`. Keep DOM/focus order in accessibility prose; SVG source order does not set it.
 
-Before building, run `pdd check --lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd check --lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
+Before building, run `pdd lint --local` (or add Story names) to see local SVG warnings with 0 AI calls and no network. It checks explicit control names, visible labels and named layout regions in both directions. A generic score field does not specify a drawn score box. Static vocabulary matching is advice: warnings name unmatched parts and never block or approve a prompt. Ordinary `pdd lint` includes this advice before its existing server lint. Resolve disagreements by making the prompt and drawing agree with the requested design.
 
 Build reads the linked drawing as the layout spec and implements its parts, words, ids, order and state. After building, serve the real page in the reference state and run:
 
 ```sh
-pdd check --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
+pdd test --screen http://127.0.0.1:8080/ --drawing prompts/views/active__stacked.ui.svg
 ```
 
-This uses installed headless Chrome/Chromium at the SVG viewport, no AI or runtime calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
+This uses installed headless Chrome/Chromium at the SVG viewport, no AI or interpreter calls. Set `PDD_CHROME_PATH` if the executable is not found. It checks every visible text occurrence and id, including numeric values, against the real page; metadata, hidden and context-only SVG subtrees are excluded. It requires visible page parts, center positions within 15% of each viewport dimension, and the same spatial order for separated parts. Arrange the named state and its dynamic values before comparing. This parts comparison does not certify pixel equivalence; retain any stricter accepted measured/exact comparator and tolerance. Text matches require effective visible glyph paint and literal displayed control labels; password and other nondisplayed stored values never supply labels. Applied clips, masks, filters and unsupported text paint or native formatting leave visibility unproved and return an error. Arbitrary overlay occlusion, colors and typography require separate verification.
 
 Verification must put a **Screen vs drawing** table in `verify.md` and in the body of the code PR (code space):
 
@@ -390,15 +390,15 @@ Keep actual rows and the command's exit code. A missing/hidden part, wrong regio
 
 ### App map
 
-The Try page has a **Screen** tab only when the repo has an app map: a JSON file that connects prompt operations to
+The Simulator has a **Screen** tab only when the repo has an app map: a JSON file that connects prompt operations to
 screens. It holds no code. Without it, the person uses forms (or a terminal for `cli`).
-- `pdd try` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
-  `pdd try <story> --app-map <path> --new`. Without `--new`, pdd reuses the open Try and does not send the map.
+- `pdd simulate` uses `app-map.json` at the repo root, else `app/app-map.json`. For another file:
+  `pdd simulate <story> --app-map <path> --new`. Without `--new`, pdd reuses the open simulation and does not send the map.
   Git must show the file. It must be an app map like the one below, not a page of your app (`public/index.html`).
   pdd does not check the map. A wrong map may give only "The Try setup is not finished or its result is unknown".
 - **A screen from an operation** (`"source": "operation"`): the operation draws the screen. `format` is `html`, `text`
   or `grid`. `result_pointer` selects the drawing: `/html` (a string) or `/lines` (a list of strings). `stylesheets` lists CSS files.
-  The runtime cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
+  The interpreter cleans the drawn html. It removes the `background` style, `list-style` and `aria-pressed`. Write
   `background-color` for a fill, `aria-current="true"` for a chosen button, and `display:block` on each `<li>` for a
   list with no bullets.
 - **A screen from a mockup** (`"source": "mockup"`, `"operation": null`, `"format": "svg"`, `"result_pointer": null`):
@@ -434,7 +434,7 @@ screens. It holds no code. Without it, the person uses forms (or a terminal for 
   other buttons of that screen by `name` too (`name="show-all"`). The field that gets `/event/target` must be a plain
   `{"type": "string"}`: a stricter schema (`minLength`, `pattern`) is refused as `template-reference-schema`.
 - Each tap costs the handler's AI calls plus 1 to draw the screen. In Harbor, opening cost 1 and a tap cost 2 to 3.
-- A tap's worst case is the handler's worst case (section 10) plus 1 to draw. A Try page allows 40 for each tap.
+- A tap's worst case is the handler's worst case (section 10) plus 1 to draw. The Simulator allows 40 for each tap.
   A screen or handler whose prompt's worst case is over 40 never opens (refused at 0 calls). Keep the chain small.
 
 A full, small app map (a book list with 2 filter buttons; one screen from an operation):
@@ -480,13 +480,13 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 1. Reproduce: turn the issue into a test. Add a criterion to the story and a step that checks it to the story's test file.
    The expected value comes from the issue and the person.
-2. Run `pdd check <story>` on the CURRENT prompt. Do not change the prompt first.
+2. Run `pdd test <story>` on the CURRENT prompt. Do not change the prompt first.
 3. ✗ failed: tell the person "Verdict: the bug is in the PROMPT (its check fails on the issue's case)." Find the
    cause first (section 11, "After a ✗"). Fix the prompt (set draft, fill the hash) and check again: at most 2 fix
    rounds, then ask the person.
 4. ✓ passed: tell the person "Verdict: the prompt is right; the bug is only in the CODE." The repo's own tests prove
    the code fix.
-5. The check report shows before ✗ → after ✓. `pdd try <story>` opens with the issue's input ready.
+5. The check report shows before ✗ → after ✓. `pdd simulate <story>` opens with the issue's input ready.
 - If no prompt owns the behavior, say in reproduce: "No prompt exists yet for this behavior, so the bug can only be
   in the code." The verdict line is "Verdict: no prompt covers this yet; the bug can only be in the code." Write the
   prompt from the issue, and write "before: no prompt" in PR 1.
@@ -497,7 +497,7 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put the `Runtime check` line(s) that `pdd check` prints, with their report links, at the top of the PR text. One
+Put the `Runtime check` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
 Story gives one line, `Runtime check (<story>): …`. 2 or more Stories give one line each and a last `Runtime check:`
 line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
 paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
@@ -512,8 +512,8 @@ Report: https://…/r/617480ac-…
   `"Added #1: Buy milk\n"`. If expected and got look the same, look for a `\n`.
 - Some refusals give no reason ("See the reported reason"). Use the refusal table in section 11.
 - The report page says "Run in your signed-in terminal: `pdd replay …`". That command does not exist yet.
-- In a Try, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
-- The Try page says "1 AI call each". A step with saved data or a prompt call uses 2 to 3.
+- In a simulation, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
+- The Simulator says "1 AI call each". A step with saved data or a prompt call uses 2 to 3.
 
 ## 17. Code space: replay evidence and the formal check
 
@@ -526,7 +526,8 @@ Stop and tell the person to start a new agent session in the run's worktree. No 
 `pdd workflow open 42` focuses or resumes the same session; it does not start a new one or clear the limit.
 Only after the check actually runs, replace its `Not checked:` line with the real result in the step's run file and any copy in `verify.md`; never keep both.
 
-Agents replay the approved prompt-space cases against the real code. Runtime checks of prompts do not establish
+Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
+Agents replay the approved prompt-space cases against the real code. Checks of prompts on the PDD interpreter do not establish
 that the code behaves the same. Agents execute the tests and supply the evidence; pdd validates structure and
 identity only. It does not independently prove execution or prompt/code equivalence.
 
@@ -537,7 +538,7 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
   wrong, return to prompt space for the person's approval and start a run with the approved vectors.
 - In `build`, write one replay test in the repo's own test runner (for example `test/<story>.vectors.test.mjs`).
   It reads the JSON file when it runs, and for each step it calls the real public boundary named by `operation`
-  (function, command or route). Steps run in order and share state, as on the runtime.
+  (function, command or route). Steps run in order and share state, as on the interpreter.
 - Map each check target: `result` → the returned value at the path; `error` → the error code; `world` → the app's
   store after the step, seeded from `initial_world`; `calls` → a spy count. A target you cannot map is
   "Not replayed", with the reason. It is never a pass. Missing checks and unexecuted operations are not replayed.
@@ -595,13 +596,13 @@ A structurally valid agent-reported replay pass can coexist with an explicit for
 ## 18. Patterns: a pure function and a state sequence
 
 Test only the real operations of the program: functions, commands or routes that the code will have. Never add an
-operation only for a check (for example `moveWithInputObservation`, `sequence` or `replay`). The runtime sees results,
+operation only for a check (for example `moveWithInputObservation`, `sequence` or `replay`). The interpreter sees results,
 saved data and call counts. It cannot see CSS layout, sizes, animation or whether an input object changed.
 A page or a screen is never "browser-only": what it shows and what each tap does are results. Give it an app map
 (section 13). A page with no mockup gets a `render` operation that returns `{"html": …}` plus the facts it shows,
 for example `{"html": "…", "emptyMessage": "No books yet", "rows": 3}`. Check the facts with `equals` or `count`
-on those fields (`/emptyMessage`); use structured HTML checks for markup (section 20). Only what the runtime truly cannot see (CSS layout, sizes,
-animation) goes in a story with no runtime test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
+on those fields (`/emptyMessage`); use structured HTML checks for markup (section 20). Only what the interpreter truly cannot see (CSS layout, sizes,
+animation) goes in a story with no PDD test (pdd only warns "has no test"), proved with the repo's tests in PR 2.
 Keep the prompt short. A `calls` entry is enough: do not copy the called prompt's schemas. Put a big table or list in a
 repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt.
 
@@ -626,15 +627,15 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
   `## Dependencies`. Do not invent a replay operation only for tests, or expand a short action into an unbounded
   chain of prompt calls. The server stops one step after 10 minutes, regardless of the remaining call budget.
 
-## 19. Use a Try from your terminal or curl
+## 19. Use a simulation from your terminal or curl
 
-`pdd try STORY --cli` prints a shim path and a PATH line. Startup and every command show a Try AI usage line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
-`--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same Try's saved data.
-`pdd try --save-last` appends the last command and its observed result to the original test file; review the
-recorded expectation and its saved-data setup. `pdd try --stop STORY` stops the session. A wrapper error prints
+`pdd simulate STORY --cli` prints a shim path and a PATH line. Startup and every command show a `Try AI usage` line on stderr: calls for the command, used/remaining in this session and its cap. Unknown counters stay unknown; this is separate from account/tester allowance. Copy the PATH line, then run the program normally.
+`--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same simulation's saved data.
+`pdd simulate --save-last` appends the last command and its observed result to the original test file; review the
+recorded expectation and its saved-data setup. `pdd simulate --stop STORY` stops the session. A wrapper error prints
 **pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
 
-`pdd try STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
+`pdd simulate STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
 route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
 one method and path. Supported methods are GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS. Use literal path
 segments or `:id` parameters declared as string input fields (directly or under a `params` object). Duplicate
@@ -649,21 +650,21 @@ A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still m
 Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
 result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
-route returns 404 without an AI call. Runtime or wrapper trouble returns 502 with a plain **pdd try:** reason.
+route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd try:** reason.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
-local server while the Try keeps its data. Use curl or fetch for API routes; browser page, image, script and
+local server while the simulation keeps its data. Use curl or fetch for API routes; browser page, image, script and
 stylesheet loads cannot spend calls through an API route.
 
 When the Story has an app map, open `http://127.0.0.1:8080/` for the actual Screen. If it has not been drawn,
-click **Open the app**; opening and taps use the same Try budget and saved data. Loading the page alone uses
+click **Open the app**; opening and taps use the same simulation budget and saved data. Loading the page alone uses
 no AI call. The Screen reuses the hosted renderer, styles and declared click/form/key targets. It keeps an action
 ID before sending and reads that same ID after a lost reply or reload; it never sends the action twice. Unknown
 outcomes block new taps until recovered. Screen-only Stories need no named HTTP route; startup says **Screen only (no named HTTP routes)**.
-If a saved Try has no app map, use the printed `--new --app-map PATH` command to start one with the selected map.
+If a saved simulation has no app map, use the printed `--new --app-map PATH` command to start one with the selected map.
 A Story with neither an app map nor named routes gets a plain message describing both options. An app map reserves
 GET/HEAD `/` and `/__pdd/screen/`; move conflicting named routes. Credentials stay in pdd, outside the page.
 
-## 20. HTML checks and Try rendering
+## 20. HTML checks and Simulator rendering
 
 A structured HTML check selects a result string with `target: "result"` and a JSON Pointer such as `/html`.
 Its `html` object names a selector and a kind. The selector matches a lowercase tag and optional exact attribute
@@ -685,8 +686,8 @@ cannot satisfy `not_equals`. Raw HTML is validated before sanitization: at most 
 attributes, unmatched or misnested closing tags, closing tags for void elements, unclosed elements and unterminated
 markup fail the check. Parser and size failures appear as `invalid_html` diagnostics.
 
-**One rendering contract.** Structured HTML checks and Try share the sanitizer. Checks select elements and read
-attributes and text from the same sanitized HTML that Try displays. The renderer derives interactive target markers
+**One rendering contract.** Structured HTML checks and the Simulator share the sanitizer. Checks select elements and read
+attributes and text from the same sanitized HTML that the Simulator displays. The renderer derives interactive target markers
 after sanitization. Reported attribute values describe the retained subset, with sensitive values redacted.
 Assert only on elements, attributes and style declarations that survive.
 
@@ -708,14 +709,14 @@ The all-Story check estimate includes entry executions, declared saved-data oper
 
 ## 21. Fake the outside world
 
-Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Declare the actual dependency's operations as Runtime resources, and supply their replies in the test. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
+Anything outside the code (databases, files, network, clock, randomness and other programs) goes behind an injected port; never call it directly from the decision logic. Declare the actual dependency's operations as resources in the Runtime interface, and supply their replies in the test. SQL, blob and compute are specialized resource bindings. Preserve existing public functions, factories and methods; do not invent a check-only API.
 
 The examples below specify small JavaScript modules with matching prompt contracts; native execution is reported separately. Their scenarios are synthetic, with exact expected results chosen before execution. The commands run in a clone of pdd (`git clone -b alpha https://github.com/promptdriven/pdd`), from its root; in your own repository, copy the linked files with their paths first. Each command first runs zero-call server lint, then a live prompt check with a hard ceiling; every step requests `gpt-6.1-sol`. A ceiling is not a charge. Native tests establish code behavior separately.
 
 ```sh
-pdd check --fill-hash
-pdd check --lint fake-database fake-files fake-hash fake-service fake-decision fake-factory
-pdd check fake-database --max-calls 9
+pdd test --fill-hash
+pdd lint fake-database fake-files fake-hash fake-service fake-decision fake-factory
+pdd test fake-database --max-calls 9
 # Substitute fake-files, fake-hash, fake-service, fake-decision or fake-factory.
 ```
 
@@ -798,7 +799,7 @@ Passing prompt check (DRAFT): [1/1 checks · 2 AI calls](https://runtime.promptd
 
 [Module](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.mjs) · [Prompt](https://github.com/promptdriven/pdd/blob/alpha/examples/fakes/hash.prompt.md) · [Story](https://github.com/promptdriven/pdd/blob/alpha/user_stories/fake-hash.md) · [Scenario](https://github.com/promptdriven/pdd/blob/alpha/test/runtime/fake-hash.json)
 
-The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the runtime canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
+The prompt calls `compute.hash_utf8` with `{text}` and returns `{value}`. The deterministic compute action hashes exact bytes; do not ask the model to calculate a digest. `hash_json` hashes the interpreter's canonical JSON representation and is not interchangeable with an application-specific canonical serializer.
 
 ```json
 {
@@ -835,7 +836,7 @@ The `simulation` entry of the scenario:
 {"simulation":{"compute.hash_json":{"action":"compute","result_template":{"value":null},"result_value_pointer":"/value"}}}
 ```
 
-`hash_json` hashes the runtime's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the runtime's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
+`hash_json` hashes the interpreter's canonical JSON: keys sorted by UTF-16 code units, no spaces, and the interpreter's own spelling of numbers (a subset of RFC 8785). An application's own serializer can give other bytes, for example for floats or non-ASCII keys. To hash exact bytes that the application made, use `hash_utf8`. Native tests must prove that the hash and the serializer match.
 
 Lint accepts this declaration also when the native code hashes inside (for example with Python `hashlib`) and takes no `compute` argument. Keep the native signature. [Module binding coverage](https://github.com/promptdriven/pdd/blob/alpha/docs/runtime-bindings.md) checks that the prompt can reach its operations. It does not run native hashing. Native tests own that, and a lint pass is not a behavior pass.
 
@@ -934,6 +935,6 @@ Passing prompt check (DRAFT): [2/2 checks · 4 AI calls](https://runtime.promptd
 A prompt pass proves these synthetic cases against the declared fake world. It does not execute the JavaScript module, establish every input/error, approve the prompt, or prove a live effect. If a criterion remains unbound, state the exact missing contract or unsupported effect and the native test needed; never report it as passed.
 ## Use the Try tools when they are available
 
-The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's Try, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the Try's call budget and appears in the Try page's history; inspect remaining calls before more work.
+The person's own agent can use the stdio server, `pdd mcp`, in the current repository. On the person's intent (for example, "try adding a bookmark with tag news"), use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, fill the input in `try_run`, `try_check` to check the run against the Story, and `try_save_case` to save a case. Follow the tools' returned input schemas and errors. Each run counts against the simulation's call budget and appears in the Simulator's history; inspect remaining calls before more work.
 
-Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd check`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd try STORY`.
+Saved cases go to a separate `tests/<story>-try-<run-id>.json` with the run's exact starting data; the original scenario stays intact. A recorded case that covers only part of the Story must be completed before `pdd test`, which requires every criterion. Saved cases contain observed results. Review them against the Story with the person before treating them as expected values. Saving or checking a case never approves its expectations or a prompt. If the tools are unavailable, offer `pdd simulate STORY`.

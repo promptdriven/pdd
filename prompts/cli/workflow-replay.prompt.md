@@ -27,7 +27,7 @@ error, world and calls. Preserve every original identity; do not substitute gene
 
 `adoptReplayCorpus` is a module function selecting an existing corpus for the runner.
 It reads a declaration and independently resolved source through the injected
-`readAdoptionSnapshot({root,declarationPath})` port (`adoption.read` at runtime), once.
+`readAdoptionSnapshot({root,declarationPath})` port (`adoption.read` at interpreter execution), once.
 A missing/malformed declaration may make the port throw; catch it as unavailable, retaining one useful cleaned single-line cause.
 The port does read-only local Git/filesystem work, never gh, Herdr, approval or models.
 It captures current files from the runner's selected base at startup and the run
@@ -47,7 +47,7 @@ reference, asserted_by}` (both nonblank, at most 1000 characters). The assertion
 explicitly covers this repository, commit, named prompts, all their required context,
 and every scenario in this declared inventory. The assertion defines scope; it does
 not prove that unrelated repository scenarios were reviewed. A string saying "approved",
-a commit message, a runtime receipt or ordinary agent prose is insufficient.
+a commit message, an interpreter receipt or ordinary agent prose is insufficient.
 
 Trust boundary: pdd verifies the declaration's structure, source identity and exact
 content. It cannot independently authenticate the external assertion's human author
@@ -74,7 +74,7 @@ Seed required context with the union of declaration prompts and every original
 scenario step entry_path, each scenario story_path and its explicit scenario context.
 An unlisted second entry prompt, Story or test context cannot escape validation.
 Resolve that complete required dependency closure from both
-snapshots using the runtime's source-selection rules, including required context
+snapshots using the interpreter's source-selection rules, including required context
 and prompt call targets. Missing dependencies, cycles or unresolved selections block.
 Require the same path set and raw SHA256 bytes for that closure and every scenario;
 JSON formatting and newline edits count as changes. Do not trust digest claims in
@@ -102,9 +102,9 @@ export is required. The injected `readAdoptionSnapshot` port supplies snapshot f
 its Runtime `adoption.read` transport reply is exactly `{snapshot}`. The capture
 callback is native metadata transport, not a Runtime resource or approval effect.
 Do not add internal bytes to the helper's public result, Runtime snapshot or user evidence.
-At runtime the supplied fake models this native port, not actual Git or byte hashing.
+At interpreter execution the supplied fake models this native port, not actual Git or byte hashing.
 Clean native causes to one finite line (at most 1000 characters), removing private
-absolute paths, credentials and Try URLs; keep a useful operation/cause explanation.
+absolute paths, credentials and Simulate URLs; keep a useful operation/cause explanation.
 For a missing declared scenario, name whether the approved or current source is
 missing it and retain its repo-relative path, including a deleted worktree file.
 Declaration-shape refusals must identify the failed rule: more than 200 scenario
@@ -218,7 +218,7 @@ let an agent's free-form PASS summary replace this status.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "be29d21c583f2fcedd6dec7941b94414733ddd4eef99ff36ef4b850e5e633e47",
+  "prose_sha256": "ed5bd6e32afe4c34de534731c8ad47f39171d09135f3630781b7d4be23bfceed",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
