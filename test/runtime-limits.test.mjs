@@ -109,3 +109,15 @@ test('2676 valid limits keep explicit lint server-owned for unrelated schema err
  assert.equal(code,4,ports.stdout.text+ports.stderr.text);assert.equal(fake.posts.length,1);assert.equal(fake.posts[0].request.complete,true);
  const result=JSON.parse(ports.stdout.text);assert.ok(result.problems.some(p=>p.message==='server-only fixture diagnosis'));
 });
+
+for(const otherProblem of ['stale-hash','bad-criteria'])test(`2676 lint limits are checked independently of ${otherProblem}`,async t=>{
+ const setup=harbor(t);harborLimit(setup,'{"max_steps":4,"max_model_calls":0}');
+ if(otherProblem==='stale-hash'){
+  const file=join(setup.repo,PLACE);writeFileSync(file,readFileSync(file,'utf8').replace('Use this menu.','Use a changed menu.'));
+ }else{
+  const file=join(setup.repo,'tests/place-order.json'),doc=JSON.parse(readFileSync(file,'utf8'));doc.criteria[0].text='Unrelated mismatched criterion.';writeFileSync(file,JSON.stringify(doc));
+ }
+ const {ports}=portsFor({HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:'http://127.0.0.1:9'},{gh:()=>assert.fail('limits admission precedes unrelated server diagnosis'),fetch:()=>assert.fail('no upload')});
+ assert.equal(await runCheck({cwd:setup.repo,words:['place-order'],options:{'--lint':true,'--json':true}},ports),4);
+ assert.ok(JSON.parse(ports.stdout.text).problems.some(p=>p.code==='invalid-limits'));
+});
