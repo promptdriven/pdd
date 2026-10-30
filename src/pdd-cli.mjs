@@ -24,12 +24,12 @@ const RUNNER_ROUTES = {
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
-  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0] }],
+  'workflow-approve': plan => ['approveRun', { ref: plan.operands[0], ...(plan.options['--expect-gate'] !== undefined ? { expectGate: plan.options['--expect-gate'] } : {}), ...(plan.options['--expect-step'] !== undefined ? { expectStep: plan.options['--expect-step'] } : {}) }],
   'workflow-ask': plan => ['askPerson', { text: plan.operands.join(' ') }],
-  'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
-  'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
+  'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' '), ...(plan.options['--expect-gate'] !== undefined ? { expectGate: plan.options['--expect-gate'] } : {}), ...(plan.options['--expect-step'] !== undefined ? { expectStep: plan.options['--expect-step'] } : {}) }],
+  'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0], ...(plan.options['--expect-gate'] !== undefined ? { expectGate: plan.options['--expect-gate'] } : {}), ...(plan.options['--expect-step'] !== undefined ? { expectStep: plan.options['--expect-step'] } : {}) }],
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
-  'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
+  'workflow-open': plan => ['openRun', { ref: plan.operands[0], ...(plan.options['--expect-gate'] !== undefined ? { expectGate: plan.options['--expect-gate'] } : {}), ...(plan.options['--expect-step'] !== undefined ? { expectStep: plan.options['--expect-step'] } : {}) }],
 };
 export function renderHelp(prefix = []) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length

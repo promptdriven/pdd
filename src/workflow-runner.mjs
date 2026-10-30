@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 3549b2147a5a488bc5e78e8a27725b54f0cc7122c4810a8ac7bab9417e425b01).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 63b5b8dfb2626d369462347d578e17fdf3bbc3eb5615581a6ed1cf212deeb22d).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -44,6 +44,34 @@ const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(B
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
 const ended = run => ['cancelled', 'completed'].includes(run.state);
+// Gate IDs are stable across saved runs and reports, even though the workflow's
+// internal area names are implementation names (story, prompt-pr, code).
+const gateArea = area => area === 'story' ? 'stories' : area === 'prompt-pr' ? 'pr' : area;
+const gateId = gate => gate?.id ?? (gate?.area && gate?.kind ? `${gateArea(gate.area)}:${gate.kind}` : null);
+const currentStep = run => {
+  const steps = run.areas?.[run.area]?.steps ?? [];
+  return steps.find(step => !run.done?.[step]) ?? (run.gate ? steps.at(-1) : null);
+};
+const knownGateIds = run => new Set((run.areas ?? []).filter(area => area.gate).flatMap(area => {
+  const kinds = area.before === 'approve' ? ['approve', 'approve-pr'] : area.gate === 'approve' ? ['approve'] : ['approve', 'approve-pr'];
+  return kinds.map(kind => `${gateArea(area.name)}:${kind}`);
+}));
+const expectationRefusal = (run, reason) => ({ exitCode: 2, message: `pdd workflow: refused reason=${reason} current_gate=${gateId(run.gate) ?? 'none'} current_step=${currentStep(run) ?? 'none'}` });
+function guardExpectation(run, expectGate, expectStep) {
+  if (expectGate !== undefined && expectStep !== undefined) return expectationRefusal(run, 'invalid_expectation');
+  const known = knownGateIds(run), step = currentStep(run), current = gateId(run.gate);
+  if (expectGate !== undefined) {
+    if (!known.has(expectGate)) return expectationRefusal(run, 'invalid_expectation');
+    if (expectGate !== current) return expectationRefusal(run, 'stale_expectation');
+  }
+  if (expectStep !== undefined) {
+    const steps = new Set((run.areas ?? []).flatMap(area => area.steps ?? []));
+    if (!steps.has(expectStep)) return expectationRefusal(run, 'invalid_expectation');
+    if (expectStep !== step) return expectationRefusal(run, 'stale_expectation');
+  }
+  return null;
+}
+const gateRecord = (area, kind, at) => ({ area: area.name, id: `${gateArea(area.name)}:${kind}`, at, kind });
 const isAgentSession = env => Boolean(env.PDD_AGENT_SESSION || env.CLAUDECODE || env.CODEX_THREAD_ID);
 // About max characters at a word end, never inside a URL: a URL that crosses the end stays whole (0.1.6 tester: status
 // showed "report https://ru").
@@ -637,7 +665,7 @@ async function finishPr(run, area, step, p, lines) {
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
-    run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : { area: area.name, at: p.now(), kind: 'ask-code' }; writeRun(run, p);
+    run.state = 'waiting'; run.gate = existing && run.gate?.kind === 'ask-code' ? run.gate : gateRecord(area, 'ask-code', p.now()); writeRun(run, p);
     return done([...lines, ...await askCodeLines(run, area, p)].join('\n'));
   }
   run.state = 'waiting'; run.gate = null; writeRun(run, p);
@@ -712,7 +740,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
   if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
     const contents = await worktreeContents(run, p);
-    run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
+    run.gate = gateRecord(area, 'approve-pr', p.now()); run.state = 'waiting'; writeRun(run, p);
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
         ? 'Gate: show the person the Runtime check line of each Story (one per Story, ✓ or ✗) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
@@ -723,7 +751,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     return done(lines.join('\n'));
   }
   if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
-  run.gate = { area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
+  run.gate = gateRecord(area, 'approve', p.now()); run.state = 'waiting'; writeRun(run, p);
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
     `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
@@ -832,11 +860,12 @@ async function startNextChat(run, p, packageRoot) {
   }
 }
 
-export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT, expectGate, expectStep }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], label = `${run.repo}#${run.number} "${oneLine(run.issue.title)}"`;
+  const refused = guardExpectation(run, expectGate, expectStep); if (refused) return refused;
   const askCode = area.then === 'ask-code', beforePr = run.gate?.kind === 'approve-pr';
   if (ended(run) && !(askCode && run.gate?.kind === 'ask-code')) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. There is nothing to approve.`);
   if (area.gate === 'pr' && !askCode && !beforePr) return fail(`Nothing to approve for #${run.number}: the ${area.name} area ends with ${prLabel(run, area)}, which pdd opens after its last step.${prOf(run, area.name) ? ` ${prLabel(run, area) === 'the PR' ? 'PR' : prLabel(run, area)}: ${prOf(run, area.name).url}` : ''}`);
@@ -896,7 +925,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
     const at = p.now(), url = prOf(run, area.name).url;
     run.decisions.push({ stage: area.name, decision: 'approve', via: record.via, at, ...(record.text !== undefined ? { text: record.text } : {}) });
     run.approvalRecord = { kind: record.via, area: area.name, at, ...(record.text !== undefined ? { userMessage: record.text, userMessageAt: record.at, sessionId: record.sessionId } : {}) };
-    run.state = 'waiting'; run.gate = askCode ? { area: area.name, at, kind: 'ask-code' } : null; run.question = null; writeRun(run, p);
+    run.state = 'waiting'; run.gate = askCode ? gateRecord(area, 'ask-code', at) : null; run.question = null; writeRun(run, p);
     const head = [`Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
@@ -946,11 +975,12 @@ export async function askPerson({ text, cwd }, ports) {
     `The person answers in this chat, or from their shell with: pdd workflow changes ${run.number} "answer". Then go on with the step and run done as usual.`].join('\n'));
 }
 
-export async function changeRun({ ref, text, cwd }, ports) {
+export async function changeRun({ ref, text, cwd, expectGate, expectStep }, ports) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run, area = run.areas[run.area], chat = currentChat(run);
+  const refused = guardExpectation(run, expectGate, expectStep); if (refused) return refused;
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   // After pdd workflow ask the text is the person's answer; otherwise it is a change request.
   const request = oneLine(text), answer = Boolean(openQuestion(run));
@@ -971,11 +1001,12 @@ export async function changeRun({ ref, text, cwd }, ports) {
     : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. Approve when you are happy: pdd workflow approve ${run.number}` : ''}`);
 }
 
-export async function cancelRun({ ref, cwd }, ports) {
+export async function cancelRun({ ref, cwd, expectGate, expectStep }, ports) {
   const p = deps(ports);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  const refused = guardExpectation(run, expectGate, expectStep); if (refused) return refused;
   if (run.state === 'cancelled') return done(`The run for ${run.repo}#${run.number} is already cancelled.`);
   p.say('Closing the chat tabs in Herdr…');
   const { warnings } = await closeChats(run, p);
@@ -1104,11 +1135,12 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   return done(detail(run, chat, facts));
 }
 
-export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT, expectGate, expectStep }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   const run = found.run;
+  const refused = guardExpectation(run, expectGate, expectStep); if (refused) return refused;
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}. Its worktree is ${run.root}.`);
   const missing = missingHome(run, p.env);
   if (missing) return fail(missing);
