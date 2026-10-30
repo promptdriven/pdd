@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: aedbb2b3dfd811725c7435e518df7228cb33729c28be3b9b778a96869b9baab8).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 5b276a0f915dbb29a7d2cb6e28f56db403dbf18c01bf616afe8bddbefa1e4be8).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -42,7 +42,7 @@ export function renderHelp(prefix = []) {
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, runtimeSlots } = {}) {
+  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -122,6 +122,11 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'runtime-jobs':
       try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
       catch (error) { line(stderr, `Local runtime jobs could not be read.${reason(error)}`); return 5; }
+    case 'contracts': case 'contracts-sync':
+      try {
+        const commands = contracts ?? await import('./contracts.mjs');
+        return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
+      } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 38e54878fb2a738e13d7f1f979b972325522e18b583dcfc99ea2b77779d4f52a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 82d1673419d578f26dac73b70bffb27b47fa583dd1f3e7e15f00ffc2301e1145).
 const form = (form, description) => Object.freeze({ form, description });
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change']);
 const routes = [
@@ -68,6 +68,10 @@ const routes = [
       form('pdd try --stop [STORY]', 'Stop the open Try link of a story.')] },
   { id: 'jobs', prefix: ['jobs'], local: 'runtime-jobs', operands: [], options: [],
     forms: [form('pdd jobs', 'List active and waiting runtime jobs on this machine without contacting the runtime.')] },
+  { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
+    forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
+  { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
+    forms: [form('pdd contracts sync [--write]', 'Preview moving schema copies to references; apply only with --write. No runtime calls.')] },
   { id: 'mcp', prefix: ['mcp'], local: 'mcp', operands: [], options: [],
     forms: [form('pdd mcp', 'Serve the current repository’s Try tools over stdio MCP.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [],

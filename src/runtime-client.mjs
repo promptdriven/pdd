@@ -1,15 +1,16 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 364c3da485b5955c6e4321899650434fec53c3355e81a5ed67ddd8a6db51e087).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 54c669b8fdd8e9e0c79a7851e72bed8183c10ca23c737e5e1ff67063c655aa57).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  preflight, readPrompt, selectTests, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
 import { lintSvgLayouts } from './svg-layout.mjs';
@@ -117,10 +118,54 @@ function realish(path) {
 }
 const inside = (child, parent) => { const rel = relative(parent, child); return rel === '' || (!rel.startsWith('..') && !rel.startsWith(sep) && rel !== '..'); };
 
-function stateFor(env, root) {
+function stateDirectory(env, root) {
   const dir = resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime'));
   if (inside(realish(dir), realpathSync(root))) throw new Stop(2, 'PDD_STATE_DIR is inside this repository. pdd keeps run state outside the repo. Choose another folder.');
-  return new StateStore(dir);
+  return dir;
+}
+function stateFor(env, root) { return new StateStore(stateDirectory(env,root)); }
+
+export function readContractHistory({root,env = process.env}) {
+  const warnings = [], latest = new Map();
+  const empty = story_path => ({story_path,baseline:'not-checked',checked_at:null,result_state:null,files:[],references:[]});
+  try {
+    const found = findTests({root});
+    for (const story of found.stories) latest.set(story.path,{value:empty(story.path),time:-Infinity,id:''});
+    const directory = join(stateDirectory(env,root),'batches');
+    let entries;
+    try { entries = readdirSync(directory); } catch (error) { if (error.code === 'ENOENT') return {stories:[...latest.values()].map(row=>row.value),warnings}; throw error; }
+    const read = path => {
+      const stat = statOrNull(path);
+      if (!stat?.isFile() || stat.isSymbolicLink()) return null;
+      try { return JSON.parse(readFileSync(path,'utf8')); } catch { warnings.push('Some local Check history is unavailable.'); return null; }
+    };
+    for (const name of entries.sort()) {
+      if (!BATCH.test(name) || !statOrNull(join(directory,name))?.isDirectory() || statOrNull(join(directory,name))?.isSymbolicLink()) continue;
+      const folder=join(directory,name), saved=read(join(folder,'batch.json'));
+      if (!saved || saved.root !== root || saved.intent === 'lint-only' || !Array.isArray(saved.rows)) continue;
+      for (const row of saved.rows) {
+        const snapshot = saved.contract_snapshots?.find(item=>item.tests?.includes(row.test));
+        const legacy = found.tests.find(test=>test.path===row.test && test.story===row.story);
+        const story_path = snapshot?.story_path ?? row.story_path ?? legacy?.storyPath;
+        if (typeof story_path !== 'string') continue;
+        for (const id of row.request_ids ?? []) {
+          if (!UUID.test(id)) continue;
+          const receipt=read(join(folder,`${id}.json`));
+          const evaluated=receipt?.result?.report?.samples?.some(sample=>sample?.steps?.some(step=>Array.isArray(step?.checks)&&step.checks.length));
+          if (!sameJob(receipt,id,'check') || !['passed','failed'].includes(receipt.state) || !evaluated) continue;
+          const at = receipt.created_at ?? receipt.started_at ?? (typeof row.sent_at === 'number' ? new Date(row.sent_at).toISOString() : saved.created_at);
+          const time=Date.parse(at); if (!Number.isFinite(time)) continue;
+          const previous=latest.get(story_path);
+          if (previous && (previous.time>time || previous.time===time && (
+            previous.value.result_state==='failed' && receipt.state==='passed'
+            || previous.value.result_state===receipt.state && previous.id>=id))) continue;
+          const available = Array.isArray(snapshot?.files) && Array.isArray(snapshot?.references);
+          latest.set(story_path,{time,id,value:{story_path,baseline:available?'checked':'unavailable',checked_at:new Date(time).toISOString(),result_state:receipt.state,files:available?snapshot.files:[],references:available?snapshot.references:[]}});
+        }
+      }
+    }
+  } catch (error) { warnings.push(`Local Check history is unavailable: ${cleanText(error.message).slice(0,500)}`); }
+  return {stories:[...latest.values()].map(row=>warnings.length && row.value.baseline==='not-checked' ? {...row.value,baseline:'unavailable'} : row.value).sort((a,b)=>a.story_path<b.story_path?-1:a.story_path>b.story_path?1:0),warnings:[...new Set(warnings)]};
 }
 
 class StateStore {
@@ -529,7 +574,8 @@ function batchRecord(context) {
   return { version: 1, batch, origin, root, head: context.head, login: identity.login, user_id: identity.userId,
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
-    rows: rows.map(row => ({ test: row.test, story: row.story, title: row.title, request_ids: row.request_ids, state: row.state,
+    contract_snapshots: capture.stories,
+    rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null,
       sent_at: row.sent_at ?? null, ended_at: row.ended_at ?? null, max_calls: row.max_calls, warnings: row.warnings, steps: row.steps, criteria_total: row.criteria_total,
@@ -899,8 +945,19 @@ async function runLintOnly(context, cwd, words, options, setRelease) {
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
   const capture = captureSource(root, { tests: selected.map(test => test.path), appMap: null });
   const svgWarnings = lintSvgLayouts({ root, files: [...found.visible], promptPaths: capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')) });
-  context.warnings = [...svgWarnings, ...found.warnings];
-  if (!context.json) for (const warning of svgWarnings) line(ports.stderr, warning);
+  const drift=[];
+  try {
+    const files=sourceFilePort(root,found.visible), sources=[];
+    for (const path of [...found.visible].sort().filter(path=>path.startsWith('contracts/') && /\.(?:md|json)$/.test(path))) {
+      try { sources.push({path,text:files.read({path}).content}); } catch { drift.push(`Warning: ${path}: contract catalog advice unavailable.`); }
+    }
+    const catalog=catalogRecords(sources,capture.references.map(ref=>ref.target));
+    const compared=compareCopies(capture.files.filter(file=>file.path.endsWith('.prompt.md')).map(file=>({path:file.path,text:files.read({path:file.path}).content})),catalog.records);
+    drift.push(...[...catalog.warnings,...compared.warnings].map(warning=>`Warning: ${warning}`));
+    for (const match of compared.matches.filter(match=>match.kind==='near')) drift.push(`Warning: ${match.path} ${match.source_pointer}: copy of ${match.target} differs (${match.differences.join('; ')}). Use {"$contract":${JSON.stringify(match.target)}}.`);
+  } catch { drift.push('Warning: contract catalog advice is unavailable.'); }
+  context.warnings = [...svgWarnings, ...found.warnings,...drift];
+  if (!context.json) for (const warning of [...svgWarnings,...drift]) line(ports.stderr, warning);
   const identity = signIn(ports.gh, context.store), startedAt = ports.now(), batch = batchId(startedAt, ports.randomUUID);
   const timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : ports.interactive ? null : AGENT_WAIT_MIN;
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: timeoutMin ? startedAt + timeoutMin * 60_000 : Infinity, rows, head: null,
@@ -1092,6 +1149,7 @@ async function continueHeld(context, candidates, saved) {
     return;
   }
   if (capture.sha256 !== saved.source_sha256) { context.continuationNotice = 'No checks were sent for the lint-held rows: the saved source no longer matches: source changed. Start a fresh selected pdd check instead.'; return; }
+  capture.stories = context.capture.stories;
   if (context.interrupted || context.ports.now() >= context.deadline) return;
   Object.assign(context, { capture, reading: false });
   const selected = candidates.filter(row => !row.request_ids.length && !row.dispatchIncomplete);
@@ -1113,7 +1171,7 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   const identity = signIn(ports.gh, context.store);
   if (identity.login !== saved.login) throw new Stop(5, `These runs belong to ${saved.login}. Run: gh auth switch -u ${saved.login}`);
   Object.assign(context, { batch: name, origin: saved.origin, coverage: saved.coverage, identity, intent: saved.intent, secrets: [identity.token], warnings: saved.warnings ?? [],
-    capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
+    capture: { sha256: saved.source_sha256, files: saved.files.map(path => ({ path })), bytes: saved.bytes, stories:saved.contract_snapshots }, lint: saved.lint, head: saved.head, startedAt: Date.parse(saved.created_at) });
   runtimeOrigin({ PDD_RUNTIME_URL: saved.origin });
   context.runtime = new Runtime({ origin: saved.origin, token: identity.token, ports, signal: context.signal });
   const rows = saved.rows.map(row => ({ ...row, ...(row.request_ids?.length ? { calls: 'unknown' } : {}), request_ids: [...(row.request_ids ?? [])], checks: null, failed_checks: [], all_checks: [] }));
@@ -1171,6 +1229,7 @@ async function recoverRestarts(context) {
   if (!eligible.length || context.interrupted || context.ports.now() >= context.deadline) return [];
   const capture = captureSource(context.root, { tests: context.rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) { context.continuationNotice = 'The saved source changed; no restarted check was sent again.'; return []; }
+  capture.stories = context.capture.stories;
   context.capture = capture;
   const selected = [];
   for (const row of eligible) {
@@ -1190,6 +1249,7 @@ async function runRetry(context, name, options) {
   if (context.interrupted || ports.now() >= context.deadline) return printResult(context, rows);
   const capture = captureSource(context.root, { tests: rows.map(row => row.test), appMap: null });
   if (capture.sha256 !== context.capture.sha256) throw new Stop(2, 'The saved source no longer matches: source changed. Start a fresh selected pdd check instead.');
+  capture.stories = context.capture.stories;
   const lintId = context.lint?.request_ids?.at(-1), lint = lintId && context.store.read(join(context.folder, `${lintId}.json`));
   if (!lint || !sameJob(lint, lintId, 'lint') || lint.state !== 'passed' || context.lint.unknown || context.lint.pending)
     throw new Stop(2, 'The saved lint cannot authorize recovery. Start a fresh selected pdd check.');
@@ -1334,6 +1394,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   const rows = localRows(checked.rows);
   for (const row of rows) {
     const test = selected.find(item => item.path === row.test);
+    row.story_path = test?.storyPath;
     row.criterion_texts = Object.fromEntries((Array.isArray(test?.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text]));
   }
   if (options['--max-calls'] !== undefined) for (const row of rows) row.max_calls = Number(options['--max-calls']);
@@ -1463,6 +1524,27 @@ async function stopTry(context, record) {
   if (done.answer?.state !== 'passed') throw new Stop(done.answer?.state === 'refused' ? 4 : 3, 'The Try did not confirm that it stopped. Run pdd try --stop again later.');
 }
 
+function tryPromptProblem(root, found, test, record, capture) {
+  const hashes=record.prompt_hashes;
+  if (!capture && isObject(hashes)) {
+    const files=sourceFilePort(root,found.visible), sources=[], references=[], raw_prompt_hashes={};
+    for (const path of Object.keys(hashes)) {
+      const prepared=readPrompt(root,found.visible,path);
+      if (!prepared.text) return 'A prompt changed or this Try has no source record.';
+      sources.push({path,bytes:Buffer.from(prepared.text,'utf8')});references.push(...(prepared.references??[]));
+      raw_prompt_hashes[path]=sha256(Buffer.from(files.read({path}).content,'utf8'));
+    }
+    capture={sources,references,raw_prompt_hashes};
+  }
+  if (!isObject(hashes) || !Object.keys(hashes).length || !test.doc?.steps?.every(step=>typeof hashes[step.entry_path]==='string')
+    || !Object.entries(hashes).every(([path,expected])=>found.visible.has(path) && capture.raw_prompt_hashes[path]===expected)) return 'A prompt changed or this Try has no source record.';
+  const current=Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)]));
+  if (isObject(record.effective_prompt_hashes) && Object.keys(hashes).every(path=>typeof record.effective_prompt_hashes[path]==='string')) {
+    if (!Object.entries(record.effective_prompt_hashes).every(([path,expected])=>current[path]===expected)) return 'A prompt or shared contract changed since this Try.';
+  } else if (capture.references.some(ref=>ref.consumer.endsWith('.prompt.md'))) return 'This Try reference baseline is unavailable.';
+  return null;
+}
+
 
 // pdd try. Returns the exit code.
 export async function runTry({ words = [], options = {}, cwd = process.cwd() } = {}, givenPorts = {}) {
@@ -1529,15 +1611,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         throw new Stop(2, `A Try for "${test.title}" is already open. --app-map and --tab apply only to a new Try: run pdd try ${test.story} --new (it stops the open Try first).`);
       }
       if (live && (options['--serve'] || context.agentConnection) && !options['--new']) {
-        let matches = false;
-        try {
-          const hashes = record.prompt_hashes;
-          matches = isObject(hashes) && Object.keys(hashes).length > 0
-            && test.doc.steps.every(step => typeof hashes[step.entry_path] === 'string')
-            && Object.entries(hashes).every(([path, expected]) => found.visible.has(path)
-              && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === expected);
-        } catch { /* A removed prompt cannot match the uploaded source. */ }
-        if (!matches) throw new Stop(options['--serve'] ? 125 : 4, `A prompt changed or this Try has no source record. Run pdd try STORY${options['--serve'] ? ' --serve' : ''} --new.`);
+        const problem=tryPromptProblem(root,found,test,record,capture);
+        if (problem) throw new Stop(options['--serve'] ? 125 : 4, `${problem} Run pdd try STORY${options['--serve'] ? ' --serve' : ''} --new.`);
       }
       if (answer?.state === 'passed' && answer.result?.session?.state === 'paused' && !options['--new']) {
         if (!validLink(answer.result?.url, origin, 'try')) throw new Stop(3, refusedLink(answer, origin));
@@ -1573,7 +1648,9 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
       if (context.interrupted || ports.now() >= context.deadline) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, 'Stopped before the Try was sent.'); }
-      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: Object.fromEntries(capture.files.map(file => file.path).filter(path => path.endsWith('.prompt.md')).map(path => [path, createHash('sha256').update(readFileSync(join(root, path))).digest('hex')])) } } });
+      const uploadedSeed=capture.sources.find(file=>file.path===test.path);
+      store.saveRepo(root, { ...repoState, tries: { ...repoState.tries, [test.path]: { id: request.requestId, ...setup, story: test.story, storyPath: test.storyPath, title: test.title, origin, login: identity.login, seed_scenario: uploadedSeed ? JSON.parse(uploadedSeed.bytes.toString('utf8')) : test.doc, story_sha256: createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex'), prompt_hashes: capture.raw_prompt_hashes,
+        effective_prompt_hashes:Object.fromEntries(capture.sources.filter(file=>file.path.endsWith('.prompt.md')).map(file=>[file.path,sha256(file.bytes)])),contract_references:capture.references } } });
       store.posted(context.folder, request.requestId);
       line(ports.stderr, `Starting your Try: sending ${capture.files.length} files, ${formatSize(capture.bytes)}${note ? ` ${note}` : ''}…`);
       reply = await context.runtime.post('/v1/try', request, capture.tar, Math.max(1, Math.min(ports.postMs, context.deadline - ports.now())));
@@ -1955,6 +2032,15 @@ export async function runDoorCall(descriptor, input, givenPorts = {}) {
   const store = stateFor(ports.env, root), identity = signIn(ports.gh, store);
   if (identity.login !== login) throw new Stop(5, `This Try belongs to ${login}. Run: gh auth switch -u ${login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: origin }) !== origin) throw new Stop(2, 'The saved runtime address is invalid.');
+  const repo=store.read(join(store.dir,'repos',`${store.repoKey(root)}.json`));
+  const saved=Object.entries(repo?.tries ?? {}).find(([,record])=>record.id===sessionId);
+  if (saved) {
+    const found=findTests({root}), test=found.tests.find(test=>test.path===saved[0]);
+    if (test) {
+      const problem=tryPromptProblem(root,found,test,saved[1]);
+      if (problem) throw new Stop(125,`${problem} Run pdd try STORY --new.`);
+    }
+  }
   const runtime = new Runtime({ origin, token: identity.token, ports, signal: ports.signal });
   if (ports.signal?.aborted) throw new Stop(125, 'The local server stopped before the command was sent.');
   const id = ports.randomUUID(), request = { requestId: id, prompt, operation, input };
@@ -2026,10 +2112,9 @@ export async function readTryOwner({ cwd = process.cwd(), story } = {}, givenPor
   const identity = signIn(ports.gh, store);
   if (record.login !== identity.login) throw new Error(`This Try belongs to ${record.login}. Run: gh auth switch -u ${record.login}`);
   if (runtimeOrigin({ PDD_RUNTIME_URL: record.origin }) !== record.origin) throw new Error('The saved runtime address is invalid.');
-  const hashes = record.prompt_hashes;
-  if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || !isObject(hashes) || !Object.keys(hashes).length || !test.doc?.steps?.every(step => typeof hashes[step.entry_path] === 'string')
-    || !Object.entries(hashes).every(([path, hash]) => found.visible.has(path) && createHash('sha256').update(readFileSync(join(root, path))).digest('hex') === hash))
-    throw new Error('The Story or a prompt changed, or this Try has no source record. Run pdd try STORY --new.');
+  const promptProblem=tryPromptProblem(root,found,test,record);
+  if (record.storyPath !== test.storyPath || record.story_sha256 && createHash('sha256').update(readFileSync(join(root, test.storyPath))).digest('hex') !== record.story_sha256 || promptProblem)
+    throw new Error(`${promptProblem ?? 'The Story changed.'} Run pdd try STORY --new.`);
   let runtime = new Runtime({ origin: record.origin, token: identity.token, ports, signal: ports.signal });
   let metadata = await runtime.send(`/v1/try/${record.id}/model`, { method: 'GET' }, GET_MS);
   let paused = false;
