@@ -1,23 +1,23 @@
-# PDD v2
+# PDD
 
 ## What PDD is
 
-This is PDD version 2. In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD runtime runs the prompts with an AI that acts as the code, so you can check and try the program before any code exists. Then your agent writes the code from the approved prompts.
+In PDD, you write prompts and Stories. The prompts are the source of your program. The PDD interpreter runs the prompts with an AI that acts as the code, so you can check and try the program before any code exists. Then your agent writes the code from the approved prompts.
 
 ```mermaid
 flowchart LR
   P["Prompt<br/>the source"] --> S["Story<br/>what a user can do"]
-  S --> C["Check<br/>pdd check"]
-  C --> T["Try<br/>pdd try"]
+  S --> C["Test<br/>pdd test"]
+  C --> T["Simulate<br/>pdd simulate"]
   T --> A["Approve<br/>pdd approve"]
   A --> K["Code<br/>from the prompts"]
 ```
 
-PDD is the `pdd` command and a set of skills for your agent. Your agent writes the prompts, the Stories, the tests and the code. The runtime runs the checks and the Try. Only you approve.
+PDD is the `pdd` command and a set of skills for your agent. Your agent writes the prompts, the Stories, the tests and the code. The PDD interpreter runs the checks and the simulation. Only you approve.
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.20 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. You also need an agent that can use skills, and access to the PDD runtime (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.20 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. You also need an agent that can use skills, and access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g github:promptdriven/pdd
@@ -29,7 +29,7 @@ pdd setup
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd#alpha -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
-3. `pdd --version` must print `0.1.11`. When your skills are older than pdd, it also prints the command that updates them.
+3. `pdd --version` must print `0.1.12`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. A second run changes nothing.
 
 To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
@@ -71,19 +71,19 @@ The agent writes these files in prompt space:
 
 You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
 
-In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow run feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
+In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow start feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
 
 > [!WARNING]
 > In a workflow run, the agents run with full access. They do not stop to ask for approval. They can change files and run commands as your user.
 
-### 2. Check
+### 2. Test
 
 ```sh
-pdd check --lint
-pdd check
+pdd lint
+pdd test
 ```
 
-`pdd check --lint` checks the format of the files, with 0 AI calls. `pdd check` runs the tests of every Story on the runtime. To check only some Stories, name them, for example `pdd check my-story other-story`. The output has this shape:
+`pdd lint` checks the format of the files, with 0 AI calls. `pdd test` runs the tests of every Story on the PDD interpreter. To check only some Stories, name them, for example `pdd test my-story other-story`. The output has this shape:
 
 ```
 Story        Test                    Result  Checks  Time
@@ -109,40 +109,40 @@ Reports (anyone with a link can open it):
 
 Checks show `✓` when all passed and `✗` when a check failed. Without a failed check, pending work shows `running`, even beside a refused check. Busy checks show `busy` when the other checks passed or are also busy. Other refused, not-run or unknown checks show `no verdict`. Exit codes use this order: 3, 5, 4, 1, 0. When failed checks sit beside a higher exit code, pdd explains why.
 
-### 3. Try
+### 3. Simulate
 
-`pdd try` lets you use the program by hand. There is no code: the runtime runs the prompts.
+`pdd simulate` (short: `pdd sim`) lets you use the program by hand in the PDD Simulator. There is no code: the interpreter runs the prompts.
 
 | Your program | Command | What you do |
 |---|---|---|
-| A screen | `pdd try STORY` | pdd opens the Try page in your browser. On the **Screen** tab, click **Open the app**, then use it. |
-| A command line | `pdd try STORY --cli` | pdd prints an `export PATH=…` line. Run that line, because pdd cannot change the PATH of your terminal. Then run your program's commands. |
-| An HTTP API | `pdd try STORY --serve PORT` | pdd serves the routes of the prompt at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
-| Anything else | `pdd try STORY` | On the **Form** tab of the Try page, fill the fields and click **Run**. |
+| A screen | `pdd simulate STORY` | pdd opens the PDD Simulator in your browser. On the **Screen** tab, click **Open the app**, then use it. |
+| A command line | `pdd simulate STORY --cli` | pdd prints an `export PATH=…` line. Run that line, because pdd cannot change the PATH of your terminal. Then run your program's commands. |
+| An HTTP API | `pdd simulate STORY --serve PORT` | pdd serves the routes of the prompt at `http://127.0.0.1:PORT`. Send requests with `curl`. Ctrl-C stops the server. |
+| Anything else | `pdd simulate STORY` | On the **Form** tab of the Simulator, fill the fields and click **Run**. |
 
 For a command line named `my-program`, and an API with a route `/api/items`:
 
 ```sh
-pdd try my-story --cli
+pdd simulate my-story --cli
 export PATH=/path/to/your-repo/.pdd/try/bin:"$PATH"
 my-program --help
 ```
 
 ```sh
-pdd try my-story --serve 8091
+pdd simulate my-story --serve 8091
 curl http://127.0.0.1:8091/api/items
 ```
 
-The server keeps running, so send the requests from a second terminal. The command line and the API use the same Try data.
+The server keeps running, so send the requests from a second terminal. The command line and the API use the same simulation data.
 
-Each command or request runs on the runtime with no code. It takes about 10 to 20 seconds and uses AI calls from the Try budget. A Try runs one command at a time. Your agent can run the same commands after the PATH line, when it has network access and no sandbox that blocks files outside the repo.
+Each command or request runs on the interpreter with no code. It takes about 10 to 20 seconds and uses AI calls from the simulation budget. A simulation runs one command at a time. Your agent can run the same commands after the PATH line, when it has network access and no sandbox that blocks files outside the repo.
 
-On the Try page, the **Ask your agent** panel connects to an agent on your computer while `pdd try` runs in your terminal. It explains and fills fields. When you ask it to run an action, it runs it using the Try budget; otherwise you press **Run**. To choose the agent, add `--agent NAME`.
+In the Simulator, the **Ask your agent** panel connects to an agent on your computer while `pdd simulate` runs in your terminal. It explains and fills fields. When you ask it to run an action, it runs it using the simulation budget; otherwise you press **Run**. To choose the agent, add `--agent NAME`.
 
-- **Budget.** A new Try has 400 AI calls. For more, click **Raise the limit** on the Try page, or start a new Try with `pdd try STORY --new --max-calls 600`. `--new` starts with fresh data.
-- **Save a case.** Click **Save as test** on the Try page, or run `pdd try --save-last` after a `--cli` command. pdd adds the case to the Story's test file.
-- **Keep the link private.** Anyone with a Try link can use it and spend its AI calls.
-- **Stop it.** A Try ends after 24 hours. To stop it before that, run `pdd try --stop STORY`.
+- **Budget.** A new simulation has 400 AI calls. For more, click **Raise the limit** in the Simulator, or start a new simulation with `pdd simulate STORY --new --max-calls 600`. `--new` starts with fresh data.
+- **Save a case.** Click **Save as test** in the Simulator, or run `pdd simulate --save-last` after a `--cli` command. pdd adds the case to the Story's test file.
+- **Keep the link private.** Anyone with a Simulator link can use it and spend its AI calls.
+- **Stop it.** A simulation ends after 24 hours. To stop it before that, run `pdd simulate --stop STORY`.
 
 ### 4. Approve
 
@@ -152,14 +152,14 @@ When the program does what you want, approve each prompt in your terminal:
 pdd approve prompts/NAME.prompt.md
 ```
 
-pdd shows the interface of the prompt and the text changes since the last approval. Then it asks yes or no. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** on the Try page while `pdd try` runs in your terminal.
+pdd shows the interface of the prompt and the text changes since the last approval. Then it asks yes or no. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** in the Simulator while `pdd simulate` runs in your terminal.
 
 ### 5. Code space
 
-In a workflow run, pdd opens two pull requests:
+Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. In a workflow run, pdd opens two pull requests:
 
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Runtime check` lines and the report links.
-2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent writes the code from the approved prompts. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
+2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
 pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
 
@@ -168,23 +168,25 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | Command | What it does |
 |---|---|
 | `pdd setup` | Set up this repo for PDD. |
-| `pdd check --lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
-| `pdd check [STORY...]` | Run the tests of the Stories on the runtime. |
-| `pdd check --files` | List the files that a check sends. No network. |
-| `pdd check --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
-| `pdd try STORY` | Open a Try page for the Story. |
-| `pdd try STORY --cli` | Run the program as a command line in your terminal. |
-| `pdd try STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
-| `pdd try STORY --agent NAME` | Connect an agent to the **Ask your agent** panel. |
-| `pdd try STORY --new --max-calls N` | Start a new Try with a limit of N AI calls. |
-| `pdd try --stop STORY` | Stop the Try link of a Story. |
+| `pdd lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
+| `pdd test [STORY...]` | Run the tests of the Stories on the PDD interpreter. |
+| `pdd test --files` | List the files that a check sends. No network. |
+| `pdd test --read` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
+| `pdd simulate STORY` | Open the Story in the PDD Simulator. |
+| `pdd simulate STORY --cli` | Run the program as a command line in your terminal. |
+| `pdd simulate STORY --serve PORT` | Serve the program as an HTTP API on localhost. |
+| `pdd simulate STORY --agent NAME` | Connect an agent to the **Ask your agent** panel. |
+| `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
+| `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
 | `pdd approve PROMPT` | Approve a prompt. Only for a person at a terminal. |
-| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
+| `pdd workflow start NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
-| `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Try links of a run. Changes nothing. |
+| `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
 | `pdd workflow approve [ISSUE]` | Approve the gate of a run, or start code space. |
 | `pdd help` | Show all commands. |
+
+`pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run` also work. Each one prints one line on stderr with the name to use.
 
 The [CLI reference](docs/cli.md) has every command and option.
 
@@ -198,15 +200,15 @@ The [CLI reference](docs/cli.md) has every command and option.
 
 **Draft and approved.** A prompt starts as a draft. A draft can be checked and tried. Only a person approves a prompt. When an approved prompt changes, it goes back to draft.
 
-**AI-call budgets.** A budget is a limit, not a price. You are charged only for calls that run. A check gives each test file 12 calls for each step, at least 18 and at most 1000. A new Try has 400 calls. `--max-calls N` sets another limit, from 1 to 1000, for a check or a new Try.
+**AI-call budgets.** A budget is a limit, not a price. You are charged only for calls that run. A check gives each test file 12 calls for each step, at least 18 and at most 1000. A new simulation has 400 calls. `--max-calls N` sets another limit, from 1 to 1000, for a check or a new simulation.
 
-**Fakes.** The runtime never touches your real database, files or services. The prompt declares each one as a resource, the test gives its starting data, and the runtime fakes it. See [RUNBOOK §5](RUNBOOK.md#5-saved-data).
+**Fakes.** The interpreter never touches your real database, files or services. The prompt declares each one as a resource, the test gives its starting data, and the interpreter fakes it. See [RUNBOOK §5](RUNBOOK.md#5-saved-data).
 
-**Scoped uploads.** A check sends only the files that the selected Stories need. Each file must be visible to Git. pdd refuses files with secret-like names. `pdd check --files` shows the list.
+**Scoped uploads.** A check sends only the files that the selected Stories need. Each file must be visible to Git. pdd refuses files with secret-like names. `pdd test --files` shows the list.
 
 ## Access
 
-`pdd check` and `pdd try` use the hosted PDD runtime. The runtime lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Runtime%20access%20for%20) with your GitHub login.
+`pdd test` and `pdd simulate` use the hosted PDD interpreter. The interpreter lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
 
 The skills and the other commands run on your computer.
 
@@ -214,17 +216,17 @@ The skills and the other commands run on your computer.
 
 | You see | What to do |
 |---|---|
-| `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
+| `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
-| `Please update pdd: …` | Your pdd is too old for the runtime. Do the install steps again. |
-| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd check --lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-check) lists the usual refusals. |
+| `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Do the install steps again. |
+| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-test) lists the usual refusals. |
 | `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
-| `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd check --read` later. Do not send the same check again. |
+| `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd test --read` later. Do not send the same check again. |
 | `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |
-| `This Try session is busy.` | The Try runs one command at a time. Wait for the first command to finish. |
-| `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a Try that you do not use, run `pdd try --stop STORY`. |
-| `This Try has ended` | The Try used all its AI calls or its 24 hours. Run `pdd try STORY --new`. |
-| `pdd --version` does not print `0.1.11` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
+| `This Try session is busy.` | A simulation runs one command at a time. Wait for the first command to finish. |
+| `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
+| `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
+| `pdd --version` does not print `0.1.12` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" setup`. It shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 
@@ -234,14 +236,14 @@ Follow [docs/ISSUES.md](docs/ISSUES.md). Your agent can follow it too, so you ca
 
 1. Run `pdd --version`. It must print `0.1.` and a number.
 2. Search the [open issues](https://github.com/promptdriven/pdd/issues). If an issue has the same problem, add a comment to it.
-3. If not, fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml): one problem, the exact command and the output. Never paste tokens, Try links or private code.
+3. If not, fill the [issue form](https://github.com/promptdriven/pdd/issues/new?template=bug.yml): one problem, the exact command and the output. Never paste tokens, Simulator links or private code.
 
 ## Links
 
 - [Documentation](docs/index.md): the [usage guide](docs/USAGE.md), [workflows](docs/workflows.md), the [CLI reference](docs/cli.md) and the [Prompting guide](docs/prompting-guide.md).
-- [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the runtime can check.
+- [RUNBOOK.md](RUNBOOK.md): how to write prompts and tests that the PDD interpreter can check.
 - [The skills](skills/).
-- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.11).
+- [Release notes](https://github.com/promptdriven/pdd/releases/tag/alpha-v0.1.12).
 - [Contributing](CONTRIBUTING.md).
 
 ## License
