@@ -260,10 +260,10 @@ function checkContracts(root,{stdout,stderr,json = false}) {
             const canonical = target ? select(target,worldPath,'Schema',target) : null;
             const old = rows.get(pointer);
             if (old?.canonical && canonical && old.canonical !== canonical) report(worldPath,key,'Schema','conflicting schema mappings');
-            if (!old) rows.set(pointer,{key,tokens,actors:new Set(actors),canonical,explicit:!!target,evidence:[cells.join(' ')]});
+            if (!old) rows.set(pointer,{key,tokens,actors:new Set(actors),canonical,explicit:!!target,evidence:[table.headings.map((heading,index) => ({heading,text:cells[index] ?? ''}))]});
             else {
               for (const actor of actors) old.actors.add(actor);
-              old.evidence.push(cells.join(' '));
+              old.evidence.push(table.headings.map((heading,index) => ({heading,text:cells[index] ?? ''})));
               old.explicit ||= !!target;
               if (!old.canonical && canonical) old.canonical = canonical;
             }
@@ -342,12 +342,11 @@ function checkContracts(root,{stdout,stderr,json = false}) {
     for (const row of rows.values()) {
       if (row.explicit) continue;
       const candidates = new Set();
-      for (const evidence of row.evidence) {
-        for (const [name,targets] of names) {
-          // Boundaries are exact record tokens, not substring/plural aliases.
-          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-          if (name && new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}(?![\\p{L}\\p{N}_-])`,'u').test(evidence.replace(/\[[^\]]*\]\([^)]*\)/g,''))) for (const target of targets) candidates.add(target);
-        }
+      for (const cells of row.evidence) for (const {heading,text:evidence} of cells) {
+        if (heading === 'Writer' || heading === 'Readers') continue;
+        const mentions = [...evidence.matchAll(/`([^`]*)`/g)].map(match => match[1]);
+        if (heading === 'Key' || heading === 'What it holds') mentions.push(evidence.trim());
+        for (const name of mentions) for (const target of names.get(name) ?? []) candidates.add(target);
         for (const link of evidence.matchAll(/\[[^\]]*\]\(([^\s)]+)\)/g)) {
           const [path,fragment = ''] = link[1].split('#');
           if (/^[a-z][a-z0-9+.-]*:/i.test(path) || path.startsWith('/')) continue;
