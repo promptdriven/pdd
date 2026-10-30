@@ -2,7 +2,7 @@
 name: pdd-setup
 description: Set up a repo for PDD. Use when the person asks to set up PDD, add PDD to a project, or connect the PDD skills to this repo. Adds one short PDD block to CLAUDE.md or AGENTS.md.
 metadata:
-  pdd-skills: 0.1.11
+  pdd-skills: 0.1.12
 ---
 
 # PDD setup
@@ -19,7 +19,7 @@ Add one short PDD block to the file that this repo's agents read. This skill onl
 ## PDD
 This project uses PDD: prompts are the source. Write the prompt, Story and test cases first, then the code.
 Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.
-Full run with PRs: `pdd workflow run NAME ISSUE` (NAME: feature, bug or small-change).
+Full run with PRs: `pdd workflow start NAME ISSUE` (NAME: feature, bug or small-change).
 Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.
 <!-- pdd:end -->
 ```

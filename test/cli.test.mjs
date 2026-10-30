@@ -16,7 +16,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -24,7 +24,7 @@ test('ALPHA1: only local plans are admitted without Host disposition or forwarde
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
   for (const argv of [['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
-    ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['lint'], ['runtime', 'discover'],
+    ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
     ['workflow', 'list', '--json', '--json'], ['workflow', 'list', 'extra'], ['completion', 'fish'],
@@ -67,9 +67,9 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
-    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|lint|runtime|doctor|phone)\b/);
+    assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
   }
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
@@ -80,7 +80,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);
-    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|phone|machine)\b|(?<!-)\blint\b/);
+    assert.doesNotMatch(result.stdout, /\b(?:runtime|doctor|verify|phone|machine)\b/);
     const script = join(sandbox, `completion.${shell}`); writeFileSync(script, result.stdout);
     if (shell === 'bash') {
       const loaded = spawnSync('bash', ['--noprofile', '--norc', '-c', 'source "$1"; COMP_WORDS=(pdd workflow ""); COMP_CWORD=2; _pdd_complete; printf "%s\\n" "${COMPREPLY[@]}"', 'test', script], { env, encoding: 'utf8' });
@@ -94,7 +94,7 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
       assert.equal(selected.status,0,selected.stderr);assert.deepEqual(selected.stdout.trim().split('\n').sort(),['claude','codex']);
     }
   }
-  for (const word of ['run', 'verify', 'lint', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
+  for (const word of ['run', 'verify', 'runtime', 'replay', 'call', 'tests', 'doctor', 'phone', 'machine', 'repo', 'agents', 'workbench', 'unknown']) {
     for (const args of [[word], [word, '--help'], [word, '-h']]) {
       const result = run(args); assert.equal(result.status, 2, JSON.stringify(args)); assert.equal(result.stdout, ''); assert.ok(result.stderr.trim());
     }
@@ -109,9 +109,9 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
 // Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.
 test('ALPHA7: each runner route calls its own export once with parsed values, cwd and package root, and prints the message', async () => {
   const cases = [
-    [['workflow','run','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
-    [['workflow','run','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
-    [['workflow','run','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
+    [['workflow','start','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
+    [['workflow','start','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
+    [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
     [['workflow','approve'], 'approveRun', { ref: undefined }],
@@ -170,7 +170,7 @@ test('Try accepts named local launchers while workflow agent choices stay bounde
   for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
-    assert.doesNotMatch(completion,/try:--agent\)/);
+    assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);
     assert.match(completion,/workflow:--agent\)/);
   }
 });
