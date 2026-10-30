@@ -8,6 +8,7 @@ import { gitContext, resolveRun, runDirFor } from './workflow-runs.mjs';
 import { interfaceBlocks, isSecretPath, proseSha256 } from './runtime-preflight.mjs';
 
 const execute = promisify(execFile);
+const redactTry = value => String(value ?? '').replace(/https?:\/\/[^\s)<><?="'`]*?\/s\/[^/\s)<><?="'`]+(?:\/[^\s)<><?="'`]*)?/g, '(Try link removed)');
 const text = value => String(value ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').trim();
 const array = value => Array.isArray(value) ? value : [];
 const ended = run => ['completed', 'cancelled'].includes(run.state);
@@ -137,8 +138,9 @@ export async function viewRun({ ref, cwd }, ports = {}) {
       actor: { via: typeof item.via === 'string' ? item.via : null },
       timestamp: Number.isFinite(item.at) ? new Date(item.at).toISOString() : null,
     }));
-    const message = run.question && typeof run.question.text === 'string' ? run.question.text : null;
     const activeGate = run.gate && !ended(run) ? run.gate : null;
+    const openQuestion = run.question && (!run.gate || run.question.at >= run.gate.at) ? run.question : null;
+    const message = activeGate?.message ? redactTry(activeGate.message) : openQuestion && typeof openQuestion.text === 'string' ? redactTry(openQuestion.text) : null;
     const output = { version: 1, issue, state: typeof run.state === 'string' ? run.state : null,
       area: typeof area?.name === 'string' ? area.name : null,
       gate: activeGate ? { id: typeof activeGate.id === 'string' ? activeGate.id : null, area: typeof activeGate.area === 'string' ? activeGate.area : null, kind: typeof activeGate.kind === 'string' ? activeGate.kind : null } : null,
