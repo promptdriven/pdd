@@ -768,9 +768,10 @@ async function runLint(context, complete = false) {
   const tick = progressTicker(context.ports.stderr, context.ports.now);
   line(context.ports.stderr, `Checking ${context.capture.files.length} files (${formatSize(context.capture.bytes)}) on the PDD runtime (lint, 0 AI calls)…`);
   const busy = () => ({ kind: 'not_run', note: { code: 'lint-busy', message: `Your wait ended while pdd waited for ${context.waitCause ?? 'server capacity'}. No checks ran. Run the same pdd command again later.` } });
-  const pause = async wait => {
+  const pause = async (wait, maintenance = false) => {
+    context.waitCause = maintenance ? 'maintenance' : 'server capacity';
     if (context.interrupted || context.ports.now() >= lintEnd) return false;
-    if (context.waitCause !== 'maintenance') { context.waitCause = 'server capacity'; line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…'); }
+    if (!maintenance) line(context.ports.stderr, 'The server is busy. Waiting for a lint slot…');
     return waitBudget(context, wait, lintEnd);
   };
   for (;;) {
@@ -780,7 +781,7 @@ async function runLint(context, complete = false) {
     const request = { requestId: context.ports.randomUUID(), source_sha256: context.capture.sha256, ...(complete ? { complete: true } : {}) };
     context.lint.request_ids.push(request.requestId);
     const verdict = await postJob(context, '/v1/lint', 'lint', request, null, Math.max(1, Math.min(context.ports.postMs, lintEnd - context.ports.now())), lintEnd);
-    if (verdict.kind === 'busy') { if (await pause(verdict.wait)) continue; return busy(); }
+    if (verdict.kind === 'busy') { if (await pause(verdict.wait, verdict.maintenance)) continue; return busy(); }
     if (verdict.kind === 'not_sent') return busy();
     if (verdict.blocked) throw new Stop(5, verdict.note.message);
     if (verdict.kind !== 'accepted' && verdict.kind !== 'unknown') return verdict;

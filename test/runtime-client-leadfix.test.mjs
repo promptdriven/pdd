@@ -219,3 +219,68 @@ test('command return stops heartbeat timers without freeing an uncertain paid le
   const jobs = (await listRuntimeJobs({ stateDir: setup.state, origin: fake.origin })).jobs;
   assert.equal(jobs.length, 1); assert.deepEqual(jobs[0].request_ids, [fake.posts.find(e => e.command === 'check').request.requestId]);
 });
+
+for (const interrupted of [false, true]) test(`coalesced-probe-observer-deadline: later Try ${interrupted ? 'interrupt' : '50ms deadline'} leaves the shared GET intact`, async t => {
+  const a = harbor(t), b = harbor(t);
+  let probing, completed = false, firstFinished = false, madeA, madeB;
+  const probeStarted = new Promise(done => { probing = done; });
+  const fake = await fakeRuntime(t, async (entry, server) => {
+    assert.equal(entry.method, 'GET', 'no job may POST while the paid lease remains uncertain');
+    probing();
+    await new Promise(done => setTimeout(done, 500));
+    completed = true; madeA.clock.now = madeB.clock.now = base + 90_000;
+    return { status: 200, json: server.check('dead-paid', 'running') };
+  });
+  madeA = make(a, fake); madeB = make(b, fake);
+  const base = madeA.clock.now, mem = memorySlots(madeA, fake.origin), deadPath = join(mem.directory, 'dead.json');
+  const paid = { id: 'dead', state: 'active', pid: 99, kind: 'check', started_at: base, request_ids: ['dead-paid'] };
+  mem.records.set(deadPath, paid);
+  for (const made of [madeA, madeB]) {
+    made.ports.env.PDD_STATE_DIR = a.state; made.ports.env.PDD_MAX_JOBS = '1';
+    made.ports.slotFiles = mem.files; made.ports.isAlive = pid => pid !== 99;
+  }
+  let moved = false, interruptTimer, probeSignal;
+  madeB.ports.slotFiles = { ...mem.files, listRecords: () => {
+    if (!moved) {
+      moved = true; madeB.clock.now = base + (interrupted ? 0 : 89_950);
+      if (interrupted) interruptTimer = setTimeout(() => madeB.clock.interrupt(), 30);
+    }
+    return mem.files.listRecords();
+  } };
+  madeA.ports.fetch = (url, init) => { if (new URL(url).pathname.startsWith('/v1/runs/')) probeSignal = init.signal; return fetch(url, init); };
+  t.after(() => clearTimeout(interruptTimer));
+  const first = startTry(a, madeA.ports).finally(() => { firstFinished = true; });
+  await probeStarted;
+  const at = performance.now(), code = await startTry(b, madeB.ports), elapsed = performance.now() - at;
+  // Check safety independently of timing so an old-code failure identifies the
+  // missing observer bound rather than a changed expected effect.
+  assert.equal(code, 5); assert.equal(fake.gets.length, 1); assert.equal(fake.posts.length, 0);
+  assert.deepEqual(mem.records.get(deadPath), paid); assert.equal(madeB.clock.uuids, 1, 'only the waiting ticket needs an ID');
+  assert.ok(elapsed < 200, `later observer took ${elapsed.toFixed(1)}ms while its shared probe takes 500ms`);
+  assert.equal(completed, false); assert.equal(firstFinished, false); assert.equal(probeSignal.aborted, false);
+  assert.equal(await first, 5); assert.equal(completed, true); assert.equal(fake.gets.length, 1); assert.equal(fake.posts.length, 0);
+  assert.deepEqual([...mem.records.values()].filter(row => row.state), [paid]);
+});
+
+for (const kind of ['check', 'lint', 'try']) test(`cleared-maintenance-then-capacity-wait: ${kind} names the current server wait`, async t => {
+  const setup = harbor(t); let made, until, reads = 0;
+  const receipt = { dispatch: 'not_started', error: { code: 'lint-queue-full', details: { retryable: true, retry_after: 300 } } };
+  const fake = await fakeRuntime(t, entry => {
+    assert.equal(entry.command, 'lint'); assert.equal(made.clock.now, until);
+    return { status: 503, headers: { 'retry-after': '300' }, json: receipt };
+  });
+  made = make(setup, fake); const base = made.clock.now; until = base + 7000;
+  fake.capacity = () => { reads++; return { status: 200, json: { maintenance: made.clock.now < until ? { until: new Date(until).toISOString(), reason: 'brief window' } : null } }; };
+  assert.equal(await (kind === 'try' ? startTry(setup, made.ports) : check(setup, made.ports, kind === 'lint' ? { '--lint': true } : {})), 5);
+  assert.equal(made.clock.now, base + 90_000); assert.equal(reads, 2); assert.equal(maintenanceCount(made.ports), 1);
+  assert.equal(fake.posts.length, 1); assert.equal(fake.gets.length, 0);
+  const output = made.ports.stdout.text + made.ports.stderr.text;
+  assert.match(output, /Your wait ended while pdd waited for server capacity\./);
+  assert.doesNotMatch(output, /Your wait ended while pdd waited for maintenance\./);
+  if (kind !== 'try') {
+    const report = JSON.parse(made.ports.stdout.text);
+    if (kind === 'check') assert.equal(report.rows[0].calls, 0); else assert.match(report.summary_line, /0 AI calls/);
+    const id = fake.posts[0].request.requestId;
+    assert.deepEqual(JSON.parse(readFileSync(join(setup.state, 'batches', report.batch, `${id}.admission.json`))), receipt);
+  }
+});

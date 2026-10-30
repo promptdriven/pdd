@@ -154,7 +154,21 @@ function retryDelay(ports, failures, follower, remaining) {
   const base = follower ? 8 : Math.min(4, 2 * 2 ** Math.min(failures, 1));
   return Math.min(remaining, base + Math.floor(ports.random() * base));
 }
-async function inspect(directory, origin, ports, ended) {
+async function observe(result, ports, ended, deadline, stopWaiting) {
+  let timer, off = () => {};
+  try {
+    return await Promise.race([result, new Promise(done => {
+      const stop = () => { stopWaiting(); done('unknown'); };
+      off = ports.onInterrupt(stop);
+      if (ended()) { stop(); return; }
+      if (deadline !== null) timer = ports.timers.setInterval(stop, Math.max(1, deadline - ports.now()));
+    })]);
+  } finally {
+    if (timer !== undefined) ports.timers.clearInterval(timer);
+    off();
+  }
+}
+async function inspect(directory, origin, ports, ended, deadline, stopWaiting) {
   const snapshots = [];
   for (const row of await rows(ports.files, directory)) {
     if (ended()) break;
@@ -167,12 +181,17 @@ async function inspect(directory, origin, ports, ended) {
         if (ended()) break;
         const key = JSON.stringify([origin, row.kind, id]), cached = probes.get(key), now = ports.now();
         let observation = cached && (cached.pending || now >= cached.at && now - cached.at < PROBE_MS) ? cached : null;
+        const shared = !!observation;
         if (!observation) {
           observation = { at: now, pending: true };
           observation.result = Promise.resolve().then(() => outsideRead(ports, id)).catch(() => 'unknown').then(state => { observation.pending = false; observation.at = ports.now(); return state; });
           probes.set(key, observation);
         }
-        states.push(await observation.result);
+        // The cached GET can belong to a caller with a longer wait. Ending this
+        // observer must leave that shared read and its eventual cache intact.
+        // The initiating readRun already owns this acquisition's transport
+        // deadline. Only observers borrowing that read need a separate timer.
+        states.push(await (shared ? observe(observation.result, ports, ended, deadline, stopWaiting) : observation.result));
       }
       reclaim = states.length === row.request_ids.length && states.every(state => state === 'ended');
     }
@@ -199,7 +218,7 @@ export async function acquireRuntimeSlot({ stateDir, origin, limit = 4, kind, de
   try {
     while (!ended()) {
       // Probes can block on HTTP. Nothing in this process holds exclusion here.
-      const snapshots = await inspect(directory, origin, ports, ended);
+      const snapshots = await inspect(directory, origin, ports, ended, deadline, () => { cancelled = true; });
       if (ended()) break;
       // Dead waiters are safe to remove by immutable ticket path without a claim.
       for (const item of snapshots.filter(item => item.row.state === 'waiting')) {
