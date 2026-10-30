@@ -101,6 +101,10 @@ test('RELAY-I b: a held-for-lint retry owns the batch before refresh and refuses
 test('RELAY-I c: the lock owner adopts a claim, clears busy retry advice and refuses another reader', { timeout: 15000 }, async t => {
   const r = await heldBatch(t), saved = read(r.file), row = saved.rows[0];
   Object.assign(row, { busy: true, can_retry: true, why: 'This check was never sent.', next_step: 'Retry now.' });
+  // Retry uses confirmed saved lint; the interrupted dispatch happened after that lint passed.
+  Object.assign(saved.lint, { state: 'passed', pending: false, unknown: false });
+  const lintId = saved.lint.request_ids.at(-1);
+  writeFileSync(join(r.folder, `${lintId}.json`), JSON.stringify(r.fake.lint(lintId)));
   writeFileSync(r.file, JSON.stringify(saved));
   const key = createHash('sha256').update(row.test).digest('hex');
   writeFileSync(join(r.folder, `${key}.0.dispatch.json`), JSON.stringify({ id: CLAIMED }));
