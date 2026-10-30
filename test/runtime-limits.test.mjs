@@ -68,3 +68,11 @@ test('2676 existing schema and hash refusals still apply with valid limits',t=>{
  writeFileSync(join(setup.repo,PLACE),text.replace('Use this menu.','Use this new menu.'));
  assert.equal(scanned(setup).refusals[0].code,'interface-stale');
 });
+
+for(const literal of ['"max_steps":1,"max_steps":"1"','"max_steps":1,"max_steps":true','"max_steps":1,"max_steps":null','"max_steps":1.0,"max_steps":1'])
+ test(`2676 duplicate JSON keys follow the last authored value: ${literal}`,t=>{
+ const setup=harbor(t);prompt(setup.repo,PLACE,'{'+literal+',"max_model_calls":1}');
+ const parsed=readPrompt(setup.repo,new Set([PLACE]),PLACE);
+ const problems=interfaceSchemaProblems(parsed.interface);
+ assert.equal(problems.some(p=>p.code==='invalid-limits'),!literal.endsWith('"max_steps":1'));
+});
