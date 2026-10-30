@@ -296,7 +296,13 @@ function checkContracts(root,{stdout,stderr,json = false}) {
       catch (error) { report(path,target,'',finite(error),isUnavailable(error)); }
     }
     const catalog = catalogRecords([...catalogSources.values()],[...selected.keys()].filter(target => !seeds.has(target.split('#')[0])));
-    for (const warning of catalog.warnings) report(warning.split(':')[0],warning.split(':')[0],'',warning);
+    // JSON schema roles have already been selected and expanded above. The
+    // advisory catalog also explores literal business objects in those files;
+    // only Markdown record discovery supplies additional required diagnostics.
+    const markdownSources = [...catalogSources.keys()].filter(path => path.endsWith('.md'));
+    for (const warning of catalog.warnings) if (markdownSources.some(path => warning.startsWith(`${path}: `))) {
+      report(warning.split(':')[0],warning.split(':')[0],'',warning);
+    }
     for (const record of catalog.records) {
       if (seeds.has(record.path)) continue;
       if (record.path.endsWith('.md')) {
