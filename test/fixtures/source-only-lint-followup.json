@@ -6,7 +6,7 @@
   "notes": [
     "Native fixtures use actual Git-visible synthetic repositories and injected transport/capture observations.",
     "Generated oversized candidate uses valid scenario schema but is not read by whyNoTests.",
-    "Cached busy is a saved definitive not-run note; refreshed busy is an authoritative GET admission response.",
+    "Cached busy is a definitive saved not-run note and remains exit 5/not_run. Refreshed busy is a transient GET HTTP 429 error server-full without a matching job receipt and retains ordinary read uncertainty: exit 3/unknown.",
     "Retry info is separate from warnings; exactly one public JSON result.",
     "Existing source-only-lint-cases.json and Runtime cases are unchanged.",
     "All fixture descriptors, case inputs and expected observation names are native harness metadata, not runtime wire fields, exported APIs or verdict-producing ports. Assertions must observe the real public boundary and effects; do not assert descriptor metadata itself."
@@ -503,11 +503,19 @@
         "cache": "refresh",
         "outcome": "busy",
         "mode": "text",
-        "operation": "--retry"
+        "operation": "--retry",
+        "get_reply": {
+          "status": 429,
+          "body": {
+            "error": {
+              "code": "server-full"
+            }
+          }
+        }
       },
       "expected": {
-        "exit_code": 5,
-        "lint_state": "not_run",
+        "exit_code": 3,
+        "lint_state": "unknown",
         "rows": [],
         "capture_calls": 0,
         "uuid_calls": 0,
@@ -755,11 +763,19 @@
         "cache": "refresh",
         "outcome": "busy",
         "mode": "json",
-        "operation": "--retry"
+        "operation": "--retry",
+        "get_reply": {
+          "status": 429,
+          "body": {
+            "error": {
+              "code": "server-full"
+            }
+          }
+        }
       },
       "expected": {
-        "exit_code": 5,
-        "lint_state": "not_run",
+        "exit_code": 3,
+        "lint_state": "unknown",
         "rows": [],
         "capture_calls": 0,
         "uuid_calls": 0,

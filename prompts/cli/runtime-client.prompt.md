@@ -121,7 +121,10 @@ exit/state, and print exactly one result (one JSON object in JSON mode). Use
 only the saved lint ID and GET when refresh is needed; never capture current
 source, allocate a UUID, POST or continue checks. Cached terminal results and
 refreshed passed/refused/unknown/pending/busy outcomes retain ordinary read
-meaning. Existing owner/origin, ID, transport and uncertainty rules still apply;
+meaning. A transient busy GET response without a matching job receipt cannot
+establish a not-run outcome; retain ordinary read uncertainty (exit 3/unknown).
+A definitive cached not-run admission retains exit 5. Existing owner/origin, ID,
+transport and uncertainty rules still apply;
 ordinary selected-check retry is unchanged.
 
 Order:
