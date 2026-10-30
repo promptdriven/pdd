@@ -691,7 +691,7 @@ function runFiles(cwd, words, options, ports) {
 }
 
 // pdd check --lint: only the server's lint (0 AI calls) on the captured files.
-// Locally only the privacy and capture checks run (secret names, links, size and file limits); the engine rules are the server's.
+// Locally the selected prompts' limits gate, SVG advice and privacy/capture checks run; other engine rules are the server's.
 async function runLintOnly(context, cwd, words, setRelease) {
   const { ports } = context, origin = runtimeOrigin(ports.env), { root, found, normalized } = localSetup(cwd, words);
   const selected = select(found, normalized, root);
@@ -717,17 +717,22 @@ async function runLintOnly(context, cwd, words, setRelease) {
     return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
   });
   if (limitRows.some(row => row.refusals.length)) {
-    const rows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
-    const problems = rows.flatMap(row => row.refusals);
+    const refusedRows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
+    const problems = [];
+    for (const problem of refusedRows.flatMap(row => row.refusals)) {
+      if (!problems.some(item => item.code === problem.code && item.path === problem.path && item.section === problem.section)) problems.push(problem);
+    }
     const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
-      coverage:context.coverage,problems,rows,warnings:found.warnings}));
+      coverage:context.coverage,problems,rows:refusedRows,warnings:found.warnings}));
     else {
       for (const problem of problems) {
         line(ports.stderr, `${problem.code}  ${problem.message}`);
         if (problem.hint) line(ports.stderr, problem.hint);
       }
+      for (const row of refusedRows) line(ports.stdout, `  ${row.test}  ${row.state === 'refused' ? `refused: ${row.refusals.map(item => item.code).join(', ')}` : 'not run'}`);
       line(ports.stdout,summary);
+      line(ports.stdout,coverageText(context.coverage));
     }
     return 4;
   }
