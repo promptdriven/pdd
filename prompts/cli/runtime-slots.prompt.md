@@ -12,6 +12,14 @@ One durable ticket per waiting job retains its original timestamp through conten
 
 An active record holds its unique id, state active, owner pid, kind, started_at (epoch milliseconds), and request_ids. Module function `recordRuntimeRequest(reservation, requestId, ports)` durably appends the ID without duplicates before dispatch, preserving earlier IDs. Module function `releaseRuntimeSlot(reservation, {ended}, ports)` releases only when ended is confirmed, or no dispatch was possible; ended false retains the record. Local timeout/interruption does not prove a posted job ended. Remove an interrupted waiter's ticket without releasing another job's reservation.
 
+### Owned record transitions
+
+For tickets and active reservations, a known owned snapshot consists of id, pid, state, kind, started_at and the complete ordered request_ids. Before registration, promotion, refresh or own-record cleanup, verify the current predecessor against that snapshot; matching only ID/PID, path or active state is insufficient. Registration validates under the existing claim immediately before its update. A changed predecessor is foreign even at the same path with the same ID/PID: registration throws the existing finite local-state-unavailable error without appending, refreshing or transferring ownership. Release and signal cleanup stop this owner's refresh work but preserve the foreign file, including when ended is true for the original job.
+
+Only a verified owned transition advances the accepted snapshot: waiting-to-active promotion changes state/start time, and registration appends a previously absent request ID in order. A duplicate succeeds without changing the request list. Registration through a separately resolved native port advances the live owner's heartbeat snapshot only after its verified mutation. A write cannot authenticate itself merely by becoming the latest file contents.
+
+Reservations remain ordinary `{id,directory}` references, including saved/adopted references and existing active records without an acquisition in this process. Do not require a new field, token, port, local-owner registration or global gate. When no owned snapshot is known, preserve those existing active-record registration/release calls and their errors; absence of a local owner alone is not a refusal. Historical ownership cannot be independently proved from such a reference. This does not permit bypassing a known owner's predecessor check. Ended false stops ownership work while retaining uncertain paid-job evidence and the same returned reservation object's snapshot for a later ended true release. That object's known snapshot takes precedence over a newer owner at the same path. Retaining that evidence must not keep released references alive or restart ended heartbeat work.
+
 ### Owner freshness and paid-job leases
 
 While this command owns a waiting ticket, active reservation or claim lock, refresh that file about every 5 seconds, including during slow outside operations.
@@ -41,7 +49,7 @@ SIGINT, SIGHUP and SIGTERM stop new acquisition/dispatch and clean this command'
 <details>
 <summary>Required native dependency bindings</summary>
 
-These ports supplement the existing module-function arguments for admission and recording, and are not public snapshot fields or a check-only API. Existing files operations are listRecords({directory}), exclusiveCreate(path,record), writeAtomic(path,record) and unlink(path). Admission additionally accepts files.modifiedAt(path), returning the last refresh epoch milliseconds or null when absent, and files.touch(path), refreshing an existing owned file and returning false if absent without recreating it. Native defaults preserve regular-file, permission and owner-identity safeguards. Claim files use their own unique owner identity so stale cleanup cannot unlink a successor.
+These ports supplement the existing module-function arguments for admission and recording, and are not public snapshot fields or a check-only API. Existing files operations are listRecords({directory}), exclusiveCreate(path,record), writeAtomic(path,record) and unlink(path). Admission additionally accepts files.modifiedAt(path), returning the last refresh epoch milliseconds or null when absent, and files.touch(path), refreshing an existing owned file and returning false if absent without recreating it. Native defaults preserve regular-file, permission and owner-identity safeguards. Claim files use their own unique owner identity so stale cleanup cannot unlink a successor. A changed or replaced owned claim is no longer held: it cannot authorize admission or registration, and cleanup must preserve the foreign claim.
 
 The optional timers port supplies setInterval(callback, milliseconds) and clearInterval(handle), with native timer defaults; timer handles remain private and cannot keep a finished command alive. The optional random() port supplies a value in [0,1) for jitter, with a native randomness default. Clock, file freshness, timers and randomness used by decisions must use their supplied ports. Existing now(), sleep(ms), interrupted() and isAlive(pid) retain their bindings. recordRuntimeRequest also honors ports.deadline (absolute epoch milliseconds, absent for no deadline) before waiting for exclusion or updating state and returns false when it cannot register within the caller wait; no POST is then authorized. onInterrupt(handler) covers SIGINT/SIGHUP/SIGTERM for cleanup and returns an unsubscribe function, with native process-signal defaults when omitted.
 
@@ -66,7 +74,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "2b96f62000aa607361393dcc22d10f25d95215ddf4917ccfa8aca8b9009dbf72",
+  "prose_sha256": "2b2c50b9bdb85e2b4ae4e6afb1fda36cb9e2d9e9799babc49b09a000e8fb03fc",
   "entries": [
     {
       "operation": "listRuntimeJobs",

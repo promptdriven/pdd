@@ -18,6 +18,8 @@ The [slots prompt](../prompts/cli/runtime-slots.prompt.md) owns local admission;
 
 Signal checks synchronize with the actual claim/admission boundary before interruption, then verify termination, cleanup and no new dispatch while preserving uncertain leases. Do not depend on a short signal timer winning a race against another short pause.
 
+Replacing my active record with another owner's record, even with the same ID and process ID, must not let my command append a request, refresh it or remove it on release or interruption. Check every ownership field and the complete ordered request list before accepting a known owner's update. Ordinary request append/deduplication, promotion and saved reservation use still work; a separately resolved file connection must keep valid updates refreshing without adopting a foreign replacement.
+
 ## Native cases for the code step
 
 [Requirement-derived native cases](../test/runtime-admission/runtime-local-slots.json) cover the normal path, limits, interruption and missing evidence. Run them through the real public commands with fake transport/clock and real temporary local state; process races need separate child processes.
