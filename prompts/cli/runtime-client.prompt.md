@@ -96,7 +96,9 @@ UUID reads retain the raw-receipt-only rule below and do not wait for batch owne
 Use the native `acquireRuntimeBatchLock(folder, {signal, timeoutMs})` boundary, replaceable
 by `ports.acquireBatchLock` for runtime-faked execution. It resolves to an idempotent release
 function. Wait at most 30 seconds, shortened by the retry's remaining command budget, and
-honor interruption before admission. Ownership is never stolen because of age: a slow or
+stop an interrupted wait without admission. An already interrupted command may acquire
+an immediately free batch to project its saved evidence, with no new network work; keep
+the existing unknown-usage result when terminal evidence is missing. Ownership is never stolen because of age: a slow or
 unresponsive process may still POST. Only a provably dead local process (PID check gives
 ESRCH) permits abandoned owner recovery, serialized against other claimants. A malformed
 owner, uncertain PID status or abandoned acquisition guard fails closed. Release ownership
