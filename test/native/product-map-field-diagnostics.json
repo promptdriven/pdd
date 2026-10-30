@@ -1,5 +1,4 @@
 {
-  "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/product-map-field-diagnostics.md",
   "criteria": [
     {

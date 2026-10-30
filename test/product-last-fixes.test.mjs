@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { productStart, productStatus, runProduct } from '../src/product.mjs';
+import { productNext, productStart, productStatus, runProduct } from '../src/product.mjs';
 
 const marker = run => `<!-- pdd-product: run=${run} -->`;
 const issue = (run, number, extra = {}) => ({ number, body: marker(run), user: { login: 'maintainer' }, author_association: 'MEMBER', created_at: '2026-10-01T00:00:00Z', state: 'OPEN', ...extra });
@@ -225,4 +227,71 @@ for (const status of [404, 503]) test(`default issue adapter retains the actual 
   assert.equal(out.exitCode, 0, out.message);
   assert.equal(JSON.parse(out.message).runs.find(row => row.run === 'phone-1').state, 'unverified');
   assert.equal(state().bindings.some(row => row.run === 'phone-1'), status !== 404);
+});
+
+function nativeLock(f, content, age = 0) {
+  const directory = join(f.cwd, '.git/pdd/products'); mkdirSync(directory, { recursive: true });
+  // The state basename is the native repository scope, independent of checkout.
+  const name = createHash('sha256').update('example/coffee').digest('hex');
+  const path = join(directory, `${name}.json.lock`);
+  writeFileSync(path, content);
+  if (age) utimesSync(path, new Date(Date.now() - age), new Date(Date.now() - age));
+  return path;
+}
+for (const mode of ['dead owner', 'aged live owner', 'aged legacy record']) test(`native state lock recovers ${mode}`, async t => {
+  const f = setup(t);
+  const child = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
+  assert.equal(child.status, 0);
+  const path = nativeLock(f, mode === 'aged legacy record' ? 'old-opaque-owner' : JSON.stringify({ pid: mode === 'dead owner' ? child.pid : process.pid }), mode === 'dead owner' ? 0 : 31000);
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.exitCode, 0, out.message);
+  assert.equal(f.s.creates.length, 1);
+  assert.equal(existsSync(path), false, 'owned recovered lock is released');
+});
+test('native live lock stays owned and busy diagnostic names its actual file', async t => {
+  const f = setup(t), owner = JSON.stringify({ pid: process.pid, token: 'another-command' });
+  const path = nativeLock(f, owner);
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.exitCode, 1);
+  assert.ok(out.message.includes(path), out.message);
+  assert.equal(readFileSync(path, 'utf8'), owner);
+  assert.equal(f.s.creates.length, 0);
+});
+test('native release preserves a successor that replaced the held lock', async t => {
+  const f = setup(t); let path;
+  f.ports.writeProductState = async ({ json }) => {
+    if (!JSON.parse(json).bindings.some(row => row.run === 'phone-1')) return {};
+    const directory = join(f.cwd, '.git/pdd/products');
+    path = join(directory, readdirSync(directory).find(name => name.endsWith('.lock')));
+    rmSync(path); writeFileSync(path, 'successor-token'); return {};
+  };
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.exitCode, 0, out.message);
+  assert.equal(existsSync(path), true, 'successor remains after original holder releases');
+  assert.equal(readFileSync(path, 'utf8'), 'successor-token');
+});
+for (const mode of ['untrusted', 'dead', 'unknown']) test(`a valid selected link clears only repaired-run advice beside ${mode} local hints`, async t => {
+  const f = setup(t); saved(f, [{ run: 'phone-1', issue: 81 }]);
+  f.s.runs = ['phone-1', 'server-1'].map(run => ({ workflow: 'feature', number: run === 'phone-1' ? 80 : 90, productMarker: marker(run), state: 'completed' }));
+  f.ports.issueByNumber = async ({ number }) => number === 81 ? issue('phone-1', 81)
+    : mode === 'dead' ? { status: 404, message: 'Not Found' }
+    : mode === 'unknown' ? { status: 503, message: 'Unavailable' }
+    : issue(number === 80 ? 'phone-1' : 'server-1', number, { author_association: 'NONE', user: { login: 'outsider' } });
+  for (const command of ['status', 'next']) {
+    const result = command === 'status' ? await productStatus({ cwd: f.cwd }, f.ports) : await productNext({ cwd: f.cwd }, f.ports);
+    const warnings = result.warnings.join(' ');
+    assert.match(warnings, /Issue #80.*unverified/);
+    assert.ok(!warnings.includes('pdd product start phone-1 to link it again'), warnings);
+    assert.ok(warnings.includes('pdd product start server-1 to link it again'), warnings);
+    if (command === 'status') assert.equal(result.runs.find(row => row.run === 'phone-1').issue, 81);
+  }
+});
+
+test('native lock failures name the obstructing lock file', async t => {
+  const f = setup(t), path = nativeLock(f, 'placeholder');
+  rmSync(path); mkdirSync(path);
+  const out = await productStart({ cwd: f.cwd, run: 'phone-1', noRun: true }, f.ports);
+  assert.equal(out.exitCode, 1);
+  assert.ok(out.message.includes(path), out.message);
+  assert.equal(f.s.creates.length, 0);
 });

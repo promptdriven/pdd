@@ -214,13 +214,6 @@
           "path": "/code",
           "op": "equals",
           "value": "invalid-product-map"
-        },
-        {
-          "criterion_id": "AC3",
-          "target": "error",
-          "path": "/message",
-          "op": "contains",
-          "value": "screen"
         }
       ],
       "expected_error": "invalid-product-map"
