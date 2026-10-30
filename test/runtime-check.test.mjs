@@ -121,7 +121,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): ✗ 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
@@ -224,6 +224,35 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
 
+// Split documented shell words without evaluating expansions or commands.
+function runbookWords(command) {
+  const words = []; let word = '', quote = '', started = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === '\\' && quote !== "'") { if (i + 1 >= command.length) throw Error('Unfinished escape'); word += command[++i]; started = true; }
+    else if (quote) { if (ch === quote) quote = ''; else word += ch; }
+    else if (ch === '"' || ch === "'") { quote = ch; started = true; }
+    else if (/\s/.test(ch)) { if (started) { words.push(word); word = ''; started = false; } }
+    else { word += ch; started = true; }
+  }
+  if (quote) throw Error('Unclosed quote');
+  if (started) words.push(word);
+  return words;
+}
+
+test('RUNTIME-RUNBOOK-QUOTES: quoted summary words remain one existing-command argument', () => {
+  let plan;
+  assert.doesNotThrow(() => { plan = parseArgv(runbookWords('pdd workflow done build --summary "defect x"').slice(1)); });
+  assert.deepEqual(plan.operands, ['build']);
+  assert.equal(plan.options['--summary'], 'defect x');
+  assert.deepEqual(runbookWords("pdd workflow done build --summary 'a # b'"), ['pdd','workflow','done','build','--summary','a # b']);
+  let proof;
+  assert.doesNotThrow(() => { proof = parseArgv(runbookWords('pdd workflow prove 2594 --test "node --test test/new.test.mjs" --expect "defect x"').slice(1)); });
+  assert.deepEqual(proof.operands, ['2594']);
+  assert.equal(proof.options['--test'], 'node --test test/new.test.mjs');
+  assert.equal(proof.options['--expect'], 'defect x');
+});
+
 // Wrong: the package has no runbook, so the skills and the setup block never mention pdd check, or the runbook names commands pdd refuses.
 test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill carries it, and its commands parse', () => {
   const runbook = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
@@ -237,7 +266,7 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
     .map(text => text.trim()).filter(Boolean);
   assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
-  for (const command of commands) assert.doesNotThrow(() => parseArgv(command.split(/\s+/).slice(1)), command);
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1)), command);
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.

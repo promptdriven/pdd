@@ -1,0 +1,185 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-new-skips.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Changing \"kept\" to skip and adding \"later\" as todo lists both new marker lines, while an existing unchanged skip is not listed as new."
+    },
+    {
+      "id": "AC2",
+      "text": "Adding an expected-failure decorator to a kept Python test lists that new marker; a Go test remains counted by name."
+    },
+    {
+      "id": "AC3",
+      "text": "No changed test files produces explicit none categories; invalid commit identities produce unavailable without reading a snapshot."
+    }
+  ],
+  "initial_world": {
+    "requests": []
+  },
+  "simulation": {
+    "snapshot.read": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {
+        "available": true,
+        "reason": "",
+        "files": []
+      }
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "new-skip-todo",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/a.test.mjs",
+            "newPath": "test/a.test.mjs",
+            "before": "test('kept', () => {});\ntest.skip('existing', () => {});\n",
+            "after": "test.skip('kept', () => {});\ntest.skip('existing', () => {});\ntest.todo('later');\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" `\"kept\"` `\"test.skip('kept', () => {});\"`.\nNew skips: \"test/a.test.mjs\" `\"later\"` `\"test.todo('later');\"`.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a.test.mjs\" 2 → 3 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/a.test.mjs\" `\"kept\"` `\"test.skip('kept', () => {});\"`.\nNew skips: \"test/a.test.mjs\" `\"later\"` `\"test.todo('later');\"`.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "pytest-xfail-go-count",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": [
+          {
+            "oldPath": "test/test_a.py",
+            "newPath": "test/test_a.py",
+            "before": "def test_kept():\n    assert True\n",
+            "after": "@pytest.mark.xfail\ndef test_kept():\n    assert True\n"
+          },
+          {
+            "oldPath": "",
+            "newPath": "test/a_test.go",
+            "before": "",
+            "after": "func TestAdded(t *testing.T) {\n}\n"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" `\"test_kept\"` `\"@pytest.mark.xfail\"`.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: \"test/a_test.go\" 0 → 1 tests. Removed: none.\nTests vs base: \"test/test_a.py\" 1 → 1 tests. Removed: none.\nChanged assertions in kept tests: none.\nNew skips: \"test/test_a.py\" `\"test_kept\"` `\"@pytest.mark.xfail\"`.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "empty-comparison",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "analyzeTestChanges",
+      "input": {
+        "files": []
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": true
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/details",
+          "op": "equals",
+          "value": "Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; tests were not run.\n"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "invalid-baseline",
+      "entry_path": "prompts/cli/workflow-inventory.prompt.md",
+      "operation": "collectTestInventory",
+      "input": {
+        "cwd": "/repository",
+        "baseSha": "",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/available",
+          "op": "equals",
+          "value": false
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/text",
+          "op": "equals",
+          "value": "Tests vs base: unavailable (\"invalid commit identity\").\nChanged assertions in kept tests: unavailable.\nNew skips: unavailable.\nStatic inventory only; tests were not run.\n"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "calls",
+          "path": "/resources/workflow-inventory-snapshot-read",
+          "op": "equals",
+          "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

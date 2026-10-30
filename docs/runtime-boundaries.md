@@ -16,6 +16,8 @@ behavior verdict. If server access is outside the task's permission, leave those
 unverified. When server access is allowed, explicit `--lint` requests complete diagnostics and prints the problems the server reports;
 correct them and check again before submitting a behavior check.
 
+The AI cannot compute a hash. Declare a compute resource with hash_json or hash_utf8, or keep this criterion in native tests. This applies when the program must build or verify a SHA-256 hash: both operations return a lowercase SHA-256. Keep any other digest, for example an HMAC, in native tests. See the [RUNBOOK §21 record-id fragment](../RUNBOOK.md#verify-a-record-id) for the resource and simulation entries and the native binding limits.
+
 ## Native factories and JSON operations
 
 Factories, constructors and objects of methods can bind through Runtime interface v2:
