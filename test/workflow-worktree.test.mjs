@@ -65,7 +65,70 @@ test('2698: bare repository stored in .git refuses with independent normal clone
   assert.equal((await f.gitAt(f.primary, 'config', '--get', 'core.bare')).stdout.trim(), 'true');
   for (const words of [/bare repository/i, /\.git/, /linked worktrees/i, /independent normal clone/i, /run.*workflow.*there/i])
     assert.match(refused.message, words);
-  assert.doesNotMatch(refused.message, /(?:git\s+config.*core\.bare|(?:change|set|disable).*core\.bare)/i);
+  assert.doesNotMatch(refused.message, /core\.bare/i);
+});
+
+test('2698: saved intent on bare-in-.git layout retains the unconfirmed allocation diagnostic and custody', async t => {
+  const f = await layoutFixture(t, 'bare-in-dotgit'), input = f.input(2698, { cwd: f.cwd });
+  const id = randomUUID(), parent = f.primary + '.pdd-worktrees';
+  const run = metadata(f, input.runId), claim = join(f.common, 'pdd/worktree-assignments/issues/2698.json');
+  const saved = { version: 1, runId: input.runId, repository: input.repository, issueNumber: input.issueNumber,
+    workflowName: input.workflowName, commonDir: f.common, sourceRoot: f.cwd, worktreePath: join(parent, id),
+    gitDir: join(f.common, 'worktrees', id), branch: `pdd/feature-2698-${id.slice(0, 8)}`, baseRef: input.baseRef,
+    baseSha: (await f.gitAt(f.cwd, 'rev-parse', 'main')).stdout.trim() };
+  await mkdir(dirname(run), { recursive: true }); await mkdir(dirname(claim)); await mkdir(parent);
+  await writeFile(run, JSON.stringify(saved) + '\n'); await link(run, claim);
+  const before = await snapshot(join(f.common, 'pdd')), original = await lstat(run);
+  assert.equal(original.nlink, 2); assert.equal((await lstat(claim)).ino, original.ino);
+  const refused = await allocateIssueWorktree(input, f.ports);
+  assert.equal(refused.state, 'recovery_required'); assert.equal(refused.assignment, null);
+  assert.match(refused.message, /Allocation is unconfirmed\./);
+  assert.doesNotMatch(refused.message, /No allocation record or issue claim was saved|No new worktree is confirmed|independent normal clone/i);
+  assert(f.calls.some(c => c.cwd === f.primary && c.args[0] === 'rev-parse' && c.args[1] === '--is-bare-repository'));
+  assert.equal(adds(f.calls).length, 0);
+  assert.deepEqual(await snapshot(join(f.common, 'pdd')), before);
+  for (const file of [run, claim]) {
+    const after = await lstat(file);
+    assert.equal(after.dev, original.dev); assert.equal(after.ino, original.ino); assert.equal(after.nlink, 2);
+  }
+});
+
+test('2698: bare-in-.git layout with a different per-worktree origin retains the generic refusal', async t => {
+  const f = await layoutFixture(t, 'bare-in-dotgit');
+  await f.gitAt(f.primary, 'config', 'extensions.worktreeConfig', 'true');
+  await f.gitAt(f.primary, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Acme/Project.git');
+  await f.gitAt(f.primary, 'config', '--local', '--unset', 'remote.origin.url');
+  await f.gitAt(f.cwd, 'config', '--worktree', 'remote.origin.url', 'https://github.com/Other/Thing.git');
+  // Git 2.43 needs an explicit linked work tree when shared core.bare remains true with worktreeConfig.
+  const env = { ...process.env, GIT_WORK_TREE: f.cwd }, original = f.ports.execFile;
+  const linkedGit = (...args) => execute('git', args, { cwd: f.cwd, encoding: 'utf8', env });
+  f.ports.execFile = (file, args, options) => {
+    if (options.cwd !== f.cwd) return original(file, args, options);
+    assert.equal(file, 'git'); assert.deepEqual(Object.keys(options), ['cwd']);
+    f.calls.push({ file, args: [...args], cwd: options.cwd });
+    return execute(file, args, { ...options, encoding: 'utf8', env });
+  };
+  assert.equal((await f.gitAt(f.primary, 'config', '--get', 'core.bare')).stdout.trim(), 'true');
+  assert.equal((await f.gitAt(f.primary, 'rev-parse', '--is-bare-repository')).stdout.trim(), 'true');
+  assert.equal((await f.gitAt(f.primary, 'rev-parse', '--absolute-git-dir')).stdout.trim(), f.common);
+  assert.equal((await f.gitAt(f.primary, 'rev-parse', '--path-format=absolute', '--git-common-dir')).stdout.trim(), f.common);
+  assert.equal((await linkedGit('rev-parse', '--show-toplevel')).stdout.trim(), f.cwd);
+  assert.equal((await linkedGit('rev-parse', '--path-format=absolute', '--git-common-dir')).stdout.trim(), f.common);
+  assert.equal((await f.gitAt(f.primary, 'remote', 'get-url', 'origin')).stdout.trim(), 'https://github.com/Acme/Project.git');
+  assert.equal((await linkedGit('remote', 'get-url', 'origin')).stdout.trim(), 'https://github.com/Other/Thing.git');
+  const before = (await linkedGit('worktree', 'list', '--porcelain')).stdout;
+  assert.match(before, new RegExp('worktree ' + f.primary + '\\nbare\\n'));
+  const input = f.input(2698, { cwd: f.cwd, repository: 'Other/Thing' });
+  const refused = await allocateIssueWorktree(input, f.ports);
+  assert.equal(refused.state, 'recovery_required'); assert.equal(refused.assignment, null);
+  assert.match(refused.message, /Cannot establish repository or allocation metadata identity\./);
+  assert.match(refused.message, /No allocation record or issue claim was saved\. No new worktree is confirmed\./);
+  assert.doesNotMatch(refused.message, /independent normal clone/i);
+  assert(f.calls.some(c => c.cwd === f.primary && c.args.join(' ') === 'remote get-url origin'));
+  assert.equal(adds(f.calls).length, 0);
+  assert.equal((await linkedGit('worktree', 'list', '--porcelain')).stdout, before);
+  await assert.rejects(lstat(metadata(f, input.runId)), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(f.common, 'pdd/worktree-assignments/issues/2698.json')), { code: 'ENOENT' });
 });
 
 for (const layout of ['normal', 'linked-bare']) test(`2698: ${layout} remains supported`, async t => {
