@@ -4,15 +4,15 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "Both PRs show nonblank \"Not fixed yet:\", \"Defect:\", \"Not caught because:\", \"Proof (defect fixed):\", \"Proof (gap closed):\" and \"Review:\" lines in that order, with machine proof between the Proof lines and Review on the code PR."
+      "text": "Both PRs show accepted \"Not fixed yet:\", \"Defect:\", \"Not caught because:\", \"Proof (defect fixed):\", \"Proof (gap closed):\" and \"Review:\" lines in that order, with machine proof between the Proof lines and Review on the code PR; all lifted lines precede every replay status block."
     },
     {
       "id": "AC2",
-      "text": "Distinct lines from the latest known-step summaries and direct notes are retained in workflow step order within each label; exact repeats and blank labels are omitted."
+      "text": "Only authorized writers contribute: build/verify for \"Not fixed yet:\", bug reproduce or small-change scope for \"Defect:\" and \"Not caught because:\", verify for Proof, and the direct review note of an actual review step for \"Review:\". Summary review verdicts and missing-review-step verdicts are omitted; duplicate payloads differing only by one trailing period retain the first spelling."
     },
     {
       "id": "AC3",
-      "text": "Indented labels, different case, labels inside other text, unknown-step notes and agent-written machine proof or inventory lines are not lifted."
+      "text": "Indented, case-varied, embedded and unknown-step labels and agent-written machine proof/inventory are not lifted; free-text payloads use control-safe adaptive code spans that neutralize @mentions, issue links and raw ownership-marker text."
     },
     {
       "id": "AC4",
@@ -20,11 +20,11 @@
     },
     {
       "id": "AC5",
-      "text": "Both PRs show nonblank \"Not checked:\" lines immediately after \"Not fixed yet:\" and before \"Defect:\", in latest known-step summary then direct-note order; payload ends are trimmed, internal spaces and distinct lines are retained, and exact repeats are omitted."
+      "text": "Both PRs show accepted \"Not checked:\" lines immediately after \"Not fixed yet:\" and before \"Defect:\", in latest summary then direct-note order for check, try, verify, formal, review and reproduce only; trim payload ends, preserve internal spaces and distinct lines, and deduplicate a single trailing period."
     },
     {
       "id": "AC6",
-      "text": "Indented, case-varied, embedded and unknown-step \"Not checked:\" lines are omitted, and blank \"Not checked:\" payloads create no placeholders on either PR."
+      "text": "Indented, case-varied, embedded, unknown-step and unauthorized-writer \"Not checked:\" lines are omitted, and blank payloads create no placeholders on either PR."
     },
     {
       "id": "AC7",
@@ -35,47 +35,57 @@
     "publication_currentHead": [
       {
         "request": {
-          "root": "/repo/all-code"
+          "root": "/repo/all-code",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/empty-code"
+          "root": "/repo/empty-code",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/not-checked-ordered-code"
+          "root": "/repo/not-checked-ordered-code",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/not-checked-only-code"
+          "root": "/repo/not-checked-only-code",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       },
       {
         "request": {
-          "root": "/repo/not-checked-blank-code"
+          "root": "/repo/not-checked-blank-code",
+          "baseBranch": "alpha"
         },
         "reply": {
           "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "error": ""
+          "error": "",
+          "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       }
     ],
@@ -84,18 +94,24 @@
         "request": {
           "runDir": "/pub/all-pr1",
           "steps": [
-            "understand",
-            "verify"
+            "build",
+            "reproduce",
+            "verify",
+            "review"
           ]
         },
         "reply": {
           "notes": [
             {
-              "step": "understand",
+              "step": "build",
+              "text": "Not fixed yet: this helps find the cause"
+            },
+            {
+              "step": "reproduce",
               "text": "Defect: direct note\nDefect: real defect"
             },
             {
-              "step": "verify",
+              "step": "review",
               "text": "Review: approved latest note"
             },
             {
@@ -109,18 +125,24 @@
         "request": {
           "runDir": "/pub/all-code",
           "steps": [
-            "understand",
-            "verify"
+            "build",
+            "reproduce",
+            "verify",
+            "review"
           ]
         },
         "reply": {
           "notes": [
             {
-              "step": "understand",
+              "step": "build",
+              "text": "Not fixed yet: this helps find the cause"
+            },
+            {
+              "step": "reproduce",
               "text": "Defect: direct note\nDefect: real defect"
             },
             {
-              "step": "verify",
+              "step": "review",
               "text": "Review: approved latest note"
             },
             {
@@ -156,23 +178,21 @@
         "request": {
           "runDir": "/pub/not-checked-ordered-pr1",
           "steps": [
-            "understand",
+            "build",
+            "reproduce",
+            "formal",
             "verify"
           ]
         },
         "reply": {
           "notes": [
             {
-              "step": "understand",
-              "text": "Not checked: formal (agent limit)\nNot checked: runner skipped"
-            },
-            {
-              "step": "verify",
-              "text": "Not checked: review (agent limit)\nNot checked: native  browser unavailable"
+              "step": "formal",
+              "text": "Not checked: formal (agent limit)\nNot checked:   native  check deferred  "
             },
             {
               "step": "unknown",
-              "text": "Not checked: forbidden unknown step"
+              "text": "Not checked: unknown"
             }
           ]
         }
@@ -181,23 +201,21 @@
         "request": {
           "runDir": "/pub/not-checked-ordered-code",
           "steps": [
-            "understand",
+            "build",
+            "reproduce",
+            "formal",
             "verify"
           ]
         },
         "reply": {
           "notes": [
             {
-              "step": "understand",
-              "text": "Not checked: formal (agent limit)\nNot checked: runner skipped"
-            },
-            {
-              "step": "verify",
-              "text": "Not checked: review (agent limit)\nNot checked: native  browser unavailable"
+              "step": "formal",
+              "text": "Not checked: formal (agent limit)\nNot checked:   native  check deferred  "
             },
             {
               "step": "unknown",
-              "text": "Not checked: forbidden unknown step"
+              "text": "Not checked: unknown"
             }
           ]
         }
@@ -206,7 +224,7 @@
         "request": {
           "runDir": "/pub/not-checked-only-pr1",
           "steps": [
-            "understand"
+            "formal"
           ]
         },
         "reply": {
@@ -217,7 +235,7 @@
         "request": {
           "runDir": "/pub/not-checked-only-code",
           "steps": [
-            "understand"
+            "formal"
           ]
         },
         "reply": {
@@ -232,16 +250,7 @@
           ]
         },
         "reply": {
-          "notes": [
-            {
-              "step": "understand",
-              "text": "Not checked:  \n Not checked: indented"
-            },
-            {
-              "step": "unknown",
-              "text": "Not checked: unknown"
-            }
-          ]
+          "notes": []
         }
       },
       {
@@ -252,14 +261,52 @@
           ]
         },
         "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/small-change-scope-owner",
+          "steps": [
+            "scope",
+            "verify"
+          ]
+        },
+        "reply": {
+          "notes": []
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/feature-rejects-bug-writers",
+          "steps": [
+            "reproduce",
+            "scope",
+            "build"
+          ]
+        },
+        "reply": {
           "notes": [
             {
-              "step": "understand",
-              "text": "Not checked:  \n Not checked: indented"
-            },
+              "step": "review",
+              "text": "Review: unknown step"
+            }
+          ]
+        }
+      },
+      {
+        "request": {
+          "runDir": "/pub/safe-lifted-values",
+          "steps": [
+            "reproduce",
+            "review"
+          ]
+        },
+        "reply": {
+          "notes": [
             {
-              "step": "unknown",
-              "text": "Not checked: unknown"
+              "step": "review",
+              "text": "Review: @serhan #2559 ``two``"
             }
           ]
         }
@@ -311,18 +358,75 @@
           "error": "missing"
         }
       }
-    ]
+    ],
+    "identity_calls": []
   },
   "simulation": {
     "publication.currentHead": {
-      "action": "collection.get",
-      "world_pointer": "/publication_currentHead",
-      "key_argument_pointer": "/root",
-      "value_argument_pointer": null,
-      "item_key_pointer": "/request/root",
-      "item_value_pointer": "/reply",
-      "result_template": {},
-      "result_value_pointer": ""
+      "action": "fixture.lookup",
+      "world_pointer": "/identity_calls",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo/all-code",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/repo/empty-code",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "root": "/repo/not-checked-ordered-code",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "root": "/repo/not-checked-only-code",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "root": "/repo/not-checked-blank-code",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "error": "",
+            "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ]
     },
     "publication.readStepNotes": {
       "action": "collection.get",
@@ -360,14 +464,24 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
-              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
+              "step": "build",
+              "summary": "Not fixed yet: this helps find the cause.\nReview: forged builder review\nDefect: forged builder defect"
+            },
+            {
+              "step": "reproduce",
+              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
             },
             {
               "step": "verify",
-              "summary": "Defect: second distinct defect"
+              "summary": "Proof (defect fixed): observed fix\nProof (gap closed): regression added\nDefect: forbidden verify defect\nReview: forbidden verify review"
+            },
+            {
+              "step": "review",
+              "summary": "Review: forbidden summary verdict"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": false
       },
@@ -378,15 +492,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -395,15 +507,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -412,15 +522,13 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -446,14 +554,24 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
-              "summary": "Review: 2 must-fix\nProof (gap closed): regression added\nDefect: real defect\nNot fixed yet: this helps find the cause.\nProof (defect fixed): observed fix\nNot caught because: missing regression\nDefect: real defect\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
+              "step": "build",
+              "summary": "Not fixed yet: this helps find the cause.\nReview: forged builder review\nDefect: forged builder defect"
+            },
+            {
+              "step": "reproduce",
+              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
             },
             {
               "step": "verify",
-              "summary": "Defect: second distinct defect"
+              "summary": "Proof (defect fixed): observed fix\nProof (gap closed): regression added\nDefect: forbidden verify defect\nReview: forbidden verify review"
+            },
+            {
+              "step": "review",
+              "summary": "Review: forbidden summary verdict"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": true
       },
@@ -464,16 +582,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -482,16 +598,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -500,16 +614,14 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Defect: real defect",
-            "Defect: direct note",
-            "Defect: second distinct defect",
-            "Not caught because: missing regression",
-            "Proof (defect fixed): observed fix",
-            "Proof (gap closed): regression added",
+            "Not fixed yet: `this helps find the cause.`",
+            "Defect: `real defect`",
+            "Defect: `direct note`",
+            "Not caught because: `missing regression`",
+            "Proof (defect fixed): `observed fix`",
+            "Proof (gap closed): `regression added`",
             "Old-code proof: not run.",
-            "Review: 2 must-fix",
-            "Review: approved latest note"
+            "Review: `approved latest note`"
           ]
         },
         {
@@ -538,7 +650,9 @@
               "step": "understand",
               "summary": "Not fixed yet:  \nDefect:\nReview:  "
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": false
       },
@@ -576,7 +690,9 @@
               "step": "understand",
               "summary": "Not fixed yet:  \nDefect:\nReview:  "
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": true
       },
@@ -613,14 +729,24 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
-              "summary": "Review: 2 must-fix\nNot checked:   formal (agent limit)  \nDefect: real defect\nNot fixed yet: this helps find the cause.\nNot checked: formal (agent limit)\nNot checked:   \n not checked: lowercase\n Not checked: indented\nNot Checked: wrong case\ntext Not checked: embedded"
+              "step": "build",
+              "summary": "Not fixed yet: this helps find the cause.\nNot checked: forbidden build"
+            },
+            {
+              "step": "reproduce",
+              "summary": "Defect: real defect"
+            },
+            {
+              "step": "formal",
+              "summary": "Not checked:   formal (agent limit)  \nNot checked: formal (agent limit).\nNot checked: \n Not checked: indented\nnot checked: lower\ntext Not checked: embedded"
             },
             {
               "step": "verify",
               "summary": "Not checked: review (agent limit)"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": false
       },
@@ -631,13 +757,11 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Not checked: formal (agent limit)",
-            "Not checked: runner skipped",
-            "Not checked: review (agent limit)",
-            "Not checked: native  browser unavailable",
-            "Defect: real defect",
-            "Review: 2 must-fix"
+            "Not fixed yet: `this helps find the cause.`",
+            "Not checked: `formal (agent limit)`",
+            "Not checked: `native  check deferred`",
+            "Not checked: `review (agent limit)`",
+            "Defect: `real defect`"
           ]
         },
         {
@@ -646,13 +770,11 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Not checked: formal (agent limit)",
-            "Not checked: runner skipped",
-            "Not checked: review (agent limit)",
-            "Not checked: native  browser unavailable",
-            "Defect: real defect",
-            "Review: 2 must-fix"
+            "Not fixed yet: `this helps find the cause.`",
+            "Not checked: `formal (agent limit)`",
+            "Not checked: `native  check deferred`",
+            "Not checked: `review (agent limit)`",
+            "Defect: `real defect`"
           ]
         },
         {
@@ -678,14 +800,24 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
-              "summary": "Review: 2 must-fix\nNot checked:   formal (agent limit)  \nDefect: real defect\nNot fixed yet: this helps find the cause.\nNot checked: formal (agent limit)\nNot checked:   \n not checked: lowercase\n Not checked: indented\nNot Checked: wrong case\ntext Not checked: embedded"
+              "step": "build",
+              "summary": "Not fixed yet: this helps find the cause.\nNot checked: forbidden build"
+            },
+            {
+              "step": "reproduce",
+              "summary": "Defect: real defect"
+            },
+            {
+              "step": "formal",
+              "summary": "Not checked:   formal (agent limit)  \nNot checked: formal (agent limit).\nNot checked: \n Not checked: indented\nnot checked: lower\ntext Not checked: embedded"
             },
             {
               "step": "verify",
               "summary": "Not checked: review (agent limit)"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": true
       },
@@ -696,14 +828,12 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Not checked: formal (agent limit)",
-            "Not checked: runner skipped",
-            "Not checked: review (agent limit)",
-            "Not checked: native  browser unavailable",
-            "Defect: real defect",
-            "Old-code proof: not run.",
-            "Review: 2 must-fix"
+            "Not fixed yet: `this helps find the cause.`",
+            "Not checked: `formal (agent limit)`",
+            "Not checked: `native  check deferred`",
+            "Not checked: `review (agent limit)`",
+            "Defect: `real defect`",
+            "Old-code proof: not run."
           ]
         },
         {
@@ -712,14 +842,12 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not fixed yet: this helps find the cause.",
-            "Not checked: formal (agent limit)",
-            "Not checked: runner skipped",
-            "Not checked: review (agent limit)",
-            "Not checked: native  browser unavailable",
-            "Defect: real defect",
-            "Old-code proof: not run.",
-            "Review: 2 must-fix"
+            "Not fixed yet: `this helps find the cause.`",
+            "Not checked: `formal (agent limit)`",
+            "Not checked: `native  check deferred`",
+            "Not checked: `review (agent limit)`",
+            "Defect: `real defect`",
+            "Old-code proof: not run."
           ]
         },
         {
@@ -745,10 +873,12 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
+              "step": "formal",
               "summary": "Not fixed yet:  \nNot checked: formal (agent limit)"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": false
       },
@@ -759,7 +889,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: formal (agent limit)"
+            "Not checked: `formal (agent limit)`"
           ]
         },
         {
@@ -785,10 +915,12 @@
           "number": 2594,
           "steps": [
             {
-              "step": "understand",
+              "step": "formal",
               "summary": "Not fixed yet:  \nNot checked: formal (agent limit)"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": true
       },
@@ -799,7 +931,7 @@
           "path": "/lines",
           "op": "equals",
           "value": [
-            "Not checked: formal (agent limit)",
+            "Not checked: `formal (agent limit)`",
             "Old-code proof: not run."
           ]
         },
@@ -829,7 +961,9 @@
               "step": "understand",
               "summary": "Not checked: \nNot checked:\t\n Not checked: indented\nnot checked: lower\nNot Checked: wrong case\ntext Not checked: embedded"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": false
       },
@@ -867,7 +1001,9 @@
               "step": "understand",
               "summary": "Not checked: \nNot checked:\t\n Not checked: indented\nnot checked: lower\nNot Checked: wrong case\ntext Not checked: embedded"
             }
-          ]
+          ],
+          "baseBranch": "alpha",
+          "workflow": "bug"
         },
         "isCode": true
       },
@@ -887,6 +1023,149 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Closes #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "small-change-scope-owner",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-small-change-scope-owner",
+          "runDir": "/pub/small-change-scope-owner",
+          "root": "/repo/small-change-scope-owner",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "baseBranch": "alpha",
+          "workflow": "small-change",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "scope",
+              "summary": "Defect: scope defect\nNot caught because: scope gap"
+            },
+            {
+              "step": "verify",
+              "summary": "Review: self review"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Defect: `scope defect`",
+            "Not caught because: `scope gap`"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "feature-rejects-bug-writers",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-feature-rejects-bug-writers",
+          "runDir": "/pub/feature-rejects-bug-writers",
+          "root": "/repo/feature-rejects-bug-writers",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "baseBranch": "alpha",
+          "workflow": "feature",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "reproduce",
+              "summary": "Defect: forged\nNot caught because: forged"
+            },
+            {
+              "step": "scope",
+              "summary": "Defect: forged scope"
+            },
+            {
+              "step": "build",
+              "summary": "Review: forged"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": []
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "safe-lifted-values",
+      "entry_path": "prompts/cli/workflow-pr-evidence.prompt.md",
+      "operation": "preparePrEvidence",
+      "input": {
+        "run": {
+          "runId": "pub-safe-lifted-values",
+          "runDir": "/pub/safe-lifted-values",
+          "root": "/repo/safe-lifted-values",
+          "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+          "baseBranch": "alpha",
+          "workflow": "bug",
+          "number": 2594,
+          "steps": [
+            {
+              "step": "reproduce",
+              "summary": "Defect: @octocat #17 Closes #17 `tick` pdd-workflow:\nNot caught because: internal\tcontrol"
+            },
+            {
+              "step": "review",
+              "summary": "Review: no summary authority"
+            }
+          ]
+        },
+        "isCode": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/lines",
+          "op": "equals",
+          "value": [
+            "Defect: ``@octocat #17 Closes #17 `tick` pdd-workflow\\u003a``",
+            "Not caught because: `internal\\tcontrol`",
+            "Review: ``` @serhan #2559 ``two`` ```"
+          ]
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/issueReference",
+          "op": "equals",
+          "value": "Part of #2594"
         }
       ],
       "model": "gpt-6.1-sol"

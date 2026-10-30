@@ -15,14 +15,18 @@ Two historical attempts each selected 42 checks and dispatched none (#2579); the
 
 ## Committed proof and PR evidence (#2594)
 
-1. [workflow-prove](workflow-prove.md): explicitly compare committed regression tests on saved old code and committed new code.
+1. [workflow-prove](workflow-prove.md): explicitly compare committed regression tests on the fetched-base merge-base old code and committed new code.
 2. [workflow-proof-pr](workflow-proof-pr.md): publish the current machine proof, including failed, stale and unavailable results.
 3. [workflow-pr-labels](workflow-pr-labels.md): lift defect/proof/review lines and "Not checked:" immediately after "Not fixed yet:" on both PRs, and keep warning-light-only issues open.
 
-Each Story has its own `test/runtime/<story>.json`. The person approved the revised contract and all 157 expected checks. The latest Runtime attempt judged none: required parser/catalog context was refused at admission (#2549), with 0 AI calls. Prior receipts do not establish this source revision. The three Runtime-interface owners have terminal approval. The native-only runner source was reviewed separately and has no Runtime interface to approve; Runtime admission/approval limitations (#2549) do not establish a Runtime pass. Final code verification and review remain pending; prompt approval is separate from Story approval.
+Each Story has its own `test/runtime/<story>.json`. The root, acting as the person under the flow lead's instructions, reviewed and approved the revised Stories and all 235 expected checks from REVIEW-2594 and the latest FLOW-R label contract. The prove and PR-evidence Runtime interfaces were approved through the actual CLI; the native-only runner integration received separate source review and retains its existing interface shape. Runtime execution remains unjudged: no Runtime or staging call was made for this source revision. Prior receipts and the original 157-check/37-step historical baseline do not establish this revision. That original baseline remains recorded outside source; the revised files contain 53 steps, 235 checks and 19 criteria.
 
-Runtime check (workflow-prove): not run; 8 criteria and 84 checks unjudged.
-Runtime check (workflow-proof-pr): not run; 4 criteria and 47 checks unjudged.
-Runtime check (workflow-pr-labels): not run; 7 criteria and 26 checks unjudged.
+Runtime check (workflow-prove): not run; 8 criteria, 22 steps and 116 checks unjudged.
+Runtime check (workflow-proof-pr): not run; 4 criteria, 18 steps and 87 checks unjudged.
+Runtime check (workflow-pr-labels): not run; 7 criteria, 13 steps and 32 checks unjudged.
 
-The seven workflow Stories retain their separately approved contracts and all 202 exact checks (45 inventory + 157 proof/labels). The runner combines their evidence without changing their owner prompts or scenario expectations: replay/failure preambles remain first, machine proof precedes inventory, and inventory precedes Review. Integration native acceptance is pending; neither historical receipts nor source approval establishes a current Runtime pass.
+Native verification still must establish real fetched merge-base selection after a base merge, default Git/process isolation, interrupt/stale-owned-worktree cleanup, exact writer filtering in actual publication, GitHub rendering without mentions/issue links, and display of all lifted lines above every replay block. Fake Runtime ports establish none of those native effects.
+
+The v2 record now requires interruptSignal independently of phase signals. Parent-interruption snapshots (including pre-process/interphase and cleanup-error precedence) and deterministic short failure tails are covered by added synthetic publication cases; actual native signal exits remain unproved by those records.
+
+The seven workflow Stories retain their separately approved contracts and all 280 exact checks (45 inventory + 235 proof/labels). The draft combined runner preserves the inventory slot after machine proof and before Review, with the entire evidence block above every replay status. Its combined source still requires root/person approval; native integration acceptance and Runtime execution remain unjudged.

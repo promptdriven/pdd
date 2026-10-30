@@ -12,23 +12,23 @@
     },
     {
       "id": "AC3",
-      "text": "If the new code fails, the report says \"head-fails\" and exits 1 even when the old code fails with \"defect-x\"."
+      "text": "If the new code fails, the report says \"head-fails\", includes the observed cause and short actual output tail and exits 1 even when the old code fails with \"defect-x\"."
     },
     {
       "id": "AC4",
-      "text": "Each phase requests a 120-second limit, a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and signals have distinct unsuccessful reports and exit 1."
+      "text": "Each phase requests a 120-second limit, a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
     },
     {
       "id": "AC5",
-      "text": "No changed test gives \"no-changed-tests\"; missing commits, unsafe overlay setup and known missing-fixture/import failures give \"setup-error\" even when their output contains \"defect-x\"; none exits 0."
+      "text": "No changed test gives \"no-changed-tests\"; missing commits, unsafe overlay setup, exit 126/127 and known missing-fixture/import failures give \"setup-error\" with a cause and short actual output tail when available even when output contains \"defect-x\"; setup-looking output from a passing phase does not disqualify proof."
     },
     {
       "id": "AC6",
-      "text": "The proof selects committed regular added, modified or renamed tests and supplemental files under the documented test/fixture convention, ignores deleted files and implementation, and uses separate base and head snapshots."
+      "text": "The proof compares committed regular added, modified or renamed tests and supplemental files against the merge-base of HEAD with the fetched selected base branch, excluding base-branch changes already merged into HEAD, and ignores deleted files and implementation."
     },
     {
       "id": "AC7",
-      "text": "The saved result keeps run/base/head identity, the exact command and expectation, selected paths, both phase exits, final output lines and the observed error excerpt even when it precedes those final lines; allocated snapshots are cleaned up even after a failed comparison."
+      "text": "The v2 saved result keeps parent interruption separately from child signals, the computed old base and captured head, exact command and expectation, copied paths, phase exits, final output and observed excerpt; the immutable saved run base stays unchanged, cleanup always runs, and each report names the command and actual base/head exits with safe code spans rather than claiming copied files were executed tests."
     },
     {
       "id": "AC8",
@@ -47,7 +47,8 @@
             "runId": "run-proved",
             "runDir": "/runs/proved",
             "root": "/repo/proved",
-            "baseSha": "0000000000000000000000000000000000000001"
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -62,7 +63,8 @@
             "runId": "run-old-passes",
             "runDir": "/runs/old-passes",
             "root": "/repo/old-passes",
-            "baseSha": "0000000000000000000000000000000000000002"
+            "baseSha": "0000000000000000000000000000000000000002",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -77,7 +79,8 @@
             "runId": "run-wrong-reason",
             "runDir": "/runs/wrong-reason",
             "root": "/repo/wrong-reason",
-            "baseSha": "0000000000000000000000000000000000000003"
+            "baseSha": "0000000000000000000000000000000000000003",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -92,7 +95,8 @@
             "runId": "run-head-fails",
             "runDir": "/runs/head-fails",
             "root": "/repo/head-fails",
-            "baseSha": "0000000000000000000000000000000000000004"
+            "baseSha": "0000000000000000000000000000000000000004",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -107,7 +111,8 @@
             "runId": "run-base-timeout",
             "runDir": "/runs/base-timeout",
             "root": "/repo/base-timeout",
-            "baseSha": "0000000000000000000000000000000000000005"
+            "baseSha": "0000000000000000000000000000000000000005",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -122,7 +127,8 @@
             "runId": "run-head-timeout",
             "runDir": "/runs/head-timeout",
             "root": "/repo/head-timeout",
-            "baseSha": "0000000000000000000000000000000000000006"
+            "baseSha": "0000000000000000000000000000000000000006",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -137,7 +143,8 @@
             "runId": "run-output-limit",
             "runDir": "/runs/output-limit",
             "root": "/repo/output-limit",
-            "baseSha": "0000000000000000000000000000000000000007"
+            "baseSha": "0000000000000000000000000000000000000007",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -152,7 +159,8 @@
             "runId": "run-signalled",
             "runDir": "/runs/signalled",
             "root": "/repo/signalled",
-            "baseSha": "0000000000000000000000000000000000000008"
+            "baseSha": "0000000000000000000000000000000000000008",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -167,7 +175,8 @@
             "runId": "run-no-tests",
             "runDir": "/runs/no-tests",
             "root": "/repo/no-tests",
-            "baseSha": "0000000000000000000000000000000000000009"
+            "baseSha": "0000000000000000000000000000000000000009",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -182,7 +191,8 @@
             "runId": "run-missing-base",
             "runDir": "/runs/missing-base",
             "root": "/repo/missing-base",
-            "baseSha": "000000000000000000000000000000000000000a"
+            "baseSha": "000000000000000000000000000000000000000a",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -197,7 +207,8 @@
             "runId": "run-unsafe-overlay",
             "runDir": "/runs/unsafe-overlay",
             "root": "/repo/unsafe-overlay",
-            "baseSha": "000000000000000000000000000000000000000b"
+            "baseSha": "000000000000000000000000000000000000000b",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -212,7 +223,88 @@
             "runId": "run-missing-fixture",
             "runDir": "/runs/missing-fixture",
             "root": "/repo/missing-fixture",
-            "baseSha": "000000000000000000000000000000000000000c"
+            "baseSha": "000000000000000000000000000000000000000c",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/merge-base-after-base-merge"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-merge-base-after-base-merge",
+            "runDir": "/runs/merge-base-after-base-merge",
+            "root": "/repo/merge-base-after-base-merge",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/exit-126-setup"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-exit-126-setup",
+            "runDir": "/runs/exit-126-setup",
+            "root": "/repo/exit-126-setup",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/exit-127-setup"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-exit-127-setup",
+            "runDir": "/runs/exit-127-setup",
+            "root": "/repo/exit-127-setup",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/passing-head-setup-looking-output"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-passing-head-setup-looking-output",
+            "runDir": "/runs/passing-head-setup-looking-output",
+            "root": "/repo/passing-head-setup-looking-output",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
+          },
+          "error": ""
+        }
+      },
+      {
+        "request": {
+          "ref": "2594",
+          "cwd": "/repo/safe-proof-values"
+        },
+        "reply": {
+          "run": {
+            "runId": "run-safe-proof-values",
+            "runDir": "/runs/safe-proof-values",
+            "root": "/repo/safe-proof-values",
+            "baseSha": "ffffffffffffffffffffffffffffffffffffffff",
+            "baseBranch": "alpha"
           },
           "error": ""
         }
@@ -222,7 +314,7 @@
       {
         "request": {
           "root": "/repo/proved",
-          "baseSha": "0000000000000000000000000000000000000001"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -256,14 +348,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000001"
           }
         }
       },
       {
         "request": {
           "root": "/repo/old-passes",
-          "baseSha": "0000000000000000000000000000000000000002"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -297,14 +390,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000002"
           }
         }
       },
       {
         "request": {
           "root": "/repo/wrong-reason",
-          "baseSha": "0000000000000000000000000000000000000003"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -338,14 +432,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000003"
           }
         }
       },
       {
         "request": {
           "root": "/repo/head-fails",
-          "baseSha": "0000000000000000000000000000000000000004"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -379,14 +474,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000004"
           }
         }
       },
       {
         "request": {
           "root": "/repo/base-timeout",
-          "baseSha": "0000000000000000000000000000000000000005"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -420,14 +516,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000005"
           }
         }
       },
       {
         "request": {
           "root": "/repo/head-timeout",
-          "baseSha": "0000000000000000000000000000000000000006"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -461,14 +558,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000006"
           }
         }
       },
       {
         "request": {
           "root": "/repo/output-limit",
-          "baseSha": "0000000000000000000000000000000000000007"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -502,14 +600,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000007"
           }
         }
       },
       {
         "request": {
           "root": "/repo/signalled",
-          "baseSha": "0000000000000000000000000000000000000008"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -543,14 +642,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000008"
           }
         }
       },
       {
         "request": {
           "root": "/repo/no-tests",
-          "baseSha": "0000000000000000000000000000000000000009"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -564,14 +664,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000009"
           }
         }
       },
       {
         "request": {
           "root": "/repo/missing-base",
-          "baseSha": "000000000000000000000000000000000000000a"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -605,14 +706,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "merge-base unavailable",
+            "baseSha": "000000000000000000000000000000000000000a"
           }
         }
       },
       {
         "request": {
           "root": "/repo/unsafe-overlay",
-          "baseSha": "000000000000000000000000000000000000000b"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -646,14 +748,15 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "000000000000000000000000000000000000000b"
           }
         }
       },
       {
         "request": {
           "root": "/repo/missing-fixture",
-          "baseSha": "000000000000000000000000000000000000000c"
+          "baseBranch": "alpha"
         },
         "reply": {
           "snapshot": {
@@ -687,7 +790,218 @@
                 "mode": "100644"
               }
             ],
-            "error": ""
+            "error": "",
+            "baseSha": "000000000000000000000000000000000000000c"
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/merge-base-after-base-merge",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000191",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": "",
+            "baseSha": "000000000000000000000000000000000000012d"
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/exit-126-setup",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000192",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": "",
+            "baseSha": "000000000000000000000000000000000000012e"
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/exit-127-setup",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000193",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": "",
+            "baseSha": "000000000000000000000000000000000000012f"
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/passing-head-setup-looking-output",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000194",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000130"
+          }
+        }
+      },
+      {
+        "request": {
+          "root": "/repo/safe-proof-values",
+          "baseBranch": "alpha"
+        },
+        "reply": {
+          "snapshot": {
+            "headSha": "0000000000000000000000000000000000000195",
+            "baseAvailable": true,
+            "headAvailable": true,
+            "files": [
+              {
+                "path": "test/new.test.mjs",
+                "status": "A",
+                "mode": "100644"
+              },
+              {
+                "path": "test/fixtures/seed.json",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "tests/renamed.test.mjs",
+                "status": "R",
+                "mode": "100755"
+              },
+              {
+                "path": "src/fix.mjs",
+                "status": "M",
+                "mode": "100644"
+              },
+              {
+                "path": "test/deleted.test.mjs",
+                "status": "D",
+                "mode": "100644"
+              }
+            ],
+            "error": "",
+            "baseSha": "0000000000000000000000000000000000000131"
           }
         }
       }
@@ -1574,7 +1888,8 @@
       "createWorktree": 0,
       "overlay": 0,
       "runProcess": 0,
-      "cleanup": 0
+      "cleanup": 0,
+      "snapshot": []
     }
   },
   "simulation": {
@@ -1589,14 +1904,721 @@
       "result_value_pointer": ""
     },
     "host.snapshot": {
-      "action": "collection.get",
-      "world_pointer": "/host_snapshot",
-      "key_argument_pointer": "/root",
-      "value_argument_pointer": null,
-      "item_key_pointer": "/request/root",
-      "item_value_pointer": "/reply",
-      "result_template": {},
-      "result_value_pointer": ""
+      "action": "fixture.lookup",
+      "world_pointer": "/host_effect_calls/snapshot",
+      "cases": [
+        {
+          "call_index": 1,
+          "args": {
+            "root": "/repo/proved",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000065",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000001"
+            }
+          }
+        },
+        {
+          "call_index": 2,
+          "args": {
+            "root": "/repo/old-passes",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000066",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000002"
+            }
+          }
+        },
+        {
+          "call_index": 3,
+          "args": {
+            "root": "/repo/wrong-reason",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000067",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000003"
+            }
+          }
+        },
+        {
+          "call_index": 4,
+          "args": {
+            "root": "/repo/head-fails",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000068",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000004"
+            }
+          }
+        },
+        {
+          "call_index": 5,
+          "args": {
+            "root": "/repo/base-timeout",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000069",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000005"
+            }
+          }
+        },
+        {
+          "call_index": 6,
+          "args": {
+            "root": "/repo/head-timeout",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006a",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000006"
+            }
+          }
+        },
+        {
+          "call_index": 7,
+          "args": {
+            "root": "/repo/output-limit",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006b",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000007"
+            }
+          }
+        },
+        {
+          "call_index": 8,
+          "args": {
+            "root": "/repo/signalled",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006c",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000008"
+            }
+          }
+        },
+        {
+          "call_index": 9,
+          "args": {
+            "root": "/repo/no-tests",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006d",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000009"
+            }
+          }
+        },
+        {
+          "call_index": 10,
+          "args": {
+            "root": "/repo/missing-base",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006e",
+              "baseAvailable": false,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "merge-base unavailable",
+              "baseSha": "000000000000000000000000000000000000000a"
+            }
+          }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "root": "/repo/unsafe-overlay",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "000000000000000000000000000000000000006f",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "000000000000000000000000000000000000000b"
+            }
+          }
+        },
+        {
+          "call_index": 12,
+          "args": {
+            "root": "/repo/missing-fixture",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000070",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "000000000000000000000000000000000000000c"
+            }
+          }
+        },
+        {
+          "call_index": 13,
+          "args": {
+            "root": "/repo/merge-base-after-base-merge",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000191",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "000000000000000000000000000000000000012d"
+            }
+          }
+        },
+        {
+          "call_index": 14,
+          "args": {
+            "root": "/repo/exit-126-setup",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000192",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "000000000000000000000000000000000000012e"
+            }
+          }
+        },
+        {
+          "call_index": 15,
+          "args": {
+            "root": "/repo/exit-127-setup",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000193",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "000000000000000000000000000000000000012f"
+            }
+          }
+        },
+        {
+          "call_index": 16,
+          "args": {
+            "root": "/repo/passing-head-setup-looking-output",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000194",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000130"
+            }
+          }
+        },
+        {
+          "call_index": 17,
+          "args": {
+            "root": "/repo/safe-proof-values",
+            "baseBranch": "alpha"
+          },
+          "result": {
+            "snapshot": {
+              "headSha": "0000000000000000000000000000000000000195",
+              "baseAvailable": true,
+              "headAvailable": true,
+              "files": [
+                {
+                  "path": "test/new.test.mjs",
+                  "status": "A",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/fixtures/seed.json",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "tests/renamed.test.mjs",
+                  "status": "R",
+                  "mode": "100755"
+                },
+                {
+                  "path": "src/fix.mjs",
+                  "status": "M",
+                  "mode": "100644"
+                },
+                {
+                  "path": "test/deleted.test.mjs",
+                  "status": "D",
+                  "mode": "100644"
+                }
+              ],
+              "error": "",
+              "baseSha": "0000000000000000000000000000000000000131"
+            }
+          }
+        }
+      ]
     },
     "host.createWorktree": {
       "action": "fixture.lookup",
@@ -1841,6 +2863,126 @@
             "worktree": "/snap/missing-fixture/head",
             "error": ""
           }
+        },
+        {
+          "call_index": 21,
+          "args": {
+            "root": "/repo/merge-base-after-base-merge",
+            "commit": "000000000000000000000000000000000000012d",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/merge-base-after-base-merge/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 22,
+          "args": {
+            "root": "/repo/merge-base-after-base-merge",
+            "commit": "0000000000000000000000000000000000000191",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/merge-base-after-base-merge/head",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 23,
+          "args": {
+            "root": "/repo/exit-126-setup",
+            "commit": "000000000000000000000000000000000000012e",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/exit-126-setup/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 24,
+          "args": {
+            "root": "/repo/exit-126-setup",
+            "commit": "0000000000000000000000000000000000000192",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/exit-126-setup/head",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 25,
+          "args": {
+            "root": "/repo/exit-127-setup",
+            "commit": "000000000000000000000000000000000000012f",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/exit-127-setup/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 26,
+          "args": {
+            "root": "/repo/exit-127-setup",
+            "commit": "0000000000000000000000000000000000000193",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/exit-127-setup/head",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 27,
+          "args": {
+            "root": "/repo/passing-head-setup-looking-output",
+            "commit": "0000000000000000000000000000000000000130",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/passing-head-setup-looking-output/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 28,
+          "args": {
+            "root": "/repo/passing-head-setup-looking-output",
+            "commit": "0000000000000000000000000000000000000194",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/passing-head-setup-looking-output/head",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 29,
+          "args": {
+            "root": "/repo/safe-proof-values",
+            "commit": "0000000000000000000000000000000000000131",
+            "phase": "base"
+          },
+          "result": {
+            "worktree": "/snap/safe-proof-values/base",
+            "error": ""
+          }
+        },
+        {
+          "call_index": 30,
+          "args": {
+            "root": "/repo/safe-proof-values",
+            "commit": "0000000000000000000000000000000000000195",
+            "phase": "head"
+          },
+          "result": {
+            "worktree": "/snap/safe-proof-values/head",
+            "error": ""
+          }
         }
       ],
       "result_template": null,
@@ -2000,6 +3142,86 @@
             "root": "/repo/missing-fixture",
             "headSha": "0000000000000000000000000000000000000070",
             "worktree": "/snap/missing-fixture/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "root": "/repo/merge-base-after-base-merge",
+            "headSha": "0000000000000000000000000000000000000191",
+            "worktree": "/snap/merge-base-after-base-merge/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 12,
+          "args": {
+            "root": "/repo/exit-126-setup",
+            "headSha": "0000000000000000000000000000000000000192",
+            "worktree": "/snap/exit-126-setup/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 13,
+          "args": {
+            "root": "/repo/exit-127-setup",
+            "headSha": "0000000000000000000000000000000000000193",
+            "worktree": "/snap/exit-127-setup/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 14,
+          "args": {
+            "root": "/repo/passing-head-setup-looking-output",
+            "headSha": "0000000000000000000000000000000000000194",
+            "worktree": "/snap/passing-head-setup-looking-output/base",
+            "paths": [
+              "test/new.test.mjs",
+              "test/fixtures/seed.json",
+              "tests/renamed.test.mjs"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 15,
+          "args": {
+            "root": "/repo/safe-proof-values",
+            "headSha": "0000000000000000000000000000000000000195",
+            "worktree": "/snap/safe-proof-values/base",
             "paths": [
               "test/new.test.mjs",
               "test/fixtures/seed.json",
@@ -2413,6 +3635,226 @@
               "setupError": ""
             }
           }
+        },
+        {
+          "call_index": 19,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/merge-base-after-base-merge/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 20,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/merge-base-after-base-merge/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 21,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/exit-126-setup/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 126,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "command unavailable",
+              "error": "",
+              "setupError": "command exited 126"
+            }
+          }
+        },
+        {
+          "call_index": 22,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/exit-126-setup/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 23,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/exit-127-setup/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 127,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "command unavailable",
+              "error": "",
+              "setupError": "command exited 127"
+            }
+          }
+        },
+        {
+          "call_index": 24,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/exit-127-setup/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 25,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/passing-head-setup-looking-output/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "defect-x",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 26,
+          "args": {
+            "command": "node --test test/new.test.mjs",
+            "cwd": "/snap/passing-head-setup-looking-output/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "ENOENT: no such file in documentation",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 27,
+          "args": {
+            "command": "printf \"@octocat #17 `x` pdd-workflow:\"",
+            "cwd": "/snap/safe-proof-values/base",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 1,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "@octocat #17 `x` pdd-workflow:",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
+        },
+        {
+          "call_index": 28,
+          "args": {
+            "command": "printf \"@octocat #17 `x` pdd-workflow:\"",
+            "cwd": "/snap/safe-proof-values/head",
+            "timeoutMs": 120000,
+            "killGraceMs": 2000,
+            "outputLimitBytes": 1048576
+          },
+          "result": {
+            "result": {
+              "exitCode": 0,
+              "signal": "",
+              "timedOut": false,
+              "outputLimited": false,
+              "stdout": "",
+              "stderr": "",
+              "error": "",
+              "setupError": ""
+            }
+          }
         }
       ],
       "result_template": null,
@@ -2551,6 +3993,71 @@
           "result": {
             "error": ""
           }
+        },
+        {
+          "call_index": 11,
+          "args": {
+            "root": "/repo/merge-base-after-base-merge",
+            "worktrees": [
+              "/snap/merge-base-after-base-merge/base",
+              "/snap/merge-base-after-base-merge/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 12,
+          "args": {
+            "root": "/repo/exit-126-setup",
+            "worktrees": [
+              "/snap/exit-126-setup/base",
+              "/snap/exit-126-setup/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 13,
+          "args": {
+            "root": "/repo/exit-127-setup",
+            "worktrees": [
+              "/snap/exit-127-setup/base",
+              "/snap/exit-127-setup/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 14,
+          "args": {
+            "root": "/repo/passing-head-setup-looking-output",
+            "worktrees": [
+              "/snap/passing-head-setup-looking-output/base",
+              "/snap/passing-head-setup-looking-output/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
+        },
+        {
+          "call_index": 15,
+          "args": {
+            "root": "/repo/safe-proof-values",
+            "worktrees": [
+              "/snap/safe-proof-values/base",
+              "/snap/safe-proof-values/head"
+            ]
+          },
+          "result": {
+            "error": ""
+          }
         }
       ],
       "result_template": null,
@@ -2597,7 +4104,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✓ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" fail on the old code with \"defect-x\" and pass on the new code."
+          "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
         },
         {
           "criterion_id": "AC1",
@@ -2646,8 +4153,8 @@
           "value": {
             "runDir": "/runs/proved",
             "record": {
-              "v": 1,
-              "origin": "pdd.workflow-prove.v1",
+              "v": 2,
+              "origin": "pdd.workflow-prove.v2",
               "runId": "run-proved",
               "baseSha": "0000000000000000000000000000000000000001",
               "headSha": "0000000000000000000000000000000000000065",
@@ -2686,9 +4193,17 @@
               },
               "outcome": "proved",
               "cleanupError": "",
-              "setupError": ""
+              "setupError": "",
+              "interruptSignal": ""
             }
           }
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/host_readRun/0/reply/run/baseSha",
+          "op": "equals",
+          "value": "ffffffffffffffffffffffffffffffffffffffff"
         }
       ],
       "model": "gpt-6.1-sol"
@@ -2716,7 +4231,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" pass on the old code too. It does not show the bug."
+          "value": "Old-code proof: ✗ old-passes; command `node --test test/new.test.mjs`; old-code exit `0`; new-code exit `0`; expected `defect-x`; cause `no output`."
         },
         {
           "criterion_id": "AC2",
@@ -2765,7 +4280,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ tests \"test/new.test.mjs\", \"test/fixtures/seed.json\", \"tests/renamed.test.mjs\" fail on the old code, but not with \"defect-x\" (got \"code: other-error\")."
+          "value": "Old-code proof: ✗ wrong-reason; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `code: other-error`."
         },
         {
           "criterion_id": "AC2",
@@ -2884,7 +4399,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ head-fails."
+          "value": "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `defect-x`; tail `defect-x`."
         },
         {
           "criterion_id": "AC3",
@@ -2940,7 +4455,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ base-timeout."
+          "value": "Old-code proof: ✗ base-timeout; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
           "criterion_id": "AC4",
@@ -2989,7 +4504,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ head-timeout."
+          "value": "Old-code proof: ✗ head-timeout; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `no output`."
         },
         {
           "criterion_id": "AC4",
@@ -3038,7 +4553,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ output-limit."
+          "value": "Old-code proof: ✗ output-limit; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
           "criterion_id": "AC4",
@@ -3087,7 +4602,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ signalled."
+          "value": "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
           "criterion_id": "AC4",
@@ -3109,6 +4624,13 @@
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
           "value": 1
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "world",
+          "path": "/saved/7/record/interruptSignal",
+          "op": "equals",
+          "value": ""
         }
       ],
       "model": "gpt-6.1-sol"
@@ -3136,7 +4658,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ no-changed-tests."
+          "value": "Old-code proof: ✗ no-changed-tests; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `no-changed-tests`."
         },
         {
           "criterion_id": "AC5",
@@ -3185,7 +4707,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ setup-error."
+          "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `merge-base unavailable`."
         },
         {
           "criterion_id": "AC5",
@@ -3234,7 +4756,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ setup-error."
+          "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `unsafe symlink ancestry`."
         },
         {
           "criterion_id": "AC5",
@@ -3283,7 +4805,7 @@
           "target": "result",
           "path": "/message",
           "op": "equals",
-          "value": "Old-code proof: ✗ setup-error."
+          "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `missing fixture`; tail `defect-x`."
         },
         {
           "criterion_id": "AC5",
@@ -3525,6 +5047,306 @@
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "merge-base-after-base-merge",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/merge-base-after-base-merge",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/12/record/baseSha",
+          "op": "equals",
+          "value": "000000000000000000000000000000000000012d"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/12/record/v",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/12/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exit-126-setup",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/exit-126-setup",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `126`; new-code exit `0`; expected `defect-x`; cause `command exited 126`; tail `command unavailable`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/13/record/baseSha",
+          "op": "equals",
+          "value": "000000000000000000000000000000000000012e"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/13/record/v",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/13/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "exit-127-setup",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/exit-127-setup",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `127`; new-code exit `0`; expected `defect-x`; cause `command exited 127`; tail `command unavailable`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/14/record/baseSha",
+          "op": "equals",
+          "value": "000000000000000000000000000000000000012f"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/14/record/v",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/14/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "passing-head-setup-looking-output",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/passing-head-setup-looking-output",
+        "test": "node --test test/new.test.mjs",
+        "expect": "defect-x"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/15/record/baseSha",
+          "op": "equals",
+          "value": "0000000000000000000000000000000000000130"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/15/record/v",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/15/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
+        }
+      ],
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "step_id": "safe-proof-values",
+      "entry_path": "prompts/cli/workflow-prove.prompt.md",
+      "operation": "proveRun",
+      "input": {
+        "ref": "2594",
+        "cwd": "/repo/safe-proof-values",
+        "test": "printf \"@octocat #17 `x` pdd-workflow:\"",
+        "expect": "@octocat #17 `x` pdd-workflow:"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/exitCode",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/message",
+          "op": "equals",
+          "value": "Old-code proof: ✓ ``printf \\\"@octocat #17 `x` pdd-workflow\\u003a\\\"``: old-code exit `1`; output contains ``@octocat #17 `x` pdd-workflow\\u003a``; new-code exit `0`."
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/16/record/baseSha",
+          "op": "equals",
+          "value": "0000000000000000000000000000000000000131"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "world",
+          "path": "/saved/16/record/v",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "world",
+          "path": "/saved/16/record/paths",
+          "op": "equals",
+          "value": [
+            "test/new.test.mjs",
+            "test/fixtures/seed.json",
+            "tests/renamed.test.mjs"
+          ]
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "calls",
+          "path": "/resources/workflow-prove-host-cleanup",
+          "op": "equals",
+          "value": 1
         }
       ],
       "model": "gpt-6.1-sol"
