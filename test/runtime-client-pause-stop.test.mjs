@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck, runTry } from '../src/runtime-client.mjs';
 import { listRuntimeJobs } from '../src/runtime-slots.mjs';
@@ -60,8 +60,11 @@ for (const stage of ['check', 'explicit-lint']) test(`post-POST stop: ${stage} t
   assert.deepEqual(JSON.parse(receipts(setup).find(r => r.path.endsWith(`${receipt.id}.json`)).raw), receipt);
 });
 
-for (const earlier of ['confirmed', 'unknown']) test(`post-POST stop preserves earlier ${earlier} evidence, accounting and recovery`, async t => {
-  const setup = harbor(t, repo => writeFileSync(join(repo, 'tests/earlier.json'), readFileSync(join(repo, 'tests/place-order.json'))));
+for (const cap of [undefined, '2']) for (const earlier of ['confirmed', 'unknown']) test(`post-POST stop preserves earlier ${earlier} evidence, accounting and recovery (cap ${cap ?? 'unset'})`, async t => {
+  const setup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    writeFileSync(join(repo, 'tests/earlier.json'), readFileSync(join(repo, 'tests/place-order.json')));
+  });
   let made, checks = 0, paused = false; const answers = new Map();
   const fake = await fakeRuntime(t, (e, f) => {
     if (e.command === 'check') {
@@ -77,7 +80,9 @@ for (const earlier of ['confirmed', 'unknown']) test(`post-POST stop preserves e
     return f.normal(e);
   });
   made = make(setup, fake);
+  if (cap !== undefined) made.ports.env.PDD_MAX_JOBS = cap;
   made.ports.sleep = async ms => {
+    // Interrupt only at this test's durable evidence gate, with no wall-clock sleep.
     made.clock.now += ms; await new Promise(done => setImmediate(done));
     const saved = receipts(setup).find(r => r.path.endsWith('/batch.json'));
     const previous = saved && JSON.parse(saved.raw).rows.find(r => r.test === 'tests/earlier.json');
