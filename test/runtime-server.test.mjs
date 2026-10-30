@@ -476,7 +476,7 @@ test('RUNTIME-SERVER11: 429 with no Retry-After waits 5 s before the new request
 });
 
 // Wrong: a pdd that was killed mid-send leaves rows that --read shows as passed (exit 0) or never reads.
-test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a row never sent is not run', async t => {
+test('RUNTIME-SERVER12: --read adopts posted claims and keeps genuinely unsent rows not run', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const first = await check(setup, fake, ['place-order']);
   assert.equal(first.code, 0);
@@ -489,7 +489,26 @@ test('RUNTIME-SERVER12: --read reads a posted row with no saved answer, and a ro
   assert.equal(read.code, 0, read.out); assert.equal(fake.gets.length, gets + 1); assert.equal(fake.gets.at(-1).url, `/v1/runs/${id}`);
   saved.rows[0] = { ...saved.rows[0], state: 'ready', request_ids: [] };
   writeFileSync(join(folder, 'batch.json'), JSON.stringify(saved));
-  const never = await check(setup, fake, [], { '--read': true });
+  const posts = fake.posts.length;
+  const adopted = await check(setup, fake, [], { '--read': true, '--json': true });
+  assert.equal(adopted.code, 0);
+  assert.equal(adopted.clock.uuids, 0);
+  assert.equal(adopted.json.rows[0].request_id, id, 'the dispatch claim preserves the paid check identity');
+  assert.equal(fake.posts.length, posts, 'erasing row IDs cannot authorize a second POST');
+
+  // A separate producer batch stopped before any dispatch has no paid claim to adopt.
+  const unsent = harbor(t);
+  const stopped = await check(unsent, fake, ['place-order'], {}, { onInterrupt: handler => { handler(); return () => {}; } });
+  assert.equal(stopped.code, 3);
+  assert.equal(fake.posts.length, posts, 'interruption precedes even the lint POST');
+  const unsentFolder = join(unsent.state, 'batches', stopped.batch);
+  const unsentSaved = batchFile(unsent, stopped.batch);
+  assert.deepEqual(unsentSaved.rows[0].request_ids, []);
+  assert.equal(filesUnder(unsentFolder).some(path => path.endsWith('.dispatch.json')), false);
+  unsentSaved.rows[0].state = 'ready';
+  writeFileSync(join(unsentFolder, 'batch.json'), JSON.stringify(unsentSaved));
+  const never = await check(unsent, fake, [], { '--read': true });
+  assert.equal(fake.posts.length, posts);
   assert.equal(never.code, 5); assert.match(never.out, /NOT RUN {2}Place a coffee order \(tests\/place-order\.json\): pdd stopped before sending this check\./);
   assert.equal(exitCodeFor([{ state: 'ready' }]), 3); assert.equal(exitCodeFor([{ state: 'sending' }, { state: 'failed' }]), 3);
 });
