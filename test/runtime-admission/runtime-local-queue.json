@@ -61,8 +61,23 @@
     },
     {
       "id": "twelve-contenders",
-      "given": "12 separate native processes launched together, shared limit 3, each holds its slot for 20 ms, existing native fixture limit 15 seconds",
-      "required_observation": "all 12 finish comfortably before the 15-second fixture timeout, measured peak active <=3, no busy failures or duplicated tickets; performance bound belongs to this controlled fixture, not a production hardware SLA"
+      "given": "12 separate native processes launched together, shared limit 3, each briefly holds its slot; a generous watchdog detects a contention stall",
+      "required_observation": "all 12 finish, measured peak active <=3, no busy failures or duplicated tickets; verify progress and order without a small elapsed-time performance target"
+    },
+    {
+      "id": "two-live-waiters-wallclock-jump",
+      "given": "one active owner holds the only slot; two live waiters have distinct original started_at values, separately equal times with stable ID tie order; both waiting refresh times become more than 60 seconds old before either next heartbeat and each can reclaim the other ticket; the active owner then releases within the caller waits",
+      "required_observation": "both live waiters recover their own missing waiting ticket with original ID/started_at, continue in original oldest-first/ID tie order and acquire once each; peak active <=1, no duplicate tickets or stranded timeout; after release no owned ticket, claim or refresh timer remains; use real separate processes for the race and a generous watchdog, without a new latency bound"
+    },
+    {
+      "id": "missing-ticket-refresh-and-identity",
+      "given": "ongoing waiter ticket disappears before inspection, separately just before its heartbeat observes absence; restoration encounters an existing record at the same path in a separate case",
+      "required_observation": "a missing waiting ticket is exclusively restored with the same ID/started_at and refresh resumes even after an absent-file heartbeat stopped; an existing record is never overwritten or duplicated, and no active reservation or claim is resurrected; other owners retain ordinary freshness rules"
+    },
+    {
+      "id": "missing-ticket-stop-and-paid-lease",
+      "given": "waiting ticket disappears, then interruption or caller deadline occurs before restoration/admission; separately another owner has a stale active record with a dispatched running or unknown job younger than 30 minutes",
+      "required_observation": "ended wait returns without acquisition or dispatch, does not restore its ticket and leaves no owned refresh work; recovery of waiting tickets never releases the other owner uncertain paid-job lease or infers completion"
     }
   ]
 }

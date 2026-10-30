@@ -14,7 +14,13 @@ An active record holds its unique id, state active, owner pid, kind, started_at 
 
 ### Owner freshness and paid-job leases
 
-While this command owns a waiting ticket, active reservation or claim lock, refresh that file about every 5 seconds, including during slow outside operations. During an ongoing acquisition, exclude the caller's own waiting ticket from stale-owner reclamation: a forward wall-clock jump or laptop sleep before its next heartbeat must preserve its original ID, timestamp and queue position until admission, interruption or the caller deadline. This exception supplies no evidence that a dispatched job ended and does not protect other owners. For other owners, a file with no refresh for >= 60 seconds has an expired owner even if its PID now belongs to a live unrelated process. For existing records without explicit heartbeat metadata, use the file refresh time with the same expiry; missing freshness evidence cannot let an alive PID retain ownership indefinitely. Process death also expires ownership; PID liveness alone cannot keep a stale ticket, active owner or claim alive. Freshness is private metadata and must not add fields to the public jobs snapshot. Refreshes never recreate a removed record or touch another owner's file. Stop refresh work when ownership ends; command return with an uncertain dispatched job retains the lease record without pretending the command remains alive.
+While this command owns a waiting ticket, active reservation or claim lock, refresh that file about every 5 seconds, including during slow outside operations.
+
+During an ongoing acquisition, exclude the caller's own waiting ticket from stale-owner reclamation. If that ticket disappears, including when two live waiters reclaim each other's apparently stale tickets after a wall-clock jump, restore this acquisition's waiting ticket with its original ID and started_at before competing for admission. Restore only a missing record, using exclusive creation without overwriting an existing record; never create a second ticket or replace an active reservation. Restored tickets keep the original started_at/ID ordering, and acquisition must continue toward the next free slot rather than wait until timeout for a ticket that no longer exists. This exception supplies no evidence that a dispatched job ended and does not protect other owners.
+
+For other owners, a file with no refresh for >= 60 seconds has an expired owner even if its PID now belongs to a live unrelated process. For existing records without explicit heartbeat metadata, use the file refresh time with the same expiry; missing freshness evidence cannot let an alive PID retain ownership indefinitely. Process death also expires ownership; PID liveness alone cannot keep a stale ticket, active owner or claim alive. Freshness is private metadata and must not add fields to the public jobs snapshot.
+
+Heartbeat refresh alone never recreates a removed record or touches another owner's file. Missing waiting-ticket recovery belongs only to the still-pending acquisition above, including when disappearance was observed before inspection or by a heartbeat: restore the waiting ticket's refresh lifecycle even if an absent-file refresh stopped it. Interruption or the caller deadline wins over restoration and admission; once acquired or ended, never restore that waiting ticket. Stop refresh work when ownership ends; command return with an uncertain dispatched job retains the lease record without pretending the command remains alive.
 
 ```mermaid
 flowchart TD
@@ -60,7 +66,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "3df92f7ba5b31146fdc4b5fc06a8ab6fbf8bc19b4e383b001ed8c59b8aa0bbb6",
+  "prose_sha256": "2b96f62000aa607361393dcc22d10f25d95215ddf4917ccfa8aca8b9009dbf72",
   "entries": [
     {
       "operation": "listRuntimeJobs",
