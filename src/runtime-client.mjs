@@ -3,7 +3,7 @@ import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -61,7 +61,7 @@ function authExecutable(env, preferred) {
 function withDefaults(ports) {
   const env = ports.env ?? process.env;
   return {
-    env, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
+    env, acquireBatchLock: ports.acquireBatchLock ?? acquireRuntimeBatchLock, agentBridge: ports.agentBridge, discoverAgents: ports.discoverAgents, askAgent: ports.askAgent, signal: ports.signal, ghPath: ports.ghPath, shell: ports.shell, serve: ports.serve, stdout: ports.stdout ?? process.stdout, stderr: ports.stderr ?? process.stderr, fetch: ports.fetch ?? globalThis.fetch,
     gh: ports.gh ?? (args => {
       const executable = authExecutable(env, ports.ghPath);
       return executable ? spawnSync(executable, args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 })
@@ -146,6 +146,79 @@ class StateStore {
   repoKey(root) { return createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 16); }
   repo(root) { return this.read(join(this.folder('repos'), `${this.repoKey(root)}.json`)) ?? { root: realpathSync(root), last_batch: null, tries: {} }; }
   saveRepo(root, value) { this.write(join(this.folder('repos'), `${this.repoKey(root)}.json`), value); }
+}
+
+// Native boundary: exclusive ownership covers a whole batch operation, not one save.
+// The short claim serializes dead-owner recovery with creation. Never expire a live PID.
+export async function acquireRuntimeBatchLock(folder, { signal, timeoutMs = 30_000 } = {}) {
+  const lock = join(folder, 'batch.lock'), claim = `${lock}.claim`;
+  const deadline = Date.now() + Math.max(0, Math.min(30_000, timeoutMs));
+  const failure = code => Object.assign(new Error(code), { code, lock, claim });
+  let waited = false;
+  for (;;) {
+    if (waited && signal?.aborted) throw failure('BATCH_LOCK_INTERRUPTED');
+    let gate, owner;
+    try { gate = openSync(claim, 'wx', 0o600); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (gate !== undefined) {
+      try {
+        writeFileSync(gate, String(process.pid)); fsyncSync(gate);
+        let available = false;
+        try {
+          const stat = lstatSync(lock);
+          const text = stat.isFile() ? readFileSync(lock, 'utf8') : '';
+          const pid = /^[1-9][0-9]*$/.test(text) ? Number(text) : NaN;
+          if (Number.isSafeInteger(pid) && pid > 0) {
+            try { process.kill(pid, 0); }
+            catch (error) {
+              if (error.code === 'ESRCH') { unlinkSync(lock); available = true; }
+              // EPERM and other uncertain answers are never permission to steal.
+            }
+          }
+        } catch (error) { if (error.code === 'ENOENT') available = true; else throw error; }
+        if (available) {
+          const fd = openSync(lock, 'wx', 0o600);
+          try {
+            owner = fstatSync(fd);
+            writeFileSync(fd, String(process.pid)); fsyncSync(fd);
+          } catch (error) { unlinkSync(lock); owner = undefined; throw error; }
+          finally { closeSync(fd); }
+        }
+      } finally { closeSync(gate); unlinkSync(claim); }
+    }
+    if (owner) {
+      let released = false;
+      return () => {
+        if (released) return; released = true;
+        try {
+          const current = lstatSync(lock);
+          if (current.dev === owner.dev && current.ino === owner.ino) unlinkSync(lock);
+        } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      };
+    }
+    if (signal?.aborted) throw failure('BATCH_LOCK_INTERRUPTED');
+    if (Date.now() >= deadline) throw failure('BATCH_LOCK_BUSY');
+    waited = true;
+    await new Promise(done => {
+      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); done(); };
+      const timer = setTimeout(finish, Math.min(50, Math.max(0, deadline - Date.now())));
+      signal?.addEventListener('abort', finish, { once: true });
+      if (signal?.aborted) finish();
+    });
+  }
+}
+
+async function ownBatch(context, name) {
+  if (context.releaseBatch) return;
+  const timeoutMs = Math.max(0, Math.min(30_000, (context.deadline ?? Infinity) - context.ports.now()));
+  try {
+    context.releaseBatch = await context.ports.acquireBatchLock(context.folder, { signal: context.signal, timeoutMs });
+  } catch (error) {
+    if (error instanceof Stop) throw error;
+    if (error.code === 'BATCH_LOCK_INTERRUPTED') throw new Stop(3, `Stopped waiting for batch ${name}. Read it with: pdd check --read ${name}`);
+    if (error.code === 'BATCH_LOCK_BUSY') throw new Stop(3, `Another command is using batch ${name}. Nothing was sent. Read it later with: pdd check --read ${name}. If ${join(context.folder, 'batch.lock.claim')} was abandoned, verify no command is using this batch before removing that guard file.`);
+    throw new Stop(5, `Could not lock batch ${name} (${error.code ?? 'state error'}). Nothing was sent.`);
+  }
 }
 
 function signIn(gh, store) {
@@ -707,8 +780,9 @@ async function runLintOnly(context, cwd, words, setRelease) {
   Object.assign(context, { origin, visible: found.visible, capture, identity, batch, startedAt, deadline: startedAt + LINT_MS, rows, head: null,
     secrets: [identity.token], lint: { request_ids: [], state: null }, timeoutMin: LINT_MS / 60_000 });
   context.folder = context.store.folder('batches', batch);
-  saveBatch(context);
   setRelease(interruptible(context));
+  await ownBatch(context, batch);
+  saveBatch(context);
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   const lint = await runLint(context, true);
   if (lint.kind === 'pending') throw new Stop(3, pendingLintMessage(context, lint.answer));
@@ -838,6 +912,8 @@ async function runRead(context, batchWord, quiet = false) {
   const name = batchWord ?? store.repo(root).last_batch;
   if (!name || !BATCH.test(name)) throw new Stop(2, name ? 'BATCH looks like 20261027-092747-k3f9.' : 'No saved check for this repository. Run pdd check first.');
   context.folder = join(store.dir, 'batches', name);
+  if (!statOrNull(join(context.folder, 'batch.json'))) throw new Stop(2, `No saved batch ${name}.`);
+  await ownBatch(context, name);
   const saved = store.read(join(context.folder, 'batch.json'));
   if (!saved) throw new Stop(2, `No saved batch ${name}.`);
   if (saved.root !== root) throw new Stop(2, 'This saved batch belongs to a different repository.');
@@ -1037,7 +1113,7 @@ export async function runCheck({ words = [], options = {}, cwd = process.cwd() }
       return error.exitCode;
     }
     throw error;
-  } finally { release(); }
+  } finally { try { context.releaseBatch?.(); } finally { release(); } }
 }
 
 async function runBatch(context, cwd, words, options, setRelease) {
@@ -1068,10 +1144,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   Object.assign(context, { capture, identity, batch, startedAt, deadline: context.timeoutMin ? startedAt + context.timeoutMin * 60_000 : Infinity, rows,
     head: head.status === 0 ? head.stdout.trim() : null, secrets: [identity.token], lint: { request_ids: [], state: null } });
   context.folder = context.store.folder('batches', batch);
+  setRelease(interruptible(context));
+  await ownBatch(context, batch);
   saveBatch(context);
   const repoState = context.store.repo(root);
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
-  setRelease(interruptible(context));
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, rows);
   saveBatch(context);
