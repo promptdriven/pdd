@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 33ae451897afe12078988039e8f7324d3296fc4fca9540a0c6c52fe7fe00fdf1).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: c5647790df5962dfed6f843a0ed26495f8c4664fe35058f5d82843dffb6176d6).
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -687,15 +687,29 @@ async function runLintOnly(context, cwd, words, setRelease) {
   const rows = selected.map(test => ({ test: test.path, story: test.story, title: test.title, state: 'ready', phase: 'lint',
     refusals: [], request_ids: [], warnings: [], steps: Array.isArray(test.doc?.steps) ? test.doc.steps.filter(isObject) : [],
     criterion_texts: Object.fromEntries((Array.isArray(test.doc?.criteria) ? test.doc.criteria : []).filter(isObject).map(item => [item.id, item.text])) }));
-  const checked = preflight({root,found,selected});
-  const limitRows = checked.rows.map(row => ({...row, refusals: row.refusals.filter(problem =>
-    ['invalid-limits','invalid-interface'].includes(problem.code) && problem.section.startsWith('/limits'))}));
+  const {readPrompt,interfaceSchemaProblems} = await import('./runtime-preflight.mjs');
+  const prompts = new Map();
+  const limitsFor = (path, seen) => {
+    if (typeof path !== 'string' || seen.has(path)) return [];
+    seen.add(path);
+    if (!prompts.has(path)) prompts.set(path,readPrompt(root,found.visible,path));
+    const prompt = prompts.get(path);
+    if (!prompt.interface) return [];
+    const own = interfaceSchemaProblems(prompt.interface).filter(problem =>
+      ['invalid-limits','invalid-interface'].includes(problem.code) && problem.pointer.startsWith('/limits'))
+      .map(problem => ({code:problem.code,section:problem.pointer,path,message:`${path} ${problem.pointer} ${problem.rule}`,hint:problem.hint}));
+    return [...own,...(Array.isArray(prompt.interface.calls) ? prompt.interface.calls : []).flatMap(call => limitsFor(call?.target,seen))];
+  };
+  const limitRows = rows.map(row => {
+    const seen = new Set();
+    return {...row,refusals:row.steps.flatMap(step => limitsFor(step.entry_path,seen))};
+  });
   if (limitRows.some(row => row.refusals.length)) {
     const rows = limitRows.map(row => ({story:row.story,title:row.title,test:row.test,state:row.refusals.length ? 'refused' : 'not_run',refusals:row.refusals}));
     const problems = rows.flatMap(row => row.refusals);
     const summary = 'Lint refused local Runtime limits. 0 AI calls. No files were sent.';
     if (context.json) line(ports.stdout, JSON.stringify({batch:null,repo:root,exit_code:4,lint_state:'refused',summary_line:summary,
-      coverage:context.coverage,problems,rows,warnings:[...found.warnings,...checked.warnings]}));
+      coverage:context.coverage,problems,rows,warnings:found.warnings}));
     else {
       for (const problem of problems) {
         line(ports.stderr, `${problem.code}  ${problem.message}`);
