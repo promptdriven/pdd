@@ -74,9 +74,9 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
   const version = run(['--version']); assert.equal(version.status, 0); assert.equal(version.stdout, `${metadata.version}\n`);
   const skill = run(['--skill']); assert.equal(skill.status, 2); assert.equal(skill.stdout, '');
   const empty = run(['workflow', 'list', '--json']); assert.equal(empty.status, 0,empty.stderr);
-  assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
+  assert.deepEqual(JSON.parse(empty.stdout).workflows.map(w=>w.name),['bug','feature','product','small-change']);assert.equal(JSON.parse(empty.stdout).default,null);
   const recipes = run(['workflow', 'list', '--json'], packed); assert.equal(recipes.status, 0);
-  assert.deepEqual(JSON.parse(recipes.stdout).workflows.map(w => w.name), ['bug', 'feature', 'small-change']);
+  assert.deepEqual(JSON.parse(recipes.stdout).workflows.map(w => w.name), ['bug', 'feature', 'product', 'small-change']);
   const human = run(['workflow', 'list'], packed); assert.equal(human.status, 0); assert.ok(human.stdout.includes('feature'));assert.ok(human.stdout.includes('Listing starts no work.'));
   for (const shell of ['bash', 'zsh']) {
     const result = run(['completion', shell]); assert.equal(result.status, 0, result.stderr);

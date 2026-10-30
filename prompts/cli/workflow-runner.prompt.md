@@ -113,3 +113,18 @@ Preserve the single canonical workflow ownership marker on both descriptions, re
 Honor structured nonzero command exits as failures. The bounded whole-description policy and redaction still apply. Full JSON stays in the run folder.
 Use sourceFingerprint from the replay module for the existing runtime-evidence git-content-v1 identity,
 preserving its representation. This does not turn prompt-runtime checks into code replay evidence.
+
+## Shared Story evidence
+
+Export module functions `matchesSource(record, root, fingerprint)`,
+`storyCount(run)`, `runtimeLines(text)` and `storyEvidence(run)` for read-only product status. Preserve
+existing status counts and source matching. `runtimeLines(text)` preserves the
+existing parser's `{story,draft,result,line,pass}` rows, including null unnamed
+Stories, DRAFT flags, result boundaries and pass recognition.
+`storyEvidence` reuses the same
+evidence ordering, named-line parsing and source checks; return each latest
+named Story as `{story, pass, current, result}`. Prefer compatible evidence for a
+Story, retain partial earlier compatible results, and otherwise report the latest
+unverified record with `current:false`. No record means no row. It must not write
+state, refresh PRs, call models or start chats. Product status may use the rows
+for attribution; it must not copy this evidence policy.

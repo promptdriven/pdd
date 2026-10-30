@@ -1,6 +1,7 @@
 # understand
 
 - Read the issue, the repo instructions and the related code.
+- When the issue names a product plan, read `product/map.md`, `product/plan.md` and the named contracts first. Do not change `contracts/`; propose a plan PR for a contract change.
 - State the wanted result, what must not change and what is out of scope.
 - Keep apart what is decided, what the code does now and open questions.
 - If the person's brief names other file names or test formats than PDD's (for example `*.prompt` or the repo's own test format), say so in one line and use PDD's, unless the person says otherwise.

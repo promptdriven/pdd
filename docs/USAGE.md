@@ -132,12 +132,13 @@ The agents that PDD starts always get the full path of PDD Alpha. They are not a
 
 ## 4. The PDD skills
 
-PDD is five skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
+PDD is six skills. A skill is a folder of plain Markdown that your agent reads when it needs it. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name).
 
 | Skill | What it is |
 |---|---|
 | [`pdd-prompting`](../skills/pdd-prompting/SKILL.md) | The full [Prompting guide](prompting-guide.md) (`guide.md`), its core rules, how to review a prompt, and `RUNBOOK.md` for runtime checks |
 | `pdd-feature` | A workflow for new behavior |
+| `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | A workflow for something that is broken |
 | `pdd-small-change` | A workflow for a small change that is easy to undo |
 | `pdd-setup` | Set up a repo for PDD. It does the same as `pdd setup` |
@@ -526,7 +527,7 @@ Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
 npm uninstall -g pdd
 rm -rf ~/.agents/skills/pdd-{prompting,setup,feature,bug,small-change}
 rm -rf ~/.claude/skills/pdd-{prompting,setup,feature,bug,small-change}
-# If you set CLAUDE_CONFIG_DIR, also remove the five pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
+# If you set CLAUDE_CONFIG_DIR, also remove the six pdd-* folders in "$CLAUDE_CONFIG_DIR/skills"
 rm -rf ~/.local/state/pdd
 ```
 

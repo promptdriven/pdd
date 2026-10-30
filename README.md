@@ -54,6 +54,7 @@ The way to call a skill depends on your agent. You can also write "Use the pdd-f
 | Skill | Use it to |
 |---|---|
 | `pdd-feature` | add new behavior |
+| `pdd-product` | Map a whole product and plan small feature runs |
 | `pdd-bug` | fix something that is broken |
 | `pdd-small-change` | make a small change that is easy to undo |
 | `pdd-prompting` | write or review prompts with the [Prompting guide](docs/prompting-guide.md) |
