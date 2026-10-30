@@ -36,7 +36,7 @@
     "git_repository": true,
     "base_files": {},
     "case_files": "Each CLI case starts empty with only set_files, all Git-visible. Execute each in text and JSON. No private fixture data.",
-    "observations": "JSON contains exactly exit_code, checked_records, checked_world_values, skipped_files, diagnostics, warnings. Diagnostics use exact supplied provenance projections and nonempty messages. Warnings use exact supplied fields; disagreement messages are nonempty unfixed prose. No extra warnings/diagnostics. Text has the same facts. Schema equality must preserve both serialized parsed input trees byte-for-byte. All filesystem cases preserve source bytes/modes and make zero effect calls. Warning messages are finite nonblank strings, never fixed prose expectations; missing-schema quantities equal the number of unique world_keys. Record-name inference includes recognized valid JSON member records without globally granting copy authority to their siblings."
+    "observations": "JSON contains exactly exit_code, checked_records, checked_world_values, skipped_files, diagnostics, warnings. Diagnostics use exact supplied provenance projections and nonempty messages. Warnings use exact supplied fields; disagreement messages are nonempty unfixed prose. No extra warnings/diagnostics. Text has the same facts. Schema equality must preserve both serialized parsed input trees byte-for-byte. All filesystem cases preserve source bytes/modes and make zero effect calls. Warning messages are finite nonblank strings, never fixed prose expectations; missing-schema quantities equal the number of unique world_keys. Record-name inference includes recognized valid JSON member records without globally granting copy authority to their siblings. Schema inference requires a known schema link, an exact inline-code record identifier in a non-actor cell, or a whole plain Key/What it holds cell equal to a known name; ordinary prose and path components do not designate records."
   },
   "cases": [
     {
@@ -1225,7 +1225,7 @@
         "--check"
       ],
       "set_files": {
-        "contracts/world.md": "| Key | What it holds | Writer |\n|---|---|---|\n| item | exact order | owner |\n",
+        "contracts/world.md": "| Key | What it holds | Writer |\n|---|---|---|\n| item | exact `order` | owner |\n",
         "contracts/shapes.json": "{\"description\":\"Synthetic metadata\",\"order\":{\"type\":\"integer\"}}",
         "contracts/seed-world.json": "{\"item\":0}"
       },
@@ -1266,6 +1266,136 @@
       "set_files": {
         "contracts/world.md": "| Key | What it holds | Writer |\n|---|---|---|\n| item | [order](shapes.json#/order) | owner |\n",
         "contracts/shapes.json": "{\"description\":\"Synthetic metadata\",\"order\":{\"type\":\"integer\"}}",
+        "contracts/seed-world.json": "{\"item\":0}"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "checked_records": 1,
+        "checked_world_values": 1,
+        "diagnostics": [],
+        "warnings": [],
+        "skipped_files": [],
+        "source_bytes_unchanged": true,
+        "source_modes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "infer-prose-is-not-designation",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "| Path | What it holds | Writer |\n|---|---|---|\n| /wire/notices | Run events: work resumed | owner |\n### work\n```json\n{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}\n```\n",
+        "contracts/seed-world.json": "{\"wire\":{\"notices\":[]}}"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "checked_records": 1,
+        "checked_world_values": 0,
+        "diagnostics": [],
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/wire/notices"
+            ]
+          }
+        ],
+        "skipped_files": [],
+        "source_bytes_unchanged": true,
+        "source_modes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "infer-path-component-is-not-designation",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "| Path | What it holds | Writer |\n|---|---|---|\n| /wire/work | Work items | owner |\n### work\n```json\n{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}\n```\n",
+        "contracts/seed-world.json": "{\"wire\":{\"work\":[]}}"
+      },
+      "delete_files": [],
+      "expected": {
+        "exit_code": 0,
+        "checked_records": 1,
+        "checked_world_values": 0,
+        "diagnostics": [],
+        "warnings": [
+          {
+            "kind": "world-schema-missing",
+            "file": "contracts/world.md",
+            "world_keys": [
+              "/wire/work"
+            ]
+          }
+        ],
+        "skipped_files": [],
+        "source_bytes_unchanged": true,
+        "source_modes_unchanged": true,
+        "calls": {
+          "runtime": 0,
+          "model": 0,
+          "auth": 0,
+          "slots": 0,
+          "history": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "infer-inline-code-in-prose",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC3",
+        "AC4",
+        "AC5",
+        "AC6"
+      ],
+      "argv": [
+        "contracts",
+        "--check"
+      ],
+      "set_files": {
+        "contracts/world.md": "| Key | What it holds | Writer |\n|---|---|---|\n| item | Saved value uses `agent` here | owner |\n### agent\n```json\n{\"type\":\"integer\"}\n```\n",
         "contracts/seed-world.json": "{\"item\":0}"
       },
       "delete_files": [],

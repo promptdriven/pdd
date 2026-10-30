@@ -2,7 +2,7 @@
 
 Say: "Build a coffee pickup app: a phone app to order, a shop server, and a
 barista screen." Call `$pdd-product` in Codex or `/pdd-product` in Claude Code.
-The skill makes a product issue and starts `pdd workflow run product ISSUE`.
+The skill makes a product issue and starts `pdd workflow start product ISSUE`.
 It makes and tracks the plan. Normal feature runs build each part.
 
 Read the map and answer its questions. Approve the map when it describes what
@@ -30,8 +30,10 @@ and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
 Each world-table row has one writer. A Schema target can describe the whole
 value, for example `contracts/world.md#orders` for an array. When omitted, a
-unique declared record named or linked in the row supplies its schema; otherwise
-the check reports unchecked declarations. Leading slash Key or Path cells are
+unique declared record designated by a schema link, exact inline-code identifier
+or whole plain Key/What it holds cell supplies its schema. Prose words, path
+components and Writer/Readers labels do not select records. Without a unique
+selection, the check reports unchecked declarations. Leading slash Key or Path cells are
 exact JSON Pointers. Key namespace declarations such as `/kv/shop` cover the
 root seed container without assigning a writer to its parents. A declared key
 may be absent initially; uncovered top-level seed keys need declarations.
@@ -40,13 +42,13 @@ are authored shared shapes, not a proof of how a running part writes data.
 
 Before the plan PR, run `pdd contracts --check`. It checks supported schemas,
 references, eligible inline-copy drift, declared writers and seed values locally,
-with no authentication, runtime slot, server or model call. Exit 0 means no definite problem or unavailable required validation was found;
+with no authentication, interpreter slot, PDD interpreter or model call. Exit 0 means no definite problem or unavailable required validation was found;
 review advisory unchecked-values and disagreement warnings; 4 identifies a definite problem; 5 means I/O or validation
 is unavailable. Diagnostics name the file, record/key and field. Nonportable
 patterns and numeric predicates outside the local exact range can be unavailable;
-a local result does not prove runtime behavior. Fix or review reported gaps.
-The plan makes no server lint/check or Try call. Each part's first server
-lint/check happens in its feature run once its prompt, Stories and tests exist.
+a local result does not prove interpreter behavior. Fix or review reported gaps.
+The plan makes no PDD interpreter lint, test or simulation call. Each part's first interpreter
+lint/test happens in its feature run once its prompt, Stories and tests exist.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
 needs wait for the implementation PR to merge. Explicit starts show unmet needs
@@ -86,7 +88,7 @@ check. On another machine, status can read Runtime check lines in the run's PR
 and labels those results "from PR #N"; these are not locally verified passes.
 Name each Story file with its map id first, for example `P01-menu.md`.
 LATER Stories do not count toward planned progress.
-No result files are committed, and these commands make no runtime calls.
+No result files are committed, and these commands make no interpreter calls.
 
 Only the run's own same-repository PRs count. Status takes check results from the
 latest PR with named results, so a code PR without them does not hide the prompt
@@ -97,7 +99,7 @@ Needs cycles show their path in status and next. They do not prevent an explicit
 start or hide unrelated ready runs.
 
 Journey J1 is the final run after the three parts. Use its normal Story checks
-and the whole-product Try to test the path across parts. Status tracks journeys
+and the whole-product simulation to test the path across parts. Status tracks journeys
 separately from each part's Stories.
 
 World ownership tables accept Key or Path. Writer cells split on commas,

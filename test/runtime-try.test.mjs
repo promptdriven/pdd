@@ -194,7 +194,7 @@ test('RUNTIME-TRY8: --no-wait returns at once; a runtime with no saved-tests end
   const quick = await tryStory(setup, fake, ['place-order'], { '--no-open': true, '--no-wait': true }, { interactive: true });
   assert.equal(quick.code, 0); assert.doesNotMatch(quick.out, /Waiting/);
   const waiting = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
-  assert.equal(waiting.code, 0); assert.match(waiting.out, /The runtime does not keep saved tests yet/);
+  assert.equal(waiting.code, 0); assert.match(waiting.out, /The interpreter does not keep saved tests yet/);
 });
 
 // T3-11: only an explicit owner reopen makes a paused Try usable; its ID, seed and cap stay the same.
@@ -421,7 +421,7 @@ test('RUNTIME-TRY18: without a terminal pdd try only names the approval request;
 
 // Wrong: pdd try hides a not-invited answer behind a Try or link message (invite list, Oct 27).
 test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, and makes no Try', async t => {
-  const line = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+  const line = 'Your GitHub login octo is not on the PDD interpreter invite list yet. Ask the PDD team to add you.';
   const denied = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'not invited' } };
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? denied : trying()(entry, f));
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
