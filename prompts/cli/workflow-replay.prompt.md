@@ -5,7 +5,7 @@ current Git-visible code. Validate structure and identity only: never run a test
 prove equivalence, approve a prompt, or infer success from prose. Preserve existing runtime source fingerprints.
 
 Export REPLAY_POLICY (`pdd.replay-evidence.v1`), sourceFingerprint(root), pinReplayVectors(root, paths),
-readReplayEvidence(run), and formatReplayEvidence(result). The runner owns policy opt-in and publication.
+readReplayEvidence(run), formatReplayEvidence(result), and adoptReplayCorpus(root, declarationPath, ports). The runner owns policy opt-in and publication.
 
 ## Original identities
 
@@ -22,6 +22,80 @@ steps/checks. Each scenario uses prompt-runtime.program-scenario.v1, unique none
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
+
+## Corpus adoption
+
+`adoptReplayCorpus` is a module function selecting an existing corpus for the runner.
+It reads a declaration and independently resolved source through the injected
+`readAdoptionSnapshot({root,declarationPath})` port (`adoption.read` at runtime), once.
+A missing/malformed declaration may make the port throw; catch it as unavailable.
+The port does read-only local Git/filesystem work, never gh, Herdr, approval or models.
+It captures current files from the runner's selected base at startup and the run
+worktree thereafter. Port failures become `blocked/unavailable`, never an empty corpus.
+
+A declaration is version `pdd.replay-adoption.v1`, with `repository` (canonical
+owner/repo), `commit` (full immutable commit ID), nonempty unique repo-relative
+`prompts` (entry prompt paths), and `approval {kind:"external-human-assertion",
+reference, asserted_by}` (both nonblank, at most 1000 characters). The assertion
+explicitly covers this repository, commit, named prompts, all their required context,
+and **every** scenario in that repository snapshot. A string saying "approved",
+a commit message, a runtime receipt or ordinary agent prose is insufficient.
+
+Trust boundary: pdd verifies the declaration's structure, source identity and exact
+content. It cannot independently authenticate the external assertion's human author
+or authorization. Retain and display `external-assertion-unverified`, the original
+reference and asserted identity; the person is responsible for the assertion's truth.
+Never invent a new authorization or make the artifact's presence prove human approval.
+
+<details>
+<summary>Authoritative inventory, byte identity and port snapshot</summary>
+
+The approved source is the declaration's commit resolved locally in the same
+repository. Enumerate its **entire tracked tree**, with exact NUL-delimited paths.
+Parse every JSON candidate and include every `prompt-runtime.program-scenario.v1`
+file; unreadable/unclassifiable candidates fail closed. No caller subset, roots,
+file list or new directory scan defines the approved corpus scope. Enumerate the
+current whole repository too, including Git-visible untracked files. Require the
+same nonempty scenario path set; missing, extra and duplicate rows block adoption.
+This deliberately requires approval covering the whole repository corpus.
+
+Seed required context with the union of declaration prompts and every original
+scenario step entry_path, each scenario story_path and its explicit scenario context.
+An unlisted second entry prompt, Story or test context cannot escape validation.
+Resolve that complete required dependency closure from both
+snapshots using the runtime's source-selection rules, including required context
+and prompt call targets. Missing dependencies, cycles or unresolved selections block.
+Require the same path set and raw SHA256 bytes for that closure and every scenario;
+JSON formatting and newline edits count as changes. Do not trust digest claims in
+the declaration. The port computes digests from independently read raw files/blobs.
+Original scenarios must pass `pinReplayVectors` validation and bounds; retain the
+complete original step/check identities, with exact equality against current rows.
+Reuse the original-path safety and size limits. Declaration is a regular single-link
+file of at most 64 KiB, with no symlink ancestors; bound reads before parsing.
+A dirty current prompt/dependency/scenario cannot reuse authorization from the commit.
+
+The port returns `snapshot`: `available`, resolved `repository`, `commit`, the parsed
+`declaration`, its computed raw `declaration_sha256`, `approved_vectors`, `current_vectors`, `approved_context`, and
+`current_context`. Vector rows contain `path`, computed raw `sha256`, and `checks`
+(the ordered original check identity tuples encoded as JSON strings). Context rows
+contain `path` and computed raw `sha256`. These are independently enumerated facts,
+never accepted as user-supplied CLI claims. The port checks raw-file safety, scenario
+structure/bounds and dependency closure completeness before `available:true`.
+At runtime the supplied fake models this native port, not actual Git or byte hashing.
+
+Validate declaration version/types, nonempty unique prompt paths and assertion
+fields; malformed declarations block as invalid-approval. Require 64 lowercase hex
+SHA256 values and unique context paths as well as unique vector paths; malformed
+snapshot facts block as unavailable. Compare declaration repository/commit to resolved source first; foreign identity
+returns `blocked/foreign-source`. Missing/invalid assertion returns
+`blocked/invalid-approval`. Empty, duplicate or unequal inventories return
+`blocked/inventory-mismatch`; unequal bytes or check identities return
+`blocked/content-mismatch`. Successful selection returns `adopted`, empty reason,
+sorted scenario `paths` and provenance `{repository,commit,reference,asserted_by,
+trust:"external-assertion-unverified",declaration_sha256,prompts}`. Blocked selection returns no paths and
+empty provenance strings and prompts (the trust label stays explicit). Do not throw through startup.
+
+</details>
 
 ## Manifest contract
 
@@ -99,3 +173,315 @@ let an agent's free-form PASS summary replace this status.
 
 - [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
 - [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
+
+<details>
+<summary>Runtime interface</summary>
+
+```json
+{
+  "status": "draft",
+  "prose_sha256": "",
+  "entries": [
+    {
+      "operation": "adoptReplayCorpus",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "declarationPath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root",
+          "declarationPath"
+        ],
+        "additionalProperties": false
+      },
+      "result_schema": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "adopted",
+              "blocked"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "commit": {
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              },
+              "asserted_by": {
+                "type": "string"
+              },
+              "trust": {
+                "type": "string"
+              },
+              "declaration_sha256": {
+                "type": "string"
+              },
+              "prompts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "repository",
+              "commit",
+              "reference",
+              "asserted_by",
+              "trust",
+              "declaration_sha256",
+              "prompts"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "outcome",
+          "reason",
+          "paths",
+          "provenance"
+        ],
+        "additionalProperties": false
+      },
+      "errors": []
+    }
+  ],
+  "calls": [],
+  "resources": [
+    {
+      "name": "adoption",
+      "kind": "collection",
+      "access": "read",
+      "operations": [
+        {
+          "name": "read",
+          "access": "read",
+          "arguments_schema": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string"
+              },
+              "declarationPath": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root",
+              "declarationPath"
+            ],
+            "additionalProperties": false
+          },
+          "result_schema": {
+            "type": "object",
+            "properties": {
+              "snapshot": {
+                "type": "object",
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "repository": {
+                    "type": "string"
+                  },
+                  "commit": {
+                    "type": "string"
+                  },
+                  "declaration": {
+                    "type": "object",
+                    "properties": {
+                      "schema_version": {
+                        "type": "string"
+                      },
+                      "repository": {
+                        "type": "string"
+                      },
+                      "commit": {
+                        "type": "string"
+                      },
+                      "prompts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "approval": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "reference": {
+                            "type": "string"
+                          },
+                          "asserted_by": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "reference",
+                          "asserted_by"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "schema_version",
+                      "repository",
+                      "commit",
+                      "prompts",
+                      "approval"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "approved_vectors": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "checks": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256",
+                        "checks"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "current_vectors": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        },
+                        "checks": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256",
+                        "checks"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "approved_context": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "current_context": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "sha256"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "declaration_sha256": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "available",
+                  "repository",
+                  "commit",
+                  "declaration",
+                  "approved_vectors",
+                  "current_vectors",
+                  "approved_context",
+                  "current_context",
+                  "declaration_sha256"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "snapshot"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "max_steps": 1,
+    "max_model_calls": 3
+  },
+  "conventions": []
+}
+```
+
+</details>

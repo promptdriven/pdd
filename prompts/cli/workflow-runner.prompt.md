@@ -10,6 +10,40 @@ For an explicit base, fetch exactly `refs/heads/BRANCH` from `origin` into `refs
 
 Allocate the issue branch from that selected origin ref and save the selection in `baseBranch` and its observed commit in `baseSha`. Show the base in startup output. PR 1 (or a small-change PR) targets that saved branch. PR 2 stacks on an open PR 1; after PR 1 merges it starts from and targets the saved base. Existing runs retain their recorded bases. Only the allocated topic branches are pushed; choosing a base does not authorize pushing it, changing origin’s default branch, or merging.
 
+## Adopt an existing approved corpus
+
+`startRun` accepts optional `adoptCorpus`, the declaration path supplied by
+`pdd workflow run NAME ISSUE --adopt-corpus FILE`. Preserve existing startup and
+changed-scenario discovery when absent. Require a fresh run whose selected areas
+explicitly opt in to replay evidence; adoption never enables a custom workflow's policy.
+Before releasing a cancelled-run claim, allocating a worktree, saving a run or starting
+Herdr, validate the selected base content through `adoptReplayCorpus` in
+[replay evidence](workflow-replay.prompt.md#corpus-adoption). Failure exits 2 with a
+finite repair reason; retain historical runs, branches and files unchanged.
+
+After worktree allocation, revalidate its actual content before saving an active run
+or starting Herdr; report failure without fabricating success if it differs.
+Save an immutable bounded copy of the declaration bytes and computed digest in the
+new run folder; later validation uses this copy and pinned commit, never a caller
+edit of FILE. Removing or changing the external FILE after successful startup cannot
+alter or invalidate the frozen authority. Save the successful selection's provenance and the anchor produced by existing
+`pinReplayVectors` as `run.replayAdoption` and `run.replayBaseline`. Preserve every
+original raw hash and check identity. Adoption reuses exact content authorization;
+it neither changes a prompt's approval state nor asks to reapprove unchanged content.
+All ordinary workflow gates remain. Announce the external-assertion trust boundary
+from the replay owner; never describe adoption as authenticated human approval or execution.
+
+For an adopted run, prompt publication must revalidate the same approved prompt,
+required dependency closure and complete scenario bytes against the original source.
+Keep the adopted anchor; the changed-file refresh rule below applies only without
+adoption. Revalidate immediately before entering code and each code publication,
+including retries. A changed, added, removed or unreadable covered file blocks reuse
+with advice to start an ordinary approval workflow for changed requirements; it must
+not replace the anchor or silently fall back to diff selection. Unrelated implementation
+changes remain allowed and bind subsequent replay to the current source fingerprint.
+The existing changed-scenario guard, public-boundary execution, mutation and formal
+checks still apply. Adoption supplies no PASS or fresh execution attestation.
+
 ## Failed chat startup and recovery
 
 A Herdr request failure is not evidence that an agent is working. If an initial or later-area start, or explicit open/resume, fails, keep the same run, allocated worktree, selected base, issue claim, completed steps and decisions. Save `chatFailure {area, phase, code, message, at}` (phase `start` or `open`, finite one-line reason), set the active run to `waiting`, and report the failure with `pdd workflow open N` for explicit recovery after Herdr is available. Do not retry the request automatically, restart an unavailable server, allocate again or fabricate a chat/session. A failure after the pane launch request may have dispatched: retain the prepared chat identity supplied by [area chats](workflow-chat.prompt.md), including its unconfirmed flag.
@@ -22,7 +56,7 @@ Only a successful start/open or positive observation of the same current chat cl
 
 Each export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
 
-- `startRun({name, issue, agent, base, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. After a cancelled run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
+- `startRun({name, issue, agent, base, adoptCorpus, cwd, packageRoot})`: read the areas from the pdd-NAME skill ([areas](workflow-areas.prompt.md)). Read the agent's config folder: `CODEX_HOME` for Codex, `CLAUDE_CONFIG_DIR` for Claude ([chat](workflow-chat.prompt.md) `homeVariable`, `expandHome`). A leading `~` or `~/` is the home folder (zsh leaves `~` as text in `env CODEX_HOME=~/x pdd …`, 0.1.6 tester), and a relative path is resolved from cwd. When it is set and that folder does not exist, refuse before any git, gh, worktree or Herdr work: `VAR is "PATH", but that folder does not exist. Fix VAR and run the command again.` The run keeps the full path as `configDir`, and the Claude trust check reads `.claude.json` in it. Resolve the issue with gh ([GitHub](workflow-github.prompt.md)). Refuse when the issue already has a run that is not cancelled. After a cancelled run, free the issue claim (`releaseIssueClaim`), keep the old worktree and branch, rename the old run folder to `<N>-cancelled-<first 8 of its run id>` and start fresh with a new worktree and branch; the new record lists the old one in `previous`. Select the base as described below. Make the worktree and branch ([worktree](workflow-worktree.prompt.md)). Make the run folder and write the run record ([runs](workflow-runs.prompt.md)). Start the area 1 chat ([chat](workflow-chat.prompt.md)). Print where the run is, `pdd workflow open N`, `pdd workflow status N` and `pdd workflow approve N`. Then return at once. If the main repository is not trusted by Claude, say that Claude asks to trust the folder first.
 - `stepDone({step, summary, cwd})`: only the agent calls this, from the worktree. Find the run from cwd. Record the step with its summary and time. The stored summary keeps its line breaks (each line's spaces collapsed, blank lines dropped); every place that shows a summary on one line (status, the code question, the PR step list) collapses it. An unknown or out-of-order step prints a warning and is still recorded. A step that runs again after later steps of its area (for example `build` after `verify` when vectors fail) prints a warning and clears those later steps, so they run again; the area's PR opens only after its last step. Then print one of:
   - the next step of the area and the exact `done` command (an optional step is a question to the person, and "skipped" is a valid summary);
   - at an `approve` gate: show the result, ask the person, stop, never approve for them; how they approve; how to handle changes (revise here, run done again, ask again);
