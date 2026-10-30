@@ -1,0 +1,365 @@
+{
+  "schema_version": "pdd.native-lint-test-data-check-hints.v1",
+  "story_path": "user_stories/lint-test-data-and-check-hints.md",
+  "synthetic": true,
+  "boundary": "src/runtime-client.mjs#runCheck",
+  "default_options": {
+    "--lint": true,
+    "--json": true
+  },
+  "fixture_sources": "test/fixtures/source-only-lint-cases.json#fixture_sources",
+  "notes": [
+    "Literal expected outcomes approved by Root from Lead 11:58 before implementation; existing fixtures stay byte-frozen.",
+    "Native setup descriptors are not exported APIs, Runtime fields or verdict-producing ports. Observe actual public results and effects.",
+    "Wrong scenario version keeps ordinary selected-test refusal; no new transport-count contract is asserted.",
+    "For the five-plus-three case, retain exact original legacy input filenames and five-hint ordering; the proper prose hint still contributes to the total eight hints.",
+    "Calibrate candidate and refresh content-read observations against actual reads; candidate oversize refusal must not open its body. Saved refresh must retain original lint ID/source hash and perform no new source-content reads."
+  ],
+  "cases": [
+    {
+      "id": "ordinary-test-fixture",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/fixtures/users.json": "{\"users\":[]}"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "ai_calls": 0
+      }
+    },
+    {
+      "id": "nested-nonruntime-test-data",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/nonruntime/nested/users.json": "{\"users\":[]}"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "ai_calls": 0
+      }
+    },
+    {
+      "id": "nested-package-test-data",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "packages/app/test/fixtures/users.json": "{\"users\":[]}"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "ai_calls": 0
+      }
+    },
+    {
+      "id": "nested-package-tests-data",
+      "criterion": "AC1",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "packages/app/tests/fixtures/users.json": "{\"users\":[]}"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "ai_calls": 0
+      }
+    },
+    {
+      "id": "runtime-invalid-json",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/runtime/order.json": "{"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "runtime-wrong-schema",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "test/runtime/order.json": "{\"schema_version\":\"foreign.v1\"}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "unit-missing-schema",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "tests/unit/order.json": "{}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "diagnostic_contains": [
+          "tests/unit/order.json",
+          "is not a PDD test file"
+        ]
+      }
+    },
+    {
+      "id": "runtime-oversize-stat-only",
+      "criterion": "AC2",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan"
+        },
+        "generated_file": {
+          "path": "test/runtime/order.json",
+          "prefix": "{\"schema_version\":\"prompt-runtime.program-scenario.v1\",\"padding\":\"",
+          "pad_byte": "x",
+          "bytes": 1048577,
+          "suffix": "\"}"
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "candidate_content_reads": 0,
+        "diagnostic_contains": [
+          "test/runtime/order.json",
+          "1 MiB"
+        ]
+      }
+    },
+    {
+      "id": "selected-family-outside-conventions",
+      "criterion": "AC3",
+      "input": {
+        "fixture": "harbor",
+        "relocate_test_to": "scenarios/order.json",
+        "reply": "passed-selected-test"
+      },
+      "expected": {
+        "exit_code": 0,
+        "selected_test": "scenarios/order.json",
+        "lint_posts": 1,
+        "check_posts": 0,
+        "prose_warning_count": 0
+      }
+    },
+    {
+      "id": "wrong-family-version-outside-conventions",
+      "criterion": "AC3",
+      "input": {
+        "files": {
+          "product/plan.md": "# Plan",
+          "scenarios/order.json": "{\"schema_version\":\"prompt-runtime.program-scenario.v999\"}"
+        }
+      },
+      "expected": {
+        "exit_code": 4,
+        "selected_test": "scenarios/order.json",
+        "prose_warning_count": 0
+      }
+    },
+    {
+      "id": "plain-check-prose-hint",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "prompts/engine.prompt.md": "# Engine\n\nNo interface here.\n"
+        },
+        "options": {
+          "--lint": false,
+          "--json": false
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "stdout": "",
+        "diagnostic_contains": [
+          "prompts/engine.prompt.md has no Runtime interface block. See RUNBOOK.md §2."
+        ]
+      }
+    },
+    {
+      "id": "plain-check-original-five-plus-three",
+      "criterion": "AC4",
+      "input": {
+        "files": {
+          "tests/game.json": "{\"cases\": [{\"input\": 2, \"expected\": 4}]}\n",
+          "tests/unit/board.json": "{\"name\": \"board\"}\n",
+          "package.json": "{\"name\": \"game\"}\n",
+          "prompts/board.prompt": "# Board\n",
+          "prompts/engine.prompt.md": "# Engine\n\nNo interface here.\n",
+          "tests/extra-0.json": "{}\n",
+          "tests/extra-1.json": "{}\n",
+          "tests/extra-2.json": "{}\n",
+          "tests/extra-3.json": "{}\n"
+        },
+        "options": {
+          "--lint": false,
+          "--json": false
+        }
+      },
+      "expected": {
+        "exit_code": 2,
+        "capture_calls": 0,
+        "auth_calls": 0,
+        "posts": 0,
+        "stdout": "",
+        "stderr_lines": [
+          "No tests found. A test is a Git-visible *.json file with \"schema_version\": \"prompt-runtime.program-scenario.v1\".",
+          "tests/extra-0.json is not a PDD test file (it has no \"schema_version\": \"prompt-runtime.program-scenario.v1\"). See RUNBOOK.md §2.",
+          "tests/extra-1.json is not a PDD test file (it has no \"schema_version\": \"prompt-runtime.program-scenario.v1\"). See RUNBOOK.md §2.",
+          "tests/extra-2.json is not a PDD test file (it has no \"schema_version\": \"prompt-runtime.program-scenario.v1\"). See RUNBOOK.md §2.",
+          "tests/extra-3.json is not a PDD test file (it has no \"schema_version\": \"prompt-runtime.program-scenario.v1\"). See RUNBOOK.md §2.",
+          "tests/game.json is not a PDD test file (it has no \"schema_version\": \"prompt-runtime.program-scenario.v1\"). See RUNBOOK.md §2.",
+          "…and 3 more"
+        ]
+      }
+    },
+    {
+      "id": "source-lint-prose-warning",
+      "criterion": "AC5",
+      "input": {
+        "files": {
+          "prompts/engine.prompt.md": "# Engine\n\nNo interface here.\n"
+        },
+        "reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "lint_posts": 1,
+        "check_posts": 0,
+        "ai_calls": 0,
+        "prose_source_paths": [
+          "prompts/engine.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "warning_contains": [
+          "prompts/engine.prompt.md has no Runtime interface yet"
+        ]
+      }
+    },
+    {
+      "id": "saved-prose-read",
+      "criterion": "AC6",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "initial_reply": "running-empty-program",
+        "after_save_files": {
+          "board.prompt.md": "Runtime-bearing replacement using loose-prompt fixture bytes",
+          "test/fixtures/users.json": "{}"
+        },
+        "read_action": "--read",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "prose_source_paths": [
+          "board.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "json_results": 1,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_uses_original_lint_id": true
+      }
+    },
+    {
+      "id": "saved-prose-retry",
+      "criterion": "AC6",
+      "input": {
+        "files": {
+          "board.prompt.md": "# Board"
+        },
+        "initial_reply": "running-empty-program",
+        "after_save_files": {
+          "board.prompt.md": "Runtime-bearing replacement using loose-prompt fixture bytes",
+          "test/fixtures/users.json": "{}"
+        },
+        "read_action": "--retry",
+        "refresh_reply": "passed-empty-program"
+      },
+      "expected": {
+        "exit_code": 0,
+        "lint_state": "passed",
+        "rows": [],
+        "prose_source_paths": [
+          "board.prompt.md"
+        ],
+        "prose_warning_count": 1,
+        "refresh_capture_calls": 0,
+        "refresh_uuid_calls": 0,
+        "refresh_posts": 0,
+        "refresh_gets": 1,
+        "json_results": 1,
+        "saved_source_hash_preserved": true,
+        "refresh_source_content_reads": 0,
+        "refresh_uses_original_lint_id": true
+      }
+    }
+  ]
+}

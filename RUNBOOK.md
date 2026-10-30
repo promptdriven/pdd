@@ -93,7 +93,7 @@ are added to the test and dependency selection. Included Markdown and prompts al
 The config is read locally and is not automatically uploaded. Selected files must be Git-visible regular files.
 Secret-looking names, symlinks (including symlink ancestors), missing files and paths outside the repository are refused.
 
-With no tests, no test-candidate hints and no Story operand, `pdd check --lint` checks existing source with 0 AI calls; warnings stay visible, and source-only `--retry` only reads the saved lint. A `*.prompt.md` with no recognized Runtime interface stays source and warns that it has no Runtime interface yet; unfinished JSON tests beneath `test/` or `tests/` still need correction.
+With no tests, no test-candidate hints and no Story operand, `pdd check --lint` checks existing source with 0 AI calls; warnings stay visible, and source-only `--retry` only reads the saved lint. A `*.prompt.md` with no recognized Runtime interface stays source and warns that it has no Runtime interface yet; plain `pdd check` still gives its missing-interface hint. Unfinished JSON tests beneath repository-root `tests/` or `test/runtime/` still need correction. Ordinary test data such as `test/fixtures/users.json` does not block source-only lint; program-scenario tests remain discoverable in any folder.
 
 ## 3. Schema rules
 

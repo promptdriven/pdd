@@ -46,7 +46,9 @@ For lint-only JSON with selected tests, `lint_state` summarizes the selected tes
 Unqualified remote `pdd check --lint` can inspect existing source before the first
 Story test is written. This exception applies only with no Story operands and
 zero discovered program-scenario tests and no candidate hints from preflight’s
-module function `whyNoTests(root, visible)`; `--json` and `--timeout` keep their normal
+module function `whyNoTests(root, visible)` with proper `*.prompt.md` paths excluded
+from this source-only candidate query; keep the full visible set for ordinary
+Check hints. `--json` and `--timeout` keep their normal
 meaning. Select the existing Git-visible `product/map.md`, `product/plan.md`,
 recursive `contracts/` Markdown and JSON files, every `*.prompt.md` wherever it
 lives, and files named exactly `seed.json` beneath `prompts/`. Do not create a
