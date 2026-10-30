@@ -1,5 +1,5 @@
-// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 1afdea020a802fdc38eb2660ef9dd5b070d6dcb49b853708ec9fe740c7d6f8e4).
-import { runAgentProcess } from './agent-adapters.mjs';
+// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 7153c686a2e93da49e223c1fab5c93785763687fbe5f8dc3accbe62809b0bd67).
+import { runAgentProcess, parseAgentAuthStatus } from './agent-adapters.mjs';
 
 const agents = ['codex', 'claude'];
 const names = { codex: 'Codex', claude: 'Claude Code' };
@@ -27,28 +27,13 @@ export function chooseWorkflowAgent({ codex, claude, requested } = {}) {
   }
   return refuse(candidates.map(name => guidance(name, observed[name])).join('\n'));
 }
-function authState(agent, result) {
-  if (!result || !Number.isInteger(result.code) || typeof result.stdout !== 'string' || typeof result.stderr !== 'string') return 'unavailable';
-  if (agent === 'claude') {
-    try {
-      const value = JSON.parse(result.stdout);
-      if (value?.loggedIn === true && result.code === 0) return 'ready';
-      if (value?.loggedIn === false && [0, 1].includes(result.code)) return 'signed_out';
-    } catch { /* An untyped response is not sign-in evidence. */ }
-    return 'unavailable';
-  }
-  const text = `${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
-  const negative = /\bnot\s+(?:logged|signed)\s+in\b|\b(?:login|sign[ -]?in)\s+required\b/i.test(text);
-  if ([0, 1].includes(result.code) && negative) return 'signed_out';
-  return result.code === 0 && /\blogged in\b/i.test(text) ? 'ready' : 'unavailable';
-}
 export async function checkWorkflowAgents({ cwd = process.cwd(), env = process.env, requested } = {}, { run = runAgentProcess } = {}) {
   if (requested !== undefined && !agents.includes(requested)) return chooseWorkflowAgent({ requested });
   const observed = { codex: 'unavailable', claude: 'unavailable' };
-  for (const agent of requested === undefined ? agents : [requested]) {
+  await Promise.all((requested === undefined ? agents : [requested]).map(async agent => {
     try {
-      observed[agent] = authState(agent, await run(agent, [...statusArgs[agent]], { cwd, env, input: '', timeoutMs: 10000, maxBytes: 16384 }));
-    } catch (error) { observed[agent] = error?.code === 'ENOENT' ? 'missing' : 'unavailable'; }
-  }
+      observed[agent] = parseAgentAuthStatus({agent,result:await run(agent, [...statusArgs[agent]], { cwd, env, input: '', timeoutMs: 10000, maxBytes: 16384 })});
+    } catch (error) { observed[agent] = error?.code === 'ENOENT' && error.executableMissing === true ? 'missing' : 'unavailable'; }
+  }));
   return chooseWorkflowAgent({ ...observed, requested });
 }

@@ -1,9 +1,9 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 802a5ca30093f09d7c92ffeb1168214f4f0a3cfdf086b2b4263f8e66b9851ad4).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 116818248b2b0f4ab5e6fc8e37d6d14dc518c225e1a9bbeb62b96eb6b9bdb9b1).
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, constants } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, chmodSync, mkdirSync, lstatSync, openSync, fstatSync, closeSync, fchmodSync, statSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter, resolve, isAbsolute } from 'node:path';
 import { buildAgentInput } from './agent-packet.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import { checkInput } from './runtime-preflight.mjs';
@@ -48,12 +48,40 @@ function unknownFeature(answer,args) {
  const flag=match&&`features.${match[1]}=false`;
  return flag&&args.includes(flag)?flag:null;
 }
+// A configured credential is not a successful provider request; never expose the status payload.
+export function parseAgentAuthStatus({agent,result} = {}) {
+ if(!result||!Number.isInteger(result.code)||typeof result.stdout!=='string'||typeof result.stderr!=='string')return 'unavailable';
+ if(agent==='claude'){
+  try{const value=JSON.parse(result.stdout);if(value?.loggedIn===true&&result.code===0)return 'ready';if(value?.loggedIn===false&&[0,1].includes(result.code))return 'signed_out';}catch{}
+  return 'unavailable';
+ }
+ if(agent!=='codex')return 'unavailable';
+ const text=`${result.stdout}\n${result.stderr}`.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'');
+ const negative=/\bnot\s+(?:logged|signed)\s+in\b|\b(?:login|sign[ -]?in)\s+required\b/i.test(text);
+ const positive=/\blogged in\b|\bapi key configured\b/i.test(text);
+ if(positive&&negative)return 'unavailable';
+ if([0,1].includes(result.code)&&negative)return 'signed_out';
+ return result.code===0&&positive?'ready':'unavailable';
+}
+function executableMissing(command,{cwd,env}={}) {
+ try{
+  const directory=cwd??process.cwd(),childEnv=env??process.env;
+  if(!statSync(directory).isDirectory())return false;
+  const pathKey=process.platform==='win32'?Object.keys(childEnv).find(key=>key.toLowerCase()==='path'):(Object.hasOwn(childEnv,'PATH')?'PATH':undefined);
+  const search=pathKey===undefined?(process.platform==='win32'?process.env.PATH??'':'/usr/bin:/bin'):childEnv[pathKey];
+  const qualified=isAbsolute(command)||/[\\/]/.test(command);
+  const endings=process.platform==='win32'?['',...(childEnv.PATHEXT??'.COM;.EXE;.BAT;.CMD').split(';')]:[''];
+  const candidates=qualified?[resolve(directory,command)]:(search??'').split(delimiter).flatMap(folder=>endings.map(ending=>resolve(directory,folder||'.',command+ending)));
+  for(const file of candidates){try{lstatSync(file);return false;}catch(error){if(error.code!=='ENOENT')return false;}}
+  return true;
+ }catch{return false;}
+}
 export function runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072}={}) {
  return new Promise((resolve,reject)=>{
   if(signal?.aborted){reject(new Error('cancelled'));return;}
   let child,stdout='',stderr='',size=0,settled=false,killTimer,stopping=false;
   const stop=()=>{if(!child)return;stopping=true;try{process.kill(-child.pid,'SIGTERM');}catch{child.kill('SIGTERM');}killTimer=setTimeout(()=>{try{process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}},500);killTimer.unref();};
-  const finish=(error,code)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);if(error){error.stderr=stderr;reject(error);}else resolve({code,stdout,stderr});};
+  const finish=(error,code)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);if(error){if(error.code==='ENOENT')error.executableMissing=executableMissing(command,{cwd,env});error.stderr=stderr;reject(error);}else resolve({code,stdout,stderr});};
   const abort=()=>{stop();finish(new Error('cancelled'));};
   const timer=setTimeout(()=>{stop();finish(new Error('timeout'));},timeoutMs);
   try{child=spawn(command,args,{cwd,env,stdio:['pipe','pipe','pipe'],shell:false,detached:process.platform!=='win32'});}catch(e){finish(e);return;}
@@ -73,10 +101,9 @@ export async function discoverAgents({cwd=process.cwd(),env=process.env,run=runA
    const flags=kind==='codex'?['--sandbox']:['--safe-mode','--tools','--permission-prompts'];
    if(flags.some(f=>!help.stdout.includes(f))){result.push({id,name,state:'error',detail:'Update this agent to a version with the required read-only controls.'});continue;}
    const auth=await run(command,kind==='codex'?['login','status']:['auth','status','--json'],{...opts,maxBytes:16384});
-   let ready=false;if(kind==='claude'){try{ready=JSON.parse(auth.stdout).loggedIn===true;}catch{}}
-   else ready=auth.code===0&&/logged in/i.test(auth.stdout+' '+auth.stderr)&&!/not logged/i.test(auth.stdout+' '+auth.stderr);
-   result.push({id,name,state:ready?'ready':'signed_out'});
-  }catch(e){result.push({id,name,state:e.code==='ENOENT'?'not_installed':'error'});}
+   const state=parseAgentAuthStatus({agent:kind,result:auth});
+   result.push({id,name,state:state==='unavailable'?'error':state});
+  }catch(e){result.push({id,name,state:e.code==='ENOENT'&&e.executableMissing===true?'not_installed':'error'});}
  }
  return result;
 }
