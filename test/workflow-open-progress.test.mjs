@@ -49,7 +49,9 @@ for (const mode of ['focus', 'resume', 'open-start', 'run-start']) {
           if (action === 'advance') { assert.equal(expected.area, 1); assert.ok(expected.decisions.length); assert.ok(expected.approvalRecord); }
           if (action === 'done') { assert.ok(expected.done.scope); assert.ok(expected.gate); }
         } finally { release(); }
-        assert.equal((await opening).exitCode, failure ? 1 : 0);
+        // Cancel closes an already saved tab, so its delayed focus/resume must report the native failure.
+        const closedSavedTab = action === 'cancel' && ['focus', 'resume'].includes(mode);
+        assert.equal((await opening).exitCode, failure || closedSavedTab ? 1 : 0);
         const saved = f.record();
         assert.deepEqual(progress(saved), progress(expected), 'Native final writes must preserve every concurrent workflow field');
         if (action === 'advance' || action === 'cancel') assert.deepEqual(saved.chats.filter(chat => chat.area === expected.areas[expected.area].name), expected.chats.filter(chat => chat.area === expected.areas[expected.area].name), 'A late result cannot overwrite current chat custody');
