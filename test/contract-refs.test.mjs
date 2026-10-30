@@ -12,10 +12,10 @@ const source = input => ({path:'prompts/consumer.prompt.md',text:prompt({status:
 const record = (target,value) => ({path:target.split('#')[0],target,value_json:typeof value === 'string' ? value : JSON.stringify(value)});
 const expand = (text,files={},format='json-schema') => expandSource({path:'prompts/consumer.prompt.md',text,format},filePort(files));
 
-test('REF lossless lexicographic JSON sorts numeric-looking keys and preserves tokens and prototypes', () => {
+test('REF lossless JSON retains authored numeric-looking keys and preserves tokens and prototypes', () => {
   const files = {'contracts/x.json':'{"type":"object","properties":{"10":{"type":"number","default":1e400},"2":{"type":"number","default":-0},"__proto__":{"type":"number","default":9007199254740993},"constructor":{"type":"number","default":1.0}},"required":[],"additionalProperties":false}'};
   const result = expand('{"$contract":"contracts/x.json#"}',files);
-  assert.equal(result.text,'{"additionalProperties":false,"properties":{"10":{"default":1e400,"type":"number"},"2":{"default":-0,"type":"number"},"__proto__":{"default":9007199254740993,"type":"number"},"constructor":{"default":1.0,"type":"number"}},"required":[],"type":"object"}');
+  assert.equal(result.text,files['contracts/x.json']);
   assert.equal(Object.prototype.default,undefined);
   assert.equal(Object.getPrototypeOf(JSON.parse(result.text)),Object.prototype);
 });
@@ -58,7 +58,7 @@ test('REF Markdown fenced headings and descriptive sections do not corrupt recor
 test('REF independent reuse is allowed while transitive seeds keep path# identities and cycles refuse', () => {
   const files={'contracts/a.json':'{"$seed":"contracts/b.json","set":{"/a":1}}','contracts/b.json':'{"base":true}'};
   const result=expand('{"initial_world":{"$seed":"contracts/a.json","set":{"/b":false}}}',files,'scenario');
-  assert.equal(result.text,'{"initial_world":{"a":1,"b":false,"base":true}}');
+  assert.equal(result.text,'{"initial_world":{"base":true,"a":1,"b":false}}');
   assert.deepEqual(result.references.map(x=>x.target),['contracts/a.json#','contracts/b.json#']);
   files['contracts/b.json']='{"$seed":"contracts/a.json"}';
   assert.throws(()=>expand('{"initial_world":{"$seed":"contracts/a.json"}}',files,'scenario'),e=>e.code==='contract-cycle'&&e.message.includes('contracts/a.json# -> contracts/b.json# -> contracts/a.json#'));
@@ -73,7 +73,7 @@ test('REF catalog includes used JSON leaf pointers, root worlds and nested schem
 });
 
 test('REF compare preserves nested annotations/constraints, field distance and exact numeric values', () => {
-  const canonical=schema({count:{type:'number',minimum:1,description:'nested canonical'},name:{type:'string'}});
+  const canonical=schema({count:{type:'number',minimum:1,description:'nested canonical'},name:{type:'string'},kind:{type:'string'},active:{type:'boolean'}});
   const records=[record('contracts/x.json#',canonical)];
   const local={...canonical,title:'local',description:'local'};
   assert.deepEqual(compareCopies([source(local)],records).matches[0].differences,[]);
@@ -82,25 +82,25 @@ test('REF compare preserves nested annotations/constraints, field distance and e
   assert.equal(matched.kind,'near');
   assert.ok(matched.differences.some(x=>x.includes('/properties/count/minimum')));
   assert.ok(matched.differences.some(x=>x.includes('/properties/count/description')));
-  const far=schema({other:{type:'string'},name:{type:'string'}});
+  const far=schema({other:{type:'string'},name:{type:'string'},kind:{type:'string'},active:{type:'boolean'}});
   assert.deepEqual(compareCopies([source(far)],records).matches,[]);
   for (const number of ['1','1.0','1e0','1.000e+0']) {
-    const input=`{"type":"object","properties":{"count":{"type":"number","minimum":${number}}},"required":["count"],"additionalProperties":false}`;
+    const input=`{"type":"object","properties":{"count":{"type":"number","minimum":${number}},"name":{"type":"string"},"kind":{"type":"string"},"active":{"type":"boolean"}},"required":["count"],"additionalProperties":false}`;
     const src={path:'p.prompt.md',text:prompt(`{"entries":[{"input_schema":${input}}]}`)};
     assert.equal(compareCopies([src],[record('contracts/n.json#',input.replace(number,'1'))]).matches[0].kind,'exact');
   }
   for (const number of ['0','-0','0.0','0e0']) {
-    const input=`{"type":"object","properties":{"n":{"type":"number","minimum":${number}}},"required":[],"additionalProperties":false}`;
+    const input=`{"type":"object","properties":{"n":{"type":"number","minimum":${number}},"name":{"type":"string"},"kind":{"type":"string"},"active":{"type":"boolean"}},"required":[],"additionalProperties":false}`;
     assert.equal(compareCopies([{path:'p',text:prompt(`{"entries":[{"input_schema":${input}}]}`)}],[record('contracts/n.json#',input.replace(number,'0'))]).matches[0].kind,'exact');
   }
-  const input='{"type":"object","properties":{"n":{"type":"number","minimum":9007199254740993}},"required":[],"additionalProperties":false}';
+  const input='{"type":"object","properties":{"n":{"type":"number","minimum":9007199254740993},"name":{"type":"string"},"kind":{"type":"string"},"active":{"type":"boolean"}},"required":[],"additionalProperties":false}';
   const mismatch=compareCopies([{path:'p',text:prompt(`{"entries":[{"input_schema":${input}}]}`)}],[record('contracts/n.json#',input.replace('9007199254740993','9007199254740992'))]).matches[0];
   assert.equal(mismatch.kind,'near');
   assert.match(mismatch.differences[0],/9007199254740993 -> 9007199254740992/);
 });
 
 test('REF equivalent exact candidates remain ambiguous; unique exact wins over near', () => {
-  const value=schema({n:{type:'number',minimum:1}}), src=source(value);
+  const value=schema({n:{type:'number',minimum:1},name:{type:'string'},kind:{type:'string'},active:{type:'boolean'}}), src=source(value);
   const first=record('contracts/a.json#',JSON.stringify(value).replace('"minimum":1','"minimum":1.0'));
   const second=record('contracts/b.json#',value);
   const ambiguous=compareCopies([src],[first,second]);
@@ -110,7 +110,7 @@ test('REF equivalent exact candidates remain ambiguous; unique exact wins over n
 });
 
 test('REF sync previews preserve prose/hash, adopt constraints, retain local annotations and become idempotent', () => {
-  const canonical=schema({name:{type:'string'},run_id:{type:'string'}}), inline=schema({name:{type:'string'}});
+  const canonical=schema({name:{type:'string'},kind:{type:'string'},active:{type:'boolean'},run_id:{type:'string'}}), inline=schema({name:{type:'string'},kind:{type:'string'},active:{type:'boolean'}});
   inline.title='CLI request'; inline.description='local';
   const src=source(inline), records=[record('contracts/x.json#',canonical)], matches=compareCopies([src],records).matches;
   const result=planSync([src],matches);
@@ -121,10 +121,10 @@ test('REF sync previews preserve prose/hash, adopt constraints, retain local ann
   assert.ok(edit.after.endsWith('Trailing exact bytes.\n'));
   assert.match(edit.after,/"status":"draft"/);
   assert.match(edit.after,/"prose_sha256":"original-hash"/);
-  assert.match(edit.after,/"input_schema":\{"\$contract":"contracts\/x.json#","description":"local","title":"CLI request"\}/);
+  assert.match(edit.after,/"input_schema":\{"\$contract":"contracts\/x.json#","title":"CLI request","description":"local"\}/);
   assert.deepEqual(planSync([{path:src.path,text:edit.after}],compareCopies([{path:src.path,text:edit.after}],records).matches).edits,[]);
   const expanded=expandSource({path:src.path,text:edit.after,format:'prompt'},filePort({'contracts/x.json':JSON.stringify(canonical)}));
-  assert.match(expanded.text,/"required":\["name","run_id"\]/);
+  assert.match(expanded.text,/"required":\["name","kind","active","run_id"\]/);
   const unmatched={path:'unmatched.prompt.md',text:'# no interface\n'};
   assert.equal(planSync([unmatched],matches).edits.length,0);
 });

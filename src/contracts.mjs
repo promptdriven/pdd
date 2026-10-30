@@ -1,7 +1,8 @@
-// Generated from prompts/cli/contracts.prompt.md (sha256: a36838188503eced7a1ff5af79f211cc2f194e57a1dbe8e890b1745ed1111a84).
+// Generated from prompts/cli/contracts.prompt.md (sha256: 07d4ee96a1bdbfa178ca14eeb9c3e0bcb399e129fc5ff1ff4dec0e3fa4f79690).
+import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { closeSync, constants, fstatSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { catalogRecords, compareCopies, expandSource, planSync } from './contract-refs.mjs';
 import { captureSource, findTests, gitFiles, sourceFilePort } from './runtime-preflight.mjs';
@@ -35,24 +36,46 @@ export function runContracts({words = [],options = {},cwd = process.cwd()} = {},
       if (options['--write']!==true) { line(stdout,`Preview: ${plan.edits.length} files. Use --write to apply.`); return 0; }
       let failures=0,changed=0;
       for (const edit of plan.edits) {
-        let fd;
+        let fd, temporary, owned;
         try {
           const path=join(root,edit.path), before=lstatSync(path,{bigint:true});
+          const ancestors = () => {
+            const parts = edit.path.split('/'), result = [];
+            for (let i=1;i<parts.length;i++) {
+              const parent = lstatSync(join(root,...parts.slice(0,i)),{bigint:true});
+              if (!parent.isDirectory() || parent.isSymbolicLink()) throw new Error('destination ancestor changed since preview');
+              result.push([parent.dev,parent.ino]);
+            }
+            return result;
+          };
+          const parents = ancestors();
           const current=sourceFilePort(root,new Set(gitFiles(root)));
           if (current.read({path:edit.path}).content!==edit.before) throw new Error('source changed since preview');
-          fd=openSync(path,constants.O_RDWR|constants.O_NOFOLLOW);
-          const opened=fstatSync(fd,{bigint:true});
-          if (!opened.isFile() || before.ino!==opened.ino || before.dev!==opened.dev || readFileSync(fd,'utf8')!==edit.before) throw new Error('destination changed since preview');
-          const after=fstatSync(fd,{bigint:true}), now=lstatSync(path,{bigint:true});
-          if (after.ino!==now.ino || after.dev!==now.dev || after.size!==opened.size || after.mtimeNs!==opened.mtimeNs || after.ctimeNs!==opened.ctimeNs) throw new Error('destination changed since preview');
-          sourceFilePort(root,new Set(gitFiles(root))).stat({path:edit.path});
+          const sameIdentity = stat => stat.isFile() && stat.dev===before.dev && stat.ino===before.ino && stat.size===before.size && stat.mtimeNs===before.mtimeNs && stat.ctimeNs===before.ctimeNs;
+          // Exclusive preparation leaves the complete destination visible until
+          // the final rename; no destination descriptor is ever truncated.
+          for (let attempt=0;attempt<100;attempt++) {
+            const candidate=join(dirname(path),`.pdd-sync-${randomUUID()}.tmp`);
+            try { fd=openSync(candidate,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,Number(before.mode & 0o777n)); temporary=candidate; break; }
+            catch (error) { if (error.code!=='EEXIST') throw error; }
+          }
+          if (fd===undefined) throw new Error('cannot prepare exclusive temporary file');
+          owned=fstatSync(fd,{bigint:true});
+          fchmodSync(fd,Number(before.mode & 0o777n));
           const bytes=Buffer.from(edit.after,'utf8');
           let offset=0;
-          while (offset<bytes.length) offset+=writeSync(fd,bytes,offset,bytes.length-offset,offset);
-          ftruncateSync(fd,bytes.length);
+          while (offset<bytes.length) { const written=writeSync(fd,bytes,offset,bytes.length-offset,offset); if (!written) throw new Error('temporary write made no progress'); offset+=written; }
+          const prepared=fstatSync(fd,{bigint:true});
+          if (!prepared.isFile() || prepared.size!==BigInt(bytes.length) || prepared.dev!==owned.dev || prepared.ino!==owned.ino) throw new Error('temporary file changed');
+          closeSync(fd); fd=undefined;
+          if (!sameIdentity(lstatSync(path,{bigint:true})) || !isDeepStrictEqual(parents,ancestors())) throw new Error('destination changed since preview');
+          if (sourceFilePort(root,new Set(gitFiles(root))).read({path:edit.path}).content!==edit.before) throw new Error('source changed since preview');
+          const tempNow=lstatSync(temporary,{bigint:true});
+          if (tempNow.isSymbolicLink() || tempNow.dev!==owned.dev || tempNow.ino!==owned.ino || !sameIdentity(lstatSync(path,{bigint:true})) || !isDeepStrictEqual(parents,ancestors())) throw new Error('destination or temporary file changed since preview');
+          renameSync(temporary,path); temporary=undefined;
           changed++; line(stdout,`Updated ${edit.path}`);
         } catch (error) { failures++; line(stderr,`Refused ${edit.path}: ${finite(error)}`); }
-        finally { if (fd!==undefined) closeSync(fd); }
+        finally { if (fd!==undefined) closeSync(fd); if (temporary!==undefined) { try { const remaining=lstatSync(temporary,{bigint:true}); if (owned && remaining.dev===owned.dev && remaining.ino===owned.ino) unlinkSync(temporary); } catch {} } }
       }
       line(stdout,`Sync: ${changed} files updated, ${failures} refused.`);
       return failures ? 4 : 0;
