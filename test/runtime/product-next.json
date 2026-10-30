@@ -2,7 +2,7 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/product-next.md",
   "criteria": [
-    {"id": "AC1", "text": "The checked-out coffee plan offers server-1, phone-1 and barista-1 in plan order."},
+    {"id": "AC1", "text": "The checked-out coffee plan offers server-1, phone-1 and barista-1 in plan order, and says they can run in parallel or one person can start them in order."},
     {"id": "AC2", "text": "The journeys run waits for server-1, phone-1 and barista-1."}
   ],
   "initial_world": {"files": {"/project/product/map.md": {"content": "# Coffee pickup: map\nSentence: \"A phone app to order coffee, a shop server, and a barista screen.\"\nSize: medium (12 CORE Stories, 3 parts)\n\n## Parts\n| Part | Folder | What it is |\n|---|---|---|\n| phone | prompts/phone | The app that a customer uses. |\n| server | prompts/server | The shop server between the phone and the barista. |\n| barista | prompts/barista | The screen behind the counter. |\n\n## Stories\n| Id | Part | Story | Tag |\n|---|---|---|---|\n| P01 | phone | I see the menu with prices. | CORE |\n| P02 | phone | I order a latte and see \"Ordered\". | CORE |\n| P03 | phone | I see \"Ready\" when my order is done. | CORE |\n| P04 | phone | I see a reason when my order is refused. | CORE |\n| S01 | server | My valid order becomes a ticket. | CORE |\n| S02 | server | My order for an unknown drink is refused with a reason. | CORE |\n| S03 | server | My completed ticket makes the order ready. | CORE |\n| S04 | server | I can read the current status of my order. | CORE |\n| B01 | barista | I see waiting tickets. | CORE |\n| B02 | barista | I mark a ticket done. | CORE |\n| B03 | barista | I see the drink and size on each ticket. | CORE |\n| B04 | barista | I see when there are no waiting tickets. | CORE |\n| P09 | phone | I can save a favourite drink. | LATER |\n\n## Journeys\n| Id | Journey | Stories |\n|---|---|---|\n| J1 | I order a latte. The barista sees it and marks it done. My phone shows \"Ready\". | P02, S01, S03, B01, B02, P03 |\n\n## Questions\n| Id | Question | Recommendation | Example | Answer |\n|---|---|---|---|---|\n| Q1 | Can a customer cancel an order? | No, not in the first version. | \"Cancel\" is LATER. | No. |\n", "is_symlink": false}, "/project/product/plan.md": {"content": "# Coffee pickup: plan\n\n## Boundaries\n| From | To | What crosses | Contract |\n|---|---|---|---|\n| phone | server | order_in, order_view | contracts/phone-server.md |\n| server | barista | ticket, ticket_done | contracts/server-barista.md |\nNever crosses: the phone never talks to the barista screen.\n\n## Runs\n| Run | Part | Slice | Stories | Needs |\n|---|---|---|---|---|\n| server-1 | server | 1 | S01, S02, S03, S04 | plan PR |\n| phone-1 | phone | 1 | P01, P02, P03, P04 | plan PR |\n| barista-1 | barista | 1 | B01, B02, B03, B04 | plan PR |\n| journeys | all | 1 | J1 | server-1, phone-1, barista-1 |\n", "is_symlink": false}}, "requests": [], "starts": [], "basePresent": true},
@@ -17,7 +17,8 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {"criterion_id": "AC1", "target": "result", "path": "/ready", "op": "equals", "value": ["server-1", "phone-1", "barista-1"]},
-        {"criterion_id": "AC2", "target": "result", "path": "/waiting", "op": "equals", "value": [{"run": "journeys", "needs": ["server-1", "phone-1", "barista-1"]}]}
+        {"criterion_id": "AC2", "target": "result", "path": "/waiting", "op": "equals", "value": [{"run": "journeys", "needs": ["server-1", "phone-1", "barista-1"]}]},
+        {"criterion_id": "AC1", "target": "result", "path": "/guidance", "op": "equals", "value": "These can run in parallel, or one person can start them in order."}
       ]
     }
   ]

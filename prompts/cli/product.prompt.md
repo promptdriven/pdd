@@ -91,8 +91,9 @@ flowchart TD
 ```
 
 `productNext` lists unstarted runs whose Needs are satisfied and lists unresolved
-needs for waiting runs. Preserve plan order. `runProduct` prints the exact
-`pdd product start RUN` for each ready run; two or more may run in parallel.
+needs for waiting runs. Preserve plan order. When at least two runs are ready,
+its guidance says "These can run in parallel, or one person can start them in order."
+`runProduct` prints that guidance and the exact `pdd product start RUN` for each ready run.
 For small products print their one-run guidance. It never starts anything.
 
 `productStart` rejects an unknown run before any mutation. For a new issue, use
@@ -116,7 +117,12 @@ an added hard gate on an explicit start; show unmet needs as advice.
 Defaults use public local files, the existing workflow-run records/evidence and
 gh helpers, and the public feature runner. Permit injected `readFile(path)`,
 `listRuns({cwd})`, `storyEvidence(run)`, `execFile(file,args,{cwd})`,
-`resolveRepository({cwd})`, `planOnBase({cwd,baseBranch})` and `startRun`.
+`resolveRepository({cwd})`, `planOnBase({cwd,baseBranch})`,
+`createIssue({repository,title,body})` and `startRun`. The optional createIssue
+effect returns `{url}` and only transports an actual GitHub issue creation;
+productStart still owns lookup, title/body policy and returned URL validation.
+Its default delegates to execFile with `gh issue create`, passing multiline body
+as an argument, so existing execFile injection remains usable.
 Runtime resources below bind those same callbacks: files.read returns content;
 runs.list and runs.evidence serialize the existing callback result as JSON;
 github.repository binds resolveWorkflowRepository through resolveRepository;
@@ -124,8 +130,9 @@ repository.planOnBase binds the read-only base-ref lookup and returns present.
 Its default uses execFile with Git argv arrays. Read this port only when a need
 names `plan PR`; the small path has no such need. Runtime bindings may record
 callback requests without changing the native operation's read-only meaning.
-github.run binds execFile('gh',args,{cwd}) and returns stdout; workflow.start
-binds startRun. No resource reads another Story's expected output. Native Git
+github.run binds read invocations of execFile('gh',args,{cwd}) and returns stdout;
+github.createIssue binds the issue-creation effect and records its typed payload.
+workflow.start binds startRun. No resource reads another Story's expected output. Native Git
 identity, process transport and simultaneous-start races need native verification.
 All successful CLI values go to stdout; finite errors go to stderr. Every emitted
 line ends with one newline. Invalid input and errors never call a model.
@@ -143,7 +150,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "ecafb384231c32e6ce87e51dcf69e3fc52b27f96e5e67b876bd42717c2636d20",
+  "status": "draft", "prose_sha256": "408bd5191bc3e94ec43c207c5b9ec6e3dd5ae9f3b5e912e1acf2eb5335717c32",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
@@ -154,7 +161,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
   "resources": [
     {"name":"files","kind":"blob","access":"read","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}}]},
     {"name":"runs","kind":"port","access":"read","operations":[{"name":"list","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"run_json":{"type":"string"}},"required":["run_json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
-    {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}}]},
+    {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}}]},
     {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}}]},
     {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]}
   ],

@@ -7,7 +7,8 @@ metadata:
 
 # PDD product
 
-Start with the person's sentence. Find or make its product issue, then run
+Start with the person's sentence. Find or make its product issue, for example
+`gh issue create --title "Product: coffee pickup" --body "<the sentence>"`, then run
 `pdd workflow run product ISSUE`. This workflow makes and tracks the plan.
 Normal feature runs build the parts.
 

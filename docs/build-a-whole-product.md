@@ -30,9 +30,8 @@ and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
-needs wait for the implementation PR to merge. Commands read local base refs,
-which may be stale; they do not prove a person's approval. Explicit starts show
-unmet needs as advice and keep the normal feature gates.
+needs wait for the implementation PR to merge. Explicit starts show unmet needs
+as advice and keep the normal feature gates.
 
 Review the plan PR's parts and contracts. The coffee plan has `server-1`,
 `phone-1`, `barista-1`, then `journeys`. The phone never talks directly to the
@@ -60,8 +59,8 @@ Status counts current passing Stories per part and slice, shows stale results,
 PRs and what can start next. A stale pass used older files and needs another
 check. On another machine, status can read Runtime check lines in the run's PR
 and labels those results "from PR #N"; these are not locally verified passes.
-Story filenames start with their map ID followed by `-`, `.`, or end of name,
-so P01 does not match P010. LATER Stories do not count toward planned progress.
+Name each Story file with its map id first, for example `P01-menu.md`.
+LATER Stories do not count toward planned progress.
 No result files are committed, and these commands make no runtime calls.
 
 Journey J1 is the final run after the three parts. Use its normal Story checks
