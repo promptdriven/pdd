@@ -1,7 +1,7 @@
 {
   "name": "pdd",
-  "version": "0.1.11",
-  "description": "PDD Alpha: local Prompting guide, skills and recipes for your coding agent",
+  "version": "0.1.12",
+  "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
     "pdd": "bin/pdd.mjs"

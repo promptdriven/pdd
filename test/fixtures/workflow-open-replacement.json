@@ -6,7 +6,7 @@
     "src/workflow-chat.mjs:restartChat",
     "src/workflow-runner.mjs:openRun"
   ],
-  "notes": "Native specification only; Runtime effects remain unbound and NOT RUN. Herdr commands use injected fakes; Git/files use isolated resources. Executable replay paths are maintained separately by the test owner; no provider or staging calls.",
+  "notes": "Native specification only; Interpreter effects remain unbound and NOT RUN. Herdr commands use injected fakes; Git/files use isolated resources. Executable replay paths are maintained separately by the test owner; no provider or staging calls.",
   "cases": [
     {
       "id": "ownership-checkout",
