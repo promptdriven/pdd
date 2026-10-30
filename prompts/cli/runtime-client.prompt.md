@@ -85,31 +85,38 @@ When attempts/time run out, show busy/not-run with zero calls and plain advice t
 
 ## Concurrent saved-batch operations
 
-One batch has one writer across processes, including separate terminals. A new Check or
-explicit lint owns its batch before the first saved record. Batch `--read` and `--retry`
-acquire that same ownership before loading the saved record, and retain it through all
-reads, retry decisions, request-ID persistence, POSTs and final batch/summary saves.
+One batch has one writer across processes, including separate terminals. A new Check and
+explicit `--lint` own their batch from before the first saved record until the command ends,
+including its final batch and summary saves. Batch `--read` and `--retry` acquire the same
+ownership before loading the saved record and retain it through all refreshes, retry
+decisions, request-ID persistence, POSTs and final saves. Different batches remain independent.
 A later retry loads the current record anew and never resends a submitted/completed check.
-Different batches remain independent. UUID reads retain the raw-receipt-only rule below
-and do not acquire batch ownership.
+UUID reads keep the raw-receipt-only rule below and do not acquire batch ownership.
 
 The native `acquireRuntimeBatchLock(folder, {onWarning})` boundary, replaceable by
 `ports.acquireBatchLock` for runtime-faked execution, resolves to an idempotent release
-function. Atomically create a private lock beside the batch record with exclusive creation;
-record the owner's PID, host and start time. The second command sends nothing and immediately
-exits 2 (the existing saved-batch file error), with one plain line naming the owner and
-`pdd check --read BATCH` after it finishes. Leave batch/summary data unchanged on failure
-to acquire ownership. Do not add a time-based expiry or another check refusal.
+function. Publish the complete PID, host and start-time record atomically beside batch.json:
+write a unique private temporary file, fsync it, then `linkSync` it to the lock path;
+EEXIST means the path already has an owner. Remove the temporary name on every exit.
+Never expose an empty or partially written lock. Folders stay 0700 and files 0600.
 
-Release ownership on every normal return, interruption and exception. Only a provably dead
-process on the same host (PID check gives ESRCH) permits abandoned owner recovery; serialize
-recovery against other claimants, and print one warning line through `onWarning`. Any
-short-lived recovery guard follows the same dead-owner recovery rule, so a crashed
-recoverer with valid ownership metadata cannot strand the batch. A live,
-foreign-host, malformed or unverifiable owner is never displaced. Native folders stay 0700
-and files 0600; never remove another owner's lock. An interrupted command that acquires a
-free batch retains the existing saved-evidence projection, including unknown usage when a
-saved success lacks terminal evidence, without new network work.
+| Existing ownership | Outcome for a competing batch read or retry |
+|---|---|
+| Valid same-host live PID, including EPERM on its existence check | Exit 3, no GET, POST or save. One plain line names the running batch, PID and start time and says `run pdd check --read BATCH after it ends`. This also applies while a new Check or explicit lint owns that batch. |
+| Provably dead same-host PID (ESRCH) | Serialize takeover and print one warning through `onWarning`; never use an age-based expiry. |
+| Malformed, foreign-host or unverifiable record | Exit 2. Name the lock file and say to delete it only if no pdd command is running on that host, then run the command again. Never take it over. |
+| Other acquisition error | Exit 2 with `Could not lock batch BATCH (CODE). Nothing was sent.` |
+
+During guarded takeover, reread the current record: unlink only when both the exact file
+identity and all three record fields (PID, host, start time) still match the record that
+proved dead. Apply the same identity-and-content check during release, so inode reuse or
+a replacement record cannot remove another owner's lock. Recovery guards follow the same
+dead-owner rules; valid metadata from a crashed recoverer cannot strand the batch.
+Release after the final batch/summary save on success, refusal, interruption and exception.
+If release fails, warn through the warning boundary; do not replace the command's exit code
+or original exception. Missing batches retain `No saved batch BATCH.` and exit 2 without
+creating a folder. Preserve the existing interrupted saved-evidence projection when ownership
+is free, including unknown usage when a saved success lacks its terminal receipt.
 
 ## Preserve recovered check receipts
 
