@@ -1,6 +1,6 @@
 # Coffee pickup
 
-This synthetic product has twelve CORE Stories in three parts. Read [the map](product/map.md), [the plan](product/plan.md) and [world ownership](contracts/world.md). The checked-in leaf prompts and maps demonstrate the shared-world journey; feature runs can expand the parts.
+This synthetic product has twelve CORE Stories in three parts. Read [the map](product/map.md), [the plan](product/plan.md) and [world ownership](contracts/world.md). The phone and barista have app maps; the server has no screen or app map, but its starting data and operations remain part of the Try. The checked-in leaf prompts and maps demonstrate the shared-world journey; feature runs can expand the parts.
 
 In this repository, map and chain prompt paths start with `examples/coffee-pickup/` because Runtime paths are repository-root-relative. For a fresh project copy product/, contracts/, prompts/, app/ and views/ into its root, then remove that exact prefix from prompt_path fields in app/maps/*.json, the After every tap entries in product/plan.md and every $contract/$seed path in the copied leaf prompts and scenario. Preserve the relative dependency links inside prompts. Copy the root J1 Story/scenario to matching root user_stories/journeys/ and test/runtime/ paths and remove the same prefix from its entry_path fields. Never run a nested example scenario with paths relative to an assumed example root.
 

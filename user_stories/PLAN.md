@@ -20,3 +20,6 @@
 9. [Keep an uncertain run link](product-unresolved-link.md): retain unresolved hints without blocking other runs.
 10. [Reuse my run link in another checkout](product-worktree-links.md): reuse compatible legacy state across worktrees.
 11. [Keep my other saved run links](product-state-updates.md): preserve other bindings during coordinated updates.
+
+- [Try my server with my screens](product-server-without-screen.md) — Runtime check: test/runtime/product-server-without-screen.json
+- [Find the missing screen setting](product-map-field-diagnostics.md) — Runtime check: test/runtime/product-map-field-diagnostics.json
