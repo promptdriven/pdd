@@ -15,7 +15,17 @@ Story footprints. Use its complete sibling-test membership, effective source
 hashes and reference provenance, plus exact Story/test bytes and reached raw
 prompt/interface bytes for eligibility. Do not substitute upload-wide hashes or
 a second dependency walk. An unavailable footprint never authorizes reuse.
-Changed execution origin, explicit call-budget settings, pdd package version or local `ENGINE_SHA` invalidate reuse. Save the observed server `engine_sha` with each pass. A server engine/model update cannot be discovered with zero calls: after an interpreter update, use `pdd test --cache-clear` to send selected Stories again; the interpreter may still return a saved answer for the same key.
+Changed execution origin, explicit call-budget settings or pdd test-format/package version invalidate reuse. Interpreter identity comes from each confirmed job answer: `engine_sha` and `requested_model` (the reported usage/evaluation requested model), never the local `ENGINE_SHA` constant. Store this identity with each pass and include it in eligibility. Missing, empty, unknown or conflicting identity cannot authorize reuse, including legacy entries and inconsistent sibling answers. Reuse requires a complete pass at most seven days old, inclusive, measured by the injected clock; future or invalid pass times cannot authorize reuse. `CI` present in the environment, even empty or `0`, runs every selected Story. These edit-loop guards do not invalidate a saved pass of at most seven days for prompt approval.
+
+When any confirmed test-job answer in the current invocation reports a build or requested model different from a provisionally skipped Story's saved identity, run that Story's selected tests in this same invocation. Replace its provisional cached row with the actual result, report `runs again: interpreter build or model changed`, and count its calls and outcome normally. Do not leave both cached and executed rows, rerun an already executed test, or expand operand scope. Differing identities within a run cannot create reusable whole-Story evidence. An all-reused local invocation cannot discover a server update without calls; `pdd test --cache-clear` sends again, although the interpreter may return a saved answer for the same key.
+
+### Declarations that require a run
+
+Use reached prompt resource declarations and the test's simulation/starting data, conservatively: uncertainty runs. A reached resource of kind `http`, `command`, `model` or `port` always runs unless every declared operation is bound by simulation to deterministic actions only: `fixture.lookup` with cases, `port.write` with a fixed result, or the key-value, collection, blob and sql store actions. Partial bindings or another action do not establish determinism. The row says `runs every time: uses an AI-played fake (<resource>)` using the declared resource name.
+
+A simulation action `http.prompt` or `port.prompt`, or a reached `prompts/fakes/<resource>.prompt.md`, always runs with that same AI-played-fake reason, including transitive reaches. A reached `port` named `clock` with operation `now` instead says `runs every time: uses the real clock`, unless the test's world/data sets `{"clock":{"now":…}}` or simulation binds `clock.now` deterministically. Fixed zero is present data. Other operations remain subject to the ordinary resource guard. A resource that a later declaration marks as real always runs; no current real-resource marker is defined.
+
+Apply the age, identity, CI and declaration guards before reuse, alongside complete-pass/source checks. The Mermaid eligibility question below includes all these guards.
 
 ```mermaid
 flowchart TD
@@ -25,7 +35,7 @@ flowchart TD
     L -->|Yes| K{Failures in scope?}
     K -->|Yes| F[Intersect scope with latest failed Stories]
     K -->|No| S
-    F --> E{Complete matching pass?}
+    F --> E{Eligible complete matching pass?}
     S --> E
     A --> R[Run ordinary local checks and dispatch]
     E -->|Yes| U[Report unchanged with zero current calls]

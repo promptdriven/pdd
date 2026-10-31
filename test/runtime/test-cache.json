@@ -32,7 +32,19 @@
     },
     {
       "id": "AC8",
-      "text": "I can select tests by Story, test file, Story file or directory relative to my current folder; ordinary test and its accepted former name use the same cache."
+      "text": "I can select tests by Story, test file, Story file or directory relative to my current folder; the canonical `pdd test` command uses this cache."
+    },
+    {
+      "id": "AC9",
+      "text": "I reuse passes only when their interpreter identity is known and they are at most seven days old; an older pass runs again. A build or model change found during my run also runs the selected Stories it initially skipped."
+    },
+    {
+      "id": "AC10",
+      "text": "A Story using the real clock or an AI-played fake runs every time and says why. Fully deterministic supplied replies and a fixed clock can still reuse a complete pass."
+    },
+    {
+      "id": "AC11",
+      "text": "When `CI` is set, every selected Story runs, even if its value is empty or `0`; a saved pass at most seven days old still counts for prompt approval."
     }
   ],
   "cases": [
@@ -159,6 +171,46 @@
     {
       "id": "max-calls",
       "criterion_id": "AC2"
+    }
+  ],
+  "native_suites": [
+    "test/test-cache.test.mjs",
+    "test/test-cache-v3.test.mjs"
+  ],
+  "v3_cases": [
+    {
+      "id": "age-boundary",
+      "criterion_id": "AC9",
+      "expected": {
+        "at_seven_days": "reuse",
+        "older_than_seven_days": "run"
+      }
+    },
+    {
+      "id": "answer-identity",
+      "criterion_id": "AC9",
+      "expected": {
+        "missing_or_conflicting": "run",
+        "same_run_change": "run initially skipped selected Stories"
+      }
+    },
+    {
+      "id": "resource-guards",
+      "criterion_id": "AC10",
+      "expected": {
+        "default_or_prompt_fake": "run with reason",
+        "all_deterministic": "reuse subject to other guards",
+        "clock_fixed_including_zero": "reuse subject to other guards"
+      }
+    },
+    {
+      "id": "ci-present",
+      "criterion_id": "AC11",
+      "expected": {
+        "empty": "run selected scope",
+        "0": "run selected scope",
+        "true": "run selected scope"
+      }
     }
   ]
 }
