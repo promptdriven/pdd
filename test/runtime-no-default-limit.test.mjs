@@ -142,7 +142,7 @@ test('2704: cap two is shared across two real CLI processes', { timeout: 40000 }
   });
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
   const children = [], pending = [setup, second].map(current => new Promise((done, fail) => {
-    const child = spawn(process.execPath, [join(root, 'bin/pdd.mjs'), 'check', '--json'], { cwd: current.repo, env: { ...process.env, HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_MAX_JOBS: '2' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', '--json'], { cwd: current.repo, env: { ...process.env, HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin, PDD_MAX_JOBS: '2' }, stdio: ['ignore', 'pipe', 'pipe'] });
     children.push(child); let out = '', err = ''; child.stdout.on('data', b => out += b); child.stderr.on('data', b => err += b); child.on('error', fail); child.on('close', code => done({ code, out, err }));
   }));
   t.after(() => children.forEach(child => { if (child.exitCode === null) child.kill('SIGKILL'); }));

@@ -2,17 +2,20 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/new-command-names.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start`, never says \"pdd check\", \"pdd try\" or \"workflow run\", prints nothing to stderr and exits with code 0."},
+    {"id": "AC1", "text": "`pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says \"pdd check\", \"pdd try\" or \"workflow start\", prints nothing to stderr and exits with code 0."},
     {"id": "AC2", "text": "`pdd test --help` lists the `pdd test` forms with --read, --retry, --fill-hash, --files and --screen, prints nothing to stderr and exits with code 0."},
     {"id": "AC3", "text": "`pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0."},
-    {"id": "AC4", "text": "`pdd check --help` prints the `pdd test` help to stdout, prints one notice line to stderr that names `pdd check` and `pdd test`, and exits with code 0."},
-    {"id": "AC5", "text": "`pdd check --lint --help` prints the `pdd lint` help to stdout, prints one notice line to stderr that names `pdd check --lint` and `pdd lint`, and exits with code 0."},
-    {"id": "AC6", "text": "`pdd try --help` prints the `pdd simulate` help to stdout, prints one notice line to stderr that names `pdd try` and `pdd simulate`, and exits with code 0."},
-    {"id": "AC7", "text": "`pdd workflow run --help` prints the `pdd workflow start` help to stdout, prints one notice line to stderr that names `pdd workflow run` and `pdd workflow start`, and exits with code 0."},
-    {"id": "AC8", "text": "`pdd workflow start 81` tells me on stderr to name the workflow with `pdd workflow start small-change 81`, prints nothing to stdout and exits with code 2."},
-    {"id": "AC9", "text": "`pdd workflow run 81` still prints only \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, with no notice, prints nothing to stdout and exits with code 2."},
-    {"id": "AC10", "text": "`pdd test --bogus` and `pdd check --bogus` each print a usage error to stderr, with no notice and no \"Unknown command\", print nothing to stdout and exit with code 2."},
-    {"id": "AC11", "text": "`pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0."}
+    {"id": "AC4", "text": "`pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2."},
+    {"id": "AC5", "text": "`pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2."},
+    {"id": "AC6", "text": "`pdd try --help` prints nothing to stdout, prints one line to stderr that names `pdd try` and `pdd simulate`, and exits with code 2."},
+    {"id": "AC7", "text": "`pdd help check` and `pdd help try` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
+    {"id": "AC8", "text": "`pdd check new-command-names --json`, `pdd check --bogus` and `pdd try new-command-names --new` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
+    {"id": "AC9", "text": "`pdd workflow run --help` prints the `pdd workflow run` help to stdout, prints nothing to stderr and exits with code 0."},
+    {"id": "AC10", "text": "`pdd workflow start --help` prints the same `pdd workflow run` help to stdout, never says \"workflow start\", prints nothing to stderr and exits with code 0."},
+    {"id": "AC11", "text": "`pdd workflow run 81` still prints only \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."},
+    {"id": "AC12", "text": "`pdd workflow start 81` prints only the same line, \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\", to stderr, prints nothing to stdout and exits with code 2."},
+    {"id": "AC13", "text": "`pdd test --bogus` prints a usage error to stderr, with no \"Unknown command\" and no \"was removed\", prints nothing to stdout and exits with code 2."},
+    {"id": "AC14", "text": "`pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0."}
   ],
   "initial_world": {},
   "simulation": {},
@@ -27,10 +30,10 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow start"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow run"},
+        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
@@ -62,71 +65,146 @@
       ]
     },
     {
-      "step_id": "check-help-gives-test-help-and-notice",
+      "step_id": "check-help-is-removed",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
       "input": {"argv": ["check", "--help"]},
       "checks": [
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --read"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
         {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
         {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
-      "step_id": "check-lint-help-gives-lint-help-and-notice",
+      "step_id": "check-lint-help-is-removed",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
       "input": {"argv": ["check", "--lint", "--help"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint --local"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
         {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
         {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
-      "step_id": "try-help-gives-simulate-help-and-notice",
+      "step_id": "check-story-lint-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["check", "new-command-names", "--lint"]},
+      "checks": [
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "try-help-is-removed",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
       "input": {"argv": ["try", "--help"]},
       "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate --stop"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
         {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
         {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
-      "step_id": "workflow-run-help-gives-start-help-and-notice",
+      "step_id": "help-check-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["help", "check"]},
+      "checks": [
+        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "help-try-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["help", "try"]},
+      "checks": [
+        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "check-story-json-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["check", "new-command-names", "--json"]},
+      "checks": [
+        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "check-unknown-option-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["check", "--bogus"]},
+      "checks": [
+        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "--bogus"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
+        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "try-story-new-is-removed",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["try", "new-command-names", "--new"]},
+      "checks": [
+        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "workflow-run-help",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
       "input": {"argv": ["workflow", "run", "--help"]},
       "checks": [
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow start NAME ISSUE"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow run"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd workflow run"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC9", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
+        {"criterion_id": "AC9", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
+        {"criterion_id": "AC9", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC9", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
-      "step_id": "workflow-start-without-name",
+      "step_id": "workflow-start-help-is-run-help",
       "entry_path": "prompts/cli/pdd-cli.prompt.md",
       "operation": "runPdd",
-      "input": {"argv": ["workflow", "start", "81"]},
+      "input": {"argv": ["workflow", "start", "--help"]},
       "checks": [
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "Name the workflow"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd workflow start small-change 81"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
+        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
+        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC10", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -135,9 +213,20 @@
       "operation": "runPdd",
       "input": {"argv": ["workflow", "run", "81"]},
       "checks": [
-        {"criterion_id": "AC9", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
-        {"criterion_id": "AC9", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC9", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "AC11", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
+        {"criterion_id": "AC11", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC11", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "workflow-start-without-name-names-run",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["workflow", "start", "81"]},
+      "checks": [
+        {"criterion_id": "AC12", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
+        {"criterion_id": "AC12", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC12", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -146,24 +235,11 @@
       "operation": "runPdd",
       "input": {"argv": ["test", "--bogus"]},
       "checks": [
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_equals", "value": ""},
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC10", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
-      ]
-    },
-    {
-      "step_id": "check-unknown-option",
-      "entry_path": "prompts/cli/pdd-cli.prompt.md",
-      "operation": "runPdd",
-      "input": {"argv": ["check", "--bogus"]},
-      "checks": [
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_equals", "value": ""},
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC10", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_equals", "value": ""},
+        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
+        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_contains", "value": "was removed"},
+        {"criterion_id": "AC13", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "AC13", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -172,10 +248,10 @@
       "operation": "runPdd",
       "input": {"argv": ["sim", "--help"]},
       "checks": [
-        {"criterion_id": "AC11", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate --stop"},
-        {"criterion_id": "AC11", "target": "result", "path": "/stdout", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC11", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC11", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "AC14", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate --stop"},
+        {"criterion_id": "AC14", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
+        {"criterion_id": "AC14", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC14", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     }
   ]
