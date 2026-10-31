@@ -58,6 +58,7 @@ test('CHAT2755 initial PR evidence includes saved approval rather than dropping 
     baseBranch: 'alpha', workflow: 'feature', number: 2755, steps: [],
     decisions: [{ stage: 'story', decision: 'approve', via: 'said', at: evidence.at, text: evidence.words, evidence }] }, isCode: false },
   { readStepNotes: async () => [] });
+  assert.ok(Array.isArray(result.approvalLines), 'preparePrEvidence requires approvalLines array for initial PR approval evidence');
   const approval = result.approvalLines.find(line => line.startsWith('Approved in chat:'));
   assert.equal(typeof approval, 'string', 'saved gate approval must be visible on initial PR creation');
   assert.ok(approval.includes('CODEX_THREAD_ID=synthetic-session'));

@@ -207,10 +207,12 @@ test('R1 publisher preserves separate identical-content events and deduplicates 
  const event={id:'event-a',route:'said',actor:{kind:'agent',id:'session'},at:100,words:'ship it',prompts:[]};
  const run={runId:'synthetic',runDir:'/unused',root:'/unused',baseSha:'a'.repeat(40),number:17,workflow:'feature',baseBranch:'main',steps:[],decisions:[{stage:'prompt-pr',decision:'approve',gateId:'gate-a',evidence:event},{stage:'prompt-pr',decision:'approve',gateId:'gate-b',evidence:{...event,id:'event-b'}}],promptApprovals:[structuredClone(event)]};
  const result=await preparePrEvidence({run,isCode:false},{readStepNotes:async()=>({notes:[]})});
+ assert.ok(Array.isArray(result.approvalLines), 'preparePrEvidence requires approvalLines array for identified and legacy approval evidence');
  assert.equal(result.approvalLines.filter(line=>line.startsWith('Approved in chat:')).length,2,'two decisions survive; same event journal copy appears once');
 });
 test('R1 legacy evidence remains readable without invented actor or words',async()=>{
  const run={runId:'legacy',runDir:'/unused',root:'/unused',baseSha:'a'.repeat(40),number:17,workflow:'feature',baseBranch:'main',steps:[],decisions:[{stage:'story',decision:'approve',via:'terminal',at:100}]};
  const result=await preparePrEvidence({run,isCode:false},{readStepNotes:async()=>({notes:[]})});
+ assert.ok(Array.isArray(result.approvalLines), 'preparePrEvidence requires approvalLines array for identified and legacy approval evidence');
  assert.equal(result.approvalLines.filter(line=>line.startsWith('Approved in terminal:')).length,1);assert.doesNotMatch(result.approvalLines.join('\n'),/actor|ship it/);
 });
