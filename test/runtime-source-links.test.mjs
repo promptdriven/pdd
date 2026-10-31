@@ -53,7 +53,7 @@ for (const kind of ['direct', 'folder']) {
   });
 }
 for (const [kind, target, reason] of [
-  ['outside', '../../../outside.md', /outside|escap/i],
+  ['outside', '../../../outside.md', /outside the repository/i],
   ['broken', 'missing.md', /broken|missing|exist/i],
   ['loop', 'other.md', /loop|cycl/i],
   ['secret link', '../../shared/shared.md', /secret/i],
