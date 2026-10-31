@@ -1257,6 +1257,12 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
     const rawFileHashes = Object.fromEntries([...footprintPayload.values()].flatMap(file=>{
       if (unavailable.has(file.path)) return [];
       try {
+        // Cache metadata reuses observed raw bytes; it must not read an unread
+        // replacement original merely to make a Story eligible for reuse.
+        if (!file.path.endsWith('.prompt.md')) {
+          const original = snapshots.get(file.path);
+          return original?.bytes ? [[file.path,sha256(original.bytes)]] : [];
+        }
         const original=inspectRaw(file.path,'Prompt snapshot',true);
         return original.stat ? [[file.path,sha256(bytes(original))]] : [];
       } catch (error) {
