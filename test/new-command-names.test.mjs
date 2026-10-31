@@ -131,7 +131,6 @@ test('pdd mcp stdout carries only MCP messages', t => {
   assert.equal(result.status, 0, result.stderr);
   const rows = result.stdout.trim().split('\n').map(line => JSON.parse(line));
   assert.deepEqual(rows.map(row => [row.jsonrpc, row.id]), [['2.0', 1], ['2.0', 2]]);
-  for (const tool of rows[1].result.tools) assert.match(tool.name, /^simulate_/);
 });
 
 test('shell completion offers only the main names', t => {
@@ -166,12 +165,12 @@ test('shell completion offers only the main names', t => {
 
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
-test('no source line names pdd check or pdd try, or calls the simulation the Try', () => {
+test('no source line names pdd check or pdd try', () => {
   const dir = join(root, 'src'), found = [];
   for (const name of readdirSync(dir).filter(file => file.endsWith('.mjs'))) {
     readFileSync(join(dir, name), 'utf8').split('\n').forEach((text, index) => {
       // A whole-line comment is never printed.
-      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b|\bTry (?:ready|link|page|budget|AI usage|is ready|is serving|tools)\b|PDD Try tools|['"`]pdd try:|\btry_(?:open|state|run|check|save_case)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
+      if (!text.trim().startsWith('//') && /\bpdd (?:check|try)\b/.test(text)) found.push(`${name}:${index + 1}: ${text.trim().slice(0, 120)}`);
     });
   }
   assert.deepEqual(found, []);

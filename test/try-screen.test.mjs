@@ -97,7 +97,7 @@ test('saved Try missing the current local app map gives deliberate recovery with
   writeFileSync(join(setup.repo,'app-map.json'),JSON.stringify({schema_version:'prompt-runtime.app-map.v1',name:'Harbor'}));
   const ports=make();
   assert.equal(await runTry({cwd:setup.repo,words:['place-order'],options:{'--serve':'8080'}},ports),125);
-  assert.match(ports.stderr.text,/saved Simulator has no Screen app map/);
+  assert.match(ports.stderr.text,/saved Try has no Screen app map/);
   assert.match(ports.stderr.text,/pdd simulate place-order --serve 8080 --new --app-map app-map.json/);
   assert.equal(fake.posts.filter(p=>p.command==='try').length,1);assert.equal(fake.deletes.length,0);assert.equal(fake.jsonPosts.length,0);
 });
@@ -116,7 +116,7 @@ test('missing-map recovery works from a subdirectory and shell-quotes the select
   writeFileSync(join(mapFolder,'my $literal.json'),JSON.stringify({schema_version:'prompt-runtime.app-map.v1',name:'Harbor'}));
   const cwd=join(setup.repo,'nested folder');mkdirSync(cwd);
   const ports=make();assert.equal(await runTry({cwd,words:['place-order'],options:{'--serve':'8080','--app-map':'../map files/my $literal.json'}},ports),125);
-  const command=ports.stderr.text.split('Start a new Simulator with the selected app map: ')[1].trim();
+  const command=ports.stderr.text.split('Start a new Try with the selected app map: ')[1].trim();
   const bin=join(setup.home,'bin');mkdirSync(bin);writeFileSync(join(bin,'pdd'),'#!/bin/sh\nprintf \'%s\\n\' "$@"\n',{mode:0o700});
   const parsed=spawnSync('/bin/sh',['-c',command],{cwd,env:{...process.env,PATH:bin+':'+process.env.PATH},encoding:'utf8'});
   assert.equal(parsed.status,0,parsed.stderr);

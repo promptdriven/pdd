@@ -16,39 +16,39 @@ function fixture(overrides = {}) {
 
 test('state uses current owner world, run preserves snapshots, check and save use confirmed evidence', async () => {
   const f = fixture(), tools = createTryTools({}, f.ports);
-  const state = await tools.call('simulate_state');
+  const state = await tools.call('try_state');
   assert.deepEqual(state.data_now, f.owner.data);
   assert.equal(state.entries[0].entry, 'prompts/bm.prompt.md#main');
-  const run = await tools.call('simulate_input', { argv: ['add', 'news'] });
+  const run = await tools.call('try_run', { argv: ['add', 'news'] });
   assert.deepEqual(run.data_before, { kv: {} });
   assert.deepEqual(run.data_after, { kv: { bookmarks: ['news'] } });
-  assert.equal((await tools.call('simulate_test')).verdict.state, 'pass');
-  assert.match((await tools.call('simulate_save_case')).result, /^added /);
-  assert.equal((await tools.call('simulate_save_case')).already_saved, true);
+  assert.equal((await tools.call('try_check')).verdict.state, 'pass');
+  assert.match((await tools.call('try_save_case')).result, /^added /);
+  assert.equal((await tools.call('try_save_case')).already_saved, true);
   assert.equal(f.saves, 1); assert.equal(f.calls, 1);
 });
 
 test('validation and ambiguous save criterion send no accidental door call', async () => {
   const f = fixture(), tools = createTryTools({}, f.ports);
-  for (const args of [{}, { argv: [2] }, { argv: [], input: {} }, { entry: 'unknown#entry', input: {} }, { argv: [], extra: true }]) await assert.rejects(tools.call('simulate_input', args));
+  for (const args of [{}, { argv: [2] }, { argv: [], input: {} }, { entry: 'unknown#entry', input: {} }, { argv: [], extra: true }]) await assert.rejects(tools.call('try_run', args));
   assert.equal(f.calls, 0);
-  await assert.rejects(tools.call('simulate_save_case'), /confirmed run/);
+  await assert.rejects(tools.call('try_save_case'), /confirmed run/);
 });
 
 test('unavailable world stays unavailable and uncertain run blocks a later mutation', async () => {
   const f = fixture({ runDoorCall: async () => { throw Object.assign(new Error('The command result is unknown. Do not repeat it automatically.'), { unknownOutcome: true }); } });
   delete f.owner.data; f.owner.data_error = 'Current saved data unavailable (HTTP 404)';
   const tools = createTryTools({}, f.ports);
-  const state = await tools.call('simulate_state'); assert.equal(state.data_now, null); assert.match(state.data_error, /unavailable/);
-  await assert.rejects(tools.call('simulate_input', { argv: [] }), /unknown/);
-  await assert.rejects(tools.call('simulate_input', { argv: [] }), /prior run/);
+  const state = await tools.call('try_state'); assert.equal(state.data_now, null); assert.match(state.data_error, /unavailable/);
+  await assert.rejects(tools.call('try_run', { argv: [] }), /unknown/);
+  await assert.rejects(tools.call('try_run', { argv: [] }), /prior run/);
 });
 
 test('concurrent tool calls are serialized', async () => {
   let active = 0, max = 0;
   const f = fixture({ readTryOwner: async () => { active++; max = Math.max(max, active); await new Promise(resolve => setTimeout(resolve, 5)); active--; return f.owner; } });
   const tools = createTryTools({}, f.ports);
-  await Promise.all([tools.call('simulate_state'), tools.call('simulate_open')]);
+  await Promise.all([tools.call('try_state'), tools.call('try_open')]);
   assert.equal(max, 1);
 });
 
@@ -67,14 +67,14 @@ test('stdio serves MCP negotiation and errors with stdout exclusively JSON', asy
   assert.equal(rows.filter(row => row.error?.code === -32700).length, 1);
   assert.equal(rows.filter(row => row.error?.code === -32600).length, 2);
   assert.equal(rows.find(row => row.id === 1).result.protocolVersion, '2025-06-18');
-  assert.deepEqual(rows.find(row => row.id === 2).result.tools.map(tool => tool.name), ['simulate_open', 'simulate_state', 'simulate_input', 'simulate_test', 'simulate_save_case']);
+  assert.deepEqual(rows.find(row => row.id === 2).result.tools.map(tool => tool.name), ['try_open', 'try_state', 'try_run', 'try_check', 'try_save_case']);
   assert.equal(rows.find(row => row.id === 3).error.code, -32601);
   assert.equal(rows.find(row => row.id === 4).error.code, -32602);
 });
 
 test('duplicate request reuses pending answer and conflicting ID cannot dispatch', async () => {
   const f = fixture();
-  const call = request(7, 'tools/call', { name: 'simulate_input', arguments: { argv: ['add', 'news'] } });
+  const call = request(7, 'tools/call', { name: 'try_run', arguments: { argv: ['add', 'news'] } });
   const rows = await exchange([call, call, request(7, 'ping')], f.ports);
   assert.equal(f.calls, 1);
   assert.equal(rows.filter(row => row.result?.structuredContent?.run_id === 'run-1').length, 2);
@@ -83,7 +83,7 @@ test('duplicate request reuses pending answer and conflicting ID cannot dispatch
 
 test('tool errors are MCP tool results and valid notifications cannot run actions', async () => {
   const f = fixture();
-  const rows = await exchange([{ jsonrpc: '2.0', method: 'tools/call', params: { name: 'simulate_input', arguments: { argv: ['add', 'news'] } } }, request(1, 'tools/call', { name: 'simulate_input', arguments: {} }), request(2, 'ping')], f.ports);
+  const rows = await exchange([{ jsonrpc: '2.0', method: 'tools/call', params: { name: 'try_run', arguments: { argv: ['add', 'news'] } } }, request(1, 'tools/call', { name: 'try_run', arguments: {} }), request(2, 'ping')], f.ports);
   assert.equal(f.calls, 0);
   assert.equal(rows.find(row => row.id === 1).result.isError, true);
   assert.deepEqual(rows.find(row => row.id === 2).result, {});
@@ -129,7 +129,7 @@ test('owner access refuses a Try recorded for another GitHub login before any ow
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
   assert.equal((await readTryOwner({ cwd: setup.repo }, ports)).record.login, 'octo');
   const gets = fake.gets.length, other = { ...ports, gh: args => args[0] === 'auth' ? ports.gh(args) : { status: 0, stdout: 'mallory 777\n' } };
-  await assert.rejects(readTryOwner({ cwd: setup.repo }, other), /This Simulator belongs to octo\. Run: gh auth switch -u octo/);
+  await assert.rejects(readTryOwner({ cwd: setup.repo }, other), /This Try belongs to octo\. Run: gh auth switch -u octo/);
   assert.equal(fake.gets.length, gets, 'another login gets no owner read');
   assert.equal(fake.posts.filter(p => p.command === 'try').length, 1);
 });
@@ -156,8 +156,8 @@ test('isolated save retains actual starting world and leaves original scenario b
 test('saving without a runtime before-world fails instead of inventing test data', async () => {
   const f = fixture({ runDoorCall: async () => ({ id: 'run', result: { stdout: 'Added\n' }, world: {} }) });
   const tools = createTryTools({}, f.ports);
-  await tools.call('simulate_input', { argv: [] });
-  await assert.rejects(tools.call('simulate_save_case'), /confirmed starting world/);
+  await tools.call('try_run', { argv: [] });
+  await assert.rejects(tools.call('try_save_case'), /confirmed starting world/);
   assert.equal(f.saves, 0);
 });
 
@@ -178,8 +178,8 @@ test('failed owner result reads block another run regardless of error wording', 
     const f = fixture();
     f.owner.root = setup.repo; f.owner.record.origin = fake.origin; f.owner.record.login = 'octo';
     const tools = createTryTools({}, { ...ports, readTryOwner: f.ports.readTryOwner, runDoorCall });
-    await assert.rejects(tools.call('simulate_input', { argv: [] }), error => error.unknownOutcome === true);
-    await assert.rejects(tools.call('simulate_input', { argv: [] }), /prior run/);
+    await assert.rejects(tools.call('try_run', { argv: [] }), error => error.unknownOutcome === true);
+    await assert.rejects(tools.call('try_run', { argv: [] }), /prior run/);
     assert.equal(dispatched, 1, `HTTP ${status} must not dispatch twice`);
   }
 });
@@ -247,16 +247,4 @@ test('owner tools resume a confirmed idle pause with the same Try, data and budg
     assert.equal(reopens, 1, 'an uncertain or unrelated receipt cannot authorize reopening');
   }
   assert.equal(fake.posts.filter(entry => entry.command === 'try').length, 1);
-});
-
-// user_stories/new-command-names.md: the tools are simulate_* only; an older try_* name is an unknown tool with no alias.
-test('the old try_* tool names are unknown tools and run nothing; tool texts say Simulator', async () => {
-  const f = fixture(), tools = createTryTools({}, f.ports);
-  for (const name of ['try_open', 'try_state', 'try_run', 'try_check', 'try_save_case']) await assert.rejects(tools.call(name, { argv: ['add', 'news'] }), /Unknown tool/);
-  assert.equal(f.calls, 0); assert.equal(f.saves, 0);
-  const rows = await exchange([request(1, 'tools/list')]);
-  for (const tool of rows[0].result.tools) {
-    assert.match(tool.name, /^simulate_/);
-    assert.doesNotMatch(tool.description, /\bTry\b|\bpdd (?:check|try)\b/, tool.name);
-  }
 });

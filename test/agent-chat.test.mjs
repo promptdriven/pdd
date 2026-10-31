@@ -99,7 +99,7 @@ test('CHAT14 non-terminal plain Try returns after collecting saved cases without
  const f=harbor(t);mkdirSync(join(f.home,'.config/pdd'),{recursive:true});writeFileSync(join(f.home,'.config/pdd/agents.json'),'invalid user config must not be read for a link-only Try');
  const fake=await fakeRuntime(t,(e,r)=>{if(e.command==='lint')return{status:200,json:r.lint(e.request.requestId)};if(e.command==='try')return{status:200,json:r.tryJob(e.request.requestId)};if(e.url.endsWith('/tests'))return{status:200,json:{tests:[]}};if(e.url.endsWith('/approvals'))return{status:200,json:{approvals:[]}};return{status:404,json:{}}});
  const {ports}=portsFor({HOME:f.home,PDD_STATE_DIR:f.state,PDD_RUNTIME_URL:fake.origin},{agentBridge:undefined,discoverAgents:async()=>assert.fail('must not discover a local agent'),openUrl:async()=>true});
- ports.stdout.isTTY=false;assert.equal(await runTry({cwd:f.repo,words:['place-order']},ports),0,ports.stderr.text);assert.match(ports.stdout.text,/Simulator ready/);assert.doesNotMatch(ports.stdout.text,/#agent=|Owner agent chat/);assert.equal(fake.gets.filter(x=>x.url.endsWith('/tests')).length,1);assert.equal(fake.gets.filter(x=>/\/agent\/|\/model$/.test(x.url)).length,0);
+ ports.stdout.isTTY=false;assert.equal(await runTry({cwd:f.repo,words:['place-order']},ports),0,ports.stderr.text);assert.match(ports.stdout.text,/Try ready/);assert.doesNotMatch(ports.stdout.text,/#agent=|Owner agent chat/);assert.equal(fake.gets.filter(x=>x.url.endsWith('/tests')).length,1);assert.equal(fake.gets.filter(x=>/\/agent\/|\/model$/.test(x.url)).length,0);
 });
 
 test('CHAT15 stdout terminal connects ordinary Try; --no-wait disables it',async t=>{

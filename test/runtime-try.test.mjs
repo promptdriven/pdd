@@ -39,11 +39,11 @@ test('RUNTIME-TRY1: pdd simulate lints, posts one Try with the test as seed, ope
   assert.deepEqual(Object.keys(request).sort(), ['max_calls', 'requestId', 'seed', 'source_sha256', 'tab']);
   assert.equal(request.max_calls, 400); assert.equal(request.seed, 'tests/place-order.json'); assert.equal(request.tab, 'call');
   assert.deepEqual(first.opened, [`${fake.origin}/s/${'t'.repeat(43)}/`]);
-  assert.equal(first.out, `Simulator budget 400 calls; 400 remaining. You are charged only for calls that run.\nSimulator ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd simulate --stop place-order\n`);
+  assert.equal(first.out, `Try budget 400 calls; 400 remaining. You are charged only for calls that run.\nTry ready for "Place a coffee order": ${fake.origin}/s/${'t'.repeat(43)}/ (open in your browser). It ends in 24 hours, or with: pdd simulate --stop place-order\n`);
   const again = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(again.code, 0, again.err);
   assert.equal(fake.posts.length, 2); assert.deepEqual(again.opened, []);
-  assert.match(again.out, new RegExp(`Simulator ready for "Place a coffee order": ${fake.origin}/s/t{43}/`));
+  assert.match(again.out, new RegExp(`Try ready for "Place a coffee order": ${fake.origin}/s/t{43}/`));
   const screen = await tryStory(setup, fake, ['place-order'], { '--new': true, '--tab': 'screen' });
   assert.equal(screen.code, 0, screen.err);
   assert.equal(fake.deletes.length, 1); assert.match(fake.deletes[0].headers['x-request-id'], /^[0-9a-f-]{36}$/);
@@ -62,20 +62,20 @@ test('RUNTIME-TRY2: --stop sends DELETE with X-Request-Id, reads the stop job an
   const id = fake.deletes[0].headers['x-request-id'];
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.ok(fake.gets.some(get => get.url === `/v1/runs/${id}`));
-  assert.equal(stopped.out, 'The Simulator link for "Place a coffee order" is stopped.\n');
+  assert.equal(stopped.out, 'The Try link for "Place a coffee order" is stopped.\n');
   const none = await tryStory(setup, fake, ['place-order'], { '--stop': true });
   assert.equal(none.code, 2); assert.equal(fake.deletes.length, 1);
 });
 
 // Wrong: pdd opens a link that points to another host, plain HTTP or a wrong path (spec 11 link checks).
-test('RUNTIME-TRY3: a Simulator link with another host, scheme, path or a user is not opened; pdd says why in one line, with no table', async t => {
+test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not opened; pdd says why in one line, with no table', async t => {
   for (const bad of [
     f => `https://${new URL(f.origin).host}/s/abc/`, f => `${f.origin.replace('127.0.0.1', 'localhost')}/s/abc/`,
     f => `${f.origin}/r/abc`, f => `${f.origin}/s/abc`, f => f.origin.replace('http://', 'http://user:pw@') + '/s/abc/']) {
     const setup = harbor(t), fake = await fakeRuntime(t, trying(f => bad(f)));
     const elsewhere = new URL(bad(fake)).origin !== fake.origin;
-    const refused = elsewhere ? `Simulator link refused: it points at ${new URL(bad(fake)).origin}, not ${fake.origin}. The server's address setting may be wrong; tell the PDD team.`
-      : 'Simulator link refused: it is not a valid Simulator link. Tell the PDD team.';
+    const refused = elsewhere ? `Try link refused: it points at ${new URL(bad(fake)).origin}, not ${fake.origin}. The server's address setting may be wrong; tell the PDD team.`
+      : 'Try link refused: it is not a valid Try link. Tell the PDD team.';
     for (const result of [await tryStory(setup, fake, ['place-order']), await tryStory(setup, fake, ['place-order'])]) {
       assert.equal(result.code, 3, `${bad(fake)}: ${result.out}${result.err}`); assert.deepEqual(result.opened, []);
       assert.equal((result.out + result.err).includes(bad(fake)), false);
@@ -231,7 +231,7 @@ test('a lost reopen reply is read once by ID, while a rejected reopen keeps the 
     const again=await tryStory(setup,fake,['place-order'],{'--no-open':true});
     assert.equal(again.code,outcome==='lost'?0:3,again.err);assert.equal(fake.jsonPosts.length,1);
     assert.equal(fake.posts.filter(p=>p.command==='try').length,1);
-    if(outcome==='refused'){assert.doesNotMatch(again.out,/Simulator link/);assert.match(again.err,/cannot reopen/);assert.match(again.err,/pdd simulate tests\/place-order\.json/);}
+    if(outcome==='refused'){assert.doesNotMatch(again.out,/Try link/);assert.match(again.err,/cannot reopen/);assert.match(again.err,/pdd simulate tests\/place-order\.json/);}
   }
 });
 
@@ -266,7 +266,7 @@ test('RUNTIME-TRY11: pdd simulate says once, in calm words, how many sent files 
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(result.code, 0);
   const said = (result.out + result.err).split('\n').filter(text => text.includes('not prompt, story or test files'));
-  assert.deepEqual(said, ['Starting your Simulator: sending 4 files, 6 KB (1 is not prompt, story or test files; run `pdd test --files` to see them)…']);
+  assert.deepEqual(said, ['Starting your Try: sending 4 files, 6 KB (1 is not prompt, story or test files; run `pdd test --files` to see them)…']);
 });
 
 const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });
@@ -286,7 +286,7 @@ test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try n
   for (const options of [{ '--app-map': 'app.json' }, { '--tab': 'screen' }]) {
     const open = await tryStory(setup, fake, ['place-order'], { ...options, '--no-open': true });
     assert.equal(open.code, 2, JSON.stringify(options));
-    assert.match(open.err, /A Simulator for "Place a coffee order" is already open\. --app-map and --tab apply only to a new Simulator: run pdd simulate place-order --new/);
+    assert.match(open.err, /A Try for "Place a coffee order" is already open\. --app-map and --tab apply only to a new Try: run pdd simulate place-order --new/);
   }
   const fresh = await tryStory(setup, fake, ['place-order'], { '--app-map': 'app.json', '--new': true, '--no-open': true });
   assert.equal(fresh.code, 0, fresh.err);
@@ -305,7 +305,7 @@ test('RUNTIME-TRY13: a Try setup that ends unknown is forgotten, and the next pd
   assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
   const restarted = await tryStory(setup, fake, ['place-order'], { '--new': true, '--no-open': true });
   assert.equal(restarted.code, 3);
-  assert.match(restarted.err, /The Simulator setup did not finish on the server \(its state is unknown; the server may have restarted\)\. It used no AI calls\. Run pdd simulate place-order to make a new Simulator link\./);
+  assert.match(restarted.err, /The Try setup did not finish on the server \(its state is unknown; the server may have restarted\)\. It used no AI calls\. Run pdd simulate place-order to make a new Try\./);
   const next = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(next.code, 0, next.err);
   assert.equal(fake.posts.filter(post => post.command === 'try').length, 3);
@@ -333,14 +333,14 @@ test('RUNTIME-TRY15: pdd simulate --stop finds the Try by story name in the stat
   assert.equal((await tryStory(setup, fake, ['place-order'], { '--no-open': true })).code, 0);
   rmSync(join(setup.repo, 'tests'), { recursive: true }); rmSync(join(setup.repo, 'user_stories'), { recursive: true });
   const unknown = await tryStory(setup, fake, ['refund'], { '--stop': true });
-  assert.equal(unknown.code, 2); assert.match(unknown.err, /No open Simulator for "refund"\. Open Simulator links: place-order/);
+  assert.equal(unknown.code, 2); assert.match(unknown.err, /No open Try for "refund"\. Open Try links: place-order/);
   const stopped = await tryStory(setup, fake, ['place-order'], { '--stop': true });
   assert.equal(stopped.code, 0, stopped.err); assert.equal(fake.deletes.length, 1);
-  assert.equal(stopped.out, 'The Simulator link for "Place a coffee order" is stopped.\n');
+  assert.equal(stopped.out, 'The Try link for "Place a coffee order" is stopped.\n');
   assert.equal((await tryStory(setup, fake, [], { '--stop': true })).code, 2);
 });
 
-// Wrong: a saved case from anyone with the Simulator link writes outside the repo, follows a symlink, or edits a non-test file (runtime review).
+// Wrong: a saved case from anyone with the Try link writes outside the repo, follows a symlink, or edits a non-test file (runtime review).
 test('RUNTIME-TRY16: hostile saved cases write nothing outside tests/ or into non-test files', async t => {
   const outside = temp(t);
   const run = async (setup, saved) => {
@@ -415,7 +415,7 @@ test('RUNTIME-TRY18: without a terminal pdd simulate only names the approval req
     ? { status: 200, json: { approvals: [approval('b1', hash)] } } : trying()(entry, f));
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });
   assert.equal(result.code, 0);
-  assert.match(result.out, /The Simulator asks to approve prompts\/place_order\.prompt\.md\. A person answers it in a terminal: pdd simulate place-order/);
+  assert.match(result.out, /The Try page asks to approve prompts\/place_order\.prompt\.md\. A person answers it in a terminal: pdd simulate place-order/);
   assert.equal(fake.jsonPosts.length, 0); assert.match(readFileSync(join(setup.repo, PLACE), 'utf8'), /"status": "draft"/);
 });
 
@@ -474,22 +474,22 @@ test('RUNTIME-TRY21: a refused Try setup says what was refused, why and the fix,
   };
   const map = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'ambiguous-handler', message: generic, engine_message: null, section: null }])), ['place-order']);
   assert.equal(map.code, 4, map.err + map.out);
-  assert.deepEqual(map.out.trimEnd().split('\n'), ['The Simulator could not start: the app map was refused (ambiguous-handler: on one screen, all taps of one kind must match by the same key).',
+  assert.deepEqual(map.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (ambiguous-handler: on one screen, all taps of one kind must match by the same key).',
     'Fix app-map.json (RUNBOOK §13), then run pdd simulate place-order --new.']);
   assert.doesNotMatch(map.out + map.err, /Prompt tests|Runtime check|pdd test(?! --files)|Story +Test|REFUSED/);
   const told = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'template-reference-schema', message: generic,
     reason: 'the field id gets /event/target but has a minLength', fix: 'Make id a plain {"type": "string"} in prompts/place_order.prompt.md.' }])), ['place-order']);
-  assert.deepEqual(told.out.trimEnd().split('\n'), ['The Simulator could not start: the app map was refused (template-reference-schema: the field id gets /event/target but has a minLength).',
+  assert.deepEqual(told.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (template-reference-schema: the field id gets /event/target but has a minLength).',
     'Make id a plain {"type": "string"} in prompts/place_order.prompt.md. Then run pdd simulate place-order --new.']);
   const placed = await tryStory(withMap, await fakeRuntime(t, refusing([{ code: 'ambiguous-handler', reason: 'two button handlers on the screen list match by value and by name',
     fix: 'Match all buttons of the screen list by name.', file: 'app-map.json', at: '/screens/0/handlers/1', where: 'app-map.json /screens/0/handlers/1', cause: 'prompt',
     message: 'two button handlers on the screen list match by value and by name. Match all buttons of the screen list by name.' }])), ['place-order']);
-  assert.deepEqual(placed.out.trimEnd().split('\n'), ['The Simulator could not start: the app map was refused (ambiguous-handler: two button handlers on the screen list match by value and by name; at app-map.json /screens/0/handlers/1).',
+  assert.deepEqual(placed.out.trimEnd().split('\n'), ['The Try could not start: the app map was refused (ambiguous-handler: two button handlers on the screen list match by value and by name; at app-map.json /screens/0/handlers/1).',
     'Match all buttons of the screen list by name. Then run pdd simulate place-order --new.']);
   const plain = harbor(t), posted = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 422, json: { error: { code: 'invalid-seed', message: 'The seed is not a test file.' } } } : trying()(entry, f));
   const seed = await tryStory(plain, posted, ['place-order']);
   assert.equal(seed.code, 4);
-  assert.deepEqual(seed.out.trimEnd().split('\n'), ['The Simulator could not start: the server refused it (invalid-seed: The seed is not a test file.).',
+  assert.deepEqual(seed.out.trimEnd().split('\n'), ['The Try could not start: the server refused it (invalid-seed: The seed is not a test file.).',
     'Fix what it names, then run pdd simulate place-order --new.']);
 });

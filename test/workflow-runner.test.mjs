@@ -620,7 +620,7 @@ test('R5: Try links (/s/<token>/) are removed from PR bodies; report links (/r/)
   writeFileSync(join(run.runDir, 'verify.md'), 'Try: https://rt.example.test/s/TTTTTTTT/\nReport: https://rt.example.test/r/360b7197\n');
   await lastSteps(f, run, await stepDone({ step: 'verify', summary: 'ok', cwd: run.root }, f.agentPorts()));
   const body = f.prs[0].body;
-  assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Simulator link removed)').length - 1, 3);
+  assert.doesNotMatch(body, /\/s\//); assert.equal(body.split('(Try link removed)').length - 1, 3);
   assert.match(body, /https:\/\/rt\.example\.test\/r\/360b7197/);
 });
 
@@ -765,7 +765,7 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
 test('#13: after check and try the chat asks the person to try and approve; PR 1 opens only after approval, then the code question', async t => {
   const { f, run, gate } = await featureAtTryGate(t);
   assert.equal(f.prs.length, 0, 'no PR 1 before the person approves');
-  assert.match(gate.message, /Prompt tests line/); assert.match(gate.message, /Simulator link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
+  assert.match(gate.message, /Prompt tests line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
   assert.doesNotMatch(gate.message, /pdd opens PR 1 now/);
   let record = f.record();
   assert.equal(record.gate.kind, 'approve-pr'); assert.equal(record.state, 'waiting');

@@ -150,7 +150,7 @@ test('registration pins this package with spaces despite an older pdd on PATH an
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'}) + '\n');
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/list',params:{}}) + '\n');
   const result = await received;
-  assert.deepEqual(result.result.tools.map(tool => tool.name), ['simulate_open','simulate_state','simulate_input','simulate_test','simulate_save_case']);
+  assert.deepEqual(result.result.tools.map(tool => tool.name), ['try_open','try_state','try_run','try_check','try_save_case']);
   assert.equal(errors.includes('OLD-PDD'), false);
   child.stdin.end();
 });
