@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { runTry } from '../src/runtime-client.mjs';
 import { openServe } from '../src/try-http.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
@@ -48,4 +49,48 @@ test('2760 replay: HTTP example uses authored path, query and body with safe she
   assert.match(missing.stdout.text, /<required:id>/);
   assert.match(missing.stdout.text, /required%3Ashelf/);
   assert.match(missing.stdout.text, /<required:body>/);
+});
+
+
+function typedReplay(t, story = 'place-order') {
+  return harbor(t, root => {
+    const promptPath = join(root, 'prompts/place_order.prompt.md');
+    const original = readFileSync(promptPath, 'utf8');
+    const iface = JSON.parse(original.match(/```json\s*([\s\S]*?)```/)[1]);
+    const object = properties => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
+    const commands = { type: 'array', items: { type: 'string' } };
+    iface.entries = [{ operation: 'resolve_command', input_schema: object({ commands }), result_schema: object({ commands }), errors: [] }];
+    iface.conventions = [];
+    const content = () => `# Resolve typed commands\n\nReturn the supplied commands as structured data.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\x60\x60\x60json\n${JSON.stringify(iface)}\n\x60\x60\x60\n</details>\n`;
+    iface.prose_sha256 = proseSha256(content());
+    writeFileSync(promptPath, content());
+    const file = join(root, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file));
+    if (story !== 'place-order') {
+      renameSync(join(root, doc.story_path), join(root, `user_stories/${story}.md`));
+      doc.story_path = `user_stories/${story}.md`;
+    }
+    doc.criteria = [{ id: 'AC1', text: 'The typed command stays available.' }];
+    writeFileSync(join(root, doc.story_path), '# Typed command\n\nI can classify a command.\n\n## Acceptance criteria\n\n1. The typed command stays available.\n');
+    doc.steps = [{ step_id: 'resolve', entry_path: 'prompts/place_order.prompt.md', operation: 'resolve_command', input: { commands: ['industry-sim day status'] }, checks: [{ criterion_id: 'AC1', target: 'result', path: '/commands', op: 'equals', value: ['industry-sim day status'] }] }];
+    writeFileSync(file, JSON.stringify(doc));
+  });
+}
+
+test('2760 replay: explicit world tab on typed input keeps its tab and never claims Form', async t => {
+  const setup = typedReplay(t);
+  const fake = await fakeRuntime(t, (entry, f) => entry.command === 'lint' ? { status: 200, json: f.lint(entry.request.requestId) } : entry.command === 'try' ? { status: 200, json: f.tryJob(entry.request.requestId) } : { status: 404, json: {} });
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, { openUrl: async () => true });
+  assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--tab': 'world' } }, ports), 0, ports.stderr.text + ports.stdout.text);
+  assert.equal(fake.posts.find(entry => entry.command === 'try').request.tab, 'world');
+  assert.doesNotMatch(ports.stdout.text + ports.stderr.text, /opens on the Form tab/);
+  assert.equal(fake.jsonPosts.length, 0);
+});
+
+test('2760 replay: no CLI choices explains quoted typed Story recovery before sign-in', async t => {
+  const story = "resolver's input", setup = typedReplay(t, story);
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('local mismatch must not authenticate'), fetch: () => assert.fail('local mismatch must not contact runtime') });
+  assert.equal(await runTry({ cwd: setup.repo, words: [story], options: { '--shell': true } }, ports), 125);
+  assert.match(ports.stderr.text, /This Story is not a command-line program\. No Stories are command-line programs\./);
+  assert.ok(ports.stderr.text.includes("pdd simulate 'resolver'\\''s input' opens its Form tab."), ports.stderr.text);
+  assert.doesNotMatch(ports.stderr.text, /RUNBOOK|convention|adapter/);
 });

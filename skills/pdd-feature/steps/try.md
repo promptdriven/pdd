@@ -6,6 +6,6 @@ If the pdd-prompting skill has a RUNBOOK.md, run `pdd simulate STORY` as it says
 - If the repo has a safe local preview or demo, use it to show the plan.
 - Report what ran and what you saw. A link or a mockup is not a try.
 
-Run `pdd simulate <story>` to automatically open a shell for a command-line program, localhost with an example request for HTTP routes, or the Simulator page for screens. Run `pdd simulate` for the whole project. Use `--page` to choose the page.
+Run `pdd simulate <story>` to automatically open a shell for a command-line program, localhost with an example request for HTTP routes, the Simulator page for screens, or its Form tab for typed operations. Run `pdd simulate` for the whole project. Use `--page` to choose the page.
 
 Use `pdd simulate <story> --cli` to print the launcher and PATH without opening a shell.

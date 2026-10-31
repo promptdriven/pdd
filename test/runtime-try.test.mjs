@@ -272,7 +272,7 @@ test('RUNTIME-TRY11: pdd try says once, in calm words, how many sent files are n
   assert.deepEqual(said, ['Starting your Try: sending 4 files, 6 KB (1 is not prompt, story or test files; run `pdd check --files` to see them)…']);
 });
 
-const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu' });
+const APP_MAP = JSON.stringify({ schema_version: 'prompt-runtime.app-map.v1', name: 'Harbor', initial_screen: 'menu', screens: [{ id: 'menu', source: 'operation', prompt_path: PLACE, operation: 'place_order', input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 1 }] }, format: 'text', result_pointer: '/customerName' }] });
 
 // Wrong: --app-map with an HTML page is sent (or silently ignored) and the Try breaks later (real-user web test, issue 4).
 test('RUNTIME-TRY12: --app-map must be a Git-visible app-map JSON; an open Try needs --new for a new app map or tab', async t => {

@@ -1,10 +1,10 @@
-// Generated from prompts/cli/try-doors.prompt.md (sha256: aa6c8d82f4a7d6bdd4b9a7a648a5b7eb92ff8ea0f9ad1f0931eae27b53d7c030).
+// Generated from prompts/cli/try-doors.prompt.md (sha256: 5ac6bb8dfd3b4dd4dbc4058ba5cacc63f70ee77c567ff68802df714cb61e394d).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { gitFiles, readPrompt } from './runtime-preflight.mjs';
+import { findTests, gitFiles, readPrompt } from './runtime-preflight.mjs';
 import { cleanText, tryUsage, tryUsageLine } from './runtime-output.mjs';
 import { runDoorCall, saveDoorCase } from './runtime-client.mjs';
 
@@ -47,9 +47,9 @@ function safeBin(root) {
   return path;
 }
 
-function cliEntry(context, test) {
+function cliEntries(context, test) {
   const entries = new Map();
-  for (const step of test.doc.steps) {
+  for (const step of test.doc?.steps ?? []) {
     const prompt = readPrompt(context.root, context.visible, step.entry_path);
     const index = prompt.interface?.entries?.findIndex(e => e.operation === step.operation);
     if (!(index >= 0)) continue;
@@ -57,7 +57,17 @@ function cliEntry(context, test) {
     if (!['input_schema', 'result_schema'].every(key => conventions.some(c => c.path === `/entries/${index}/${key}` && c.convention === 'cli'))) continue;
     entries.set(`${step.entry_path}#${step.operation}`, { step, prompt, entry: prompt.interface.entries[index] });
   }
-  if (entries.size !== 1) fail(entries.size ? 'This Story uses several CLI entries; choose a Story with one CLI entry.' : 'This Story has no CLI entry. Mark both schemas with the cli convention (RUNBOOK §6).');
+  return entries;
+}
+
+function cliEntry(context, test) {
+  const entries = cliEntries(context, test);
+  if (entries.size !== 1) {
+    if (entries.size) fail('This Story uses more than one command-line program. Choose a Story with one command-line program.');
+    const found = context.found ?? findTests({ root: context.root, files: [...context.visible] });
+    const names = [...new Set(found.tests.filter(candidate => cliEntries(context, candidate).size === 1).map(candidate => candidate.story))].sort();
+    fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'} pdd simulate ${quote(test.story)} opens its Form tab.`);
+  }
   const value = [...entries.values()][0];
   const heading = value.prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/, '$1');
   if (!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(heading ?? '') || ['pdd', 'node', 'gh', 'git'].includes(heading?.toLowerCase())) fail('Name the program in the CLI prompt’s first heading, for example # tipjar; pdd, node, gh and git are reserved (RUNBOOK §6).');

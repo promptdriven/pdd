@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 100f3d95d5f22b80271d7e3c95467c2b807e35fb82dce972e5c5b94d8293a4c3).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9ff126c545a83bbca2adf6ecf3288459ebb696f7a47aec93ebea0cd6da29dd6a).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1826,11 +1826,15 @@ function simulationSelection(root, found, words, appMap, options) {
   const rows = kinds.filter(row => selected.includes(row.test));
   const cli = new Set(rows.flatMap(row => [...row.cli]));
   const hasHttp = rows.some(row => row.http.size);
+  const screens = appMap ? JSON.parse(readFileSync(join(root, appMap), 'utf8')).screens : [];
+  const mapped = Array.isArray(screens) && selected.some(test => (test.doc?.steps ?? []).some(step => screens.some(screen => screen?.source === 'operation' && screen.prompt_path === step.entry_path && screen.operation === step.operation)));
+  const typed = words.length && !cli.size && !hasHttp && !mapped;
   const page = options['--page'] || options['--agent'] !== undefined || options['--tab'] !== undefined;
   const forcedCli = options['--cli'] || options['--shell'];
   if (forcedCli && cli.size !== 1) {
     const names = [...new Set(kinds.filter(row => row.cli.size === 1).map(row => row.test.story))].sort();
-    throw new Stop(2, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}`);
+    const name = selected[0].story, target = /^[A-Za-z0-9_./-]+$/.test(name) ? name : "'" + name.replaceAll("'", "'\\''") + "'";
+    throw new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typed ? ` pdd simulate ${target} opens its Form tab.` : ''}`);
   }
   if (options['--serve'] !== undefined && !hasHttp && !appMap) {
     const names = [...new Set(kinds.filter(row => row.http.size).map(row => row.test.story))].sort();
@@ -1845,7 +1849,8 @@ function simulationSelection(root, found, words, appMap, options) {
   if (forcedCli) options['--cli'] = true;
   if (options['--cli']) seed = rows.find(row => row.cli.size)?.test ?? seed;
   else if (options['--serve'] !== undefined && hasHttp) seed = rows.find(row => row.http.size)?.test ?? seed;
-  return { test: seed, selected };
+  const tab = options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap && (!words.length || mapped || !typed) ? 'screen' : 'call');
+  return { test: seed, selected, tab, typed: typed && tab === 'call' && options['--serve'] === undefined };
 }
 
 async function readUntil(context, id, command, isDone, ms, label) {
@@ -1970,7 +1975,8 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
         if (problem) throw new Stop(125, `${problem} Run pdd simulate STORY --serve --new.`);
       }
     }
-    const { test, selected } = simulationSelection(root, found, normalized, appMap, options);
+    const { test, selected, tab, typed } = simulationSelection(root, found, normalized, appMap, options);
+    context.typedForm = typed;
     context.doorMode = !!(options['--cli'] || options['--serve'] !== undefined);
     context.agentConnection = !options['--no-wait'] && !context.doorMode && ports.agentBridge !== false
       && (ports.stdout.isTTY === true || options['--agent'] !== undefined);
@@ -2059,7 +2065,7 @@ export async function runTry({ words = [], options = {}, cwd = process.cwd() } =
     for (;;) {
       if (!await admission(context, 'try', setup)) throw new Stop(context.interrupted ? 3 : 5, context.interrupted ? 'Stopped before sending.' : 'The interpreter stayed busy until the Try setup wait ended. No new Try was sent.');
       request = { requestId: ports.randomUUID(), source_sha256: capture.sha256, seed: test.path, max_calls: requestedBudget ?? 400, ...(appMap ? { app_map: appMap } : {}),
-        tab: options['--tab'] ?? (options['--cli'] ? 'terminal' : appMap ? 'screen' : 'call') };
+        tab };
       setup.request_ids.push(request.requestId);
       const registered = await recordRuntimeRequest(setup.reservation, request.requestId, slotPorts(context));
       if (registered === false) { await finishReservation(context, setup, { state: 'not_run' }); throw new Stop(3, context.interrupted ? 'Stopped before sending.' : 'Stopped before the Try was sent.'); }
@@ -2193,6 +2199,7 @@ function printTryProblem(context, row) {
 }
 
 async function showTry(context, test, link, options, tryId, reused = false, session) {
+  if (context.typedForm) line(context.ports.stderr, "This Story's operation takes typed input, so it opens on the Form tab.");
   const budget = Number.isSafeInteger(session?.max_calls) && session.max_calls > 0 && Number.isSafeInteger(session?.remaining_calls)
     && session.remaining_calls >= 0 && session.remaining_calls <= session.max_calls
     ? `Try budget ${session.max_calls} calls; ${session.remaining_calls} remaining. You are charged only for calls that run.`
