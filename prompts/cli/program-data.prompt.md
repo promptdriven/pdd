@@ -53,7 +53,14 @@ file/symlink checks on every directory segment and credentials never enter data
 or records. Export module function acquireProgramLock(dir), returning a release
 function: one active owner per program directory; a second live owner refuses
 with the plain busy message and cannot enter until release. Different program
-directories remain independent; release must permit a later owner.
+directories remain independent, including mapping and initialization: contention
+for unrelated mapping work or malformed ownership/session metadata in another
+program directory must not block the selected program from initializing or
+reusing its saved world. This does not relax checks on the selected target:
+unsafe paths or malformed selected ownership/session metadata refuse locally
+(exit2 with a plain reason naming the problem) without overwriting those bytes
+or the saved world. A live owner of the selected program still refuses with
+exit125. Release must permit a later owner.
 
 ## Dependencies
 
