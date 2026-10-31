@@ -66,7 +66,7 @@ function cliEntry(context, test) {
     if (entries.size) fail('This Story uses more than one command-line program. Choose a Story with one command-line program.');
     const found = context.found ?? findTests({ root: context.root, files: [...context.visible] });
     const names = [...new Set(found.tests.filter(candidate => cliEntries(context, candidate).size === 1).map(candidate => candidate.story))].sort();
-    fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'} pdd simulate ${quote(test.story)} opens its Form tab.`);
+    fail(`This Story is not a command-line program. ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}\npdd simulate ${quote(test.story)} opens its Form tab.`);
   }
   const value = [...entries.values()][0];
   const heading = value.prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/, '$1');

@@ -1834,7 +1834,7 @@ function simulationSelection(root, found, words, appMap, options) {
   if (forcedCli && cli.size !== 1) {
     const names = [...new Set(kinds.filter(row => row.cli.size === 1).map(row => row.test.story))].sort();
     const name = selected[0].story, target = /^[A-Za-z0-9_./-]+$/.test(name) ? name : "'" + name.replaceAll("'", "'\\''") + "'";
-    throw new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typed ? ` pdd simulate ${target} opens its Form tab.` : ''}`);
+    throw new Stop(125, `${cli.size ? 'This Story uses more than one command-line program.' : 'This Story is not a command-line program.'} ${names.length ? `These are: ${names.join(', ')}.` : 'No Stories are command-line programs.'}${typed ? `\npdd simulate ${target} opens its Form tab.` : ''}`);
   }
   if (options['--serve'] !== undefined && !hasHttp && !appMap) {
     const names = [...new Set(kinds.filter(row => row.http.size).map(row => row.test.story))].sort();
