@@ -4,7 +4,7 @@
   "runtime_check": "NOT REPLAYED",
   "reason": "Owning prompts have no executable Runtime interface for real Git discovery, OS link identity/open races or tar headers. This is a native inventory, not a prompt-runtime.program-scenario.v1 scenario.",
   "native_test": "test/runtime-source-links.test.mjs",
-  "command": "node --test test/runtime-source-links.test.mjs",
+  "command": "node --test test/runtime-source-links.test.mjs test/runtime-source-links-review.test.mjs",
   "cases": [
     {
       "name": "LINK upload direct: server receives regular target bytes under authored path",
@@ -113,13 +113,205 @@
         "AC5"
       ],
       "baseline_expectation": "ERR_ASSERTION at safe source acceptance; current bad code fails standalone command refusal"
+    },
+    {
+      "name": "LINK review generated secret below missing ancestor: gen/.env",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: missing expected refusal"
+      }
+    },
+    {
+      "name": "LINK review generated secret below missing ancestor: gen/id_rsa",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: missing expected refusal"
+      }
+    },
+    {
+      "name": "LINK review generated secret below missing ancestor: gen/server.pem",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: missing expected refusal"
+      }
+    },
+    {
+      "name": "LINK review generated secret below missing ancestor: newdir/secrets/x.md",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: missing expected refusal"
+      }
+    },
+    {
+      "name": "LINK review missing secret stat refuses before absence",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: missing expected refusal"
+      }
+    },
+    {
+      "name": "LINK review linked Story title uses target size limit",
+      "criterion_ids": [
+        "AC4",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: oversized target supplies BIG TITLE"
+      }
+    },
+    {
+      "name": "LINK review linked Story title never follows unchecked path at read time",
+      "criterion_ids": [
+        "AC4",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: linked Story unavailable, filename title",
+        "code_b20c1d63": "fail: unchecked fallback reads OUTSIDE TITLE"
+      }
+    },
+    {
+      "name": "LINK review nested destination failure names the escaping link itself",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket no-link refusal",
+        "code_b20c1d63": "fail: names nested d rather than escaping e.md"
+      }
+    },
+    {
+      "name": "LINK review ignored authored chain names the invisible link itself",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket no-link refusal",
+        "code_b20c1d63": "fail: blames visible vis.md target"
+      }
+    },
+    {
+      "name": "LINK review plain non-link refusal text preserves alpha exactly",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: exact compatibility wording changed"
+      }
+    },
+    {
+      "name": "LINK review bindings inventory remains strict while regular inventory works",
+      "criterion_ids": [
+        "AC4",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "fail: linked inventory accepted"
+      }
+    },
+    {
+      "name": "LINK review bindings declarations refuse linked ancestors",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "pass: preserved strict declaration guard"
+      }
+    },
+    {
+      "name": "LINK review absolute outside link cannot resolve against benign repository shadow",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket refusal lacks destination/reason",
+        "code_b20c1d63": "pass; absolute-as-root-relative mutation fails assertion"
+      }
+    },
+    {
+      "name": "LINK review public read refuses parent substitution between internal stat and open",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "pass",
+        "code_b20c1d63": "pass; removing all per-read identity guards returns outside bytes and fails assertion"
+      }
+    },
+    {
+      "name": "LINK review chain boundary 40",
+      "criterion_ids": [
+        "AC3",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket no-link refusal",
+        "code_b20c1d63": "pass: 40 accepted"
+      }
+    },
+    {
+      "name": "LINK review chain boundary 41",
+      "criterion_ids": [
+        "AC3",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket refusal lacks chain-limit reason",
+        "code_b20c1d63": "fail: generic loop message lacks too-many-links/40 diagnostic"
+      }
+    },
+    {
+      "name": "LINK review expanding loop is bounded by a parent child-process deadline",
+      "criterion_ids": [
+        "AC3",
+        "AC5"
+      ],
+      "native_test": "test/runtime-source-links-review.test.mjs",
+      "baseline_expectation": {
+        "alpha_c9e23e9c": "fail: blanket ancestor refusal lacks loop reason",
+        "code_b20c1d63": "pass; removing cap triggers parent SIGKILL and assertion failure"
+      }
     }
   ],
   "not_replayed": [
-    "Prompt interpreter: forbidden by authorized zero-call manual flow",
-    "OS race/ancestor/chain substitution adversarial injection",
-    "Internal absolute and multi-link resolution acceptance",
-    "Linked-source limits, PAX long/unicode names, submodule and native executable/write-destination preservation beyond existing tests"
+    "Prompt interpreter: forbidden by authorized zero-call manual flow; no executable Runtime port",
+    "Native coverage is not Runtime replay. New tests cover one parent-substitution read race and an unchecked linked-title path race; other adversarial schedules remain outside this inventory.",
+    "Internal absolute and multi-link resolution acceptance, linked-source limits/PAX/submodule and executable/write-destination preservation beyond this prompt-side inventory remain covered only by separate code-side tests where actually executed."
   ],
   "follow_up": "Build/verify must retain existing refusal suite and exercise consistency/limit boundaries against linked accepted paths. Inventory omissions are not passes.",
   "criteria": [
@@ -137,11 +329,15 @@
     },
     {
       "id": "AC4",
-      "text": "Source metadata and raw preparation/reference reads use the same safe link policy; reference-only source stays unselected and relative Markdown dependencies keep the authored linked path as their base."
+      "text": "Source metadata, except the strict no-link bindings inventory, and raw preparation/reference reads use the same safe link policy; reference-only source stays unselected and relative Markdown dependencies keep the authored linked path as their base."
     },
     {
       "id": "AC5",
       "text": "Link resolution and bytes belong to one consistent snapshot; source SHA, archive ordering/PAX, limits, other privacy/type/submodule refusals, prepared output destinations and executable/write-target refusals retain their existing guarantees."
     }
+  ],
+  "native_tests": [
+    "test/runtime-source-links.test.mjs",
+    "test/runtime-source-links-review.test.mjs"
   ]
 }
