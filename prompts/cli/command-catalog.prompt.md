@@ -37,7 +37,7 @@ Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT` (local `workflow-prove`): one required issue operand and two text options. Help says it runs committed changed tests on the merge-base of committed head with the fetched base branch and committed head, with a 120-second limit per phase, and saves a non-gating report. No timeout override or native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
 
-Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Workflow approval help reflects the [runner's approval authority](workflow-runner.prompt.md#approval-through-the-persons-words): one --said approves the gate and all its draft prompts using any nonblank words relayed from the person after the gate prompt in any chat, without grading them. Help tells an agent, non-TTY caller or caller in the current area pane without --said to ask the person then relay their words with --said; latest native chat alone never approves. Person-terminal y/N stays available; root pdd.json strict_approvals true permits only person-terminal y/N. The start route is `workflow run`, without a former-name notice for run; the already-supported `workflow start` spelling remains a former-name alias with the parser-owned notice. Other 0.1.12 names stay unchanged.
+Both routes support the exact `--said -` marker. It forwards unchanged to the approval owner, which reads all UTF-8 stdin as one payload after strict/configuration prechecks. Help shows the shared quoted-heredoc template, with a delimiter absent from person text. Keep help in short sentences: ask the person; relay their words; latest chat alone never approves. Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Workflow approval help reflects the [runner's approval authority](workflow-runner.prompt.md#approval-through-the-persons-words): one --said approves the gate and all its draft prompts using any nonblank words relayed from the person after the gate prompt in any chat, without grading them. Help tells an agent, non-TTY caller or caller in the current area pane without --said to ask the person then relay their words with --said; latest native chat alone never approves. Person-terminal y/N stays available; root pdd.json strict_approvals true permits only person-terminal y/N. The start route is `workflow run`, without a former-name notice for run; the already-supported `workflow start` spelling remains a former-name alias with the parser-owned notice. Other 0.1.12 names stay unchanged.
 
 ## Workflow runner help
 
@@ -93,7 +93,52 @@ interpreter calls, and their help says "no interpreter calls". [Product](product
 
 ## Help forms
 
-`PUBLIC_COMMAND_MANIFEST` holds exactly the forms and descriptions of the [help forms](pdd-cli.prompt.md#help-forms) that the CLI prompt lists, in the same order. Each route owns the lines whose form starts with its prefix.
+`PUBLIC_COMMAND_MANIFEST` owns the forms, descriptions and order below. Each route owns entries whose form starts with its prefix. A help entry may include multiline example text. After each approval entry, include the shared policy's quoted-heredoc example with that route's command (`pdd approve PATH` or `pdd workflow approve N`). The example preserves person text without shell interpolation. Tell the caller to choose a delimiter absent from the text. Both approval descriptions state that --said - reads all UTF-8 stdin, including trailing newlines; simple literal --said text remains supported. A person terminal uses y/N; workflow y/N covers the ready gate and all selected drafts in one call.
+
+```text
+  pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
+  pdd product next  Show ready planned runs and their start commands; no interpreter calls.
+  pdd product start RUN [--no-run] [--agent codex|claude]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
+  pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.
+  pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
+  pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
+  pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
+  pdd workflow ask QUESTION  For the agent in a run worktree: show the person that the chat waits for their answer.
+  pdd workflow approve [ISSUE] [--said WORDS]  Use --said - with the shared quoted-heredoc template to record chat words for the gate and all its drafts, or use terminal y/N; strict mode requires a person terminal.
+  pdd workflow changes ISSUE TEXT  Send a change request to the same area chat; the gate stays open.
+  pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
+  pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
+  pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
+  pdd workflow open ISSUE  Focus or attach the current area chat; resume it if its session ended.
+  pdd  Show local commands.
+  pdd --help  Show local commands.
+  pdd -h  Show local commands.
+  pdd help  Show local commands.
+  pdd --version  Show this package version.
+  pdd completion bash|zsh  Print local shell completion.
+  pdd workflow list [--json]  List the bundled workflows with their areas and gates.
+  pdd test [STORY...] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: sends the named Stories (every Story when you name none) and their dependencies, waits for every check (no limit in a terminal, at most 90 s for an agent; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
+  pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
+  pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
+  pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
+  pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
+  pdd test --screen URL --drawing PATH [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.
+  pdd lint [STORY...] [--json] [--timeout MIN]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
+  pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
+  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
+  pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
+  pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
+  pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
+  pdd simulate --save-last  Save the last terminal command and its output in the original Story test file.
+  pdd simulate --stop [STORY]  Stop the open Simulator link of a story.
+  pdd jobs  List active and waiting interpreter jobs on this machine without contacting the interpreter.
+  pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
+  pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
+  pdd mcp  Serve the current repository’s Try tools over stdio MCP.
+  pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
+```
+
+
 
 ## Dependencies
 
