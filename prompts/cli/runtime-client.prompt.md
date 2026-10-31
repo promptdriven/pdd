@@ -2,6 +2,18 @@
 
 Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
 
+## Direct program transport
+
+Support direct program callers without changing existing Check/Try/simulate.
+The [program runner](program-run.prompt.md) is navigation to the consumer, not
+required loading context for this transport.
+Lint a program upload without a Story. POST /v1/try multipart request contains
+requestId, source_sha256, entry (repository-relative prompt path), initial_world,
+optional simulation and max_calls, with no seed. Calls use the existing JSON call
+endpoint and identity, adding per-call max_calls. Preserve world snapshots,
+call_chain frames and error code/message for the runner. Keep existing auth,
+admission and GET-only recovery: never resend an accepted or ambiguous call.
+
 ## Setup
 
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
