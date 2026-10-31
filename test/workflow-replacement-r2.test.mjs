@@ -30,6 +30,8 @@ test('lost launch waits startup grace before any same-session resume',async t=>{
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{const reply=await healthy(args);if(args[0]==='pane'&&args[1]==='run')throw lost();return reply;};
  await open(f,{newSession:true});f.ports.herdr=healthy;const pending=f.record().chatReplacement;
+ assert.ok(pending,'A lost launch reply must retain public replacement custody for startup-grace recovery');
+ assert.ok(pending.replacement,'A lost launch reply must retain the exact replacement descriptor before startup-grace recovery');
  f.herdr.paneOf(pending.replacement).agent=null;f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}];
  const count=runs(f).length;const out=await open(f,{newSession:true});assert.equal(runs(f).length,count,'No resume dispatch during START_GRACE_MS');
  assert.equal(out.exitCode,1);assert.match(out.message,/open 17 --new/);

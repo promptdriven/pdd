@@ -52,7 +52,10 @@ for (const mode of ['focus', 'resume', 'open-start', 'run-start']) {
             }
           }
           expected = f.record();
-          if (action === 'replace') { assert.equal(expected.chatReplacement.phase, 'launched'); assert.equal(expected.abandonedChats.length, 1); }
+          if (action === 'replace') {
+            assert.ok(expected.chatReplacement, 'A concurrent replacement must retain its public replacement custody');
+            assert.equal(expected.chatReplacement.phase, 'launched'); assert.equal(expected.abandonedChats.length, 1);
+          }
           if (action === 'advance' || action === 'replace') { assert.equal(expected.area, 1); assert.ok(expected.decisions.length); assert.ok(expected.approvalRecord); }
           if (action === 'done') { assert.ok(expected.done.scope); assert.ok(expected.gate); }
         } finally { release(); }
