@@ -258,7 +258,7 @@ test('CHAT2755 ready gate said approves multiple current drafts without an area 
 
 test('CHAT2755 strict workflow said refuses even with valid native evidence and writes nothing', async t => {
   const { f, run, selected } = await readyStory(t);
-  writeFileSync(join(run.root, 'pdd.json'), '{"strict_approvals":true}\n');
+  writeFileSync(join(f.source, 'pdd.json'), '{"strict_approvals":true}\n');
   const status = readFileSync(join(run.runDir, 'status.json'), 'utf8');
   const drafts = selected.map(path => readFileSync(join(run.root, path), 'utf8'));
   const calls = f.herdr.calls.length; let evidenceReads = 0;

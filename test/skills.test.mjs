@@ -252,7 +252,7 @@ test('SKILLS16: check notes go to <run folder>/check.md, and every workflow runs
   assert.match(read('pdd-small-change/steps/change.md'), /`pdd test`[^\n]*Keep its notes out of verify\.md\./);
   // A question dialog (request_user_input) blocks the chat, and Herdr then refuses pdd's text, so `changes` fails.
   for (const name of Object.keys(AREAS))
-    assert.ok(read(`${name}/SKILL.md`).includes('- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `pdd workflow changes N "answer"`.'), name);
+    assert.ok(read(`${name}/SKILL.md`).includes('- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `<pdd> workflow changes N "answer"`.'), name);
 });
 
 // Wrong (0.1.4 #12, #17, before link): Stories read like code, one rule gets two owner prompts (a CLI's rule copied into
@@ -690,7 +690,7 @@ test('SKILLS50: approval instructions reject automatic chat authority and lexica
   const book = read('pdd-prompting/RUNBOOK.md');
   for (const rule of ['Show the gate', 'question, change request or earlier message is not approval',
     'No exact phrase is needed', 'pdd does not grade nonblank words',
-    'non-TTY or current Herdr chat-pane', 'ask the person, then run with --said',
+    'caller outside a normal terminal', 'ask the person, then run with --said',
     'Only an explicit approve call', 'never authorizes approval', 'no approve gate before code'])
     assert.ok(book.includes(rule), rule);
   assert.doesNotMatch(book, /optional native Herdr area-chat evidence work/);

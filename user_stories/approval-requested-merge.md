@@ -6,8 +6,7 @@ I can ask my coding agent to merge a checked pdd PR.
 
 1. The bug, feature and small-change skills let my agent merge a pdd PR only after my explicit chat request and at least one check, with all required checks green, first recording my exact request in a PR comment.
 2. The merge uses `gh pr merge` with `--merge --match-head-commit <head>`; absent request, failed or pending checks, a changed head or a failed request comment cannot merge.
-3. Help, docs and skills describe one-step approval of a ready gate and all its selected drafts. Any nonblank person words can be relayed from any chat through --said - with a quoted heredoc, without grading them. All UTF-8 stdin, including trailing newlines, is preserved. Agent/non-terminal/current-area-pane callers without --said ask me, then relay my words. Person-terminal y/N lists and approves the gate and its drafts in one call. Target-checkout pdd.json strict_approvals permits terminal approval only. Latest chat alone never approves. The agent never changes expected values on its own.
-4. The workflow start command is `pdd workflow run`; other 0.1.12 command names and the rule that pdd itself never merges stay unchanged.
+3. Help, docs and skills describe one-step approval of a ready gate and all its selected drafts. Any nonblank person words can be relayed from any chat through --said - with a quoted heredoc, without grading them. All UTF-8 stdin, including trailing newlines, is preserved. Without --said, my agent asks me, then relays my words. Person-terminal y/N lists and approves the gate and its drafts in one call. Standalone approval reads my target checkout's pdd.json; workflow approval reads the main checkout's pdd.json, so changing the run worktree cannot turn off strict_approvals. Strict mode permits terminal approval only. Latest chat alone never approves. The agent never changes expected values on its own.
 
 ## Rules to check
 

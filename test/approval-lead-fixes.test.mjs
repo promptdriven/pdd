@@ -54,7 +54,7 @@ for(const route of ['standalone','workflow'])test(`LEAD shell quoted heredoc ${r
 for(const route of ['standalone','workflow'])for(const mode of ['strict','blank','bad-config'])test(`LEAD ${route} dash ${mode} refuses without mutation`,async t=>{
  const data=route==='standalone'?{f:harbor(t)}:await ready(t), f=data.f, repo=route==='standalone'?f.repo:data.r.root;
  if(route==='standalone')draft(repo);
- if(mode!=='blank')fs.writeFileSync(join(repo,'pdd.json'),mode==='strict'?'{"strict_approvals":true}':'{bad json');
+ if(mode!=='blank')fs.writeFileSync(join(route==='workflow'?f.source:repo,'pdd.json'),mode==='strict'?'{"strict_approvals":true}':'{bad json');
  let reads=0;const stdin={async *[Symbol.asyncIterator](){reads++;yield ' \n\n';}};
  const before=fs.readFileSync(join(repo,route==='standalone'?PLACE:data.selected[0]),'utf8');
  const out=route==='standalone'?await runApprove({words:[PLACE],cwd:repo,said:'-'},pports({stdin})):await approveRun({ref:'17',cwd:repo,said:'-'},f.agentPorts({stdin}));
@@ -89,9 +89,9 @@ test('LEAD preservation approval words use adaptive code spans with ISO timestam
  assert.deepEqual(out.lines,[],'approval must not displace Runtime/verdict top lines');assert.equal(Array.isArray(out.approvalLines),true,'Required separate approvalLines result must be an array');assert.equal(out.approvalLines.length,1);const line=out.approvalLines[0];assert.ok(line.includes('2023-11-14T22:13:20.000Z'));
  const match=line.match(/(`{5,})\s*("yes ```` @person #17\\n\\"quoted\\"")\s*\1/);assert.ok(match,'JSON-quoted complete words stay inside an adaptive span longer than interior backticks');assert.equal(JSON.parse(match[2]),words);
 });
-test('LEAD current target checkout is the common policy authority for both commands',async t=>{
+test('LEAD main checkout policy is authoritative for workflow approval',async t=>{
  const {f,r,selected}=await ready(t);fs.writeFileSync(join(f.source,'pdd.json'),'{"strict_approvals":true}');
- const out=await approveRun({ref:'17',cwd:f.source,said:'approve target checkout'},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+ const out=await approveRun({ref:'17',cwd:f.source,said:'approve target checkout'},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/strict|terminal/i);assert.equal(fs.existsSync(journal(r.root)),false);
  const single=harbor(t);draft(single.repo);fs.mkdirSync(join(single.repo,'nested'));fs.writeFileSync(join(single.repo,'nested/pdd.json'),'{"strict_approvals":true}');
  const code=await runApprove({words:['../'+PLACE],cwd:join(single.repo,'nested'),said:'approve target checkout'},pports());assert.equal(code,0);
 });
@@ -112,9 +112,9 @@ test('LEAD stale journal lock reclaims only after its actual local owner dies',a
  let failure;try{await recordPromptApproval({commonDir,evidence:{...evidence,id:'after-death'}});}catch(error){failure=error;}
  assert.equal(failure,undefined,'dead local owner is reclaimable through public journal API');assert.equal(readJournal(f.repo).approvals.at(-1).id,'after-death');
 });
-test('LEAD preservation unverifiable legacy empty lock is not reclaimed',async t=>{
+test('LEAD empty journal lock is reclaimed',async t=>{
  const {recordPromptApproval}=await requiredJournalBoundary();const f=harbor(t);const commonDir=execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:f.repo,encoding:'utf8'}).trim();fs.mkdirSync(join(commonDir,'pdd/approvals.lock'),{recursive:true});
- await assert.rejects(recordPromptApproval({commonDir,evidence:{id:'probe',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words:'approve',prompts:[]}}),/busy|saving|lock/i);assert.equal(fs.existsSync(join(commonDir,'pdd/approvals.lock')),true);assert.equal(fs.existsSync(journal(f.repo)),false);
+ let failure;try{await recordPromptApproval({commonDir,evidence:{id:'probe',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words:'approve',prompts:[]}});}catch(error){failure=error;}assert.equal(failure,undefined,'empty lock recovery permits approval');assert.equal(fs.existsSync(join(commonDir,'pdd/approvals.lock')),false);assert.equal(readJournal(f.repo).approvals.at(-1).id,'probe');
 });
 for(const mode of ['foreign','unverifiable','permission-denied'])test(`LEAD preservation ${mode} lock owner is never reclaimed`,async t=>{
  const {spawn}=await import('node:child_process');const {once}=await import('node:events');const {recordPromptApproval}=await requiredJournalBoundary();const f=harbor(t);

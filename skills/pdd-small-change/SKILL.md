@@ -29,13 +29,13 @@ Each area is one main chat. Step briefs are in `steps/`.
 ## In a run
 
 - Each step writes notes to `<run folder>/STEP.md` and commits its code.
-- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `pdd workflow changes N "answer"`.
-- Show the gate. Judge the later reply in any chat. No exact phrase is needed. Never approve questions or changes. Show changed prompts again. Record approval for gate and drafts:
+- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `<pdd> workflow changes N "answer"`.
+- Show the gate; judge the later chat reply without exact phrases. Never approve questions or changes. Show changed prompts again. Record gate and draft approval:
 
 ```sh
-pdd workflow approve N --said - <<'PDD_SAID'
+<pdd> workflow approve N --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
 ```
 
-Choose a delimiter absent as a whole line in the words. Keep it quoted. Stdin keeps newlines. Blank input fails. No word grading. RUNBOOK §2.
+Quote a delimiter absent as a whole line in the words. Stdin keeps newlines. Blank input fails; no word grading. RUNBOOK §2.

@@ -58,7 +58,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. It merges only on your explicit chat request after the checks and comment described below | pdd opens them. It merges only on your explicit chat request after the checks and comment described below |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) |
 
 ## How a run works
 
@@ -267,6 +267,6 @@ pdd-mybug/
 
 Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
 
-pdd never merges and has no merge command. You may explicitly ask your agent in chat to merge a PR. It requires at least one check and all required checks green for the exact current head, first posts `Merge requested by the person: "…"` with your exact request safely quoted in a code span (JSON-quote controls and use a delimiter longer than embedded backticks), then uses `gh pr merge PR --merge --match-head-commit <head>`. It uses a comment body file, rechecks the head and checks, and stops on a failed comment, pending/failed checks or a changed head. See [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](../RUNBOOK.md#2-the-files).
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
