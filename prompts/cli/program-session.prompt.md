@@ -64,7 +64,11 @@ or `port.prompt` only for kind port. target is the repository fake prompt path;
 operation names the selected fake entry. For equal schemas use request_template
 and response_template `{}`, and request_mapping and response_mapping each
 `[{"from":"","to":""}]` (whole-value identity). max_calls is an integer1–20
-and must bound fake invocation. Never execute a real service. Native discovery,
+and must bound fake invocation. Automatic bindings use min(20, declaring prompt
+limits.max_steps), including when replacing the default service. When several
+reachable owners share a simulation key, use the maximum of their bounded limits
+if the target and schemas agree; otherwise report the existing binding ambiguity.
+Explicit bindings keep their supplied max_calls unchanged. Never execute a real service. Native discovery,
 admission and capture consume0 AI calls; fake execution belongs to server cap.
 
 ## Dependencies

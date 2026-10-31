@@ -120,3 +120,47 @@ test('legacy receipt without refusals remains a valid semantic pass',async t=>{
  const h=await harness(t,{cli:false,reply(e,f,job){delete job.result.refusals;return {status:200,json:job};}});
  const r=await h.invoke(['--input','{}']);pass(r);assert.equal(r.out,'{\"ok\":true}\n');
 });
+
+// Synthetic admission oracle: these bounds are contract examples, not model output.
+const budgetResource=(kind='http',name='cloud')=>({name,kind,access:'read',operations:[{name:name==='clock'?'now':'lookup',access:'read',arguments_schema:obj({}),result_schema:obj({})}]});
+function admission(bound){return (e,f,job)=>{if(e.json.max_calls<bound){job.result.report={verdict:'refused',provider_calls:0,error:{code:'session-call-cap',message:`Graph requires ${bound}`,fix:'Increase cap'}};job.result.output=null;}return {status:200,json:job};};}
+for(const [steps,bound] of [[1,3],[20,41]])for(const kind of ['http','command','model','port'])test(`budget admission default ${kind} steps${steps} requires${bound}`,async t=>{
+ const h=await harness(t,{edit(s){s.limits.max_steps=steps;s.resources=[budgetResource(kind)];},reply:admission(bound)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,bound);
+});
+for(const [kind,name,ceiling] of [['key-value','store',20],['port','clock',20],['key-value','store',57]])test(`budget external ${kind}/${name} ceiling${ceiling}`,async t=>{
+ const h=await harness(t,{edit(s){s.resources=[budgetResource(kind,name)];s.limits.max_model_calls=ceiling===57?57:1;},reply:admission(ceiling)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,ceiling);
+});
+for(const [steps,bound] of [[1,3],[4,9]])test(`budget automatic own fake steps${steps} retains invocation bound`,async t=>{
+ const h=await harness(t,{edit(s){s.limits.max_steps=steps;s.resources=[budgetResource()];},files(root){mkdirSync(join(root,'prompts/fakes'));const s=iface(false);s.entries[0].operation='lookup';s.entries[0].result_schema=obj({});prompt(root,'prompts/fakes/cloud.prompt.md',s);},reply:admission(bound)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,bound);assert.equal(h.fake.posts.find(p=>p.command==='try').request.simulation['cloud.lookup'].max_calls,steps);
+});
+test('budget own fake includes nested call closure but not body dependency',async t=>{
+ const h=await harness(t,{edit(s){s.resources=[budgetResource()];},files(root){mkdirSync(join(root,'prompts/fakes'));const s=iface(false);s.entries[0].operation='lookup';s.entries[0].result_schema=obj({});s.calls=[{operation:'child',target:'prompts/child.prompt.md',target_operation:'main',max_calls:2}];prompt(root,'prompts/fakes/cloud.prompt.md',s,'fake','- [Body](../../body.txt)');prompt(root,'prompts/child.prompt.md',iface(false));writeFileSync(join(root,'body.txt'),'Context has no provider cost.');},reply:admission(7)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,7);
+ writeFileSync(join(h.repo,'body.txt'),'Different context, identical graph.');pass(await h.invoke(['next']));assert.equal(h.fake.jsonPosts[1].json.max_calls,7);
+});
+test('budget selected operation excludes unused resources and calls',async t=>{
+ const h=await harness(t,{edit(s){s.entries[0].resource_operations=[];s.entries[0].call_operations=[];s.resources=[budgetResource()];s.calls=[{operation:'unused',target:'prompts/child.prompt.md',target_operation:'main',max_calls:10}];},files(root){prompt(root,'prompts/child.prompt.md',iface(false));},reply:admission(1)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,1);
+});
+test('budget service projection caps100, forwards insufficient explicit cap to interpreter',async t=>{
+ const h=await harness(t,{edit(s){s.limits.max_steps=20;s.resources=['one','two','three'].map(n=>budgetResource('http',n));},reply:admission(121)});
+ const r=await h.invoke();assert.equal(r.code,125,r.err);assert.equal(h.fake.jsonPosts[0].json.max_calls,100);assert.match(r.err,/session-call-cap|Graph requires/);
+ const low=await h.invoke(['next'],['--max-calls','2']);assert.equal(low.code,125,low.err);assert.equal(h.fake.jsonPosts[1].json.max_calls,2);
+});
+test('budget explicit prompt simulation bound wins over automatic fake',async t=>{
+ const h=await harness(t,{edit(s){s.resources=[budgetResource()];},files(root){mkdirSync(join(root,'prompts/fakes'));const s=iface(false);s.entries[0].operation='lookup';s.entries[0].result_schema=obj({});prompt(root,'prompts/fakes/cloud.prompt.md',s);},reply:admission(15)});
+ const binding={action:'http.prompt',target:'prompts/fakes/cloud.prompt.md',operation:'lookup',max_calls:7,request_template:{},request_mapping:[{from:'',to:''}],response_template:{},response_mapping:[{from:'',to:''}]};writeFileSync(join(h.repo,'seed.json'),JSON.stringify({initial_world:{},simulation:{'cloud.lookup':binding}}));
+ pass(await h.invoke(['list'],['--data','seed.json']));assert.equal(h.fake.jsonPosts[0].json.max_calls,15);assert.deepEqual(h.fake.posts.find(p=>p.command==='try').request.simulation['cloud.lookup'],binding);
+});
+test('budget shared own fake takes maximum reachable owner bound',async t=>{
+ const h=await harness(t,{edit(s){s.resources=[budgetResource()];s.calls=[{operation:'child',target:'prompts/child.prompt.md',target_operation:'main',max_calls:1}];},files(root){mkdirSync(join(root,'prompts/fakes'));const fake=iface(false);fake.entries[0].operation='lookup';fake.entries[0].result_schema=obj({});prompt(root,'prompts/fakes/cloud.prompt.md',fake);const child=iface(false);child.limits.max_steps=4;child.resources=[budgetResource()];prompt(root,'prompts/child.prompt.md',child);},reply:admission(19)});
+ // Shared binding4: child W9, root W1+4*2+1*(9+1)=19.
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,19);assert.equal(h.fake.posts.find(p=>p.command==='try').request.simulation['cloud.lookup'].max_calls,4);
+});
+test('budget fake target operation scope leaves deterministic nested ceiling',async t=>{
+ const h=await harness(t,{edit(s){s.resources=[budgetResource()];s.limits.max_model_calls=33;},files(root){mkdirSync(join(root,'prompts/fakes'));const fake=iface(false);fake.entries[0].operation='lookup';fake.entries[0].result_schema=obj({});fake.entries[0].resource_operations=['store.lookup'];fake.resources=[budgetResource('key-value','store'),budgetResource('http','unused')];fake.limits.max_steps=20;prompt(root,'prompts/fakes/cloud.prompt.md',fake);},reply:admission(33)});
+ pass(await h.invoke());assert.equal(h.fake.jsonPosts[0].json.max_calls,33);
+});
