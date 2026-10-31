@@ -1,7 +1,7 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: eca465b5758f447a84e7ad43d0d361f29ddc385609e6488b6670b853b4ea690d).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: e55af847ccc458e92b2892baf3edaf90d8e719633bdbd9173f42f0086ab22cfb).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'run' });
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
 const { test, lint, simulate, start } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. An agent, non-TTY caller or caller in the current area pane must relay with --said. Chat alone never approves. Use this quoted heredoc by default:
@@ -16,10 +16,10 @@ const routes = [
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
   { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
     forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
-  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'start'],
+  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'run'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
-    forms:[form(`pdd workflow ${start} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR. --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow.')] },
+    forms:[form(`pdd workflow ${start} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
