@@ -263,3 +263,19 @@ for (const newer of ['failed', 'passed']) test(`TEST-CACHE old interrupted read 
   const repeat = await ctx.invoke(['place-order'], newer === 'failed' ? { '--lf': true } : {});
   assert.equal(repeat.sent, newer === 'failed' ? 1 : 0); assert.equal(repeat.code, 0, repeat.err);
 });
+
+test('TEST-CACHE saved UUID read completion supplies reusable pass', async t => {
+  const ctx = await setup(t);
+  await pending(ctx);
+  const id = checks(ctx.fake).at(-1).request.requestId;
+  const files = readdirSync(ctx.state, { recursive: true }).filter(path => /(?:batch|summary)\.json$/.test(path));
+  const before = files.map(path => [path, readFileSync(join(ctx.state, path), 'utf8')]);
+  ctx.mode('passed');
+  const recovered = await ctx.invoke([id], { '--read': true });
+  assert.equal(recovered.code, 0, recovered.err); assert.equal(recovered.sent, 0);
+  for (const [path, bytes] of before) assert.equal(readFileSync(join(ctx.state, path), 'utf8'), bytes, 'UUID read preserves saved batch projections');
+  const repeat = await ctx.invoke(['place-order']);
+  assert.equal(repeat.sent, 0, 'UUID completion populates the Story pass cache');
+  assert.equal(repeat.network, 0); assert.equal(repeat.gh, 0);
+  assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
+});
