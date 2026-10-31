@@ -1,0 +1,148 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/test-cache.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "I can repeat `pdd test` without changing my files and see unchanged Stories with their previous pass time, zero current AI calls and the number of skipped Stories."
+    },
+    {
+      "id": "AC2",
+      "text": "Changing a reached prompt, shared dependency, starting data, test or Story reruns exactly the affected Stories in my selected scope; unrelated Stories stay skipped."
+    },
+    {
+      "id": "AC3",
+      "text": "A Story is reused only after all its test files passed; failed, refused, not-run, unknown or interrupted attempts cannot reuse an older pass."
+    },
+    {
+      "id": "AC4",
+      "text": "`pdd test --lf` runs the latest failed Stories in my selected scope; no history runs the selected Stories and known history with no failures runs none."
+    },
+    {
+      "id": "AC5",
+      "text": "`pdd test --cache-clear` clears the whole cache and runs all Stories, even when a path or `--lf` is also supplied."
+    },
+    {
+      "id": "AC6",
+      "text": "A damaged or unsafe cache runs my selected Stories with one warning, leaves outside files untouched and never treats damaged data as a pass."
+    },
+    {
+      "id": "AC7",
+      "text": "The local `.pdd/test-cache/` folder is Git-ignored in my repository, including a linked worktree."
+    },
+    {
+      "id": "AC8",
+      "text": "I can select tests by Story, test file, Story file or directory relative to my current folder; ordinary test and its accepted former name use the same cache."
+    }
+  ],
+  "cases": [
+    {
+      "id": "reuse",
+      "criterion_id": "AC1"
+    },
+    {
+      "id": "time-previous-day",
+      "criterion_id": "AC1"
+    },
+    {
+      "id": "mixed-json",
+      "criterion_id": "AC1"
+    },
+    {
+      "id": "prompt",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "transitive",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "shared-data",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "test-data",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "story",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "unrelated",
+      "criterion_id": "AC2"
+    },
+    {
+      "id": "sibling",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "failed",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "refused",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "not_run",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "unknown",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "old-pass-invalidated",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "interrupted",
+      "criterion_id": "AC3"
+    },
+    {
+      "id": "lf",
+      "criterion_id": "AC4"
+    },
+    {
+      "id": "lf-cold",
+      "criterion_id": "AC4"
+    },
+    {
+      "id": "lf-empty",
+      "criterion_id": "AC4"
+    },
+    {
+      "id": "clear",
+      "criterion_id": "AC5"
+    },
+    {
+      "id": "malformed",
+      "criterion_id": "AC6"
+    },
+    {
+      "id": "invalid-shape",
+      "criterion_id": "AC6"
+    },
+    {
+      "id": "symlink",
+      "criterion_id": "AC6"
+    },
+    {
+      "id": "ignored",
+      "criterion_id": "AC7"
+    },
+    {
+      "id": "directory",
+      "criterion_id": "AC8"
+    },
+    {
+      "id": "cli-options",
+      "criterion_id": "AC8"
+    },
+    {
+      "id": "cli-reuse",
+      "criterion_id": "AC8"
+    }
+  ]
+}

@@ -1,6 +1,69 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd, cache=false}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
+
+## Reuse complete Story passes
+
+Ordinary test CLI calls opt into local reuse with `cache:true`; direct `runCheck`
+callers retain `cache:false` by default. Explicit `--lf` or `--cache-clear` also
+opts in. Apply this only to ordinary checks: lint, files, fill-hash, screen,
+request, saved reads/retries and Try keep their current behavior. Cache options
+mixed with those modes are input errors before effects.
+
+The existing [source capture](runtime-preflight.prompt.md#source-capture) owns
+Story footprints. Use its complete sibling-test membership, effective source
+hashes and reference provenance, plus exact Story/test bytes and reached raw
+prompt/interface bytes for eligibility. Do not substitute upload-wide hashes or
+a second dependency walk. An unavailable footprint never authorizes reuse.
+Changed execution origin or explicit model/call-budget settings invalidate reuse.
+
+```mermaid
+flowchart TD
+    C{Cache clear?} -->|Yes| A[Discard cache and select all Stories]
+    C -->|No| L{Last failed?}
+    L -->|Yes| F[Intersect scope with latest failed Stories]
+    L -->|No| S[Keep selected scope]
+    F --> E{Complete matching pass?}
+    S --> E
+    A --> R[Run ordinary local checks and dispatch]
+    E -->|Yes| U[Report unchanged with zero current calls]
+    E -->|No| R
+```
+
+`--cache-clear` wins over `--lf` and operands: discard the entire cache and run
+all discovered Stories. Otherwise preserve explicit selection scope. `--lf`
+uses each Story's latest known outcome across invocations, selecting exactly
+`failed`, including all its test files within the selected scope. A cold absent
+history runs the whole selected scope; valid history with no failures succeeds
+with no dispatch and no sign-in. Nonfailed refused/not-run/unknown outcomes are
+not last-failed selections, but normal tests must always retry them. Do not
+expand a selected test file to sibling files silently.
+
+Reuse requires all discovered sibling files to have confirmed passes for the
+same current footprint. A partial run must never manufacture a complete pass.
+Before a fresh attempt, invalidate any older pass for that Story; local refusal,
+interruption, unknown/transient outcomes and unavailable accounting cannot leave
+an older pass eligible. Only confirmed complete terminal success becomes a new
+pass. Keep latest outcomes for unselected Stories. Saved reads and retries do not
+update this cache or change their existing recovery semantics.
+
+Perform current local validation/capture before reuse, and filter reusable work
+before gh, capacity, lint, POSTs, GETs or fresh runtime IDs. An all-reused command
+has no gh/server requests. Mixed commands dispatch only fresh selected work.
+Existing runtime state and saved-batch recovery remain outside the repository.
+
+Store versioned, bounded metadata in `.pdd/test-cache/`; never credentials or
+source copies. Arrange Git ignore in each user's repository using its local Git
+exclude, including linked worktrees, without editing tracked ignore files.
+Use injected cache filesystem, clock and capture/hash ports for decision tests;
+native tests establish actual safe writes and Git effects. Never follow symlinks
+in cache paths or Git excludes, traverse outside their intended roots, or trust
+cached paths as filesystem authority. Atomic replacement and serialized updates
+must prevent truncated/concurrent writes from authorizing stale passes. Malformed,
+truncated, incompatible, oversized or otherwise unsafe cache data invalidates the
+whole cache: run all selected work with exactly one plain warning. Unwritable
+cache also fails open with one warning; it cannot block checks or claim a new
+pass was saved. An unsafe cache-clear target is left untouched and fails open.
 
 ## Setup
 
