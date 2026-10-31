@@ -13,6 +13,26 @@ The result structures of the first four are declared below. `runProduct` returns
 `{exitCode,message}` for the CLI, catches finite input/dependency failures, and
 formats the same structured results. It never retries a mutation automatically.
 
+## Pure document parsers
+
+Public synchronous module function `parseProductDocuments({mapText,planText=''})`
+owns the existing product map/plan parsing and validation, returning
+`{product,boundaries}`. Boundaries retain From, To, What crosses and Contract string
+columns. It performs no reads or effects. Existing readers delegate to it with
+unchanged results and errors so capture can parse attempt-local bytes.
+
+Public synchronous module function `parseProductWorldWriters({worldText})` returns
+`[{key,writer}]` from only the canonical world key table identified by its `Key` / `Writer`
+header. Select the first real matching header table (the usual `## Keys`
+heading is optional), and stop at the end of its contiguous table rows. Reuse
+this module's table/cell rules; tables in other sections, examples, explanatory
+material and code fences are not declarations. A present world document without
+a matching Key/Writer table is invalid-product, rather than an empty declaration
+set. Missing required columns or an empty key/writer gives
+`invalid-product` naming contracts/world.md and the column/row. Preserve document
+order, duplicates and repeated identical rows. Other columns are descriptive;
+composition owns conflicts. This parser performs no file access or effects.
+
 ## Read the durable plan
 
 For these module functions, cwd is the explicit product repository root (or the
@@ -373,7 +393,7 @@ The [command catalog](command-catalog.prompt.md) owns CLI syntax.
 
 ```json
 {
-  "status": "draft", "prose_sha256": "d43d00fbd9d3de7928941c038adb40f35f72e199ece1311e777e2f06901c5cb8",
+  "status": "draft", "prose_sha256": "399410731fc419f66a7090196c246d39d7a0b60bdf0445fc32d61dedaa68d4f5",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},

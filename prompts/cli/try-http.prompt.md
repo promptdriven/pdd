@@ -58,6 +58,19 @@ sandboxed frames. JSON action bodies go through the existing remote action ledge
 lost answer. A lost POST returns uncertainty to the driver, which reads its persisted action ID. Stop prevents
 new upstream work and interrupts outstanding reads. Print the actual Screen URL as well as named API routes.
 
+## Prompt-program caller
+
+`openServe` also accepts a no-Story program context from program-app. That context
+carries the original entry command and authored map/product diagnostics. Use it
+for recovery and busy/permission port suggestions instead of inserting an absent
+Story or generated artifact path; keep flags before the file. In this context
+print one usable app or endpoint URL and the prompt-behavior/not-tested-code
+notice; suppress the duplicate Screen URL. For a program context with both Screen
+and HTTP capability, keep one listener for the admitted map and session and print
+only its Screen URL; its named routes remain available until Ctrl-C. Do not change standalone simulation
+output, route adaptation, headers, security or session data. The same pinned
+metadata and authenticated transport admission apply without a Story.
+
 ## Dependencies
 
 - [Runtime client](runtime-client.prompt.md): required generation/runtime context for owner-authenticated metadata,

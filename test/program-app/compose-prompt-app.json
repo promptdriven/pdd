@@ -1,0 +1,211 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/compose-prompt-app.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Reached product maps open as one app with part-qualified screen names, faithful navigation and state, including selected parts that have no screen."
+    },
+    {
+      "id": "AC2",
+      "text": "A small product opens without a world contract or base seed, starting from an empty world plus any part seeds; present files still keep their normal checks."
+    },
+    {
+      "id": "AC3",
+      "text": "Only the world key table declares writers, and conflicting part writers or part seeds refuse before upload with the key and both parts."
+    },
+    {
+      "id": "AC4",
+      "text": "After every tap, the declared follow-up operations run in order after existing follow-ups, with typed scratch state that does not erase part data."
+    },
+    {
+      "id": "AC5",
+      "text": "A tap whose full worst-case draw, prompt-call and follow-up cost exceeds 40 calls is explained before upload; a cost of 40 remains allowed."
+    },
+    {
+      "id": "AC6",
+      "text": "Generated map and world artifacts never overwrite authored or ignored files, preserve source diagnostics and numerical seed values, and require no Story."
+    }
+  ],
+  "cases": [
+    {
+      "id": "joined-map",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "phone map has home and detail; barista map has board; server part has no map; reached parts ordered phone/server/barista",
+      "required_observation": "phone/home, phone/detail and barista/board; initial phone/home; server kept in parts and world; selected map dependencies and tab handlers retained"
+    },
+    {
+      "id": "local-slash-target",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "phone has local ID account/settings plus qualified target barista/board",
+      "required_observation": "local account/settings becomes phone/account/settings before accepting already-qualified product targets"
+    },
+    {
+      "id": "subset-not-closed",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "phone target names barista/board but barista is not selected",
+      "required_observation": "invalid-product-map names missing target; no redirect, partial upload or dropped handler"
+    },
+    {
+      "id": "wildcard-priority",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "part has exact home rule and wildcard overlapping home plus another screen",
+      "required_observation": "preserve exact-rule actions and wildcard actions on remaining screens or explicit unsupported wildcard priority refusal; no extra bridge calls"
+    },
+    {
+      "id": "router-policy",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "two mapped parts have incompatible routers; a third selected part has no map",
+      "required_observation": "unsupported-product-router; no silently discarded router and no router requirement for mapless part"
+    },
+    {
+      "id": "small-no-contracts",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "small product has no contracts/world.md or contracts/seed-world.json; part seed is {\"orders\":[]}",
+      "required_observation": "stat optional files, never read missing files; merged world exactly {\"orders\":[]}; no Story/scenario"
+    },
+    {
+      "id": "empty-small-world",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "small product has no world, base seed or part seed",
+      "required_observation": "empty merged world and usable map; no phantom contract dependency"
+    },
+    {
+      "id": "present-invalid-seed",
+      "criteria": [
+        "AC2",
+        "AC6"
+      ],
+      "given": "small product has present malformed base seed or symlinked world file",
+      "required_observation": "normal shared seed/source refusal; not mistaken for optional absence"
+    },
+    {
+      "id": "key-table-only",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "world key table declares orders writer phone; later explanatory table has other columns; fenced example has Key/Writer rows",
+      "required_observation": "orders/phone only; descriptive tables neither parsed as declarations nor rejected for missing Key/Writer"
+    },
+    {
+      "id": "writer-conflict",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "canonical key table declares orders for phone and server",
+      "required_observation": "world-writer-conflict names orders, phone and server before upload"
+    },
+    {
+      "id": "seed-conflict-without-world",
+      "criteria": [
+        "AC2",
+        "AC3"
+      ],
+      "given": "small product has no world file; phone and server seed files both set orders to []",
+      "required_observation": "world-writer-conflict names key and both parts even for equal values"
+    },
+    {
+      "id": "after-chain",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "handler has existing after; product plan lists clock#tick then server#advance with complete expanded result schemas",
+      "required_observation": "original after first, tick then advance; later operations see prior effects; distinct non-root typed scratch slots"
+    },
+    {
+      "id": "scratch-collision",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "selected part names include product_after and product_after_; one has no map; part state includes own __proto__ key",
+      "required_observation": "scratch product_after__; all part keys preserved as data; no prototype mutation or erased sibling state"
+    },
+    {
+      "id": "call-budget-40",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "draw prompt has no calls, cost 1; handler declares max_calls:19 to a no-call leaf, cost 1 + 19 * (1 + 1) = 39; no after operations; complete worst-case tap is 1 + 39 = 40",
+      "required_observation": "no over-limit rejection; direct count reported separately"
+    },
+    {
+      "id": "call-budget-41",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "draw prompt has no calls, cost 1; handler declares max_calls:18 to a no-call leaf, cost 1 + 18 * (1 + 1) = 37; one after prompt declares max_calls:1 to a no-call leaf, cost 1 + 1 * (1 + 1) = 3; complete worst-case tap is 1 + 37 + 3 = 41",
+      "required_observation": "pre-upload explanation names authored cost contributors and 40 ceiling; no safe-budget claim from direct count"
+    },
+    {
+      "id": "after-over-eight",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "given": "existing after chain plus appended plan operations total nine",
+      "required_observation": "pre-upload explanation of eight-after limit"
+    },
+    {
+      "id": "artifact-collision",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "app/maps/product.json authored; contracts/product-seed_1.json occupied; suffix 2 pair absent",
+      "required_observation": "choose product_2.json and product-seed_2.json; no repository write"
+    },
+    {
+      "id": "ignored-artifact-collision",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "proposed generated path exists but is Git-ignored",
+      "required_observation": "occupancy-only safe stat reports ignored regular candidate as occupied; choose next free paired suffix; no read, upload or overwrite of ignored file; symlink/unsafe path checks remain"
+    },
+    {
+      "id": "lossless-seed",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "exact seed bytes {\"large\":9007199254740993,\"decimal\":0.10000000000000001,\"nearOne\":1.0000000000000001,\"tiny\":1e-400,\"flag\":false,\"nil\":null,\"array\":[1e-400],\"__proto__\":{\"kept\":true}}",
+      "required_observation": "merged seed artifact is exactly {\"__proto__\":{\"kept\":true},\"array\":[1e-400],\"decimal\":0.10000000000000001,\"flag\":false,\"large\":9007199254740993,\"nearOne\":1.0000000000000001,\"nil\":null,\"tiny\":1e-400} with no trailing newline; numerical tokens, false/null, array order and own __proto__ data preserved; Object prototype is not mutated"
+    },
+    {
+      "id": "required-screen-fields",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "operation screen omits result_pointer or has source/format mismatch",
+      "required_observation": "invalid-product-map names exact missing or mismatched field before upload"
+    },
+    {
+      "id": "all-mapless",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "every selected part lacks a map",
+      "required_observation": "finite no-screen explanation; no nullable map or invented placeholder screen"
+    },
+    {
+      "id": "present-world-without-key-table",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "contracts/world.md exists and contains title, prose and a Notes/Readers table but no real Key/Writer header table",
+      "required_observation": "invalid-product names contracts/world.md and the missing Key/Writer declaration table before upload; do not interpret present malformed declaration source as empty writers"
+    }
+  ]
+}
