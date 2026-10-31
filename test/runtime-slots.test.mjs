@@ -166,7 +166,7 @@ test('slots: ten real CLI checks across repositories share a limit of three and 
   });
   const gh = join(setup.sandbox, 'gh'); writeFileSync(gh, '#!/bin/sh\nif [ "$1" = auth ]; then echo fixture-token; else echo "octo 4242"; fi\n'); chmodSync(gh, 0o700);
   const env = { HOME: setup.home, PATH: `${setup.sandbox}:${process.env.PATH}`, PDD_STATE_DIR: setup.state, PDD_MAX_JOBS: '3', PDD_RUNTIME_URL: fake.origin };
-  const start = i => child([join(root, 'bin/pdd.mjs'), 'check', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });
+  const start = i => child([join(root, 'bin/pdd.mjs'), 'test', 'place-order', '--json'], { cwd: i % 2 ? second.repo : setup.repo, env, t });
   const waitFor = async predicate => {
     const deadline = Date.now() + 60_000;
     while (!await predicate()) {
@@ -249,4 +249,13 @@ test('jobs: age comes from the injected clock and snapshot read errors retain th
   }), 0);
   assert.match(stdout.text, /9 s/); assert.equal(stderr.text, '');
   await assert.rejects(listRuntimeJobs(options('/state'), { files: { listRecords: () => { throw Error('denied'); } } }), { code: 'local-state-unavailable' });
+});
+
+// The saved kind stays check, lint or try, because older pdd versions read and write these records; pdd jobs prints the command name.
+test('jobs: the saved kinds check, try and lint print as test, simulate and lint; listRuntimeJobs keeps the saved kind', async () => {
+  const jobs = [record('a', { kind: 'check', started_at: 1 }), record('b', { kind: 'try', started_at: 2 }), record('c', { kind: 'lint', started_at: 3 })];
+  const stdout = sink(), stderr = sink();
+  assert.equal(await runJobs({ env: { PDD_STATE_DIR: '/state', PDD_RUNTIME_URL: origin } }, { stdout, stderr, now: () => 10_000, files: { listRecords: () => ({ jobs }) } }), 0);
+  assert.deepEqual(stdout.text.trim().split('\n').map(line => line.split(' · ')[0]), ['active test', 'active simulate', 'active lint']);
+  assert.deepEqual((await listRuntimeJobs(options('/state'), { files: { listRecords: () => ({ jobs }) } })).jobs.map(job => job.kind), ['check', 'try', 'lint']);
 });
