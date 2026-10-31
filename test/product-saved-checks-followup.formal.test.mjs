@@ -13,7 +13,7 @@ const clone = value => structuredClone(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const canonical = path => ({ '/base-alias': '/base', '/other-alias': '/other' })[path] ?? path;
 const forbidden = name => () => assert.fail(`Evidence read caused forbidden effect: ${name}`);
-const hint = text => ['older checks', 'not counted', 'pdd check'].every(part => text.toLowerCase().includes(part));
+const hint = text => ['older checks', 'not counted', 'pdd test'].every(part => text.toLowerCase().includes(part));
 
 function authoredRow(story, selectedTest, id) {
   return { story, test: selectedTest, request_ids: [id], state: 'passed', ended_at: 2000,

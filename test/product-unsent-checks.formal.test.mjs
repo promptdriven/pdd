@@ -90,7 +90,7 @@ function exact(reply, expected, message, legacyHints = 0) {
   assert.ok(Array.isArray(reply.warnings), message);
   assert.equal(new Set(reply.warnings).size, reply.warnings.length, message);
   for (const warning of reply.warnings) assert.ok(typeof warning === 'string' && warning.length > 0 && warning.length < 2000, message);
-  const hints = reply.warnings.filter(warning => ['older checks', 'not counted', 'pdd check'].every(text => warning.toLowerCase().includes(text)));
+  const hints = reply.warnings.filter(warning => ['older checks', 'not counted', 'pdd test'].every(text => warning.toLowerCase().includes(text)));
   assert.equal(hints.length, legacyHints, message);
 }
 async function run(specs, options, expected, message, boundary = 'factory') {
