@@ -176,6 +176,8 @@ for (const clear of [false, true]) test(`dead-owner cache lock recovers${clear ?
   const result = await ctx.invoke(clear ? { '--cache-clear': true } : {});
   assert.equal(result.sent, clear ? 2 : 0, 'dead owner does not permanently disable reuse');
   assert.equal(cacheWarnings(result).length, 1);
+  assert.match(cacheWarnings(result)[0], /recover.*(?:stale|dead).*cache.*lock/i);
+  assert.doesNotMatch(cacheWarnings(result)[0], /not reused|running all|run all/i, 'recovery must not falsely deny eligible reuse');
   assert.equal(existsSync(lock), false, 'stale lock is removed after transaction');
   assert.equal((await ctx.invoke()).sent, 0);
 });

@@ -102,6 +102,6 @@ No outside values or callback replies are required for this data-only module. Al
 The check route accepts Boolean flags `--lf` and `--cache-clear`. PATH operands
 select files or directories as defined by preflight. Ordinary tests reuse
 unchanged successful Stories; `--lf` selects prior failed Stories, and
-`--cache-clear` clears `.pdd/test-cache/` and runs all Stories. The runtime client
+`--cache-clear` clears `.pdd/cache/test/` and sends the named selected scope again (all Stories when no operands are given); it takes precedence over `--lf`. With no failed Story in the selected scope, `--lf` uses the normal selection. The runtime client
 owns precedence, eligibility and persistence. Add these D-specific meanings to
 the test help description; preserve every unrelated help form.

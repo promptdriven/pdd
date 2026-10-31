@@ -15,7 +15,7 @@ Story footprints. Use its complete sibling-test membership, effective source
 hashes and reference provenance, plus exact Story/test bytes and reached raw
 prompt/interface bytes for eligibility. Do not substitute upload-wide hashes or
 a second dependency walk. An unavailable footprint never authorizes reuse.
-Changed execution origin, explicit call-budget settings, pdd package version or local `ENGINE_SHA` invalidate reuse. Save the observed server `engine_sha` with each pass. A server engine/model update cannot be discovered with zero calls: after an interpreter update, use `pdd test --cache-clear`.
+Changed execution origin, explicit call-budget settings, pdd package version or local `ENGINE_SHA` invalidate reuse. Save the observed server `engine_sha` with each pass. A server engine/model update cannot be discovered with zero calls: after an interpreter update, use `pdd test --cache-clear` to send selected Stories again; the interpreter may still return a saved answer for the same key until prompt-runtime #535.
 
 ```mermaid
 flowchart TD
@@ -30,12 +30,9 @@ flowchart TD
     E -->|No| R
 ```
 
-`--cache-clear` takes precedence over `--lf` while retaining operand scope: discard the entire cache, ask the server for fresh answers without replay and run
-the normal selected scope. Server replay bypass requires a compatible interpreter request control; the current Check protocol does not provide one. Keep this dependency explicit: local cache clearing alone cannot establish fresh interpreter execution. Otherwise preserve explicit selection scope. `--lf`
-uses each Story's latest known outcome across invocations, selecting exactly
-`failed`, including all its test files within the selected scope. A cold absent
-history runs the whole selected scope; history with no recorded failures uses the normal selected scope (including ordinary unchanged-pass reuse). Keep a known failure selected until a confirmed pass, even if a later attempt has no verdict (including sign-in failure, interruption, timeout or unavailable accounting). Refused/not-run/unknown attempts without an earlier failure are not last-failed selections, but normal tests must always retry them. Do not
-expand a selected test file to sibling files silently.
+`--cache-clear` takes precedence over `--lf` while retaining operand scope: discard the entire local cache and send the normal selected scope again. The interpreter may return a saved answer for the same key until prompt-runtime #535; fresh server execution is not guaranteed. Print exactly one progress line to stderr, including in JSON mode: `pdd: test cache cleared. Running N selected Stories; the interpreter may reuse saved answers until prompt-runtime #535.` If safe local clearing is unavailable, truthfully replace `test cache cleared` with `test cache unavailable`; still report selected dispatch and the same replay caveat. Count distinct selected Stories, retain the named scope, and do not add this progress notice to the warnings array.
+
+Otherwise preserve explicit selection scope. `--lf` reads validated `lastfailed.json` to select each Story whose latest known outcome is `failed`, including all its test files within the selected scope. If no failure belongs to the selected scope, run the normal selected scope (including ordinary unchanged-pass reuse), even when failures exist elsewhere. Forget records for deleted Stories in both metadata files, using authoritative discovered Git-visible regular files rather than operand scope or cached-path filesystem lookups. An existing Story with temporarily invalid text retains its failure; unselected existing failures survive. Keep a known failure selected until a confirmed pass, even if a later attempt has no verdict (including sign-in failure, interruption, timeout or unavailable accounting). Refused/not-run/unknown attempts without an earlier failure are not last-failed selections, but normal tests must always retry them. Do not expand a selected test file to sibling files silently.
 
 Reuse requires all discovered sibling files to have confirmed passes for the
 same current footprint. A partial run must never manufacture a complete pass.
@@ -50,7 +47,7 @@ has no gh/server requests. Mixed commands dispatch only fresh selected work.
 Existing runtime state and saved-batch recovery remain outside the repository.
 
 Store versioned, bounded Story pass metadata in `.pdd/cache/test/stories.json` and last-known failures in `.pdd/cache/test/lastfailed.json`; never credentials or
-source copies. Never reuse a cache when any path under `.pdd/cache/test/` is Git-tracked: warn once and run selected checks. Bind cache eligibility to a repository-keyed local epoch or key stored only in the external `PDD_STATE_DIR`; a cache copied to fresh external state cannot authorize reuse. Arrange Git ignore in each user's repository using its local Git
+source copies. Read last-failed metadata safely and validate its version, epoch, generation and failed Story set against the Story metadata before using it. A missing last-failed file after Story metadata exists, damaged metadata or inconsistent metadata invalidates the whole cache with one warning, runs selected work fresh and heals after the next completed run. A cold absent cache remains warning-free. Never reuse a cache when any path under `.pdd/cache/test/` is Git-tracked: warn once and run selected checks. Bind cache eligibility to a repository-keyed local epoch or key stored only in the external `PDD_STATE_DIR`; a cache copied to fresh external state cannot authorize reuse. Arrange Git ignore in each user's repository using its local Git
 exclude, including linked worktrees, without editing tracked ignore files.
 Use injected cache filesystem, clock and capture/hash ports for decision tests;
 native tests establish actual safe writes and Git effects. Never follow symlinks
@@ -60,7 +57,7 @@ must prevent truncated/concurrent writes from authorizing stale passes. Malforme
 truncated, incompatible, oversized or otherwise unsafe cache data invalidates the
 whole cache: run all selected work with exactly one plain warning. Unwritable
 cache also fails open with one warning; it cannot block checks or claim a new
-pass was saved. An unsafe cache-clear target is left untouched and fails open. A damaged regular cache is replaced after the next completed run and then becomes reusable; the warning includes `pdd test --cache-clear`. A lock whose recorded owner PID is dead is taken over with one warning, including during `--cache-clear`; live owners remain protected. Resolve the external state root with realpath so symlinked ancestors (such as macOS `/tmp`) are accepted, while refusing a final state-directory symlink. Safety checks below that trusted root still apply.
+pass was saved. An unsafe cache-clear target is left untouched and fails open. A damaged regular cache is replaced after the next completed run and then becomes reusable; the warning includes `pdd test --cache-clear`. A lock whose recorded owner PID is dead is taken over with one warning, including during `--cache-clear`; live owners remain protected. Recovery warnings describe the stale lock or claim recovered and truthfully say that previous passes may remain eligible; never claim that recovery necessarily runs all work. Resolve the external state root with realpath so symlinked ancestors (such as macOS `/tmp`) are accepted, while refusing a final state-directory symlink. Safety checks below that trusted root still apply.
 
 If cache writes fail, persist a small, bounded repository-keyed invalidation
 tombstone in the existing external runtime-state directory. It contains no

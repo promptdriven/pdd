@@ -1,9 +1,12 @@
 import test from 'node:test';
+import * as disk from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runCheck } from '../src/runtime-client.mjs';
+import { renderHelp } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { captureSource, interfaceBlocks, proseSha256 } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
@@ -190,7 +193,7 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
       const path = join(ctx.repo, 'tests/place-order.json'), doc = read(path); doc.initial_world.changed = true; write(path, doc);
       ctx.mode('failed'); await ctx.invoke(['place-order']); ctx.mode('passed');
       await ctx.invoke(['independent']);
-      const scoped = await ctx.invoke(['independent'], { '--lf': true }); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 0);
+      const scoped = await ctx.invoke(['independent'], { '--lf': true }); assert.equal(scoped.sent, 0); assert.equal(scoped.json.rows.length, 1); assert.equal(scoped.json.rows[0].cached, true);
       const result = await ctx.invoke([], { '--lf': true }); assert.equal(result.sent, 1); assert.equal(result.json.rows.length, 1);
     }
     const empty = await ctx.invoke([], { '--lf': true }); assert.equal(empty.sent, 0); assert.equal(empty.json.rows.length, 3); assert.equal(empty.code, 0); return;
@@ -278,4 +281,76 @@ test('TEST-CACHE saved UUID read completion supplies reusable pass', async t => 
   assert.equal(repeat.sent, 0, 'UUID completion populates the Story pass cache');
   assert.equal(repeat.network, 0); assert.equal(repeat.gh, 0);
   assert.ok(repeat.json.rows.every(row => row.cached && row.calls === 0));
+});
+
+// Oracles: LEAD 20:05 R1/R3 and DESIGN §6; fake interpreter only.
+test('TEST-CACHE lf disjoint scope falls back to its normal uncached selection', async t => {
+  const ctx = await setup(t);
+  ctx.mode('failed'); await ctx.invoke(['place-order']); ctx.mode('passed');
+  const result = await ctx.invoke(['independent'], { '--lf': true });
+  assert.equal(result.sent, 1, 'failure elsewhere cannot suppress selected checks');
+  assert.equal(result.json.rows.length, 1); assert.equal(result.json.rows[0].test, 'tests/independent.json');
+  const retained = await ctx.invoke(['place-order'], { '--lf': true });
+  assert.equal(retained.sent, 1, 'disjoint fallback preserves the other failure');
+});
+
+test('TEST-CACHE lf forgets deleted failed Stories and runs normal remaining selection', async t => {
+  const ctx = await setup(t);
+  ctx.mode('failed'); await ctx.invoke(['independent']); ctx.mode('passed');
+  unlinkSync(join(ctx.repo, 'tests/independent.json')); unlinkSync(join(ctx.repo, 'user_stories/independent.md'));
+  const result = await ctx.invoke([], { '--lf': true });
+  assert.equal(result.sent, 2, 'deleted failure cannot make a cold remaining scope empty');
+  assert.equal(result.json.rows.length, 2);
+  for (const name of ['stories', 'lastfailed']) {
+    const metadata = read(join(ctx.repo, `.pdd/cache/test/${name}.json`));
+    assert.ok(!JSON.stringify(metadata).includes('user_stories/independent.md'), `${name} forgets deleted Story`);
+  }
+});
+
+for (const damage of ['missing', 'malformed', 'inconsistent']) test(`TEST-CACHE lastfailed ${damage} fails open once and heals`, async t => {
+  const ctx = await setup(t); await prime(ctx, false);
+  const path = join(ctx.repo, '.pdd/cache/test/lastfailed.json');
+  assert.ok(existsSync(path), 'completed cache includes last-failed selection evidence');
+  if (damage === 'missing') unlinkSync(path);
+  else if (damage === 'malformed') writeFileSync(path, '{broken');
+  else { const doc = read(path); doc.generation += 1; write(path, doc); }
+  const result = await ctx.invoke(['independent'], { '--lf': true });
+  assert.equal(result.sent, 1, 'untrusted last-failed metadata cannot suppress selected checks');
+  assert.equal(result.json.warnings.filter(w => /cache/i.test(String(w))).length, 1);
+  assert.ok(result.json.rows.every(row => !row.cached));
+  const healed = await ctx.invoke(['independent'], { '--lf': true });
+  assert.equal(healed.sent, 0); assert.equal(healed.json.rows.length, 1);
+  assert.equal(healed.json.warnings.filter(w => /cache/i.test(String(w))).length, 0);
+});
+
+test('TEST-CACHE lf actually reads lastfailed through the injected filesystem', async t => {
+  const ctx = await setup(t); await prime(ctx, false);
+  const reads = [];
+  ctx.ports.cacheFiles = { nonce: randomUUID, lstat: disk.lstatSync, mkdir: disk.mkdirSync, write: disk.writeFileSync,
+    list: disk.readdirSync, rename: disk.renameSync, unlink: disk.unlinkSync, rmdir: disk.rmdirSync,
+    exclude(root) { return join(root, '.git/info/exclude'); },
+    read(path, ...args) { reads.push(String(path)); return disk.readFileSync(path, ...args); } };
+  await ctx.invoke(['independent'], { '--lf': true });
+  assert.ok(reads.some(path => path.endsWith('/lastfailed.json')), 'lf must consume designated selection metadata');
+});
+
+for (const json of [true, false]) test(`TEST-CACHE clear notice preserves ${json ? 'JSON' : 'text'} and selected scope`, async t => {
+  const ctx = await setup(t); await prime(ctx, false);
+  const result = await ctx.invoke(['independent'], { '--cache-clear': true, '--lf': true, '--json': json });
+  assert.equal(result.sent, 1); assert.equal(result.code, 0);
+  const notices = result.err.split('\n').filter(line => /test cache cleared/.test(line));
+  assert.equal(notices.length, 1, 'exactly one clear progress notice');
+  assert.match(notices[0], /Running 1 selected Stor/);
+  assert.match(notices[0], /interpreter may reuse saved answers.*#535/);
+  assert.doesNotMatch(ctx.ports.stdout.text, /test cache cleared/);
+  if (json) { assert.equal(result.json.rows.length, 1); assert.ok(!result.json.warnings.some(w => /test cache cleared/.test(String(w)))); }
+  else assert.match(ctx.ports.stdout.text, /independent/);
+});
+
+test('TEST-CACHE help describes current cache path and retained scope', () => {
+  const help = renderHelp(['test']);
+  assert.ok(help.includes('.pdd/cache/test/'));
+  assert.ok(!help.includes('.pdd/test-cache/'));
+  assert.match(help, /--cache-clear[^\n]*selected Stories/);
+  assert.doesNotMatch(help, /--cache-clear[^\n]*runs all Stories/);
 });
