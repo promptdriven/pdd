@@ -57,6 +57,8 @@ Public detailed, list, all-repository and JSON status group this failure as wait
 
 Only a successful start/open or positive observation of the same current chat clears its active failure/unconfirmed flag. Restore `running` only when no person question or approval gate is waiting; recovery never approves, advances an area or discards decisions. If Herdr remains unavailable, keep the precise external failure and preserve custody rather than claiming recovery.
 
+When the [layout owner](workflow-herdr-layout.prompt.md#actionable-identity-refusal) refuses with `herdr_layout_identity_changed`, preserve its actionable message with its unchanged code in the public command result, including later-area startup after approval. Keep initial-start and explicit-open failure reporting and cleanup warnings equally informative. The layout owner defines diagnostic contents; this forwarding changes no approval decision, area transition, run custody or recovery policy.
+
 ## Commands
 
 Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
@@ -279,6 +281,6 @@ The Interpreter entry below is scoped to the existing public `changeRun` operati
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"528bdca2808889931871ce3e5cc7d9d357593a5c833656dba31a8af7dee9af11","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"11f41202560f9f4a53be73b9ad7db424a2e879daf3d926e0e77ea6a09a9dc3d1","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
