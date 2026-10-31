@@ -13,5 +13,5 @@ test('LINK native inventory replay: every frozen case executes its named public-
   assert.equal(replay.status,0,`${replay.stdout}\n${replay.stderr}`);
   const executed=[...replay.stdout.matchAll(/^ok \d+ - (.+)$/gm)].map(match=>match[1]);
   assert.deepEqual(executed,inventory.cases.map(item=>item.name));
-  assert.equal(executed.length,13);
+  assert.equal(executed.length,inventory.cases.length);
 });

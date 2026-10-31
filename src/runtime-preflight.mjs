@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 19648c04b8859023bd8ae0af69520fd2151d06de195c76900231c8b9af545757).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7de2a465eadde1d6b3fcf04cb6d8d091b269915e028fdc176194af9fb261a26f).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -91,11 +91,15 @@ const titleOf = text => text.split('\n').find(line => line.startsWith('# '))?.sl
 
 // Tests, stories and Git-visible regular files of one repo.
 export function findTests({ root, files = gitFiles(root) }) {
+  return discoverTests(root, files);
+}
+
+function discoverTests(root, files, strict = false) {
   const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
-  let linkedFiles;
+  let linkedFiles = strict ? filePort(root, new Set(files), true) : undefined;
   for (const path of files) {
-    let stat = statOf(join(root, path)), linked = false;
-    if (stat?.isSymbolicLink()) {
+    let stat = strict ? null : statOf(join(root, path)), linked = false;
+    if (strict || stat?.isSymbolicLink()) {
       linkedFiles ??= sourceFilePort(root, new Set(files));
       try {
         const info = linkedFiles.stat({path});
@@ -122,7 +126,13 @@ export function findTests({ root, files = gitFiles(root) }) {
     const story = stories.find(item => item.path === storyPath);
     test.storyPath = storyPath;
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
-    test.title = story?.title ?? (storyPath && visible.has(storyPath) && Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes ? titleOf(readText(root, storyPath)) : null) ?? test.story;
+    let fallback = null;
+    if (!story?.title && storyPath && visible.has(storyPath)) {
+      if (strict) {
+        try { if (linkedFiles.stat({path:storyPath}).size <= LIMITS.bytes) fallback = titleOf(linkedFiles.read({path:storyPath}).content); } catch {}
+      } else if (Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes) fallback = titleOf(readText(root,storyPath));
+    }
+    test.title = story?.title ?? fallback ?? test.story;
   }
   const named = new Set(tests.map(test => test.storyPath));
   const warnings = [...discoveryWarnings, ...stories.filter(story => !named.has(story.path)).map(story => `Warning: ${story.path} has no test.`)];
@@ -1014,7 +1024,7 @@ function sourceLimit(files) {
   return total;
 }
 
-function snapshotReader(root, diskVisible, beforeRead = () => {}) {
+function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false) {
   const snapshots = new Map();
   let unstable = false;
   root = realpathSync(root);
@@ -1052,7 +1062,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
       if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
       return file;
     }
-    let pending = path.split('/'), resolved = [], lastLink = null, linkedVisible = false;
+    let pending = path.split('/'), resolved = [], lastLink = null, linkedVisible = false, authored = true;
     const seen = new Set(), observed = new Set(['']);
     const refuse = reason => {
       throw sourceProblem(from, path, lastLink ? `: link ${lastLink.path} -> ${lastLink.link}: ${reason}` : `: ${reason}`);
@@ -1072,7 +1082,11 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
       const { stat, link } = observe(current);
       if (link !== null) {
         lastLink = { path: current, link };
-        linkedVisible ||= diskVisible.has(current);
+        // Only an ancestor in the authored spelling can authorize that spelling.
+        // Links encountered after substitution cannot grant authored visibility.
+        linkedVisible ||= authored && current !== path && diskVisible.has(current);
+        authored = false;
+        if (strict) refuse(current === path ? 'symbolic links are not allowed.' : 'symbolic link ancestor: symbolic links are not allowed.');
         if (noLinks) refuse('symbolic links are not allowed for prepared output.');
         if (isSecretPath(path) || isSecretPath(current)) refuse('the name looks like a secret. pdd never sends it.');
         const state = `${current}\0${pending.join('/')}`;
@@ -1124,7 +1138,11 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}) {
 }
 
 export function sourceFilePort(root, visible = new Set(gitFiles(root))) {
-  const reader = snapshotReader(root, visible);
+  return filePort(root, visible);
+}
+
+function filePort(root, visible, strict = false) {
+  const reader = snapshotReader(root, visible, undefined, strict);
   return {
     stat({path}) {
       const file = reader.inspectRaw(path, 'Source', true);
@@ -1147,13 +1165,13 @@ function preparedText(root, visible, path, text, format) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }) {
+function captureOnce(root, { tests, appMap = null, prepareSource }, strict = false) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
   const unavailable = new Map();
   const markUnavailable = (path,error) => unavailable.set(path,{path,cause:String(error.message ?? error).replace(/[\r\n\x00-\x1f\x7f]/g,' ').slice(0,4000)});
-  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); });
+  const reader = snapshotReader(root,new Set(names),file => { if (payload.has(file.path)) sourceLimit([...payload.values()]); }, strict);
   const { inspectRaw, bytes, snapshots } = reader;
   function inspect(path, from) {
     if (overlay.has(path)) return overlay.get(path);
@@ -1245,7 +1263,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
     const selected = tests ?? [...new Set([
-      ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
+      ...discoverTests(root,names,strict).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
       ...[...overlay.keys()].sort().filter(path => {
       if (!path.endsWith('.json')) return false;
       const file = overlay.get(path);
@@ -1262,7 +1280,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (index === queue.length && !siblingsAdded) {
         siblingsAdded = true; selecting = false;
         const selectedStories = new Set(storyTests.keys());
-        const discovered=findTests({root,files:names}).tests.filter(test=>!overlay.has(test.path));
+        const discovered=discoverTests(root,names,strict).tests.filter(test=>!overlay.has(test.path));
         for (const [path,file] of overlay) {
           if (!path.endsWith('.json') || file.size>LIMITS.test) continue;
           try { const doc=JSON.parse(bytes(file).toString('utf8')); if (typeof doc?.schema_version==='string' && doc.schema_version.startsWith('prompt-runtime.program-scenario')) discovered.push({path,doc}); } catch {}
@@ -1367,11 +1385,24 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
 
 // Rebuild the selection on each attempt, including metadata and newly declared dependencies.
 export function captureSource(root, { attempts = 3, ...selection } = {}) {
+  return captureWithPolicy(root, { attempts, ...selection });
+}
+
+function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = false) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const captured = captureOnce(root, selection);
+    const captured = captureOnce(root, selection, strict);
     if (captured) return captured;
   }
   throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+}
+
+// A bound capability keeps strict command reads isolated from source-upload reads.
+export function createStrictSourceAccess(root) {
+  return {
+    sourceFilePort(visible = new Set(gitFiles(root))) { return filePort(root, visible, true); },
+    findTests({files = gitFiles(root)} = {}) { return discoverTests(root, files, true); },
+    captureSource(options = {}) { return captureWithPolicy(root, options, true); },
+  };
 }
 
 // Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.
