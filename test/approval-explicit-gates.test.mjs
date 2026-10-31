@@ -185,7 +185,10 @@ for(const kind of ['approve','approve-pr','ask-code']) {
 
 test('2762 preservation: chat, status and repeated done cannot approve a waiting gate',async t=>{
  const f=await ready(t), before=f.record();
- const ports=f.agentPorts({readApprovalEvidence:async()=>({ok:true,decision:'approve',userMessage:'I approve',userMessageAt:f.clock+1})});
+ const chat=before.chats.at(-1), dir=join(f.base,'home','.claude','projects','synthetic'); mkdirSync(dir,{recursive:true});
+ const message={type:'user',sessionId:chat.session.id,cwd:before.root,timestamp:new Date(f.clock+1).toISOString(),message:{role:'user',content:[{type:'text',text:'I approve'}]}};
+ writeFileSync(join(dir,chat.session.id+'.jsonl'),JSON.stringify(message)+'\n');
+ const ports=f.agentPorts();
  await runStatus({ref:'17',cwd:f.source},ports);
  await stepDone({step:'prompt-story',summary:'Still ready',cwd:before.root},ports);
  const after=f.record(); assert.equal(after.area,before.area); assert.equal(after.gate.kind,'approve'); assert.deepEqual(after.decisions,before.decisions);
@@ -204,7 +207,7 @@ test('2762 missing approve boundary: valid custom single-area workflow warns wit
 
 for(const strict of [false,true]) test(`2762 refuse ${strict?'strict said':'blank said'}`,async t=>{
  const f=await ready(t), r=f.record();
- if(strict) writeFileSync(join(r.sourceRoot??r.root,'pdd.json'),JSON.stringify({strict_approvals:true}));
+ if(strict) writeFileSync(join(r.root,'pdd.json'),JSON.stringify({strict_approvals:true}));
  const before=readFileSync(join(r.runDir,'status.json'),'utf8');
  const out=await approveRun({ref:'17',cwd:f.source,said:strict?'looks good':'  '},f.agentPorts({readApprovalEvidence:async()=>({ok:false,code:'user_message_missing',message:'No turn'})}));
  assert.equal(out.exitCode,1); assert.equal(readFileSync(join(r.runDir,'status.json'),'utf8'),before);

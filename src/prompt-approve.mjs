@@ -1,5 +1,5 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 92a2560cd9405ca039278254ecb94f71c6792edd7f8980b3f6f5e47e955944ec).
-import { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 8821baa81e0596ba99db30d9ddb283c968e280c83edabf35ea22a9dca8c00d9c).
+import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -245,7 +245,6 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     const root = realpathSync(top.stdout.trim()), path = promptPath(root, cwd, words[0]);
     if (!path) throw new Stop(2, `${relative(root, resolve(realpathSync(cwd), words[0])).split(sep).join('/')} is not a Git-visible *.prompt.md file in this repository.`);
     const { strictApprovals } = readApprovalPolicy({ root }, ports);
-    if (said !== undefined && (typeof said !== 'string' || !said.trim())) throw new Stop(2, '--said requires nonblank words.');
     const env = ports.env ?? process.env;
     const agent = approvalActor(env).kind === 'agent';
     // A saved current workflow pane is also an agent environment in strict mode.
@@ -260,6 +259,10 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     if (common.status !== 0) throw new Stop(4, 'Cannot resolve Git common directory.');
     const commonDir = common.stdout.trim();
     readPromptApprovals({ commonDir }, ports);
+    if (said !== undefined) {
+      try { said = await readSaidWords(said, { ...ports, stdin }); }
+      catch (error) { throw new Stop(2, error.message); }
+    }
     const answers = said === undefined ? lineReader(stdin) : { close() {} };
     const commit = async ({ text, next, hash }) => {
       const fs = ports.fs ?? { writeFileSync };

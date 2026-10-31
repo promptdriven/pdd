@@ -2,6 +2,12 @@
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.
 
+# Adopt an existing approved regression corpus
+
+1. [Adopt the complete unchanged approved corpus](adopt-approved-corpus.md): start a fresh evidence-enabled workflow with preserved content authorization and explicit external-assertion trust.
+   Test: `test/runtime/adopt-approved-corpus.json`.
+   Interpreter test: NOT RUN (Story gate; snapshot-port cases drafted).
+
 # Shared runtime admission (#2631)
 
 Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
@@ -90,14 +96,14 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## PDD names (#2701)
 
 1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.
-2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow start`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
+2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
 
 ## Approval through agent chat (#2755)
 
-1. [Approve a prompt through my agent](approval-prompt-chat.md) — [native/manual cases](../test/approval-chat/approval-prompt-chat.json). Runtime check: NOT RUN (provider calls forbidden).
-2. [Approve a gate and its prompts in one step](approval-workflow-chat.md) — [native/manual cases](../test/approval-chat/approval-workflow-chat.json). Runtime check: NOT RUN (provider calls forbidden).
-3. [Ask my agent to merge a checked PR](approval-requested-merge.md) — [native/manual cases](../test/approval-chat/approval-requested-merge.json). Runtime check: NOT RUN (provider calls forbidden).
+1. [Approve a prompt through my agent](approval-prompt-chat.md) — native cases `test/approval-chat-core.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden).
+2. [Approve a gate and its prompts in one step](approval-workflow-chat.md) — native cases `test/approval-chat.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden).
+3. [Ask my agent to merge a checked PR](approval-requested-merge.md) — native cases `test/skills.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden).
 
 ## Explicit gate decisions (#2762, same PR pair as #2755)
 
-1. [Keep every gate waiting for my decision](approval-explicit-gates.md) — [native/manual cases](../test/approval-chat/approval-explicit-gates.json). Runtime check: NOT RUN (provider calls forbidden). Native gate authority and advisory regressions plus honest terminal/no-auto-advance preservation controls.
+1. [Keep every gate waiting for my decision](approval-explicit-gates.md) — native cases `test/approval-explicit-gates.test.mjs` in [code PR #2768](https://github.com/promptdriven/pdd/pull/2768). Runtime check: NOT RUN (provider calls forbidden). Native gate authority and advisory regressions plus honest terminal/no-auto-advance preservation controls.

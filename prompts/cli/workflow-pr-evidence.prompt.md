@@ -1,7 +1,7 @@
 # Workflow PR evidence
 
 
-Own `src/workflow-pr-evidence.mjs`. Export module function `preparePrEvidence({run, isCode}, ports = {}) -> {lines, issueReference, proofStatus}`. This is the production evidence-preparation boundary: both PR creation and updates must call it from the real body/publication path. Existing workflow-runner exports and callers stay compatible. It reads notes and machine proof through actual injected ports; it does not execute a test, publish, approve or advance a step. `run.workflow` is the saved workflow name; bug and small-change enable their named writer rules, and other workflow names do not; `run.baseBranch` is its selected base branch and saved `run.baseSha` remains immutable. `run.steps` is the workflow's known step order with each latest saved summary, including earlier areas; the caller derives it from the saved workflow/run, never arbitrary directory entries.
+Own `src/workflow-pr-evidence.mjs`. Export module function `preparePrEvidence({run, isCode}, ports = {}) -> {lines, approvalLines, issueReference, proofStatus}`. This is the production evidence-preparation boundary: both PR creation and updates must call it from the real body/publication path. Existing workflow-runner exports and callers stay compatible. It reads notes and machine proof through actual injected ports; it does not execute a test, publish, approve or advance a step. `run.workflow` is the saved workflow name; bug and small-change enable their named writer rules, and other workflow names do not; `run.baseBranch` is its selected base branch and saved `run.baseSha` remains immutable. `run.steps` is the workflow's known step order with each latest saved summary, including earlier areas; the caller derives it from the saved workflow/run, never arbitrary directory entries.
 
 For each known step in workflow order, scan its latest stored summary, then the current direct `<runDir>/<step>.md` if present. Read no recursive logs, JSON, archived notes, foreign files or arbitrary summary-file paths. Missing notes contribute nothing. Edited notes replace their previous contents; replaced summaries use only the latest record. Lift only column-zero lines starting exactly with `Not fixed yet:`, `Not checked:`, `Defect:`, `Not caught because:`, `Proof (defect fixed):`, `Proof (gap closed):`, `Review:`. Only lift from the authorized writer table below. Trim payload ends, drop blanks and deduplicate within a label by payload equality ignoring one trailing period; preserve the first spelling, internal spaces and case, with distinct lines in source order. Emit `LABEL SAFE_PAYLOAD`, applying the prove owner's safe-value rule once to the raw payload. No further normalization or HTML entity escaping is permitted. Do not lift indented/case-varied labels or agent-authored `Old-code proof:`/`Tests vs base:`.
 
@@ -27,7 +27,7 @@ Insert every lifted/machine line above every replay status block, including PASS
 
 ## Approval evidence in PRs
 
-After the ordered top evidence block, before ordinary step prose, emit one short line per saved approval in chronological order. The optional `run.decisions` and `run.promptApprovals` input fields carry saved gate decisions and standalone journal entries whose path/hash match currently published prompts. A new decision's `evidence` is authoritative; legacy records remain readable but never acquire invented actor/time/words. Deduplicate copies with the same evidence event `id` across gate history/journal. Different ids produce separate lines even when route, actor, time, words and prompts are identical. For id-less legacy evidence only, retain content-based deduplication; do not collapse an identified event into an id-less one. Event/gate identities need not be displayed. `said` lines begin `Approved in chat:`, terminal lines `Approved in terminal:`, native chat lines `Approved in area chat:`. Include the invoking actor kind/id, epoch-millisecond time, route, verbatim words when present, and every approved prompt path/hash; never silently omit approval records from a successful body. A body budget omission must say approval evidence was omitted, not imply complete evidence.
+Return approval lines separately as `approvalLines`; never prepend them to `lines`. The runner places them after the complete ordinary header, preserving the verdict, Runtime check/report lines, their blank separator and the `Part of #N` issue-reference line in their literal #18 positions. Approval lines follow that header and precede step prose; this publisher never inserts them into its top evidence `lines`. Emit one short line per saved approval in chronological order. The optional `run.decisions` and `run.promptApprovals` input fields carry saved gate decisions and standalone journal entries whose path/hash match currently published prompts. A new decision's `evidence` is authoritative; legacy records remain readable but never acquire invented actor/time/words. Deduplicate copies with the same evidence event `id` across gate history/journal. Different ids produce separate lines even when route, actor, time, words and prompts are identical. For id-less legacy evidence only, retain content-based deduplication; do not collapse an identified event into an id-less one. Event/gate identities need not be displayed. `said` lines begin `Approved in chat:`, terminal lines `Approved in terminal:`, native chat lines `Approved in area chat:`. Include the invoking actor kind/id, ISO-8601 UTC time derived from the stored epoch milliseconds, route, verbatim words when present, and every approved prompt path/hash; never silently omit approval records from a successful body. A body budget omission must say approval evidence was omitted, not imply complete evidence.
 
 Every dynamic value, including actor, timestamp, route, path/hash and words, is a quoted JSON literal in a Markdown code span longer than all interior backtick runs. Preserve recoverable raw text: JSON escapes newlines, carriage returns, controls and bidi characters. Escape each exact `pdd-workflow:` prefix colon as `\u003a` inside the JSON literal, preventing an ownership marker. Do not HTML-escape raw identity or allow mentions, issue references, closing instructions, HTML or backticks to escape the span. These approval values use this rule instead of the ordinary lifted-label formatter. Keep exactly one real ownership marker and preserve existing redaction/budget/publication safeguards. A full render through the read-only GitHub Markdown API must show no user-mention/issue anchors or extra workflow markers from supplied evidence.
 
@@ -46,7 +46,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "7157604d356ef51f25d1d5d9f9194080cecc3e750fe47fc12ee3ace99101fef7",
+  "prose_sha256": "08d77bbc6fb8417cd2e9c46f75aebeaa52b02f521dfb1673638b91e889075684",
   "entries": [
     {
       "operation": "preparePrEvidence",
@@ -316,6 +316,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
       "result_schema": {
         "type": "object",
         "properties": {
+          "approvalLines": {"type": "array", "items": {"type": "string"}},
           "lines": {
             "type": "array",
             "items": {
@@ -331,6 +332,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
         },
         "required": [
           "lines",
+          "approvalLines",
           "issueReference",
           "proofStatus"
         ],

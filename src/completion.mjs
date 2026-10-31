@@ -1,4 +1,4 @@
-// Generated from prompts/cli/completion.prompt.md (sha256: 3c13cb80f733ce37e4f60daaa0a87db37c3688d65956bb79c9c4c1bd80ef8aa2).
+// Generated from prompts/cli/completion.prompt.md (sha256: b278c8905fa5467c1f7fc16c27c0be06def9e6f2f610e8286342a9c08adcb0a1).
 import { NAMES, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 function add(map, key, value) {

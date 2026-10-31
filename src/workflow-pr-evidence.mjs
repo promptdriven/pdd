@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: b55d2327a079dcc913adc45fb4c69d260683cef6586fdd1e8472b9286ace071e).
+// Generated from prompts/cli/workflow-pr-evidence.prompt.md (sha256: 37cd26844357b4a265c59e8e828b9de442a53c3db315582f36541f14db784eb3).
 import { execFile } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,7 +35,7 @@ function approvalLines(run) {
     const label = evidence.route === 'said' ? 'Approved in chat:' : evidence.route === 'chat' ? 'Approved in area chat:' : 'Approved in terminal:';
     const values = [evidence.words !== undefined && evidence.words !== null ? approvalValue(evidence.words) : null,
       evidence.actor ? `actor ${approvalValue(evidence.actor.kind)} ${approvalValue(evidence.actor.id)}` : null,
-      evidence.at !== undefined ? `at ${approvalValue(evidence.at)}` : null,
+      evidence.at !== undefined ? `at ${approvalValue(new Date(evidence.at).toISOString())}` : null,
       `route ${approvalValue(evidence.route)}`,
       ...(evidence.prompts ?? []).map(prompt => `${approvalValue(prompt.path)} ${approvalValue(prompt.proseSha256)}`)].filter(Boolean);
     return [`${label} ${values.join('; ')}`];
@@ -115,7 +115,6 @@ export async function preparePrEvidence({ run, isCode }, ports = {}) {
     lines.push(line);
   }
   lines.push(...[...grouped.get('Review:')].map(row=>row.line));
-  lines.push(...approvalLines(run));
   const issueReference = `${grouped.get('Not fixed yet:').size ? 'Refs' : isCode ? 'Closes' : 'Part of'} #${run.number}`;
-  return { lines, issueReference, proofStatus };
+  return { lines, approvalLines: approvalLines(run), issueReference, proofStatus };
 }

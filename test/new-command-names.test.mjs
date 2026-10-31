@@ -12,8 +12,7 @@ import { fakeRuntime, harbor, root, sink } from './runtime-fake.mjs';
 // Rules of user_stories/new-command-names.md that the runPdd vectors cannot see: the same code,
 // the notice on stderr only and once, clean --json and mcp stdout, and completion.
 const { test: TEST, lint: LINT, simulate: SIMULATE, start: START } = NAMES;
-test('workflow canonical name remains run', () => assert.equal(START, 'run'));
-const names = (line, before, after) => typeof line === 'string' && line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
+const names = (line, before, after) => line.includes(`pdd ${before}`) && line.includes(`pdd ${after}`);
 const effect = plan => ({ local: plan.local, operands: plan.operands, options: plan.options, helpPrefix: plan.helpPrefix });
 const noRunner = new Proxy({}, { get() { assert.fail('A usage error must not dispatch'); } });
 
@@ -25,7 +24,7 @@ const PAIRS = [
   [['check', '--lint'], [LINT], [[], ['place-order', 'unknown-item', '--json', '--timeout', '4'], ['--local', '--json'], ['--help']]],
   [['try'], [SIMULATE], [[], ['place-order', '--max-calls', '5', '--tab', 'world', '--new', '--no-open', '--no-wait', '--agent', 'Codex (work5)'],
     ['place-order', '--cli', '--shell'], ['--serve', '8123'], ['--save-last'], ['--stop', 'place-order'], ['--help']]],
-  [['workflow', 'start'], ['workflow', START], [['feature', 'owner/repo#42', '--agent', 'claude', '--base', 'main'], ['bug', '7'], ['--help']]],
+  [['workflow', 'run'], ['workflow', START], [['feature', 'owner/repo#42', '--agent', 'claude', '--base', 'main'], ['bug', '7'], ['--help']]],
 ];
 
 test('an old name gives the same plan as its new name, and only the old name carries a notice', () => {
@@ -43,7 +42,7 @@ test('an old name gives the same plan as its new name, and only the old name car
   }
   assert.ok(names(parseArgv(['check', '--json', '--lint']).notice, 'check --lint', LINT), 'the flag may stand anywhere');
   assert.ok(names(parseArgv(['help', 'try']).notice, 'try', SIMULATE));
-  assert.ok(names(parseArgv(['help', 'workflow', 'start']).notice, 'workflow start', `workflow ${START}`));
+  assert.ok(names(parseArgv(['help', 'workflow', 'run']).notice, 'workflow run', `workflow ${START}`));
 });
 
 test('sim is the short form of simulate: the same plan, help and usage error, and never a notice', async () => {
@@ -68,7 +67,7 @@ test('sim is the short form of simulate: the same plan, help and usage error, an
 test('a usage error of an old name prints the same message as the new name, with no notice', async () => {
   const bad = [[['check'], [TEST], [['--bogus'], ['--max-calls', '0'], ['--timeout', 'x'], ['--lint', '--lint'], ['--request', 'nope']]],
     [['try'], [SIMULATE], [['--tab', 'phone'], ['a', 'b'], ['--serve', '70000']]],
-    [['workflow', 'start'], ['workflow', START], [[], ['feature', '0'], ['feature', '42', '--agent', 'other'], ['../bad', '1']]]];
+    [['workflow', 'run'], ['workflow', START], [[], ['feature', '0'], ['feature', '42', '--agent', 'other'], ['../bad', '1']]]];
   for (const [before, after, tails] of bad) for (const tail of tails) {
     const results = [];
     for (const argv of [[...before, ...tail], [...after, ...tail]]) {
@@ -103,12 +102,12 @@ function assertNotice([old, ...current], before, after, normalize = text => text
   assert.ok(!old.stdout.includes(' is now '), 'never on stdout');
 }
 
-test('workflow start reaches the same runner export as workflow run, with the notice once on stderr', async () => {
+test('workflow run reaches the same runner export as workflow start, with the notice once on stderr', async () => {
   const calls = [];
-  const runs = await sameRun([['workflow', 'start', 'feature', 'o/r#42', '--agent', 'claude'], ['workflow', START, 'feature', 'o/r#42', '--agent', 'claude']], () => ({
+  const runs = await sameRun([['workflow', 'run', 'feature', 'o/r#42', '--agent', 'claude'], ['workflow', START, 'feature', 'o/r#42', '--agent', 'claude']], () => ({
     cwd: '/chosen', packageRoot: '/bundle', workflowRunner: { startRun: async input => { calls.push(input); return { exitCode: 0, message: 'started' }; } } }));
   assert.equal(calls.length, 2); assert.deepEqual(calls[0], calls[1]);
-  assertNotice(runs, 'workflow start', `workflow ${START}`);
+  assertNotice(runs, 'workflow run', `workflow ${START}`);
 });
 
 test('local check, lint and Try modes of an old name keep stdout, --json and the exit code', async t => {
@@ -174,7 +173,7 @@ test('shell completion offers only the new names', t => {
       for (const word of ['check', 'try', 'sim']) assert.ok(!first.includes(word), `${shell} ${words} ${word}`);
     }
     const workflow = choices(shell, ['workflow']);
-    assert.ok(workflow.includes(START)); assert.ok(!workflow.includes('start'));
+    assert.ok(workflow.includes(START)); assert.ok(!workflow.includes('run'));
     const testOptions = choices(shell, [TEST]);
     assert.ok(testOptions.includes('--read') && testOptions.includes('--fill-hash'));
     for (const hidden of ['--lint', '--local', '--request']) assert.ok(!testOptions.includes(hidden), `${shell} ${TEST} ${hidden}`);

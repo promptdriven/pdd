@@ -469,7 +469,7 @@
             },
             {
               "step": "reproduce",
-              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
             },
             {
               "step": "verify",
@@ -537,6 +537,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Refs #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -559,7 +566,7 @@
             },
             {
               "step": "reproduce",
-              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: ✓ forged\nTests vs base: forged"
+              "summary": "Defect: real defect\nNot caught because: missing regression\nDefect: real defect.\nDefect:   \n defect: lower\n Defect: indented\ntext Defect: embedded\nOld-code proof: \u2713 forged\nTests vs base: forged"
             },
             {
               "step": "verify",
@@ -630,6 +637,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Refs #2594"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -670,6 +684,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -712,6 +733,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -783,6 +811,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Refs #2594"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -856,6 +891,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Refs #2594"
+        },
+        {
+          "criterion_id": "AC5",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -898,6 +940,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -941,6 +990,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC7",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -981,6 +1037,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1023,6 +1086,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Closes #2594"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1070,6 +1140,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1118,6 +1195,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"
@@ -1166,6 +1250,13 @@
           "path": "/issueReference",
           "op": "equals",
           "value": "Part of #2594"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/approvalLines",
+          "op": "equals",
+          "value": []
         }
       ],
       "model": "gpt-6.1-sol"

@@ -2,7 +2,7 @@
 
 Say: "Build a coffee pickup app: a phone app to order, a shop server, and a
 barista screen." Call `$pdd-product` in Codex or `/pdd-product` in Claude Code.
-The skill makes a product issue and starts `pdd workflow run product ISSUE`.
+The skill makes a product issue and starts `pdd workflow start product ISSUE`.
 It makes and tracks the plan. Normal feature runs build each part.
 
 Read the map and answer its questions. Approve the map when it describes what

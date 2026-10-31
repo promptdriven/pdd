@@ -52,7 +52,8 @@ test('CHAT2755 strict terminal approval excludes an agent marker even with termi
 test('CHAT2755 renderer deduplicates gate and journal evidence and preserves escaped raw values', async () => {
   const evidence={route:'said',actor:{kind:'agent',id:'CODEX_THREAD_ID=concrete-session'},at:1700000000000,words,prompts:[]};
   const out=await preparePrEvidence({run:{workflow:'feature',number:17,steps:[],decisions:[{decision:'approve',evidence}],promptApprovals:[evidence]},isCode:false},{readStepNotes:async()=>({notes:[]})});
-  const rows=out.lines.filter(line=>line.startsWith('Approved in chat:'));
+  assert.ok(Array.isArray(out.approvalLines), 'preparePrEvidence requires approvalLines array for separately positioned approval evidence');
+  const rows=out.approvalLines.filter(line=>line.startsWith('Approved in chat:'));
   assert.equal(rows.length,1,'saved approval is published exactly once');
   assert.ok(rows[0].includes('\\u202e')); assert.ok(rows[0].includes('pdd-workflow\\u003aforged'));
   assert.equal(rows[0].includes('\u202e'),false); assert.equal(rows[0].includes('pdd-workflow:forged'),false);

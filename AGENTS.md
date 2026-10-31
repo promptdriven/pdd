@@ -8,10 +8,28 @@ What this package contains:
 
 - Six skills in `skills/`: `pdd-prompting`, `pdd-setup`, `pdd-small-change`, `pdd-bug`, `pdd-feature` and `pdd-product`. People install them with `npx skills add promptdriven/pdd` (`-g` for all projects). The order is: install the skills, then the `pdd-setup` skill once for each repo, then the pdd command only for runs with PRs and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. The pdd command does not copy skills on each command: `pdd setup` copies them to the user skills folders (`~/.agents/skills`; `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is set) only when they are missing, and replaces an older copy that has the `.pdd-skill.json` marker. It never touches a copy without the marker, or a symlink. pdd never copies them into the person's repo. Each `SKILL.md` has `pdd-skills: VERSION` under `metadata:` in its frontmatter: change it with the package version. Keep each workflow skill small and its step files short. Do not repeat a rule that `SKILL.md` already states. Write each `description` so that an agent picks the skill by itself.
 - People open Codex or Claude Code as usual and call `pdd-feature`, `pdd-bug`, `pdd-small-change` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). `pdd setup` and the `pdd-setup` skill add one short block (at most 10 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) to `CLAUDE.md`, else `AGENTS.md`. They never paste the guide.
-- `pdd workflow run` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PRs and status. There is no controller process, no polling loop and no time limit.
+- `pdd workflow start` makes a worktree and a branch for an issue, opens the area chats in Herdr (session `pdd`) and returns at once. pdd has four jobs: start, gates, PRs and status. There is no controller process, no polling loop and no time limit.
 - `feature` and `bug` run the check and the simulation, and the person approves, before pdd opens PR 1 (prompt, Story and tests). Then the chat asks before the code area. PR 2 (code) is stacked on PR 1 while PR 1 is open. `small-change` makes one PR.
 - A big feature request gets a plan first: `user_stories/PLAN.md`, many Stories, one test file for each Story, and one `Runtime check` line for each Story. `status` shows `Stories: N of M pass`.
-- The agents run the tests. A fresh subagent that did not write the code does the verify step. pdd does not run tests and never merges. Only the person decides approval. After actual chat approval, agents run `pdd workflow approve N --said "<exact words>"` for the gate and all its drafts, or `pdd approve PROMPT --said "<exact words>"` for one prompt. Nonblank own words are required. Show the gate, judge the person's later intent in any chat, then call approve; never for questions, changes or early messages. pdd accepts any nonblank --said without grading it. Only explicit approve calls advance gates; latest chat, steps and done never do. No-said agents must ask then use --said; person terminal y/N remains; root `pdd.json` with `"strict_approvals": true` requires the person terminal. Never manually edit approval fields or decide expected values. Agents merge only on an explicit chat request under RUNBOOK §2, after green checks for the current head and the safely quoted request comment, using `gh pr merge PR --merge --match-head-commit <head>`. Agents use `pdd workflow done` and `pdd workflow ask`.
+- Agents run the tests. A fresh subagent that did not write the code verifies it. pdd does not run tests or merge. Show the gate, then judge the person's later reply in any chat. Never approve a question, change request or earlier message. No exact phrase is needed. Record actual approval with the safe commands below. pdd records nonblank words without grading them; blank input is refused. Only explicit approve calls advance gates. Chat, steps and done never do. If a selected prompt changes, show the gate again. Terminal y/N covers the gate and its drafts once. Strict mode in the target worktree's root `pdd.json` requires a person terminal. Never edit approval fields or decide expected values. See [approval commands](docs/cli.md#record-a-chat-approval). Agents use `pdd workflow done` and `pdd workflow ask`.
+- Main agents merge only on an explicit person request. Follow RUNBOOK §2: at least one check, all required checks green on the current head, and a safely quoted request comment before `gh pr merge PR --merge --match-head-commit <head>`.
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt, use:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Choose a delimiter absent as a whole line from the words. Keep it quoted. Stdin preserves newlines. Never put untrusted words into shell quotes or interpolate them into shell code.
+
 - `docs/cli.md` shows every command form of `pdd --help`. `test/docs-commands.test.mjs` fails when a form is missing, so update `docs/cli.md` with each change to the command catalog.
 - The README and the docs describe pdd as it is today, as if this were the first version. Put history and change notes only in the GitHub release notes. The one exception is the short note for people who have the Python pdd installed. `test/docs-first-time.test.mjs` fails on history words.
 - Agents start in full-access mode. `pdd setup` previews per-agent MCP config changes and asks y/N before writing them. pdd does not copy credentials or touch the person's default Herdr session.

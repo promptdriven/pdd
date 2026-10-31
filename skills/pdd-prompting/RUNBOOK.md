@@ -42,10 +42,28 @@ The block of Harbor Coffee's `place_order` (schemas cut):
 ```
 - Every schema follows section 3. List every error that the prose can return in `errors`.
 - Do not write `prose_sha256`: `pdd test --fill-hash` fills it.
-- Show the gate, then judge the person's reply in any chat: their own Claude Code or Codex conversation or Herdr. Never call approve for a question, change request or message from before you showed the gate. No exact approval phrase is needed; the agent judges intent, not pdd. After actual approval, run `pdd approve <path> --said "<their exact words>"` for one prompt or `pdd workflow approve N --said "<their exact words>"` for the ready gate and all its draft prompts in one step. Nonblank own words are required; pdd accepts any nonblank payload without yes-word or semantic grading. Never invent a decision; never manually edit approval fields. Output lists prompt paths and current prose hashes.
-- Without --said, a person at a normal terminal can answer y/N. An agent, non-TTY or current Herdr chat-pane caller gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
-- Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
-- pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require all checks green for that head; failed/pending checks stop. First post a PR comment beginning `Merged at the person's request: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
+- Show the gate. Judge the person's later reply in any chat. A question, change request or earlier message is not approval. No exact phrase is needed. Never invent a decision or edit approval fields. See [Record a chat approval](https://github.com/promptdriven/pdd/blob/alpha/docs/cli.md#record-a-chat-approval).
+- After actual approval, record the exact words for the ready gate and all its drafts:
+
+```sh
+pdd workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+For one prompt:
+
+```sh
+pdd approve PROMPT --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Choose a delimiter absent as a whole line from the payload. Keep it quoted. Never interpolate the words into shell code or shell quotes. `--said -` records stdin exactly, including newlines. Blank input is refused; pdd does not grade nonblank words.
+- The gate saves selected prompt paths and prose hashes when shown. If a prompt changes, show the gate again before approval. Output lists the paths and hashes.
+- Without --said, a person at a normal terminal can answer y/N once for the listed gate and all its drafts. `pdd approve PATH` approves one prompt. An agent, non-TTY or current Herdr chat-pane caller gets a plain instruction: ask the person, then run with --said and their words. Native Herdr area-chat evidence may record history but never authorizes approval. Only an explicit approve call passes an approval gate; steps, `workflow done` and chat messages never do. Warn, without blocking, when a workflow has no approve gate before code.
+- Both commands read `pdd.json` from the target worktree root (`run.root` for a workflow). Root `pdd.json` with `"strict_approvals": true` permits only a person terminal; absent/false is easy mode. Strict mode refuses --said. Prompt approval records the invoking actor, time, route, exact words and path/hash; PR evidence shows matching approvals safely quoted in code spans. Gate approval does not approve the later code-or-stop gate. A person decides expected values; never change them on your own.
+- pdd never merges and has no merge command. An agent may merge only after the person's explicit chat request. Resolve the PR's exact current head and require at least one check and all required checks green for that head; missing, failed or pending checks stop. First post a PR comment beginning `Merge requested by the person: "…"`, preserving the exact request safely in a Markdown code span (use a fence longer than any backtick run; JSON-quote controls/newlines). Use a body file, never interpolate the words into shell code. A failed comment stops. Recheck head/checks, then run `gh pr merge PR --merge --match-head-commit <head>` with that same head. A changed head stops; obtain green checks for its current head before retrying.
 - To change an approved prompt (prose or interface), set `"status": "draft"`, run `pdd test --fill-hash` and ask the
   person to approve again through these routes.
 
@@ -571,11 +589,11 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 **Structured record for a workflow run.**
 New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
 custom workflows without that field keep their publication behavior; small-change has no replay policy.
-After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+For ordinary runs, after each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
 hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
-freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.

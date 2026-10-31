@@ -67,7 +67,7 @@ for(const key of ['spawn','spawnSync','exec','execFile','execSync','execFileSync
 for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const original=fs[key];fs[key]=function(path,...args){if(/(?:\\/toolbox\\/|\\/\\.ssh(?:\\/|$)|\\/credentials(?:\\/|$)|\\/\\.npmrc$)/.test(String(path)))stop();return original.call(this,path,...args);};}syncBuiltinESMExports();`);
   const run = (args, cwd = project) => spawnSync(process.execPath, ['--import', guard, bin, ...args],
     { cwd, env, encoding: 'utf8', timeout: 5000 });
-  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','run','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
+  for (const argv of [[], ['--help'], ['-h'], ['help'], ['workflow', '--help'], ['workflow', 'list', '--help'], ['completion', '--help'], ['setup','--help'], ['workflow','start','--help'], ['workflow','done','--help'], ['workflow','approve','--help'], ['workflow','open','--help']]) {
     const answer = run(argv); assert.equal(answer.status, 0, answer.stderr); assert.equal(answer.stderr, '');
     assert.ok(answer.stdout.includes('pdd')); assert.doesNotMatch(answer.stdout, /pdd (?:run|verify|runtime|doctor|phone)\b/);
   }
@@ -109,14 +109,14 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync']){const or
 // Wrong: runner routes reach the wrong export, drop parsed values, retry after a failure, or print an object instead of the message.
 test('ALPHA7: each runner route calls its own export once with parsed values, cwd and package root, and prints the message', async () => {
   const cases = [
-    [['workflow','run','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
-    [['workflow','run','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
-    [['workflow','run','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
+    [['workflow','start','feature','owner/repo#42','--agent','claude'], 'startRun', { name: 'feature', issue: 'owner/repo#42', agent: 'claude' }],
+    [['workflow','start','small-change','1'], 'startRun', { name: 'small-change', issue: '1', agent: 'codex' }],
+    [['workflow','start','bug','2','--base','round3/tipjar-workflow-base'], 'startRun', { name: 'bug', issue: '2', agent: 'codex', base: 'round3/tipjar-workflow-base' }],
     [['workflow','done','prompt-story','--summary','Story and cases written'], 'stepDone', { step: 'prompt-story', summary: 'Story and cases written' }],
     [['workflow','done','scope'], 'stepDone', { step: 'scope' }],
-    [['workflow','approve'], 'approveRun', { ref: undefined, said: undefined }],
+    [['workflow','approve'], 'approveRun', { ref: undefined }],
     [['workflow','ask','--','Should','-h','work?'], 'askPerson', { text: 'Should -h work?' }],
-    [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7', said: undefined }],
+    [['workflow','approve','https://github.com/o/r/issues/7'], 'approveRun', { ref: 'https://github.com/o/r/issues/7' }],
     [['workflow','changes','7','use','--','--blue'], 'changeRun', { ref: '7', text: 'use --blue' }],
     [['workflow','cancel','o/r#7'], 'cancelRun', { ref: 'o/r#7' }],
     [['workflow','status'], 'runStatus', { ref: undefined }],
@@ -173,4 +173,14 @@ test('Try accepts named local launchers while workflow agent choices stay bounde
     assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);
     assert.match(completion,/workflow:--agent\)/);
   }
+});
+
+test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup exit 2',async t=>{
+  const cwd=temp(t),stdout=capture(),stderr=capture();let input;
+  const args=['workflow','run','replay','17','--base','main','--adopt-corpus','/approval folder/corpus.json'];
+  assert.equal(parseArgv(args).options['--adopt-corpus'],'/approval folder/corpus.json');
+  const code=await runPdd(args,{cwd,stdout,stderr,env:{HOME:cwd,PATH:''},workflowRunner:{startRun:async value=>{input=value;return {exitCode:2,message:'Cannot adopt (content-mismatch).'};}}});
+  assert.equal(code,2);assert.equal(input.adoptCorpus,'/approval folder/corpus.json');assert.equal(input.name,'replay');assert.equal(input.base,'main');assert.match(stderr.text,/Cannot adopt/);assert.equal(stdout.text,'');
+  for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
+  for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);
 });

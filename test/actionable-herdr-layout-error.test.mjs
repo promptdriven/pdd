@@ -9,7 +9,7 @@ import {execFileSync,spawnSync} from 'node:child_process';
 // Builder copies this unchanged to test/actionable-herdr-layout-error.test.mjs before code.
 const source=resolve(process.env.PDD_LAYOUT_SOURCE ?? new URL('..',import.meta.url).pathname);
 const layoutModule=await import(pathToFileURL(join(source,'src/workflow-herdr-layout.mjs')));
-const {openRun,approveRun}=await import(pathToFileURL(join(source,'src/workflow-runner.mjs')));
+const {openRun,approveRun,stepDone}=await import(pathToFileURL(join(source,'src/workflow-runner.mjs')));
 const {closeChats}=await import(pathToFileURL(join(source,'src/workflow-chat.mjs')));
 async function fixture(t){
  const root=realpathSync(mkdtempSync(join(tmpdir(),'pdd-actionable-layout-')));t.after(()=>rmSync(root,{recursive:true,force:true}));
@@ -87,7 +87,8 @@ test('cleanup warning preserves layout diagnostic rather than dropping message a
 
 test('next-area public failure forwards layout diagnostic after explicit approval',async t=>{
  const f=await fixture(t),w=f.rows.find(w=>w.workspace_id===f.layout.workspaceId);w.worktree.repo_key='/other.git';
- f.run.areas.push({name:'build',steps:['build'],optional:[],gate:'pr'});f.run.done={plan:{summary:'Plan ready',at:1}};f.run.gate={id:'gate',area:'plan',at:2,kind:'approve'};f.save();
+ f.run.areas.push({name:'build',steps:['build'],optional:[],gate:'pr'});f.save();
+ await stepDone({step:'plan',summary:'Plan ready',cwd:f.cwd,packageRoot:source},f.runnerPorts);
  const before=f.registry(),out=await approveRun({ref:'17',cwd:f.parent,said:'looks good',packageRoot:source},f.runnerPorts);
  assert.equal(out.exitCode,1);assert.equal(f.registry(),before);assert.match(out.message,/herdr_layout_identity_changed/);
  diagnostic(out.message,{workspace:f.layout.workspaceId,field:'repo_key',expected:f.input.commonDir,found:'/other.git'});
