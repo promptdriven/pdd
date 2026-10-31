@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 43b981d05678aea07e49ab0ea81ea994217b6e8a6d50c9758404f09b4f8b6c13).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 869a6a29ea25f036bbf09ca1bd0a72c44e923fc6857e614ad5507013737b181d).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -9,7 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { homedir, hostname } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { DRAFT_SERVER_TEXT, PreflightError, TEST_SCHEMA, captureSource, checkInput, fillHashes, sharedSourceFiles, whyNoTests, findTests, formatSize, gitFiles, otherFiles,
-  preflight, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
+  preflight, interfaceBlocks, readPrompt, selectTests, sourceFilePort, sha256, STALE_HINT, staleHint } from './runtime-preflight.mjs';
 import { catalogRecords, compareCopies } from './contract-refs.mjs';
 import { askApproval, lineReader, promptPath } from './prompt-approve.mjs';
 import { OPEN_STATES, causeText, cleanText, exitCodeFor, progressTicker, projectAnswer, renderJson, renderText, summaryLine, stepTimeLimit, tryUsage, validLink, coverageText } from './runtime-output.mjs';
@@ -865,8 +865,24 @@ function noVerdictAdvice(answer, view) {
     next_step: checkCapacity(answer) === null ? view.next_step : null };
 }
 
+// Only the confirmed answer can identify the engine/model that produced a pass.
+function answerCacheIdentity(answer) {
+  const engine = answer?.engine_sha;
+  const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model].filter(value => value !== undefined && value !== null);
+  const known = value => typeof value === 'string' && value.trim().length > 0 && value.trim().toLowerCase() !== 'unknown';
+  if (!known(engine) || !models.length || !models.every(known) || new Set(models).size !== 1) return null;
+  return { engine_sha: engine, requested_model: models[0] };
+}
+const sameCacheIdentity = (a, b) => !!a && !!b && a.engine_sha === b.engine_sha && a.requested_model === b.requested_model;
+
 function applyAnswer(row, answer, context, observedWait = null, observedAt = context.ports.now()) {
   context.unsentInterruptions?.delete(row);
+  row.cache_identity = answerCacheIdentity(answer);
+  const knownIdentity = value => typeof value === 'string' && value.trim() && value.trim().toLowerCase() !== 'unknown';
+  context.observedTestIdentities ??= [];
+  const models = [answer?.usage?.requested_model, answer?.result?.report?.evaluation?.requested_model];
+  context.observedTestIdentities.push({ engine_sha: knownIdentity(answer?.engine_sha) ? answer.engine_sha : null,
+    models: models.filter(knownIdentity) });
   const view = projectAnswer(answer, { origin: context.origin, secrets: context.secrets, steps: row.steps ?? [], criterionTexts: row.criterion_texts ?? {} });
   const advice = noVerdictAdvice(answer, view);
   const firstDiagnosis = view.failed_checks.find(check => check.diagnosis) ?? null, failed = view.state === 'failed';
@@ -920,7 +936,8 @@ function batchRecord(context) {
       reservation: row.reservation ?? null, restart_used: !!row.restart_used,
       busy: !!row.busy, can_retry: !!row.can_retry, eligible: !!row.eligible, retry_at: row.retry_at ?? null,
       busy_request_id: row.busy_request_id ?? null, busy_observed_at: row.busy_observed_at ?? null, capacity_until: row.capacity_until ?? null,
-      engine_sha: row.engine_sha ?? null, criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
+      engine_sha: row.engine_sha ?? null, requested_model: row.requested_model ?? null, cache_identity: row.cache_identity ?? null,
+      ...(row.cache_reason ? { cache_reason: row.cache_reason } : {}), criterion_texts: row.criterion_texts ?? {}, draft: !!row.draft })) };
 }
 
 // Claims are permanent and authoritative even if an older concurrent reader saves stale rows.
@@ -1162,9 +1179,10 @@ async function runLint(context, complete = false) {
   }
 }
 
-async function checkBatch(context, rows) {
+async function checkBatch(context, rows, priorLint = null) {
   const { ports } = context, sendable = rows.filter(row => row.state === 'ready');
-  const lint = await runLint(context);
+  const lint = priorLint ?? await runLint(context);
+  context.lastCheckLint = lint;
   context.lint.state = lint.answer?.state ?? lint.kind;
   context.lint.unknown = false;
   const lintView = noVerdictAdvice(lint.answer, projectAnswer(lint.answer ?? {}, { origin: context.origin, secrets: context.secrets }));
@@ -1918,7 +1936,7 @@ function validTestCache(value) {
   if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
   return Object.entries(value.stories).every(([name, row]) => path(name) && keys(row, ['generation', 'outcome', 'pass']) && Number.isSafeInteger(row.generation) && row.generation >= 0 && row.generation <= value.generation
     && ['passed', 'failed', 'refused', 'not_run', 'unknown'].includes(row.outcome)
-    && (row.pass === undefined || (row.outcome === 'passed' && keys(row.pass, ['fingerprint', 'passed_at', 'tests', 'rows', 'engine_sha']) && hash(row.pass.fingerprint)
+    && (row.pass === undefined || (row.outcome === 'passed' && keys(row.pass, ['fingerprint', 'passed_at', 'tests', 'rows', 'engine_sha', 'requested_model']) && hash(row.pass.fingerprint)
       && typeof row.pass.passed_at === 'string' && Number.isFinite(Date.parse(row.pass.passed_at)) && new Date(row.pass.passed_at).toISOString() === row.pass.passed_at
       && Array.isArray(row.pass.tests) && row.pass.tests.length > 0 && row.pass.tests.every(path) && new Set(row.pass.tests).size === row.pass.tests.length
       && keys(row.pass.rows, row.pass.tests) && Object.keys(row.pass.rows).length === row.pass.tests.length && row.pass.tests.every(test => evidence(row.pass.rows[test])))));
@@ -2182,9 +2200,62 @@ function storyFingerprint(cache, capture, story, options, origin) {
   const rawPaths = [...new Set([story, ...footprint.tests, ...footprint.files.filter(file => file.path.endsWith('.prompt.md')).map(file => file.path)])].sort();
   const raw = rawPaths.map(path => [path, capture.raw_file_hashes?.[path] ?? (path.endsWith('.prompt.md') ? capture.raw_prompt_hashes?.[path] : undefined)]);
   if (raw.some(([, hash]) => !hash)) return null;
-  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: PDD_VERSION, engine_sha: ENGINE_SHA })));
+  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: PDD_VERSION })));
 }
-async function beginTestAttempts(cache, rows, capture, options, origin) {
+// The captured footprint owns reachability; inspect its captured declarations without
+// inventing another dependency graph or reading a later version of a source file.
+function declarationCacheReason(capture, story, tests) {
+  const footprint = capture.stories?.find(item => item.story_path === story);
+  if (!footprint?.files || !Array.isArray(capture.sources)) return null;
+  const sources = new Map(capture.sources.map(file => [file.path, Buffer.from(file.bytes).toString('utf8')]));
+  const fake = name => `runs every time: uses an AI-played fake (${name})`;
+  const deterministic = binding => {
+    if (!isObject(binding)) return false;
+    if (binding.action === 'fixture.lookup') return Array.isArray(binding.cases) && binding.cases.length > 0;
+    if (binding.action === 'port.write') return Object.hasOwn(binding, 'result_template') || Object.hasOwn(binding, 'result');
+    return /^(key-value\.(get|put|delete|list)|collection\.(get|insert|update|delete|query|list)|blob\.(read|write|stat)|sql\.execute)$/.test(binding.action);
+  };
+  const prompts = [];
+  for (const file of footprint.files) {
+    const match = /^prompts\/fakes\/(.+)\.prompt\.md$/.exec(file.path);
+    if (match) return fake(match[1]);
+    if (!file.path.endsWith('.prompt.md')) continue;
+    try { prompts.push(JSON.parse(interfaceBlocks(sources.get(file.path) ?? '')[0][1])); }
+    catch { return 'runs every time: resource declarations unavailable'; }
+  }
+  for (const path of tests) {
+    let doc; try { doc = JSON.parse(sources.get(path)); } catch { return 'runs every time: resource declarations unavailable'; }
+    // A step override is part of that step's world, not evidence for other steps.
+    const bindings = [doc.simulation ?? {}, ...(doc.steps ?? []).map(step => ({ ...(doc.simulation ?? {}), ...(step.simulation_overrides ?? {}) }))];
+    for (const simulation of bindings) for (const [operation, binding] of Object.entries(simulation)) {
+      if (['http.prompt', 'port.prompt'].includes(binding?.action)) return fake(operation.split('.')[0]);
+    }
+    for (const prompt of prompts) for (const resource of prompt.resources ?? []) {
+      if (!['http', 'command', 'model', 'port'].includes(resource.kind)) continue;
+      const operations = resource.operations;
+      if (!Array.isArray(operations) || !operations.length) return fake(resource.name);
+      for (const operation of operations) {
+        const bound = bindings.every(simulation => deterministic(simulation[`${resource.name}.${operation.name}`]));
+        if (resource.kind === 'port' && resource.name === 'clock' && operation.name === 'now') {
+          const fixed = [doc.initial_world, doc.world, doc.data].some(world => isObject(world?.clock) && Object.hasOwn(world.clock, 'now'));
+          if (!fixed && !bound) return 'runs every time: uses the real clock';
+        } else if (!bound) return fake(resource.name);
+      }
+    }
+  }
+  return null;
+}
+function eligibleCachePass(pass, now) {
+  const age = now - Date.parse(pass?.passed_at);
+  return sameCacheIdentity(pass, pass) && typeof pass.requested_model === 'string' && pass.requested_model.trim() && pass.requested_model.toLowerCase() !== 'unknown'
+    && typeof pass.engine_sha === 'string' && pass.engine_sha.trim() && pass.engine_sha.toLowerCase() !== 'unknown'
+    && Number.isFinite(age) && age >= 0 && age <= 7 * 86400000;
+}
+
+function identityFingerprint(cache, fingerprint, identity) {
+  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ fingerprint, engine_sha: identity?.engine_sha ?? null, requested_model: identity?.requested_model ?? null })));
+}
+async function beginTestAttempts(cache, rows, capture, options, origin, force = false) {
   if (cache.disabled || !rows.length) return;
   const originals = rows.map(row => ({ ...row }));
   const grouped = new Map();
@@ -2194,8 +2265,10 @@ async function beginTestAttempts(cache, rows, capture, options, origin) {
       if (!story) continue;
       const fingerprint = capture ? storyFingerprint(cache, capture, story, options, origin) : null;
       const pass = data.stories[story]?.pass;
-      if (fingerprint && pass?.fingerprint === fingerprint && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
-        for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, passed_at: pass.passed_at, phase: 'cache', calls: 0, seconds: 0, request_ids: [], report_url: null });
+      const reason = capture && declarationCacheReason(capture, story, own.map(row => row.test));
+      if (reason) for (const row of own) row.cache_reason = reason;
+      if (!force && !reason && !Object.hasOwn(cache.context.ports.env, 'CI') && eligibleCachePass(pass, cache.context.ports.now()) && fingerprint && pass?.fingerprint === identityFingerprint(cache, fingerprint, pass) && own.every(row => row.state === 'ready' && pass.tests.includes(row.test))) {
+        for (const row of own) Object.assign(row, pass.rows[row.test], { state: 'passed', cached: true, cache_identity: { engine_sha: pass.engine_sha, requested_model: pass.requested_model }, passed_at: pass.passed_at, phase: 'cache', calls: 0, seconds: 0, request_ids: [], report_url: null });
         continue;
       }
       const generation = ++data.generation;
@@ -2214,8 +2287,11 @@ async function finishTestAttempts(cache, rows, capture) {
       const complete = footprint?.tests.length === own.length && footprint.tests.every(test => own.some(row => row.test === test));
       const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : complete && own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number') && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
       const record = data.stories[story] = { generation: token.generation, outcome: outcome !== 'passed' && data.stories[story]?.outcome === 'failed' ? 'failed' : outcome };
-      if (outcome === 'passed' && token.fingerprint) {
-        record.pass = { engine_sha: own.find(row => row.engine_sha)?.engine_sha ?? null, fingerprint: token.fingerprint, tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
+      const identity = own[0]?.cache_identity;
+      const consistent = identity && own.every(row => sameCacheIdentity(identity, row.cache_identity))
+        && rows.filter(row => !row.cached && row.cache_identity).every(row => sameCacheIdentity(identity, row.cache_identity));
+      if (outcome === 'passed' && token.fingerprint && consistent) {
+        record.pass = { ...identity, fingerprint: identityFingerprint(cache, token.fingerprint, identity), tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
           rows: Object.fromEntries(own.map(row => [row.test, { checks: row.checks, criteria: row.criteria, criteria_total: row.criteria_total, draft: !!row.draft }])) };
       }
     }
@@ -2275,6 +2351,27 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.store.saveRepo(root, { ...repoState, last_batch: batch });
   context.runtime = new Runtime({ origin, token: identity.token, ports, signal: context.signal });
   await checkBatch(context, fresh);
+  if (cache) {
+    const observed = context.observedTestIdentities ?? [];
+    const rerun = rows.filter(row => row.cached && observed.some(identity =>
+      identity.engine_sha && identity.engine_sha !== row.cache_identity?.engine_sha
+      || identity.models.some(model => model !== row.cache_identity?.requested_model)));
+    if (rerun.length) {
+      // Restore the selected local rows, then invalidate their old generations before
+      // sending. The same rows replace the provisional cache projection in output.
+      const originals = new Map(localRows(checked.rows).map(row => [row.test, row]));
+      for (const row of rerun) {
+        const original = originals.get(row.test), storyPath = row.story_path, texts = row.criterion_texts;
+        for (const key of Object.keys(row)) delete row[key];
+        Object.assign(row, original, { story_path: storyPath, criterion_texts: texts, cache_reason: 'runs again: interpreter build or model changed' });
+        if (options['--max-calls'] !== undefined) row.max_calls = Number(options['--max-calls']);
+      }
+      await beginTestAttempts(cache, rerun, capture, options, origin, true);
+      context.rows.push(...rerun);
+      saveBatch(context);
+      await checkBatch(context, rerun, context.lastCheckLint);
+    }
+  }
   if (cache) await finishTestAttempts(cache, rows, capture);
   saveBatch(context);
   return printResult(context, rows);

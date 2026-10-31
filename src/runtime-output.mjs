@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-output.prompt.md (sha256: fa9b715e4e0faf5043e4b3406d0f6fd79cd6166a9e01ca4c6f1f9377822bbcb4).
+// Generated from prompts/cli/runtime-output.prompt.md (sha256: 2fbd5421749a28ae44496d897aeed202d9719fd4f020bcf3d2be13239bd732a5).
 export const OPEN_STATES = new Set(['queued', 'running']);
 const RESULT_WORDS = { not_run: 'not run' };
 
@@ -158,7 +158,7 @@ export function jsonRow(row) {
     seconds: round(row.seconds), requested_model: row.requested_model ?? null, report_url: row.report_url ?? null,
     request_id: row.request_ids?.at(-1) ?? null, draft: !!row.draft, busy: !!row.busy, can_retry: !!row.can_retry, time_limit: row.time_limit ?? null,
     why: row.why ?? null, who: row.who ?? null, next_step: row.next_step ?? null,
-    rerun: row.rerun ?? null, ...(row.cached ? { cached: true, passed_at: row.passed_at } : {}),
+    rerun: row.rerun ?? null, ...(typeof row.cache_reason === 'string' ? { cache_reason: row.cache_reason } : {}), ...(row.cached ? { cached: true, passed_at: row.passed_at } : {}),
     reason: ['passed', 'failed'].includes(row.state) ? null : row.time_limit ? { code: row.time_limit.code, message: `${row.time_limit.message} ${row.time_limit.fix}` } : row.provider ? { code: row.provider.code, message: PROVIDER_TEXT } : row.note ?? (row.state === 'unknown' && row.why ? { code: null, message: row.why } : null) };
 }
 
@@ -212,7 +212,7 @@ function table(rows, now) {
       + `; force with pdd test --cache-clear ${shellWord(row.story)}`;
   };
   const lines = [['Story', 'Test', 'Result', 'Checks', 'Time'], ...rows.map(row => [row.title ?? row.story, row.test,
-    `${row.cached ? previousPass(row) : row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
+    `${row.cached ? previousPass(row) : row.busy ? 'busy (not run)' : RESULT_WORDS[row.state] ?? row.state}${row.draft ? ' (DRAFT)' : ''}${row.cache_reason ? `; ${cleanText(row.cache_reason)}` : ''}`, row.checks ? `${row.checks.passed}/${row.checks.total}` : '-',
     typeof row.seconds === 'number' ? `${round(row.seconds).toFixed(1)} s` : '-'])];
   const widths = lines[0].map((_, column) => Math.max(...lines.map(line => line[column].length)));
   return lines.map(line => line.map((cell, column) => column === line.length - 1 ? cell : cell.padEnd(widths[column])).join('  ').trimEnd());
