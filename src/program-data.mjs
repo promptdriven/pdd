@@ -1,5 +1,5 @@
-// Generated from prompts/cli/program-data.prompt.md (sha256: 5f09c6739e3bd0e67f77fc41a723a2015e4ab4de70dd53575b030c4f6072329d).
-import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+// Generated from prompts/cli/program-data.prompt.md (sha256: 2ddc32f2137a6ffbe33adbfe1faadbbebbd5c22f5810c4708e89bfcd141e96fb).
+import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { hostname } from 'node:os';
@@ -32,8 +32,36 @@ export function programData({root,program,flags={}},ports={}) {
   if(!parts.length||isAbsolute(program)||parts.some(part=>!part||part==='.'||part==='..'||part.includes('\\')||part.includes('\0')))throw localError('Invalid program identity.');
   const files=spawnSync('git',['ls-files','-z','--cached','--others','--exclude-standard'],{cwd:root,encoding:'utf8'}).stdout.split('\0');
   const leaf=basename(program),duplicates=files.filter(f=>f.endsWith('.prompt.md')&&basename(f,'.prompt.md')===leaf).length>1;
-  const encode=part=>part.replaceAll('%','%25').replace(duplicates?/__|^_|_$/g:/__/g,match=>'%5F'.repeat(match.length));
-  const dir=safeDirectory(root,['.pdd','run',(duplicates?parts:[leaf]).map(encode).join('__')]);
+  const encode=(part,flat=false)=>part==='active.lock'?'%61ctive.lock':part.replaceAll('%','%25').replace(flat?/__|^_|_$/g:/__/g,match=>'%5F'.repeat(match.length));
+  const run=safeDirectory(root,['.pdd','run']);
+  let dir;
+  {
+    const ownership=path=>{
+      try {
+        const recorded=readPrivate(join(path,'program.json'),undefined);
+        const session=readPrivate(join(path,'session.json'),undefined);
+        const validIdentity=value=>typeof value==='string'&&value.length>0&&!isAbsolute(value)&&!value.split('/').some(part=>!part||part==='.'||part==='..'||part.includes('\\')||part.includes('\0'));
+        if(recorded!==undefined&&(!object(recorded)||!validIdentity(recorded.program)))throw localError('Invalid program ownership metadata.');
+        if(session!==undefined&&(!object(session)||!validIdentity(session.file??session.program)))throw localError('Invalid program session metadata.');
+        return recorded?.program??(session?.file??session?.program)?.replace(/\.prompt\.md$/,'');
+      }catch(error){if(error.exitCode)throw error;throw localError(`Invalid program ownership/session metadata: ${error.message}`);}
+    };
+    for(const name of readdirSync(run)){
+      const path=join(run,name),stat=lstatSync(path);
+      if(!stat.isDirectory()||stat.isSymbolicLink())continue;
+      try{if(ownership(path)===program){dir=safeDirectory(root,['.pdd','run',name]);break;}}catch{ /* An unrelated unusable record cannot identify this entry. Selected paths are checked below. */ }
+    }
+    if(!dir){
+      const base=encode(leaf),flat=parts.map(part=>encode(part,true)).join('__');
+      let selected=duplicates?flat:base;
+      const basePath=join(run,base);
+      if(selected===base)try{const st=lstatSync(basePath);if(!st.isDirectory()||st.isSymbolicLink())throw localError('Refusing an unsafe program data directory.');if(ownership(basePath)&&ownership(basePath)!==program)selected=flat;}catch(e){if(e.code!=='ENOENT')throw e;}
+      dir=safeDirectory(root,['.pdd','run',selected]);
+      const owner=ownership(dir);if(owner&&owner!==program)throw localError('Program data directory belongs to another entry.');
+    }
+    const releaseMapping=acquireProgramLock(dir);
+    try{const owner=ownership(dir);if(owner&&owner!==program)throw localError('Program data directory belongs to another entry.');writePrivate(join(dir,'program.json'),{program});}finally{releaseMapping();}
+  }
   if(flags.fresh){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined)writePrivate(join(dir,'world.prev.json'),prior);}finally{release();}}
   const git=spawnSync('git',['rev-parse','--git-path','info/exclude'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   if(git.status!==0)throw localError('Cannot locate local Git excludes.');

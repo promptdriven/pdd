@@ -1,8 +1,8 @@
-// Generated from prompts/cli/program-run.prompt.md (sha256: 576fd167342a7ade2891bc35b97c38593f7f39d6fe198589719b8517e279e874).
+// Generated from prompts/cli/program-run.prompt.md (sha256: 46af7a47f8d330c3dee27c16a957341beaddedb098d71a35f3b73c84e1e24120).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, chmodSync, lstatSync, openSync, closeSync, constants } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
-import { captureSource, gitFiles, readPrompt, checkInput, interfaceSchemaProblems } from './runtime-preflight.mjs';
+import { basename, join, relative, resolve, posix } from 'node:path';
+import { gitFiles, readPrompt, checkInput, interfaceSchemaProblems } from './runtime-preflight.mjs';
 import { programData, readPrivate, writePrivate, safeDirectory, localError, object, acquireProgramLock } from './program-data.mjs';
 import { openProgramSession } from './program-session.mjs';
 import { programTransport } from './runtime-client.mjs';
@@ -67,7 +67,7 @@ function estimate(root,visible,file,operation,simulation={}) {
 function trace(report,write,sanitize) {
   if(Array.isArray(report.call_chain)&&report.call_chain.length){write('Traceback (prompt calls, most recent call last):\n');for(const frame of report.call_chain)write(`  ${sanitize(frame.prompt)}, operation ${sanitize(frame.operation)}${frame.call_index!=null&&frame.max_calls!=null?` (call ${frame.call_index} of at most ${frame.max_calls})`:''}\n`);}
   if(report.call_chain_total>(report.call_chain?.length??0))write(`${report.call_chain_total} total prompt calls; ${report.call_chain_total-(report.call_chain?.length??0)} frames omitted.\n`);
-  const error=report.error??report.refusal;if(error)write(`Error ${sanitize(error.code)}${error.message===undefined?'':`: ${sanitize(error.message)}`}\n`);
+  const error=report.error??report.refusal;if(error)write(`${sanitize(error.code)}${error.message===undefined?'':`: ${sanitize(error.message)}`}\n`);
 }
 function sessionRecord(session) {
   const {transport,capture,newSession,save,serve,...record}=session;return record;
@@ -89,34 +89,67 @@ async function shellProgram({root,file,name,env,flags,data},ports) {
 }
 export async function runProgram({file,args=[],root=process.cwd(),env=process.env,flags={},once=false},givenPorts={}) {
   const ports={stdout:process.stdout,stderr:process.stderr,stdin:process.stdin,...givenPorts,env};
-  const quiet=flags.q||flags.quiet;const sessionPorts={...ports,programQuiet:!!quiet};let usage,unlock,session,callCap,usagePrinted=false;
-  const summary=(cached=false)=>{if(!quiet){ports.stderr.write(cached?'pdd: cached · 0 AI calls\n':`pdd: ${usage?.calls??'unknown'} AI calls · ${usage?.seconds??'unknown'} s${session?.draft?' · DRAFT':''}${session?.newSession?' · prompt behavior, not tested code':''}\n`);}usagePrinted=true;};
+  const quiet=flags.q||flags.quiet;const sessionPorts={...ports,programQuiet:!!quiet};const originalFile=file,originalArgs=[...args];let usage,unlock,session,callCap,admissionBound,usagePrinted=false;
+  const capAdvice=()=>{const next=Math.max(admissionBound??0,(callCap??0)+1);return next<=1000?`pdd --max-calls ${next} ${[originalFile,...originalArgs].map(word=>/^[A-Za-z0-9_./-]+$/.test(word)?word:quote(word)).join(' ')}`:'Reduce the prompt call graph before trying again.';};
+  const summary=(cached=false)=>{if(!quiet){ports.stderr.write(cached?'pdd: cached · 0 AI calls\n':`pdd: ${usage?.calls??'unknown'} AI call${usage?.calls===1?'':'s'} · ${Number.isFinite(usage?.seconds)?Math.round(usage.seconds):'unknown'} s${session?.draft?' · DRAFT':''}${session?.newSession?' · prompt behavior, not tested code':''}\n`);}usagePrinted=true;};
   try {
     const found=spawnSync('git',['rev-parse','--show-toplevel'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});if(found.status!==0)throw localError('Run the prompt inside a Git repository.');
     const cwd=root;root=found.stdout.trim();file=relative(root,resolve(cwd,file)).split('\\').join('/');
     const visible=new Set(gitFiles(root)),prompt=readPrompt(root,visible,file);if(prompt.error)throw localError(`Cannot read ${file}: ${prompt.error}.`);
     let app=ports.programApp;try{if(!app)app=await import('./program-app.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND'||!e.message.includes('/program-app.mjs'))throw e;}
-    const appKind=app?await app.appKind({file,root},ports):null;
+    const classification=app?await app.appKind({file,root,all:true},ports):null;
     const entries=prompt.interface.entries??[];
-
     const cliEntries=entries.filter((e,i)=>['input_schema','result_schema'].every(key=>(prompt.interface.conventions??[]).some(c=>c.path===`/entries/${i}/${key}`&&c.convention==='cli')));
-    if(cliEntries.length>1||(cliEntries.length&&entries.length>1)||(appKind&&cliEntries.length))throw localError('One file is one program; multiple CLI entries or two kinds cannot run together.');
-    if(appKind)return await app.runApp({file,root,env,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
-    const cli=cliEntries.length===1;let entry=cli?cliEntries[0]:entries.length===1?entries[0]:undefined;
-    if(!entries.length){ports.stderr.write(`pdd: ${file} has no entry, so it cannot run.\npdd: It is context for other prompts.\n`);for(const path of visible){if(path===file||!path.endsWith('.prompt.md'))continue;const caller=readPrompt(root,visible,path);if(!caller.error){try{if(captureSource(root,{entry:path}).sources.some(s=>s.path===file))ports.stderr.write(`pdd: used by ${path}\n`);}catch{ /* Uncapturable prompts cannot establish a caller. */ }}}return 2;}
-    const usageText=`pdd: Usage: pdd ${file}${entries.length>1?' '+entries.map(e=>e.operation).join('|'):''} ${Object.entries((entry??entries[0]).input_schema?.properties??{}).map(([k,v])=>{const flag='--'+k+' '+(v.enum?v.enum.join('|'):(v.type??'JSON').toUpperCase());return ((entry??entries[0]).input_schema.required??[]).includes(k)?flag:'['+flag+']';}).join(' ')}\n`;
+    if(cliEntries.length>1)throw localError('Multiple CLI entries cannot run together.');
+    const kinds=typeof classification==='string'?[classification]:classification?.kinds??[];
+    const httpOperations=typeof classification==='string'?entries.filter(e=>!cliEntries.includes(e)).map(e=>e.operation):classification?.httpOperations??[];
+    const typed=entries.filter(e=>!cliEntries.includes(e)&&!httpOperations.includes(e.operation));
+    const heading=prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');
+    const table=[...(kinds.includes('http')?[{word:'serve',kind:'http'}]:[]),...(kinds.includes('screen')?[{word:'app',kind:'screen'}]:[]),...cliEntries.map(entry=>({word:heading,kind:'cli',entry})),...typed.map(entry=>({word:entry.operation,kind:'typed',entry}))];
+    let selected=once?table.find(row=>row.kind==='cli'):!args[0]?.startsWith('-')?table.find(row=>row.word===args[0]):undefined;
+    if(selected&&!once)args=args.slice(1);
+    let recoveredData;
+    if(flags.read){
+      recoveredData=programData({root,program:file.slice(0,-'.prompt.md'.length),flags:{}},ports);
+      const saved=readPrivate(join(recoveredData.dir,'session.json'),null);
+      if(!saved?.pending||saved.pending.id!==flags.read)fail('No matching pending request belongs to this program.');
+      if(saved.pending.command==='call'){
+        selected=table.find(row=>row.entry?.operation===saved.pending.operation);
+        if(!selected)fail('The pending operation is no longer in this prompt. Restore its source before reading.');
+      }else selected={kind:'setup',entry:entries[0]};
+    }
+    if(!selected)selected=table.find(row=>row.kind==='cli')??(table.length===1?table[0]:undefined);
+    if(selected&&['http','screen'].includes(selected.kind)){
+      if(args.length)throw localError(selected.kind==='http'?'HTTP programs take no ARGS. Call the link.':'Screen programs take no ARGS. Open the link.');
+      return await app.runApp({file,root,env,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})},kind:selected.kind},ports);
+    }
+    const cli=selected?.kind==='cli';let entry=selected?.entry;
+    if(!entries.length&&!table.length&&!recoveredData){
+      ports.stderr.write(`pdd: ${file} has no entry, so it cannot run.\npdd: It is context for other prompts.\n`);
+      const links=new Map();
+      for(const path of visible){if(!path.endsWith('.prompt.md'))continue;const caller=readPrompt(root,visible,path);if(caller.error)continue;
+        const section=caller.text.split(/^##\s+Dependencies\s*$/mi)[1]?.split(/^#{1,2}\s+/m)[0]??'';
+        const targets=[...(caller.interface.calls??[]).map(c=>c.target)];
+        for(const match of section.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)|^\s*[-*+]\s+`([^`]+)`/gm)){const target=match[1]??match[2];if(!/^[a-z]+:/i.test(target))targets.push(posix.normalize(posix.join(posix.dirname(path),target)));}
+        links.set(path,targets);
+      }
+      const uses=(path,seen=new Set())=>{if(seen.has(path))return false;seen.add(path);return (links.get(path)??[]).some(target=>target===file||uses(target,seen));};
+      for(const path of links.keys())if(path!==file&&uses(path))ports.stderr.write(`pdd: used by ${path}\n`);return 2;
+    }
+    if(!selected){ports.stderr.write(`pdd: Usage: pdd ${file} ${table.map(row=>row.word).join('|')} [ARGS]\npdd: Word table:\n`+table.map(row=>`  ${row.word}: ${row.kind}\n`).join(''));return 2;}
+    const usageText=`pdd: Usage: pdd ${file}${entries.length>1?' '+entries.map(e=>e.operation).join('|'):''} ${Object.entries((entry??entries[0])?.input_schema?.properties??{}).map(([k,v])=>{const flag='--'+k+' '+(v.enum?v.enum.join('|'):(v.type??'JSON').toUpperCase());return ((entry??entries[0])?.input_schema.required??[]).includes(k)?flag:'['+flag+']';}).join(' ')}\n`;
     if(!cli&&args.includes('--help')){ports.stdout.write(usageText);return 0;}
     let input,name;
     const schemaIssues=interfaceSchemaProblems(prompt.interface);if(schemaIssues.length){ports.stderr.write(usageText+schemaIssues.map(i=>i.pointer+' '+i.rule).join('\n')+'\n');return 2;}
     try {
       if(cli){name=prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');if(!args.length&&!once&&!flags.read&&(!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(name??'')||['pdd','node','gh','git'].includes(name.toLowerCase())))throw localError('Name the program with a safe first heading; pdd, node, gh and git are reserved.');
         input={argv:args};if((args.length||once)&&!flags.read){if(entry.input_schema.properties?.stdin&&!ports.stdin?.isTTY)input.stdin=await stdinText(ports.stdin);else if(entry.input_schema.required?.includes('stdin'))input.stdin='';validate(input,entry.input_schema);}
-      }else if(!flags.read){if(entries.length>1){entry=entries.find(e=>e.operation===args[0]);if(!entry)throw localError('Choose an operation: '+entries.map(e=>e.operation).join(', '));args=args.slice(1);}input=await typedInput(args,entry,cwd,ports.stdin);validate(input,entry.input_schema);}
+      }else if(!flags.read){input=await typedInput(args,entry,cwd,ports.stdin);validate(input,entry.input_schema);}
     }catch(e){ports.stderr.write(usageText+'pdd: '+(e.message??'Invalid input.').replaceAll('\n','\npdd: ')+'\n');return 2;}
     const program=file.slice(0,-'.prompt.md'.length);
-    let data=programData({root,program,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
+    let data=recoveredData??programData({root,program,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
     if(once){const selected=readPrivate(join(data.dir,'launcher.json'),null);if(selected){data={...data,startingData:{initial_world:selected.pending?selected.initial_world:data.startingData.initial_world,...(selected.simulation===undefined?{}:{simulation:selected.simulation})},fresh:!!selected.pending&&!!selected.fresh};}}
-    if(data.fresh&&!quiet)ports.stderr.write('pdd: fresh start\n');
+    if(data.fresh&&!quiet)ports.stderr.write(`pdd: fresh start${readPrivate(join(data.dir,'world.prev.json'),undefined)!==undefined?'. Old data kept in '+join(data.dir,'world.prev.json'):''}\n`);
     if(flags['show-data']){ports.stdout.write(JSON.stringify(data.startingData.initial_world)+'\n');return 0;}
     unlock=acquireProgramLock(data.dir);
     if(cli&&!args.length&&!flags.read&&!once){
@@ -141,7 +174,8 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
         session.save(updated);if(!quiet)ports.stderr.write('pdd: Program setup confirmed. Run the prompt again.\n');return 0;
       }
       input=saved.pending.input;entry=entries.find(e=>e.operation===saved.pending.operation);if(!entry)fail('The pending operation is no longer in this prompt. Restore its source before reading.');before=saved.pending.before;
-      callCap=saved.pending.cap??Number(flags['max-calls']??Math.min(estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{}),100));
+      admissionBound=estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{});
+      callCap=saved.pending.cap??Number(flags['max-calls']??Math.min(admissionBound,100));
       answer=await transport.finish(await transport.get(flags.read),flags.read,'call',{sessionId:saved.id});
     }else{
       usage={calls:0,seconds:0};
@@ -149,14 +183,14 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
       if(flags['max-calls']!==undefined&&(!Number.isInteger(cap)||cap<1||cap>1000))throw localError('--max-calls must be from 1 to 1000.');
       usage=undefined;
       session=await openProgramSession({root,file,program,data},sessionPorts);session.draft=session.capture.sources.filter(s=>s.path.endsWith('.prompt.md')).some(s=>/"status"\s*:\s*"draft"/.test(s.bytes.toString()));
-      if(cap===undefined)cap=Math.min(estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{}),100);
+      admissionBound=estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{});if(cap===undefined)cap=Math.min(admissionBound,100);
       callCap=cap;if(cap>20&&!quiet)ports.stderr.write(`pdd: may use up to ${cap} AI calls.\n`);
       record=sessionRecord(session);
       const last=readPrivate(join(data.dir,'last-run.json'),null);
       if(!data.fresh&&!data.explicit&&last?.simulation===session.simulation&&last?.cap===cap&&!session.capture.sources.some(s=>s.path.endsWith('.prompt.md')&&(readPrompt(root,visible,s.path).interface?.resources??[]).some(r=>r.name==='clock'||r.kind==='clock'))&&last?.source===session.source&&last.login===session.login&&last.origin===session.origin&&last.operation===entry.operation&&JSON.stringify(last.input)===JSON.stringify(input)&&JSON.stringify(last.data_before)===JSON.stringify(before)&&last.cacheable){
         summary(true);if(flags.json){ports.stdout.write(JSON.stringify(last)+'\n');return last.exit_code;}if(cli){ports.stdout.write(last.output.stdout);ports.stderr.write(last.output.stderr);return last.output.exit_code;}ports.stdout.write(JSON.stringify(last.output)+'\n');return 0;
       }
-      if(session.remaining<cap){usage={calls:0,seconds:0};fail('No AI calls remain for this call. Start fresh with a sufficient session budget.');}
+      if(session.remaining<cap){usage={calls:0,seconds:0};fail('No AI calls remain for this call. Start a new session with a sufficient session budget, preserving the saved world.');}
       if(once){const selected=readPrivate(join(data.dir,'launcher.json'),null);if(selected?.pending)writePrivate(join(data.dir,'launcher.json'),{...selected,pending:false});}
       const id=session.transport.ports.randomUUID();record.pending={id,command:'call',input,operation:entry.operation,before,cap};session.save(record);
       let interrupted=false;const off=session.transport.ports.onInterrupt(()=>{interrupted=true;});
@@ -199,12 +233,14 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     if(verdict!=='passed'){
       receipt.cacheable=false;writePrivate(join(data.dir,'last-run.json'),receipt);
       if(verdict==='refused')ports.stderr.write(`pdd: refused, ${usage?.calls??0} AI calls.\n`);
-      const error=report.error??refusal;ports.stderr.write(`pdd: Fix: ${error?.fix??error?.hint??'Fix the reported prompt or call allowance before trying again.'}\n`);
+      const error=report.error??refusal;if(error?.fix??error?.hint)ports.stderr.write(`pdd: Fix: ${error.fix??error.hint}\n`);
+      if(verdict==='refused'&&/cap|allowance|budget|max.calls/i.test(JSON.stringify(error??{})))ports.stderr.write(`pdd: Fix: ${capAdvice()}\n`);
+      else if(verdict==='refused'&&!error?.fix&&!error?.hint)ports.stderr.write('pdd: Fix: Fix the reported prompt or call allowance before trying again.\n');
       ports.stderr.write(`pdd: details: ${reportUrl}\n`);if(flags.json)ports.stdout.write(JSON.stringify(receipt)+'\n');summary(!!report.replayed);return exit;
     }
     writePrivate(join(data.dir,'last-run.json'),receipt);
     if(!quiet&&receipt.outside_calls.length){ports.stderr.write('pdd: fake calls (nothing real was called):\n');for(const call of receipt.outside_calls)ports.stderr.write(`pdd: ${session.transport.sanitize(call.summary??JSON.stringify(call))} · ${session.transport.sanitize(call.level??'fake')}\n`);}
     if(flags.json)ports.stdout.write(JSON.stringify(receipt)+'\n');else if(cli){ports.stdout.write(result.stdout);ports.stderr.write(result.stderr);if(result.stderr&&!result.stderr.endsWith('\n')&&!quiet)ports.stderr.write('\n');}else ports.stdout.write(JSON.stringify(result)+'\n');
     summary(!!report.replayed);if(!quiet)ports.stderr.write(`pdd: details: ${reportUrl}\n`);return exit;
-  }catch(e){ports.stderr.write('pdd: '+(session?.transport?.sanitize(e.message)??e.message??'The program could not run.').replaceAll('\n','\npdd: ')+'\n');if(e.requestId)ports.stderr.write(`pdd: pdd --read ${e.requestId} ${file}\n`);if(!usagePrinted&&(e.exitCode??125)!==2)summary();return e.exitCode??125;}finally{unlock?.();}
+  }catch(e){if(e.runtimeCode==='session-call-cap'&&Number.isFinite(admissionBound))ports.stderr.write(`pdd: Fix: ${capAdvice()}\n`);ports.stderr.write('pdd: '+(session?.transport?.sanitize(e.message)??e.message??'The program could not run.').replaceAll('\n','\npdd: ')+'\n');if(e.requestId)ports.stderr.write(`pdd: pdd --read ${e.requestId} ${file}\n`);if(!usagePrinted&&(e.exitCode??125)!==2)summary();return e.exitCode??125;}finally{unlock?.();}
 }

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: f53a0c659cd06147f3bf1c2ac511911eb20a56e12fbf9307f07a3f88028447d1).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: ccacb3253ed0c336ffd1c79d7386b60b19191ca2d8f2cb1f684435d8c18a0009).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -112,7 +112,7 @@ function parseWords(argv, typed) {
 }
 
 function parseProgram(words) {
-  const options = {}, valueOptions = new Set(['--data', '--max-calls', '--read']);
+  const options = {}, valueOptions = new Set(['--data', '--max-calls', '--read', '--port']);
   let i = 0;
   while (i < words.length && words[i].startsWith('-')) {
     const key = words[i];
@@ -124,6 +124,7 @@ function parseProgram(words) {
   }
   if (!words[i]?.endsWith('.prompt.md')) return null;
   if (options['--max-calls'] !== undefined && !/^(?:[1-9][0-9]{0,2}|1000)$/.test(options['--max-calls'])) fail();
+  if (options['--port'] !== undefined && (!/^[0-9]+$/.test(options['--port']) || Number(options['--port']) < 1 || Number(options['--port']) > 65535)) fail();
   if (options['--read'] && !/^[a-f0-9-]{36}$/i.test(options['--read'])) fail();
   return Object.freeze({commandId:'prompt-run',local:'prompt-run',operands:Object.freeze(words.slice(i)),options:Object.freeze(options)});
 }
