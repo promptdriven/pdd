@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
-import { NAMES, PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { findSkills, setupSkills } from './skills-install.mjs';
@@ -21,6 +21,7 @@ const skillNames = folders => folders.map(folder => basename(folder)).join(', ')
 // npx skills update changes only what npx skills add recorded (0.1.8 tester); add replaces any copy.
 const staleLine = ({ found, stale }, version, cwd) => `PDD skills in ${found} ${stale === 'older' ? `are older than pdd ${version}` : `differ from the skills of pdd ${version}`}. To update them, run: npx skills add promptdriven/pdd${[join(cwd, '.agents/skills'), join(cwd, '.claude/skills')].includes(found) ? '' : ' -g'} -a codex -a claude-code -y`;
 const RUNNER_ROUTES = {
+  'workflow-request-uptake': plan => ['acknowledgeRequest', { requestId: plan.operands[0], summary: plan.options['--summary'] }],
   'workflow-run': plan => ['startRun', { name: plan.operands[0], issue: plan.operands[1], agent: plan.options['--agent'] ?? 'codex', ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}), ...(plan.options['--adopt-corpus'] !== undefined ? { adoptCorpus: plan.options['--adopt-corpus'] } : {}) }],
   'workflow-evidence': plan => ['recordEvidence', { ref: plan.operands[0], summaryFile: plan.options['--summary'] }],
   'workflow-done': plan => ['stepDone', { step: plan.operands[0], ...(plan.options['--summary'] !== undefined ? { summary: plan.options['--summary'] } : {}) }],
@@ -96,9 +97,13 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         return result.exitCode;
       } catch (error) { line(stderr, `The product command failed.${reason(error)}`); return 1; }
     }
-    case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
+    case 'workflow-request-uptake': case 'workflow-run': case 'workflow-done': case 'workflow-ask': case 'workflow-approve': case 'workflow-changes':
     case 'workflow-cancel': case 'workflow-status': case 'workflow-open': case 'workflow-evidence': {
       if (plan.local === 'workflow-evidence' && !plan.options['--summary']) { line(stderr, 'Use pdd workflow evidence ISSUE --summary FILE.'); return 2; }
+      if (plan.local === 'workflow-request-uptake' && !plan.options['--summary']?.trim()) {
+        const route = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake');
+        line(stderr, `Use pdd ${route.prefix.join(' ')} REQUEST_ID --summary TEXT.`); return 2;
+      }
       const [name, input] = RUNNER_ROUTES[plan.local](plan);
       try {
         const runner = workflowRunner ?? await import('./workflow-runner.mjs');
