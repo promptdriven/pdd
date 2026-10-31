@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: f5bc0e93c5458ee13ad527b839d7415f4a74f91b965a7cda2ad7f03d01c2163d).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -254,8 +254,8 @@ const pointerOf = tokens => tokens.map(token => `/${String(token).replace(/~/g, 
 const sectionOf = (base, tokens) => tokens.reduce((text, token) => /^\d+$/.test(token) ? `${text}[${token}]` : `${text}.${token}`, base);
 
 // P9 on one step input: {refusals, warnings}. An unknown schema keyword skips that input with a warning.
-export function checkInput(input, schema, index) {
-  if (hasReference(input)) return { refusals: [], warnings: [] };
+export function checkInput(input, schema, index, { literal = false } = {}) {
+  if (!literal && hasReference(input)) return { refusals: [], warnings: [] };
   const keyword = unknownKeyword(schema);
   if (keyword) return { refusals: [], warnings: [`steps[${index}] input was not checked here: the prompt schema uses "${keyword}". The interpreter still checks it.`] };
   const problems = [], warnings = [];
@@ -1071,7 +1071,7 @@ function preparedText(root, visible, path, text, format) {
   }
 }
 
-function captureOnce(root, { tests, appMap = null, prepareSource }) {
+function captureOnce(root, { tests, entry, appMap = null, prepareSource }) {
   const names = gitFiles(root), visible = new Set(names), overlay = new Map(), payload = new Map(), queue = [], visited = new Set();
   const effective = new Map(), provenance = new Map(), edges = new Map(), shared = new Set(), footprintPayload = new Map();
   let selecting = true;
@@ -1157,7 +1157,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       }
       for (const path of overlay.keys()) add(path, 'prepareSource');
     }
-    if (visible.has(SOURCE_CONFIG)) {
+    if (!entry && visible.has(SOURCE_CONFIG)) {
       const config = inspect(SOURCE_CONFIG, SOURCE_CONFIG);
       if (config.size > LIMITS.test) throw sourceProblem(SOURCE_CONFIG, '', 'must be at most 1 MiB.');
       let doc;
@@ -1168,7 +1168,7 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       if (!isObject(doc) || Object.keys(doc).length !== 1 || !Array.isArray(doc.include)) throw sourceProblem(SOURCE_CONFIG, '', 'must contain only an include array of file paths.');
       for (const path of doc.include) { add(path, SOURCE_CONFIG); shared.add(sourcePath(path,SOURCE_CONFIG)); }
     }
-    const selected = tests ?? [...new Set([
+    const selected = tests ?? (entry ? [] : [...new Set([
       ...findTests({root,files:names}).tests.map(test=>test.path).filter(path=>!overlay.has(path)),
       ...[...overlay.keys()].sort().filter(path => {
       if (!path.endsWith('.json')) return false;
@@ -1177,11 +1177,12 @@ function captureOnce(root, { tests, appMap = null, prepareSource }) {
       const text = bytes(file).toString('utf8');
       if (!text.includes('prompt-runtime.program-scenario')) return false;
       try { const version=JSON.parse(text)?.schema_version; return typeof version==='string' && version.startsWith('prompt-runtime.program-scenario'); } catch { return true; }
-    })])];
+    })])]);
+    if (entry) add(entry, 'Entry prompt', 'prompt');
     for (const path of selected) add(path, 'Selected test', 'test');
     if (appMap) { add(appMap, 'App map', 'app-map'); shared.add(sourcePath(appMap,'App map')); }
     const storyTests = new Map();
-    let siblingsAdded = false;
+    let siblingsAdded = !!entry;
     for (let index = 0; index < queue.length || !siblingsAdded; index++) {
       if (index === queue.length && !siblingsAdded) {
         siblingsAdded = true; selecting = false;
