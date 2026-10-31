@@ -20,7 +20,7 @@ async function harness(t,options={}){
   if(e.command==='lint')return {status:200,json:f.lint(e.request.requestId)};
   if(e.command==='try')return {status:200,json:f.tryJob(e.request.requestId)};
   if(e.method==='DELETE')return {status:200,json:f.stopJob(e.headers['x-request-id'],e.url.split('/').at(-1))};
-  if(e.json){const output=options.cli===false?{ok:true}:{stdout:'program only\n',stderr:options.stderr??'',exit_code:options.exit??0};const report={verdict:'passed',replayed:false,provider_calls:1,remaining_calls:299,...options.report};const job={...f.job(e.json.requestId,'call','passed',{exitCode:0,output,world:options.world??{},refusals:options.refusals??[],report},options.calls??1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return options.reply?.(e,f,job)??{status:200,json:job};}
+  if(e.json){const output=options.cli===false?{ok:true}:{stdout:'program only\n',stderr:options.stderr??'',exit_code:options.exit??0};const report={verdict:'passed',error:null,replayed:false,provider_calls:1,remaining_calls:299,...options.report};const job={...f.job(e.json.requestId,'call','passed',{exitCode:0,output,world:options.world??{},refusals:options.refusals??[],report},options.calls??1),session_id:e.url.split('/')[3]};f.jobs.set(e.json.requestId,job);return options.reply?.(e,f,job)??{status:200,json:job};}
   if(f.jobs.has(e.url.split('/').at(-1)))return {status:200,json:f.jobs.get(e.url.split('/').at(-1))};
   return {status:404,json:{error:{code:'not-found',message:'Not found'}}};
  });
@@ -78,6 +78,12 @@ test('fresh plus explicit data preserves old backup while selecting explicit wor
 test('flattened duplicate paths cannot collide with literal delimiter basenames',async t=>{const h=await harness(t);mkdirSync(join(h.repo,'a'));mkdirSync(join(h.repo,'b'));for(const path of ['a/main.prompt.md','b/main.prompt.md','a__main.prompt.md']){writeFileSync(join(h.repo,path),readFileSync(join(h.repo,PLACE)));const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([path,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);}assert.equal(h.fake.posts.filter(p=>p.command==='try').length,3);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{},{}]);});
 
 for(const [label,mutate] of [
+ ['error string',job=>{job.result.report.error='declared';}],
+ ['error array',job=>{job.result.report.error=[];}],
+ ['error missing code',job=>{job.result.report.error={message:'bad'};}],
+ ['error empty code',job=>{job.result.report.error={code:''};}],
+ ['error nonstring message',job=>{job.result.report.error={code:'declared',message:7};}],
+ ['passed with valid error',job=>{job.result.report.error={code:'declared',message:'contradiction'};}],
  ['unknown verdict',job=>{job.result.report.verdict='unknown';}],
  ['missing verdict',job=>{delete job.result.report.verdict;}],
  ['nonstring verdict',job=>{job.result.report.verdict={passed:true};}],
@@ -168,4 +174,21 @@ test('budget explicit nonconventional fake captures target and selected nested c
  const h=await harness(t,{edit(s){s.resources=[budgetResource()];},files(root){mkdirSync(join(root,'sandbox'));const fake=iface(false);fake.entries[0].operation='lookup';fake.entries[0].result_schema=obj({});fake.calls=[{operation:'nested',target:'sandbox/child.prompt.md',target_operation:'main',max_calls:2}];prompt(root,'sandbox/custom.prompt.md',fake,'custom','- [Rules](rules.txt)');prompt(root,'sandbox/child.prompt.md',iface(false));prompt(root,'sandbox/unrelated.prompt.md',iface(false));writeFileSync(join(root,'sandbox/rules.txt'),'CUSTOM BINDING RULES');},reply:admission(13)});
  const binding={action:'http.prompt',target:'sandbox/custom.prompt.md',operation:'lookup',max_calls:2,request_template:{},request_mapping:[{from:'',to:''}],response_template:{},response_mapping:[{from:'',to:''}]};writeFileSync(join(h.repo,'seed.json'),JSON.stringify({initial_world:{},simulation:{'cloud.lookup':binding}}));
  pass(await h.invoke(['list'],['--data','seed.json']));assert.equal(h.fake.jsonPosts[0].json.max_calls,13);const start=h.fake.posts.find(p=>p.command==='try');assert.deepEqual(start.request.simulation['cloud.lookup'],binding);for(const path of ['sandbox/custom.prompt.md','sandbox/child.prompt.md','sandbox/rules.txt'])assert.ok(start.tar.includes(Buffer.from(path)),path);assert.equal(start.tar.includes(Buffer.from('sandbox/unrelated.prompt.md')),false);assert.ok(start.tar.includes(Buffer.from('CUSTOM BINDING RULES')));
+});
+
+for(const error of [null,undefined])test(`canonical no-error passed receipt: ${error}`,async t=>{
+ const h=await harness(t,{report:{error},world:{confirmed:true}});const r=await h.invoke();pass(r);assert.equal(r.out,'program only\n');assert.deepEqual(h.stored('world.json'),{confirmed:true});assert.equal(h.stored('session.json').pending,undefined);
+});
+for(const error of [null,{code:'session-call-cap'}])test(`canonical refused receipt accepts optional error message: ${JSON.stringify(error)}`,async t=>{
+ const h=await harness(t,{report:{verdict:'refused',error},refusals:[{code:'session-call-cap',message:'Cap exhausted'}],world:{confirmed:true}});const r=await h.invoke();assert.equal(r.code,125);assert.equal(r.out,'');assert.match(r.err,/refused/);assert.match(r.err,/session-call-cap/);assert.deepEqual(h.stored('world.json'),{confirmed:true});assert.equal(h.stored('session.json').pending,undefined);assert.equal(h.stored('last-run.json').exit_code,125);
+});
+test('canonical declared error without message is a confirmed failure1',async t=>{
+ const h=await harness(t,{report:{verdict:'failed',error:{code:'declared'}},world:{confirmed:true}});const r=await h.invoke();assert.equal(r.code,1,r.err);assert.equal(r.out,'');assert.match(r.err,/declared/);assert.deepEqual(h.stored('world.json'),{confirmed:true});assert.equal(h.stored('session.json').pending,undefined);assert.equal(h.stored('last-run.json').exit_code,1);
+});
+for(const notice of ['capacity','maintenance'])for(const quiet of [false,true])test(`direct transport ${notice} notices respect quiet=${quiet} and preserve program streams`,async t=>{
+ // Omit error only here to isolate notice behavior against the pre-fix runner.
+ const h=await harness(t,{report:{error:undefined},stderr:'program diagnostic\n'});let reads=0;
+ h.fake.capacity=()=>{reads++;return {status:200,json:notice==='capacity'?{unrecognized:true}:{maintenance:reads===1?{until:new Date(Date.parse('2026-10-27T16:27:47Z')+1000).toISOString(),reason:'Synthetic maintenance'}:null}};};
+ const r=await h.invoke(['list'],quiet?['-q']:[]);pass(r);assert.equal(r.out,'program only\n');assert.ok(reads>=1);assert.equal(r.err.includes('program diagnostic\n'),true);
+ const own=r.err.replace('program diagnostic\n','');if(quiet)assert.equal(own,'');else {assert.match(own,notice==='capacity'?/capacity could not be read/:/maintenance/);assert.ok(own.trim().split('\n').every(line=>line.startsWith('pdd:')),own);}
 });

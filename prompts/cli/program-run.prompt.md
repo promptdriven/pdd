@@ -125,6 +125,12 @@ verdict, malformed refusal container or entry, or contradictory receipt
 exits125 with a plain interpreter-failure reason and same-ID read hint: no result
 stdout (including --json), no world replacement, no cacheable receipt and no pending
 clear. Keep the accepted ID for GET-only recovery until a valid confirmed outcome.
+For report.error, null and absence both mean no error. A supplied non-null error
+must be an object with a nonempty string code; message is optional, but when
+provided must be a string. Reject malformed errors and semantic passed with a
+non-null error before any acknowledgment, persistence or output, using the same
+uncertain-receipt recovery above. Missing message never invalidates a declared
+error or refusal; display its supplied code without inventing a message.
 A valid report.verdict passed yields CLI exit_code or typed0; failed with a
 declared report.error yields1; refused yields125 even when report.error exists.
 Preserve result.refusals and report.error code/message, fix/hint/field and graph
