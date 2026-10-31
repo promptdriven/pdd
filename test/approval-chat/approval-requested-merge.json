@@ -12,7 +12,7 @@
     },
     {
       "id": "AC3",
-      "text": "Help, docs and skills describe --said, the one-step gate/prompt approval, preserved terminal/native-chat routes and root pdd.json strict_approvals, while the agent never changes expected values on its own."
+      "text": "Help, docs and skills describe one-step gate/prompt approval with any nonblank person words relayed through --said from any chat without grading them, ask-then-relay guidance for agent/non-TTY/current-area-pane callers without --said, preserved person-terminal y/N and root pdd.json strict_approvals terminal-only mode; latest chat alone never approves and the agent never changes expected values on its own."
     },
     {
       "id": "AC4",
@@ -33,7 +33,7 @@
     {
       "id": "contracts",
       "given": "review docs/skills/help/caps/byte-identical RUNBOOK copies using native suite",
-      "required_observation": "all named files describe exact said/default/strict/one-step/native routes; expected-value and no-hand-edit rules remain"
+      "required_observation": "all named files describe any nonblank said from any chat without grading, one-step approval, ask-then-relay for bare agent/non-TTY/current-area-pane, terminal y/N and strict terminal-only; latest native chat alone never authorizes; expected-value and no-hand-edit rules remain"
     },
     {
       "id": "names",
