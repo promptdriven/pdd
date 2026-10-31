@@ -2,6 +2,16 @@
 
 Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd try` before anything goes to the PDD runtime: it finds the files, the tests and the stories, checks each test, computes the prose hash, fills draft hashes and builds the source tar. It makes no network call and never reads a token.
 
+## Direct program source capture
+
+Direct program execution captures a Git-visible entry without discovering or
+requiring Stories/scenarios. Follow its calls targets and local Dependencies links
+recursively, including referenced contracts and Markdown images. Apply existing
+bounded reads and secret-name, symlink, outside-root and size privacy checks.
+Only the entry graph is uploaded: unrelated prompts, Stories, tests and repository
+files are excluded. Missing reached source refuses before upload. Preserve existing
+Story capture. This supplies the [program runner](program-run.prompt.md).
+
 ## Files
 
 - Git files = `git ls-files -z -co --exclude-standard` in the repo root, unique and sorted. A deleted tracked file is skipped. This lookup is noninteractive: explicitly ignore stdin and retain captured stdout and stderr. Its helpers and descendants must not retain the caller's stdin after pdd exits; this defensive isolation leaves discovery results and errors unchanged.

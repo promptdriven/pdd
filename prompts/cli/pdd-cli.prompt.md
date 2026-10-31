@@ -12,6 +12,17 @@ one newline. Preserve other commands and their existing dispatch and effects.
 
 When the plan has a `notice` ([former names](argument-parser.prompt.md#former-names)), print it once to stderr before any other line, help and PATH lines included, then run the plan as usual. Never print it to stdout, so `--json` output stays exact. A `CommandInputError` has no notice.
 
+## Direct prompt dispatch
+
+For a `prompt-run` plan, call module function `runProgram({file, args, root, env, flags}, ports)`
+from the [program runner](program-run.prompt.md), required native generation,
+verification and testing context. `runPdd` accepts optional `runtimePorts` using the
+runtime client's ports; forward those plus stdout, stderr, env and stdin to the
+runner, returning its exit code unchanged. Resolve root from cwd; normalize prefix
+option names into flags without leading hyphens (quiet for -q). Program streams and shell introduction
+follow that owner's rules rather than ordinary CLI line normalization. Preserve
+all other routes, including simulate.
+
 ## Authoring
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for native authoring/generation scope and shared local command policy. Runtime parsing/forwarding receives no guide input; applicable concrete validation and route facts remain with the required parser/catalog contracts.
