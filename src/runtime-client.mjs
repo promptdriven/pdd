@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: b335caa6c99be6b76c197c7635d564b458a74150a88634278fb7f0fa8909b01d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: bcc33bf74f5b95c67c6c791382863856414ff304ce4bbfdc8956c52d09ff3147).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -1815,12 +1815,21 @@ function validTestCache(value) {
       && keys(row.pass.rows, row.pass.tests) && Object.keys(row.pass.rows).length === row.pass.tests.length && row.pass.tests.every(test => evidence(row.pass.rows[test])))));
 }
 function cacheWarning(cache, recovered = false) {
-  if (!cache.warned) cache.context.warnings.push('Warning: test cache unavailable or damaged; running selected Stories without reuse. To reset, run pdd test --cache-clear.');
+  const message = 'Warning: test cache unavailable or damaged; running selected Stories without reuse. To reset, run pdd test --cache-clear.';
+  if (!cache.warned) cache.warningIndex = cache.context.warnings.push(message) - 1;
+  else if (cache.recoveredWarning) cache.context.warnings[cache.warningIndex] = message;
+  cache.recoveredWarning = false;
   if (!recovered) {
     if (!cache.disabled) recordCacheInvalidation(cache);
     cache.disabled = true;
   }
   cache.warned = true;
+}
+function cacheRecoveryWarning(cache) {
+  if (cache.warned) return;
+  cache.warningIndex = cache.context.warnings.push('Warning: recovered stale cache lock or claim; previous passes may remain eligible.') - 1;
+  cache.warned = true;
+  cache.recoveredWarning = true;
 }
 // Immutable markers let recovery retire observed failures without erasing a later one.
 function cacheInvalidations(cache) {
@@ -1860,7 +1869,14 @@ function readTestCache(cache) {
   const data = JSON.parse(cache.fs.read(cache.path, 'utf8'));
   if (!validTestCache(data)) throw new Error('invalid cache');
   if (data.epoch !== cache.epoch) return { data: freshTestCache(cache), history: false };
-  return { data, history: true };
+  safeCachePath(cache.fs, cache.failedPath);
+  const failedStat = cacheStat(cache.fs, cache.failedPath);
+  if (!failedStat || failedStat.size > CACHE_LIMIT) throw new Error('missing or oversized last-failed metadata');
+  const failed = JSON.parse(cache.fs.read(cache.failedPath, 'utf8'));
+  const expected = Object.fromEntries(Object.entries(data.stories).filter(([, row]) => row.outcome === 'failed').map(([story]) => [story, true]));
+  if (!isObject(failed) || Object.keys(failed).length !== 4 || failed.schema_version !== 1 || failed.epoch !== data.epoch
+    || failed.generation !== data.generation || !isDeepStrictEqual(failed.stories, expected)) throw new Error('invalid last-failed metadata');
+  return { data, history: true, failed: failed.stories };
 }
 function replaceCacheFile(cache, path, text) {
   safeCachePath(cache.fs, path);
@@ -1902,7 +1918,7 @@ async function acquireCacheGuard(cache) {
         if (!cacheStat(fs, path)) continue;
         let dead = false;
         try { process.kill(Number(match[1]), 0); } catch (error) { if (error.code === 'ESRCH') dead = true; }
-        if (dead) { remove(path); cacheWarning(cache, true); continue; }
+        if (dead) { remove(path); cacheRecoveryWarning(cache); continue; }
         const ticketPath = join(path, 'ticket.json');
         safeCachePath(fs, ticketPath);
         let ticket = null;
@@ -1960,7 +1976,7 @@ async function cacheTransaction(cache, operation, clear = false) {
             cache.fs.unlink(ownerPath);
           }
           cache.fs.rmdir(cache.lock);
-          cacheWarning(cache, true);
+          cacheRecoveryWarning(cache);
           continue;
         }
         await cache.context.ports.sleep(10);
@@ -1981,7 +1997,7 @@ async function cacheTransaction(cache, operation, clear = false) {
     if (invalidations.length) {
       snapshot = { data: { ...freshTestCache(cache), generation: snapshot.data.generation + 1 }, history: false };
     }
-    const result = operation(snapshot.data, snapshot.history);
+    const result = operation(snapshot.data, snapshot.history, snapshot.failed ?? {});
     if (snapshot.data.epoch !== cache.epoch) {
       replaceCacheFile(cache, cache.bindingPath, JSON.stringify({ schema_version: 1, epoch: snapshot.data.epoch }));
       cache.epoch = snapshot.data.epoch;
@@ -2010,7 +2026,7 @@ async function cacheTransaction(cache, operation, clear = false) {
     if (releaseGuard) try { releaseGuard(); } catch { cacheWarning(cache); }
   }
 }
-async function openTestCache(context, root, clear) {
+async function openTestCache(context, root, clear, visible) {
   const fs = context.ports.cacheFiles, dir = join(root, '.pdd', 'cache', 'test');
   const cache = { fs, context, dir, path: join(dir, 'stories.json'), failedPath: join(dir, 'lastfailed.json'), lock: join(dir, 'transaction.lock'), tokens: new Map(), data: null, history: false, markerDir: join(context.store.dir, 'test-cache-invalidations', sha256(Buffer.from(root))) };
   try {
@@ -2040,8 +2056,12 @@ async function openTestCache(context, root, clear) {
     const text = stat ? fs.read(exclude, 'utf8') : '';
     if (!text.split(/\r?\n/).includes('/.pdd/cache/test/')) replaceCacheFile(cache, exclude, `${text}${text.endsWith('\n') || !text ? '' : '\n'}/.pdd/cache/test/\n`);
     // Clearing replaces only known metadata; unsafe files and directories remain untouched.
-    await cacheTransaction(cache, (data, history) => {
+    await cacheTransaction(cache, (data, history, failed) => {
       cache.history = history;
+      cache.failed = { ...failed };
+      if (visible) for (const story of Object.keys(data.stories)) {
+        if (!visible.has(story)) { delete data.stories[story]; delete cache.failed[story]; }
+      }
       if (clear) { const generation = data.generation + 1; Object.assign(data, freshTestCache(cache), { generation }); cache.history = false; }
     }, clear);
   } catch { cacheWarning(cache); }
@@ -2102,11 +2122,12 @@ async function runBatch(context, cwd, words, options, setRelease) {
   context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
   let selected = select(found, normalized, root);
-  const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear']) : null;
+  const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear'], found.visible) : null;
   if (cache && !cache.disabled && options['--lf'] && !options['--cache-clear'] && cache.history) {
-    const failures = Object.values(cache.data.stories).some(row => row.outcome === 'failed');
-    if (failures) selected = selected.filter(test => cache.data.stories[test.storyPath]?.outcome === 'failed');
+    const failures = selected.filter(test => cache.failed[test.storyPath] === true);
+    if (failures.length) selected = failures;
   }
+  if (options['--cache-clear']) line(ports.stderr, `pdd: test cache ${cache && !cache.disabled ? 'cleared' : 'unavailable'}. Running ${new Set(selected.map(test => test.storyPath ?? test.path)).size} selected Stories; the interpreter may reuse saved answers until prompt-runtime #535.`);
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
   const rows = localRows(checked.rows);
