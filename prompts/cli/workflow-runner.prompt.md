@@ -60,6 +60,8 @@ An inventory failure, removal, changed assertion, new skip, or unavailable compa
 
 ## Dependencies
 
+- [Thread selection](workflow-agent-limits.prompt.md): required authoring/generation/testing context for saved selection semantics.
+
 - [Workflow areas](workflow-areas.prompt.md), [run records](workflow-runs.prompt.md), [area chats](workflow-chat.prompt.md), [approval evidence](approval-evidence.prompt.md), [GitHub](workflow-github.prompt.md) and [worktree](workflow-worktree.prompt.md).
 - [PR evidence preparation](workflow-pr-evidence.prompt.md): required authoring/generation/verification/testing context for the real `src/workflow-pr-evidence.mjs` module function `preparePrEvidence({run,isCode}, ports)`. Both PR creation and updates must call it with the actual saved-run projection and native ports; insert its lines/reference through the existing body protections. It owns lifted labels, machine proof freshness, reference substitution and their publication-refresh requirements. No alternative test-only renderer.
 - [Old-code proof](workflow-prove.prompt.md): required generation/runtime/verification context for machine result schema, classification and provenance; runner consumes results without executing proof.
@@ -173,3 +175,15 @@ comparison root through the existing matching policy.
 ## PR evidence integration
 
 Call the production [PR evidence preparation](workflow-pr-evidence.prompt.md) boundary for both new and updated PR bodies, including relevant PR 1 updates. Its `{lines,issueReference,proofStatus}` replaces only the owned top evidence/reference content; preserve all existing caller, approval, stacking, publication-pending-before-push ordering, marker/redaction/report/body-budget behavior. Pass `isCode` false for prompt-space and true for code/small-change, and derive the helper's known ordered step projection, workflow type and selected baseBranch from the saved run/workflow. Keep saved run.baseSha unchanged. The helper's entire top evidence block precedes all replay status blocks (including PASS, BLOCKED, NOT REPLAYED and publication-pending); this display order does not relax pending-before-push safeguards. Native integration must provide real current Git-head and direct note/machine-record readers. Compose the helper's lines with the current inventory at its reserved slot, using only the inventory collector's result; summaries and notes cannot supply machine proof or inventory text. The helper's Runtime pass does not prove the runner uses it or that GitHub edits/pushes occur in the required order; native lifecycle tests remain required.
+
+## Saved Codex thread policy
+
+Pass the saved area's agent_limits and run account configuration to chat launch
+and recovery paths, including explicit fresh sessions. Preserve these fields in
+run area snapshots; never replace absent legacy fields from newly installed
+workflow definitions. Persist each returned chat's threadBudget and history,
+including uncertain dispatch records. JSON status exposes those saved records;
+plain detail status shows each selected total with source, or the unknown reason.
+No-field/Claude records carry no inferred native default. Status never rereads
+config or relaunches a chat to compute a value. Selection and launch history
+remain observations, not approval or evidence that fresh checking succeeded.

@@ -1,0 +1,525 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/workflow-codex-thread-budget.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "I can start a bundled Codex workflow with 5 total thread slots for bug/feature story and prompt-pr or small-change plan, and 6 for bug/feature code or small-change build, when no explicit personal value exists."
+    },
+    {
+      "id": "AC2",
+      "text": "My explicit modern Codex thread setting takes precedence over either agents alias, and either alias counts helpers plus one main thread; my value is preserved even below the workflow request or above 8."
+    },
+    {
+      "id": "AC3",
+      "text": "I can opt a custom area into an integer thread budget from 4 through 8; invalid supplied budgets are rejected, while an area without the field keeps its existing launch behavior without reading configuration."
+    },
+    {
+      "id": "AC4",
+      "text": "If configuration or its active layers cannot be established safely, my chat starts without a thread override and its record and status visibly explain the unknown setting."
+    },
+    {
+      "id": "AC5",
+      "text": "First starts, stopped-session resumes and requested fresh sessions use the saved account configuration, preserve newly changed explicit personal settings, and retain the selected total and source in chat/run records; status reports saved launch facts without rereading configuration."
+    },
+    {
+      "id": "AC6",
+      "text": "Claude chats and legacy saved areas keep their existing behavior; thread policy changes neither approval authority nor checker independence, and an exhausted checker still reports \"Not checked:\" honestly."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "planning",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "absent",
+        "configText": "",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 5
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "workflow"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "step_id": "code",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 6,
+        "configState": "absent",
+        "configText": "",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 6
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "workflow"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": 6
+        }
+      ]
+    },
+    {
+      "step_id": "boundary-4",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 4,
+        "configState": "absent",
+        "configText": "",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "workflow"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": 4
+        }
+      ]
+    },
+    {
+      "step_id": "boundary-8",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 8,
+        "configState": "absent",
+        "configText": "",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 8
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "workflow"
+        },
+        {
+          "criterion_id": "AC3",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": 8
+        }
+      ]
+    },
+    {
+      "step_id": "modern-lower",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "[features.multi_agent_v2]\nmax_concurrent_threads_per_session=2\n",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "features.multi_agent_v2.max_concurrent_threads_per_session"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "modern-large",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "features.multi_agent_v2.max_concurrent_threads_per_session=12",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 12
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "features.multi_agent_v2.max_concurrent_threads_per_session"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "alias-long",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "agents.max_concurrent_threads_per_session=8",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 9
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "agents.max_concurrent_threads_per_session"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "alias-short",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "agents.max_threads=3",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "agents.max_threads"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "modern-wins",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "features={ multi_agent_v2={max_concurrent_threads_per_session=4}}\nagents.max_threads=12",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "features.multi_agent_v2.max_concurrent_threads_per_session"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "quoted-comments",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "[\"features\".\"multi_agent_v2\"]\n\"max_concurrent_threads_per_session\" = 7 # comment\n",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": 7
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "features.multi_agent_v2.max_concurrent_threads_per_session"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "unreadable",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "unreadable",
+        "configText": "",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "malformed",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "x=[",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "active-layer-unknown",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "absent",
+        "configText": "",
+        "layersSafe": false
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "invalid-explicit",
+      "entry_path": "prompts/cli/workflow-agent-limits.prompt.md",
+      "operation": "selectThreadBudget",
+      "input": {
+        "agent": "codex",
+        "budget": 5,
+        "configState": "read",
+        "configText": "agents.max_threads=\"8\"",
+        "layersSafe": true
+      },
+      "checks": [
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/total",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/source",
+          "op": "equals",
+          "value": "unknown"
+        },
+        {
+          "criterion_id": "AC4",
+          "target": "result",
+          "path": "/override",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    }
+  ]
+}

@@ -19,3 +19,42 @@ Forward the command execFile port to the layout's verified repository-parent loo
 Herdr transport reads complete stdout/stderr before interpreting JSON or a nonzero exit. Responses larger than a pipe buffer must retain their full content, and a nonzero response must keep its structured error code. Attaching to a session waits for stream closure before reporting its exit status.
 
 Full-access flags stay. Do not pin tool versions. No timeouts. Shell-quote every path and the resume id in the shell line. A native session id (from Herdr, a session file or the run record) is stored or used only when it is a UUID; `chatCommand` refuses any other resume id.
+
+## Thread policy at native launch
+
+For each actual Codex first start, stopped-session resume or explicit fresh
+session, call the [thread selector](workflow-agent-limits.prompt.md) with the saved
+area's budget. `chatCommand` accepts optional `threadBudget` (the selector result);
+add a shell-quoted `-c features.multi_agent_v2.max_concurrent_threads_per_session=N`
+only for its nonnull override, preserving trust flags and UUID safeguards. Claude
+and absent budgets keep the exact existing command and do not inspect config.
+
+Acquire configuration through injected ports, with production filesystem defaults.
+Use expanded saved chat configDir, then saved run configDir, then CODEX_HOME, then
+HOME/.codex (os.homedir fallback). Read only config TOML and necessary active
+configuration layers; never authentication files. Establish effective active
+system/user/project/profile values using Codex precedence, or supply layersSafe=false
+and a visible reason. Check whether extra system/project layers or an active
+profile are present: unsupported present layers may conservatively skip injection.
+When these extra layers are absent and user config is parseable or confirmed
+absent, selection must proceed; never mark every opted-in chat unknown. A missing
+user config alone does not prove layers absent.
+Do not assume a read/parse failure means no setting. Never edit these files.
+
+Save optional `threadBudget: {total,source,override,reason}` on each launch's chat
+record before dispatch, including error.chat on uncertain starts. On a later
+actual launch reselect from current configuration, archiving the prior selection
+in `threadBudgetHistory` with its launch time before replacing the current one;
+observing/focusing a live chat does not reselect. Fresh-session archived chat
+records retain their original setting. A newly explicit setting always controls
+the new launch, even when the historical workflow selection differs.
+
+## Dependencies
+
+- [Thread selection](workflow-agent-limits.prompt.md): required authoring,
+  generation, runtime and testing context for selection and record meaning.
+- [Run layout](workflow-herdr-layout.prompt.md): required generation/testing
+  context for the existing layout operations.
+- Native filesystem/config-layer acquisition, Herdr dispatch and native agent
+  acceptance are outside this module's unsupported Runtime effects; native
+  tests bind injected read/config/environment/Herdr/process ports.

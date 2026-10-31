@@ -1,0 +1,519 @@
+{
+  "schema_version": "pdd.native-workflow-cases.v1",
+  "story_path": "user_stories/workflow-codex-thread-budget.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "I can start a bundled Codex workflow with 5 total thread slots for bug/feature story and prompt-pr or small-change plan, and 6 for bug/feature code or small-change build, when no explicit personal value exists."
+    },
+    {
+      "id": "AC2",
+      "text": "My explicit modern Codex thread setting takes precedence over either agents alias, and either alias counts helpers plus one main thread; my value is preserved even below the workflow request or above 8."
+    },
+    {
+      "id": "AC3",
+      "text": "I can opt a custom area into an integer thread budget from 4 through 8; invalid supplied budgets are rejected, while an area without the field keeps its existing launch behavior without reading configuration."
+    },
+    {
+      "id": "AC4",
+      "text": "If configuration or its active layers cannot be established safely, my chat starts without a thread override and its record and status visibly explain the unknown setting."
+    },
+    {
+      "id": "AC5",
+      "text": "First starts, stopped-session resumes and requested fresh sessions use the saved account configuration, preserve newly changed explicit personal settings, and retain the selected total and source in chat/run records; status reports saved launch facts without rereading configuration."
+    },
+    {
+      "id": "AC6",
+      "text": "Claude chats and legacy saved areas keep their existing behavior; thread policy changes neither approval authority nor checker independence, and an exhausted checker still reports \"Not checked:\" honestly."
+    }
+  ],
+  "cases": [
+    {
+      "id": "bundled-bug",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": {
+        "workflow": "bug"
+      },
+      "expected": {
+        "areas": {
+          "story": 5,
+          "prompt-pr": 5,
+          "code": 6
+        }
+      }
+    },
+    {
+      "id": "bundled-feature",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": {
+        "workflow": "feature"
+      },
+      "expected": {
+        "areas": {
+          "story": 5,
+          "prompt-pr": 5,
+          "code": 6
+        }
+      }
+    },
+    {
+      "id": "bundled-small-change",
+      "criterion_ids": [
+        "AC1"
+      ],
+      "given": {
+        "workflow": "small-change"
+      },
+      "expected": {
+        "areas": {
+          "plan": 5,
+          "build": 6
+        }
+      }
+    },
+    {
+      "id": "invalid-3",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": null
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-4",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": 3
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-5",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": 9
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-6",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": 4.5
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-7",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": "6"
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-8",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": []
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-9",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": {
+          "codex_threads": null
+        }
+      },
+      "expected": {
+        "valid": false
+      }
+    },
+    {
+      "id": "valid-unrelated-metadata",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": {
+          "codex_threads": 6,
+          "other": 1
+        }
+      },
+      "expected": {
+        "valid": true,
+        "preserved": {
+          "codex_threads": 6,
+          "other": 1
+        }
+      }
+    },
+    {
+      "id": "valid-11",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": {}
+      },
+      "expected": {
+        "valid": true,
+        "preserved": {}
+      }
+    },
+    {
+      "id": "valid-12",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": {
+          "codex_threads": 4
+        }
+      },
+      "expected": {
+        "valid": true,
+        "preserved": {
+          "codex_threads": 4
+        }
+      }
+    },
+    {
+      "id": "valid-13",
+      "criterion_ids": [
+        "AC3"
+      ],
+      "given": {
+        "agent_limits": {
+          "codex_threads": 8
+        }
+      },
+      "expected": {
+        "valid": true,
+        "preserved": {
+          "codex_threads": 8
+        }
+      }
+    },
+    {
+      "id": "first-explicit",
+      "criterion_ids": [
+        "AC2",
+        "AC5"
+      ],
+      "given": {
+        "phase": "first",
+        "budget": 6,
+        "savedConfigDir": "~/account",
+        "callerCodexHome": "/other",
+        "savedAccountConfig": "agents.max_threads=2"
+      },
+      "expected": {
+        "configPath": "HOME/account/config.toml",
+        "total": 3,
+        "source": "agents.max_threads",
+        "threadOverride": null,
+        "configWrites": 0
+      }
+    },
+    {
+      "id": "first-workflow",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "given": {
+        "phase": "first",
+        "budget": 6,
+        "safeLayers": true,
+        "configAbsent": true
+      },
+      "expected": {
+        "total": 6,
+        "source": "workflow",
+        "threadOverride": 6
+      }
+    },
+    {
+      "id": "resume-explicit",
+      "criterion_ids": [
+        "AC2",
+        "AC5"
+      ],
+      "given": {
+        "phase": "resume",
+        "budget": 6,
+        "savedConfigDir": "~/account",
+        "callerCodexHome": "/other",
+        "savedAccountConfig": "agents.max_threads=2"
+      },
+      "expected": {
+        "configPath": "HOME/account/config.toml",
+        "total": 3,
+        "source": "agents.max_threads",
+        "threadOverride": null,
+        "configWrites": 0
+      }
+    },
+    {
+      "id": "resume-workflow",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "given": {
+        "phase": "resume",
+        "budget": 6,
+        "safeLayers": true,
+        "configAbsent": true
+      },
+      "expected": {
+        "total": 6,
+        "source": "workflow",
+        "threadOverride": 6
+      }
+    },
+    {
+      "id": "fresh-explicit",
+      "criterion_ids": [
+        "AC2",
+        "AC5"
+      ],
+      "given": {
+        "phase": "fresh",
+        "budget": 6,
+        "savedConfigDir": "~/account",
+        "callerCodexHome": "/other",
+        "savedAccountConfig": "agents.max_threads=2"
+      },
+      "expected": {
+        "configPath": "HOME/account/config.toml",
+        "total": 3,
+        "source": "agents.max_threads",
+        "threadOverride": null,
+        "configWrites": 0
+      }
+    },
+    {
+      "id": "fresh-workflow",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "given": {
+        "phase": "fresh",
+        "budget": 6,
+        "safeLayers": true,
+        "configAbsent": true
+      },
+      "expected": {
+        "total": 6,
+        "source": "workflow",
+        "threadOverride": 6
+      }
+    },
+    {
+      "id": "default-home",
+      "criterion_ids": [
+        "AC1",
+        "AC5"
+      ],
+      "given": {
+        "budget": 5,
+        "HOME": "/scratch",
+        "CODEX_HOME": null,
+        "safeLayers": true,
+        "configAbsent": true
+      },
+      "expected": {
+        "configPath": "/scratch/.codex/config.toml",
+        "total": 5,
+        "source": "workflow"
+      }
+    },
+    {
+      "id": "status-saved",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": {
+        "savedThreadBudget": {
+          "total": 6,
+          "source": "workflow",
+          "override": 6,
+          "reason": ""
+        },
+        "currentConfig": "features.multi_agent_v2.max_concurrent_threads_per_session=12",
+        "action": "status"
+      },
+      "expected": {
+        "total": 6,
+        "source": "workflow",
+        "configReads": 0,
+        "nativeLaunches": 0,
+        "plainContains": [
+          "6",
+          "workflow"
+        ],
+        "jsonPreservesSelection": true
+      }
+    },
+    {
+      "id": "resume-reselection",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": {
+        "savedThreadBudget": {
+          "total": 6,
+          "source": "workflow",
+          "override": 6,
+          "reason": ""
+        },
+        "currentConfig": "features.multi_agent_v2.max_concurrent_threads_per_session=12",
+        "action": "resume"
+      },
+      "expected": {
+        "total": 12,
+        "source": "features.multi_agent_v2.max_concurrent_threads_per_session",
+        "override": null,
+        "historyRetainsTotal": 6
+      }
+    },
+    {
+      "id": "dispatch-unconfirmed",
+      "criterion_ids": [
+        "AC5"
+      ],
+      "given": {
+        "budget": 6,
+        "configAbsent": true,
+        "safeLayers": true,
+        "dispatchFailure": true
+      },
+      "expected": {
+        "errorChatKeepsIdentity": true,
+        "errorChatTotal": 6,
+        "startUnconfirmed": true
+      }
+    },
+    {
+      "id": "unknown-config-visible",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": {
+        "budget": 6,
+        "configReadError": true
+      },
+      "expected": {
+        "source": "unknown",
+        "total": null,
+        "override": null,
+        "visibleReasonNonempty": true,
+        "nativeLaunchAllowed": true
+      }
+    },
+    {
+      "id": "legacy-and-claude",
+      "criterion_ids": [
+        "AC3",
+        "AC6"
+      ],
+      "given": {
+        "actions": [
+          "legacy-start",
+          "legacy-resume",
+          "claude-start"
+        ],
+        "malformedConfig": true
+      },
+      "expected": {
+        "configReads": 0,
+        "threadOverrides": 0,
+        "existingCommandPreserved": true
+      }
+    },
+    {
+      "id": "independence",
+      "criterion_ids": [
+        "AC6"
+      ],
+      "given": {
+        "threadLimitReached": true
+      },
+      "expected": {
+        "notCheckedVisible": true,
+        "selfCheckAllowed": false,
+        "reusedReviewerAllowed": false
+      }
+    },
+    {
+      "id": "unsupported-profile-visible",
+      "criterion_ids": [
+        "AC4"
+      ],
+      "given": {
+        "budget": 6,
+        "activeProfilePresent": true,
+        "profileResolutionSupported": false
+      },
+      "expected": {
+        "total": null,
+        "override": null,
+        "source": "unknown",
+        "visibleReasonNonempty": true
+      }
+    },
+    {
+      "id": "no-extra-layers-selects",
+      "criterion_ids": [
+        "AC1",
+        "AC4"
+      ],
+      "given": {
+        "budget": 6,
+        "extraSystemProjectLayersPresent": false,
+        "activeProfilePresent": false,
+        "userConfig": "unrelated=true"
+      },
+      "expected": {
+        "total": 6,
+        "override": 6,
+        "source": "workflow"
+      }
+    }
+  ]
+}
