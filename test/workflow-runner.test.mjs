@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -18,59 +18,7 @@ async function lastSteps(f, run, out) {
   return out;
 }
 
-// A fake Herdr server for session pdd: workspaces, tabs, panes and the agents that pane commands start.
-function fakeHerdr() {
-  const h = { workspaces: [], tabs: [], panes: [], calls: [], next: 1, focus: null };
-  const id = prefix => `${prefix}${h.next++}`;
-  const commonDir = cwd => realpathSync(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' }).trim());
-  const pane = (workspace, tab, cwd) => { const p = { workspace_id: workspace, tab_id: tab, pane_id: id('p'), terminal_id: id('term'), cwd, agent: null }; h.panes.push(p); return p; };
-  const fail = code => { throw Object.assign(Error(code), { code }); };
-  h.herdr = async args => {
-    h.calls.push(args);
-    const [group, verb, ...rest] = args;
-    const flag = name => rest[rest.indexOf(name) + 1];
-    if (group === 'status') return { running: true, session: 'pdd', compatible: true };
-    if (group === 'workspace' && verb === 'list') return { id: 'cli:workspace:list', result: { type: 'workspace_list', workspaces: h.workspaces } };
-    if (group === 'workspace' && verb === 'create') {
-      const cwd = flag('--cwd'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: false } };
-      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:workspace:create', result: { workspace: w, tab:t, root_pane:h.panes.at(-1) } };
-    }
-    if (group === 'worktree' && verb === 'open') {
-      const cwd = flag('--path'), w = { workspace_id: id('w'), label: flag('--label'), worktree: { checkout_path: cwd, repo_key: commonDir(cwd), is_linked_worktree: true } };
-      h.workspaces.push(w); const t = { tab_id: id('t'), workspace_id: w.workspace_id, label: '1' }; h.tabs.push(t); const p = pane(w.workspace_id, t.tab_id, cwd);
-      return { id: 'cli:worktree:open', result: { workspace: w, tab: t, root_pane: p } };
-    }
-    if (group === 'workspace' && verb === 'close') {
-      h.workspaces = h.workspaces.filter(w => w.workspace_id !== rest[0]); h.tabs = h.tabs.filter(t => t.workspace_id !== rest[0]);
-      return { id: 'cli:workspace:close', result: { type: 'ok' } };
-    }
-    if (group === 'pane' && verb === 'list') return { id: 'cli:pane:list', result: { type: 'pane_list', panes: h.panes.filter(p => p.workspace_id === flag('--workspace') && h.tabs.some(t => t.tab_id === p.tab_id)) } };
-    if (group === 'tab' && verb === 'create') {
-      const t = { tab_id: id('t'), workspace_id: flag('--workspace'), label: flag('--label') }; h.tabs.push(t);
-      return { id: 'cli:tab:create', result: { tab: t, root_pane: pane(t.workspace_id, t.tab_id, flag('--cwd')) } };
-    }
-    if (group === 'tab' && verb === 'list') return { id: 'cli:tab:list', result: { type: 'tab_list', tabs: h.tabs.filter(t => t.workspace_id === flag('--workspace')) } };
-    if (group === 'tab' && verb === 'get') { const t = h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); return { result: { tab: t } }; }
-    if (group === 'tab' && verb === 'focus') { h.tabs.find(t => t.tab_id === rest[0]) ?? fail('tab_not_found'); h.focus = rest[0]; return { result: { type: 'ok' } }; }
-    if (group === 'tab' && verb === 'close') { h.tabs = h.tabs.filter(t => t.tab_id !== rest[0]); return { id: 'cli:tab:close', result: { type: 'ok' } }; }
-    if (group === 'pane' && verb === 'run') {
-      const p = h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found');
-      const command = rest[1], kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : null;
-      const session = command.match(/--(?:session-id|resume) ([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume ([0-9a-f-]{36})/)?.[1] ?? '00000000-0000-4000-8000-000000000017';
-      p.commands = [...(p.commands ?? []), command];
-      if (kind) p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
-      return {};
-    }
-    if (group === 'agent' && verb === 'get') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); return { result: { agent: { ...p.agent, pane_id: p.pane_id } } }; }
-    if (group === 'agent' && verb === 'prompt') { const p = h.panes.find(p => p.pane_id === rest[0]); if (!p?.agent) fail('agent_not_found'); if (p.agent.agent_status === 'blocked') fail('agent_blocked'); p.agent.prompts.push(rest[1]); return { result: { type: 'agent_prompted' } }; }
-    fail(`unexpected herdr ${args.join(' ')}`);
-  };
-  h.paneOf = chat => h.panes.find(p => p.pane_id === chat.paneId);
-  // Every chat finished its turn (after done, the chat writes its gate message and then waits).
-  h.idle = () => { for (const p of h.panes) if (p.agent) p.agent.agent_status = 'idle'; };
-  return h;
-}
+import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
 
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
@@ -2328,6 +2276,164 @@ test('2553: merged prompt branch retains its published anchor on final code entr
   assert.deepEqual(f.record().replayBaseline,saved);
 });
 
+// #2640 uses the native Git/blob/current-file adapter, never supplied snapshot facts.
+async function adoptedCorpusRun(t,{adopt=true,multi=false,start=true}={}) {
+  const f=await fixture(t,{name:'replay',agent:'codex'});
+  const skill=join(f.source,'.agents/skills/pdd-replay');mkdirSync(skill,{recursive:true});
+  const code={name:'code',steps:['verify'],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'};
+  writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:multi?[{name:'story',steps:['scope'],gate:'approve'},{name:'prompt',steps:['check'],gate:'pr',before:'approve',then:'ask-code'},code]:[code]}));
+  mkdirSync(join(f.source,'tests'));mkdirSync(join(f.source,'prompts'));mkdirSync(join(f.source,'rules'));
+  writeFileSync(join(f.source,'prompts/add.prompt.md'),'# Add\n## Dependencies\n[Rule](../rules/add.md)\n');writeFileSync(join(f.source,'rules/add.md'),'Addition rule.\n');
+  const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
+  writeFileSync(join(f.source,'tests/add.json'),JSON.stringify(vector));
+  f.git(f.source,'add','.');f.git(f.source,'commit','-qm','Approved synthetic corpus');const commit=f.git(f.source,'rev-parse','HEAD');f.git(f.source,'update-ref','refs/remotes/origin/main',commit);
+  const declaration=join(f.base,'adoption.json');writeFileSync(declaration,JSON.stringify({schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit,prompts:['prompts/add.prompt.md'],scenarios:['tests/add.json'],approval:{kind:'external-human-assertion',reference:'review:fixture',asserted_by:'Synthetic human'}}));
+  // Keep the canonical origin; perform real fetch/push/ls-remote against a local bare
+  // server through a transport-only URL substitution. gh/Herdr remain boundary fakes.
+  const bare=join(f.base,'remote.git');execFileSync('git',['init','--bare','-q',bare]);f.git(f.source,'push','-q',bare,'HEAD:refs/heads/main');
+  const original=f.ports.execFile;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git'&&['fetch','push','ls-remote'].includes(args[0])) {
+      if(args[0]==='push')f.pushes.push(args);
+      return exec('git',['-c',`url.${bare}.insteadOf=https://github.com/example/project.git`,...args],{...options,encoding:'utf8'});
+    }
+    return original(file,args,options);
+  };
+  const begin=()=>startRun({name:'replay',issue:'17',agent:'codex',cwd:f.source,packageRoot,...(adopt?{adoptCorpus:declaration}:{})},f.ports);
+  if(start){const out=await begin();assert.equal(out.exitCode,0,out.message);if(adopt)assert.match(out.message,/external-assertion-unverified/);}
+  return {f,declaration,vector,commit,begin,bare};
+}
+test('2640 custom first/only replay code area adopts without prompt publication, freezes authority, and publishes source-bound evidence',async t=>{
+  const {f,declaration,vector,bare}=await adoptedCorpusRun(t);const run=f.record(),anchor=structuredClone(run.replayBaseline);
+  assert.equal(run.area,0);assert.equal(run.areas.length,1);assert.equal(run.pr.length,0);assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/add.json']);
+  rmSync(declaration);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'Original public replay executed',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,1);assert.match(f.prs[0].body,/^Code replay: PASS/m);assert.deepEqual(f.record().replayBaseline,anchor);
+  const remote=execFileSync('git',['--git-dir',bare,'rev-parse',`refs/heads/${run.branch}`],{encoding:'utf8'}).trim();assert.equal(remote,f.git(run.root,'rev-parse','HEAD'));
+});
+test('2640 same custom first code area without adoption stays truthful BLOCKED',async t=>{
+  const {f,vector}=await adoptedCorpusRun(t,{adopt:false});const run=f.record();assert.equal(run.replayBaseline,undefined);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'PASS in prose',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);assert.match(f.prs[0].body,/^Code replay: BLOCKED/m);
+});
+for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication refuses ${mode} changes without repinning`,async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  if(mode==='prompt')writeFileSync(join(run.root,'prompts/add.prompt.md'),'Changed prompt.\n');
+  if(mode==='dependency')writeFileSync(join(run.root,'rules/add.md'),'Changed rule.\n');
+  if(mode==='vector')writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector)+'\n');
+  if(mode==='added')writeFileSync(join(run.root,'tests/new.json'),JSON.stringify(vector));
+  if(mode==='removed')rmSync(join(run.root,'tests/add.json'));
+  if(mode==='frozen-declaration')writeFileSync(join(run.runDir,'replay-adoption.json'),'{}');
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);assert.deepEqual(f.record().replayBaseline,anchor);
+});
+test('2640 startup validates selected base rather than dirty caller tree',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});writeFileSync(join(f.source,'rules/add.md'),'Dirty caller rule.\n');
+  const out=await begin();assert.equal(out.exitCode,0,out.message);assert.equal(readFileSync(join(f.record().root,'rules/add.md'),'utf8'),'Addition rule.\n');
+});
+test('2640 foreign source refusal occurs before allocating or starting Herdr',async t=>{
+  const {f,begin,declaration}=await adoptedCorpusRun(t,{start:false});const d=JSON.parse(readFileSync(declaration));d.repository='foreign/project';writeFileSync(declaration,JSON.stringify(d));
+  const before=f.git(f.source,'worktree','list','--porcelain');const out=await begin();assert.equal(out.exitCode,2,out.message);assert.equal(f.herdr.calls.length,0);assert.equal(f.git(f.source,'worktree','list','--porcelain'),before);assert.throws(()=>f.record());
+});
+test('2640 allocation race retains named files, releases new claim and never saves an active run',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});const original=f.ports.execFile;let allocated;
+  f.ports.execFile=async(file,args,opts)=>{
+    const reply=await original(file,args,opts);
+    if(file==='git'&&args[0]==='worktree'&&args[1]==='add') {allocated=args.at(-2);writeFileSync(join(allocated,'rules/add.md'),'Racing write.\n');}
+    return reply;
+  };
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/Retained worktree:/);assert.ok(out.message.includes(allocated));assert.match(out.message,/claim was released/);assert.equal(f.herdr.calls.length,0);assert.throws(()=>f.record());assert.ok(existsSync(allocated));
+});
+test('2640 adopted prompt publication and code entry retain anchor and ignore caller declaration edits',async t=>{
+  const {f,declaration}=await adoptedCorpusRun(t,{multi:true}),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(declaration,'{}');await stepDone({step:'scope',summary:'Scope unchanged',cwd:run.root},f.agentPorts());assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(join(run.root,'note.txt'),'Implementation note.\n');await stepDone({step:'check',summary:'Runtime unavailable; original corpus retained',cwd:run.root},f.agentPorts());
+  const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,0,out.message);assert.equal(f.record().areas[f.record().area].name,'code');assert.deepEqual(f.record().replayBaseline,anchor);
+});
+test('2640 adopted prompt publication refuses changed covered context before a push',async t=>{
+  const {f}=await adoptedCorpusRun(t,{multi:true}),run=f.record();await stepDone({step:'scope',summary:'Scope',cwd:run.root},f.agentPorts());await approveRun({ref:'17',cwd:f.source},f.ports);
+  writeFileSync(join(run.root,'rules/add.md'),'Changed requirement.\n');await stepDone({step:'check',summary:'Check',cwd:run.root},f.agentPorts());
+  const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,1,out.message);assert.equal(f.pushes.length,0);assert.equal(f.prs.length,0);
+});
+test('2640 publication retry revalidates frozen context before updating an open PR',async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  assert.equal((await stepDone({step:'verify',summary:'Replay',cwd:run.root},f.agentPorts())).exitCode,0);
+  const pushes=f.pushes.length,edits=f.edits.length;writeFileSync(join(run.root,'rules/add.md'),'Changed after publication.\n');
+  const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);assert.equal(f.record().replayEvidence.outcome,'blocked');assert.equal(f.record().done.verify.replayEvidence.outcome,'blocked');
+});
+test('2640 invalid adoption preserves cancelled historical run and its claim before restart',async t=>{
+  const {f,begin,declaration}=await adoptedCorpusRun(t);const run=f.record();assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const status=readFileSync(join(run.runDir,'status.json')),worktrees=f.git(f.source,'worktree','list','--porcelain');
+  writeFileSync(declaration,'{}');const out=await begin();assert.equal(out.exitCode,2,out.message);assert.deepEqual(readFileSync(join(run.runDir,'status.json')),status);assert.equal(f.git(f.source,'worktree','list','--porcelain'),worktrees);assert.ok(existsSync(run.root));
+});
+test('2640 adoption requires explicit workflow policy before starting Git/Herdr work',async t=>{
+  const f=await fixture(t);const out=await startRun({name:'small-change',issue:'17',cwd:f.source,packageRoot,adoptCorpus:'missing.json'},f.ports);
+  assert.equal(out.exitCode,2);assert.match(out.message,/explicitly replay-evidence-enabled/);assert.equal(f.fetches,0);assert.equal(f.herdr.calls.length,0);assert.throws(()=>f.record());
+});
+for(const mode of ['cancelled-claim-refusal','allocation-refusal'])test(`2640 declaration scratch cleanup after ${mode}`,async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:mode==='cancelled-claim-refusal'});
+  let savedStatus;
+  if(mode==='cancelled-claim-refusal') {
+    const run=f.record();await cancelRun({ref:'17',cwd:f.source},f.ports);savedStatus=readFileSync(join(run.runDir,'status.json'));
+    const claim=join(f.source,'.git/pdd/worktree-assignments/issues/17.json');const data=JSON.parse(readFileSync(claim));data.runId='foreign-run';writeFileSync(claim,JSON.stringify(data));
+  } else {
+    const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>{
+      if(file==='git'&&args[0]==='worktree'&&args[1]==='add')throw Error('Allocation refused');
+      return original(file,args,options);
+    };
+  }
+  const previous=process.env.TMPDIR;process.env.TMPDIR=f.base;
+  try {
+    const out=await begin();assert.notEqual(out.exitCode,0,out.message);assert.deepEqual(readdirSync(f.base).filter(name=>name.startsWith('pdd-adoption-declaration-')),[]);
+    if(savedStatus)assert.deepEqual(readFileSync(join(f.record().runDir,'status.json')),savedStatus);else assert.throws(()=>f.record());
+  } finally {if(previous===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previous;}
+});
+
+test('2640 positive runner supports symlink TMPDIR for both native scratch locations',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});
+  const alias=join(f.base,'tmp-alias');symlinkSync(f.base,alias);
+  const old=process.env.TMPDIR;process.env.TMPDIR=alias;
+  try {const out=await begin();assert.equal(out.exitCode,0,out.message);assert.ok(f.record().replayAdoption);}
+  finally {if(old===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=old;}
+});
+
+test('2640 final step publication validates adoption once after automatic commit and persists step evidence',async t=>{
+  const {f}=await adoptedCorpusRun(t),run=f.record();
+  const bin=join(f.base,'git-bin');mkdirSync(bin);const log=join(f.base,'git.log');
+  const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
+  writeFileSync(join(bin,'git'),`#!/bin/sh\nprintf '%s\\n' "$*" >> "$PDD_GIT_LOG"\nexec '${git.replaceAll("'","'\\''")}' "$@"\n`,{mode:0o755});
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const oldPath=process.env.PATH,oldLog=process.env.PDD_GIT_LOG;process.env.PATH=`${bin}:${oldPath}`;process.env.PDD_GIT_LOG=log;
+  try {const out=await stepDone({step:'verify',summary:'Finished',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);}
+  finally {process.env.PATH=oldPath;if(oldLog===undefined)delete process.env.PDD_GIT_LOG;else process.env.PDD_GIT_LOG=oldLog;}
+  const commands=readFileSync(log,'utf8').trim().split('\n');
+  assert.equal(commands.filter(c=>c.startsWith('merge-base --is-ancestor ')).length,1);
+  const committed=commands.findIndex(c=>c.startsWith('commit ')),validated=commands.findIndex(c=>c.startsWith('merge-base --is-ancestor '));
+  assert.ok(committed>=0 && committed<validated);assert.deepEqual(f.record().done.verify.replayEvidence,f.record().replayEvidence);
+  assert.match(f.prs[0].body,/Anchor adopted from example\/project@.*approval reference review:fixture by Synthetic human; external-assertion-unverified/);
+  assert.match(f.prs[0].body,/Code replay: BLOCKED/);
+  t.diagnostic('final step + automatic publication commit: one full adoption validation (one actual Git ancestry check)');
+});
+
+for(const mode of ['throw','exit-code'])test(`2640 rework startup fetch failure ${mode} names fetch and never allocates or leaks stderr`,async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});const original=f.ports.execFile;
+  const before=f.git(f.source,'worktree','list','--porcelain');let allocations=0,fetches=0;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git'&&args[0]==='worktree'&&args[1]==='add')allocations++;
+    if(file==='git'&&args[0]==='fetch'){
+      fetches++;const error=Error(`fetch refused ${f.base} password=hiddenPassword ghp_hiddenCredential`);
+      error.stderr=`fatal: /private/person/remote https://runtime.invalid/s/capability Authorization: Bearer hiddenToken`;
+      if(mode==='exit-code')return {code:128,stderr:error.stderr,stdout:error.message};
+      throw error;
+    }
+    return original(file,args,options);
+  };
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/fetch failed/i);assert.equal(fetches,1);assert.equal(allocations,0);
+  assert.ok(!out.message.includes(f.base));assert.doesNotMatch(out.message,/hiddenPassword|hiddenCredential|hiddenToken|capability|private|person|Authorization|fatal:/);
+  assert.equal(f.herdr.calls.length,0);assert.equal(f.git(f.source,'worktree','list','--porcelain'),before);assert.throws(()=>f.record());
+});
 
 test('product association: start saves one issue marker and both producer PRs preserve it independently of branch identity', async t => {
   const marker = '<!-- pdd-product: run=phone-1 -->';
