@@ -18,6 +18,7 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 ## Dependencies
 
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for stable route identity and public command spelling.
 - [Contract commands](contracts.prompt.md): required generation and verification
   context for local list/sync dispatch; the syntax-only Runtime entry does not
   bind these native effects.
@@ -34,6 +35,8 @@ Native authoring/generation uses existing imported project APIs and their owner 
 ## Workflow dispatch
 
 The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. Pass `adoptCorpus` only when `--adopt-corpus` was given, using its text unchanged; the runner owns adoption policy. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+
+For catalog route `workflow.request-uptake`, require nonblank `--summary` before importing or invoking the runner; missing summary returns 2 with one finite diagnostic. Reuse normal parser validation for missing/extra operands, duplicate/blank options and help/completion. Call the actual module function `acknowledgeRequest({requestId: operands[0], summary: options['--summary'], cwd}, ports)` on the existing injectable `workflowRunner`, using the workflow stream/error handling above. Derive command hints from the catalog prefix by stable id; dispatch on the catalog's stable disposition, never a second public verb. `bin/pdd.mjs` remains a thin entry point. Interpreter resource `dispatch.requestUptake` binds this same injected module function, not native journal execution.
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
@@ -66,7 +69,7 @@ pdd never merges.
 
 ## Help forms
 
-Help prints exactly these lines, in this order. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix.
+The ordered help-form list consists of the lines below in their displayed order, inserting the canonical form and description for catalog route `workflow.request-uptake` immediately after the ask line. That inserted entry uses that route's prefix followed by `REQUEST_ID --summary TEXT` and its catalog-owned agent uptake description; resolve it by stable id rather than a copied public verb. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix. This complete list, including the catalog-derived inserted entry, defines the manifest and root help.
 
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
@@ -161,7 +164,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "4d3a7bc6cefbeb013b7f43555f126c986c61bb19f9bdd5ae0edb22646d9a53f2",
+  "prose_sha256": "f8594ccfe12e3e6ce0def4e5087bff84f3f13a71b0bb5bca3d3c74aa2bb760c1",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
@@ -186,6 +189,14 @@ finite local cause and returns 5. Catalog owns all syntax.
       "ref": {"type": "string"}, "test": {"type": "string"},
       "expect": {"type": "string"}, "cwd": {"type": "string"}},
       "required": ["ref", "test", "expect", "cwd"], "additionalProperties": false},
+    "result_schema": {"type": "object", "properties": {
+      "exitCode": {"type": "integer"}, "message": {"type": "string"}},
+      "required": ["exitCode", "message"], "additionalProperties": false}
+  }, {
+    "name": "requestUptake", "access": "write",
+    "arguments_schema": {"type": "object", "properties": {
+      "requestId": {"type": "string"}, "summary": {"type": "string"}, "cwd": {"type": "string"}},
+      "required": ["requestId", "summary", "cwd"], "additionalProperties": false},
     "result_schema": {"type": "object", "properties": {
       "exitCode": {"type": "integer"}, "message": {"type": "string"}},
       "required": ["exitCode", "message"], "additionalProperties": false}
