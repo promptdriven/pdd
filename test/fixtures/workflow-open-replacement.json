@@ -535,7 +535,7 @@
         7
       ],
       "action": "Prove unsent launch after grace, save recovery dispatch intent, lose recovery launch reply, retry --new",
-      "expected": "No repeated recovery dispatch, including shell-only later observation; positive same-agent observation may finish same attempt",
+      "expected": "No repeated recovery dispatch based on the earlier proof; positive same-agent observation may finish same attempt. Another dispatch requires fresh START_GRACE_MS and authoritative process proof that the latest request never ran",
       "input": {}
     }
   ]
