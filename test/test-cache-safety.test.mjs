@@ -345,3 +345,16 @@ test('partial sibling pass retains last failure until the whole Story passes', a
   assert.deepEqual(remaining.json.rows.map(row => row.test), ['tests/unknown-item.json'],
     'a complete Story pass clears only that Story from last-failed selection');
 });
+
+for (const clear of [false, true]) test(`damaged cache plus stale lock warns once${clear ? ' during clear' : ''}`, async t => {
+  const ctx = await fixture(t), lock = join(ctx.repo, '.pdd/cache/test/transaction.lock');
+  mkdirSync(lock); writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: 2147483647 }));
+  utimesSync(lock, new Date(0), new Date(0));
+  writeFileSync(ctx.path, '{broken');
+  const result = await ctx.invoke(clear ? { '--cache-clear': true } : {});
+  assert.equal(result.sent, 2, 'damaged cache cannot reuse previous passes');
+  assert.equal(result.code, 0);
+  assert.equal(cacheWarnings(result).length, 1, 'combined recovery and damage share one cache warning');
+  assert.match(cacheWarnings(result)[0], /pdd test --cache-clear/);
+  assert.equal((await ctx.invoke()).sent, 0, 'completed recovery heals usable metadata');
+});
