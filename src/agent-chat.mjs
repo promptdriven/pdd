@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-chat.prompt.md (sha256: efcefafc9ee05a7cb82c766d9c2fdf8161a11682000ec00298eb66d47afd0646).
+// Generated from prompts/cli/agent-chat.prompt.md (sha256: 3e52b2cc81f23cc8046d0d1e605815e952069ee79fb6cd5f91cc50ccf783f9dd).
 import {discoverAgents,askAgent} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {createTryGuide} from './agent-guide.mjs';
@@ -27,7 +27,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  write(context,'Connecting your agent to the Try page…');
  const modelReply=await runtime.send(`${prefix}/model`,{method:'GET'},30000);
  if(modelReply.status===404){write(context,'This interpreter does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
- if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd try again.`);
+ if(!good(modelReply)||!Array.isArray(modelReply.json.entries))throw Error(`Could not read the owner’s Try model for agent chat (${why(modelReply)}). Run pdd simulate again.`);
  const model=modelReply.json,entries=model.entries.filter(e=>typeof e.entry_path==='string'&&typeof e.operation==='string'&&object(e.input_schema))
   .map(e=>({entry:`${e.entry_path}#${e.operation}`,prompt_path:e.entry_path,operation:e.operation,input_schema:e.input_schema,...Object.fromEntries(['label','name','cli','http'].filter(k=>Object.hasOwn(e,k)).map(k=>[k,e[k]]))}));
  const discovered=await (ports.discoverAgents??discoverAgents)({cwd:root,env:ports.env,definitions});
@@ -37,7 +37,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
  const remember=id=>{if(!known(id))return;choice=id;const name=definitions.find(d=>d.id===id).name,saved=store.repo(root);if(saved.agent_choice!==name)store.saveRepo(root,{...saved,agent_choice:name});};
  const connected=await runtime.send(`${prefix}/agent/connect`,json({bridge_id,agents,selected:choice,features:FEATURES}),30000);
  if(connected.status===404){write(context,'This interpreter does not support Ask your agent yet. The ordinary Try link remains available.');return null;}
- if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd try again.`);
+ if(!good(connected)||connected.json.bridge_id!==bridge_id||connected.json.connected!==true||!/^[A-Za-z0-9_-]{43,128}$/.test(connected.json.browser_key??''))throw Error(`Could not connect your agent to this Try (${why(connected)}). Run pdd simulate again.`);
  remember(choice);
  const features=Array.isArray(connected.json.features)?connected.json.features.slice(0,32).filter(x=>FEATURES.includes(x)):[];
  const secretName=/token|password|secret|api[_-]?key|authorization|cookie|credential/i;
@@ -63,7 +63,7 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   else if(asked&&agent)agents=agents.map(a=>a.id===message.agent?{...a,state:'ready',detail:undefined}:a);
   const decorated=guide.decorate(result),safe=guide.wire(decorated);
   const reply=await runtime.send(`${prefix}/agent/reply`,json({bridge_id,message_id:message.id,...safe,agents:scrub(agents,secrets)}),30000);
-  if(!good(reply)||reply.json.ok!==true){failed=true;write(context,'Your agent reply could not be delivered. It will not be run again. Reconnect with pdd try.');stop();}
+  if(!good(reply)||reply.json.ok!==true){failed=true;write(context,'Your agent reply could not be delivered. It will not be run again. Reconnect with pdd simulate.');stop();}
   else guide.delivered(message,decorated);
  }
  async function run(onTick){
@@ -71,17 +71,17 @@ export async function createAgentBridge(context,test,tryId,options={},link){
   try{while(!closed&&!controller.signal.aborted&&!context.interrupted){
    const before=ports.now();const poll=await runtime.send(`${prefix}/agent/poll?bridge_id=${bridge_id}`,{method:'GET'},25000);
    if(controller.signal.aborted||context.interrupted)break;
-   if(!good(poll)||poll.json.connected!==true){failed=true;write(context,'Your agent connection ended. Run pdd try again to reconnect.');break;}
+   if(!good(poll)||poll.json.connected!==true){failed=true;write(context,'Your agent connection ended. Run pdd simulate again to reconnect.');break;}
    remember(poll.json.selected);
    const message=poll.json.message;
    if(message!==null&&message!==undefined){
-    if(!object(message)||typeof message.id!=='string'||message.id.length>128||typeof message.text!=='string'||message.text.length>8000||!known(message.agent)||(message.kind!==undefined&&!['chat','run','walk','own'].includes(message.kind))){failed=true;write(context,'The server sent an invalid agent message. Reconnect with pdd try.');break;}
+    if(!object(message)||typeof message.id!=='string'||message.id.length>128||typeof message.text!=='string'||message.text.length>8000||!known(message.agent)||(message.kind!==undefined&&!['chat','run','walk','own'].includes(message.kind))){failed=true;write(context,'The server sent an invalid agent message. Reconnect with pdd simulate.');break;}
     if(!seen.has(message.id)){
-     if(task){failed=true;write(context,'Another agent message arrived while one was running. Reconnect with pdd try.');break;}
+     if(task){failed=true;write(context,'Another agent message arrived while one was running. Reconnect with pdd simulate.');break;}
      seen.add(message.id);task=answer(message).catch(()=>{failed=true;write(context,'Your agent could not finish this message. It will not be run again.');stop();}).finally(()=>{task=null;});
     }
    }
-   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(()=>{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd try.');stop();}).finally(()=>{tickTask=null;});
+   if(onTick&&!tickTask)tickTask=Promise.resolve().then(onTick).then(keep=>{if(keep===false)stop();}).catch(()=>{failed=true;write(context,'Saved Try updates could not be read. Reconnect with pdd simulate.');stop();}).finally(()=>{tickTask=null;});
    if(ports.now()-before<1000)await ports.sleep(1000,controller.signal);
   }}finally{await close();await task;await tickTask;}
   return failed?5:0;

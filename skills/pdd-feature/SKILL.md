@@ -23,7 +23,7 @@ Step briefs are in `steps/`. `?` means optional.
 - Use full URLs.
 - Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". In a run, run `<pdd> workflow ask` first. For a page or a screen, recommend visual: it makes the app map.
 - At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. If visual made an app map, tell the person to run `pdd simulate <story> --new`. Ask for approval or changes in their own words.
-- Before PR 1, show one `Runtime check` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first?"
+- Before PR 1, show one `Prompt tests` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first?"
 - On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; start a fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.

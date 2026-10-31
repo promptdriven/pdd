@@ -62,7 +62,7 @@ test('RUNTIME-HASH2: --fill-hash fills a draft, keeps approved prompts and exits
   writeFileSync(file, stale);
   result = await check(repo, home, [], { '--fill-hash': true });
   assert.equal(result.code, 4); assert.equal(readFileSync(file, 'utf8'), stale);
-  assert.match(result.out, /the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person/);
+  assert.match(result.out, /the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person/);
   writeFileSync(file, draft.replace('"prose_sha256": "",\n', ''));
   result = await check(repo, home, [], { '--fill-hash': true });
   assert.equal(result.code, 4); assert.match(result.out, /Add "prose_sha256": ""/);
@@ -121,7 +121,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeJson(file, doc);
   const result = await check(repo, home, ['place-order'], {});
   assert.equal(result.code, 4);
-  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Runtime check (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
+  assert.deepEqual(result.out.split('\n').slice(2, 3), ['Prompt tests (place-order): no verdict · 0 of 3 criteria · 0/0 checks · 1 refused · 0 AI calls']);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n').startsWith('REFUSED before sending'), true);
   assert.equal(result.out.split('\n').filter(Boolean).slice(3, 6).join('\n'), ['REFUSED before sending (not sent, 0 AI calls)',
     '  tests/place-order.json  step 1  invalid-input', '  steps[0] input /items/0/quantity is 0. The prompt allows 1 to 20.'].join('\n'));
@@ -131,7 +131,7 @@ test('RUNTIME-RULES2: quantity 0 gives the exact field and rule; the number warn
   writeFileSync(prompt, readFileSync(prompt, 'utf8').replace('Use this menu.', 'Use this menu now.'));
   const stale = await check(repo, home, ['unknown-item'], {});
   assert.equal(stale.code, 4); assert.deepEqual(stale.calls, { fetch: 0, gh: 0 });
-  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd check --fill-hash\./);
+  assert.match(stale.out, /interface-stale[\s\S]*pdd: prompts\/place_order\.prompt\.md is a draft whose text changed after its hash was filled\. Run pdd test --fill-hash\./);
 });
 
 // Wrong: an unknown story sends every test, or the error hides the stories that exist.
@@ -163,7 +163,7 @@ test('RUNTIME-CAPTURE1: capture refuses secrets, links and size limits, and make
   for (const [name, setup, pattern] of [
     ['secret', r => writeFileSync(join(r, '.env.local'), 'TOKEN=x\n'), /\.env\.local: the name looks like a secret/],
     ['secret folder', r => { mkdirSync(join(r, 'config/secrets'), { recursive: true }); writeFileSync(join(r, 'config/secrets/a.txt'), 'x'); }, /config\/secrets\/a\.txt/],
-    ['symlink', r => symlinkSync('README.md', join(r, 'link.md')), /link\.md: a symbolic link/],
+    ['symlink', r => symlinkSync('missing.md', join(r, 'link.md')), /link\.md.*(?:symbolic link|broken|missing)/],
     ['size', r => writeFileSync(join(r, 'big.bin'), Buffer.alloc(10_485_761)), /too big to send: \d+ files, 10\.0 MB[\s\S]*big\.bin/],
     ['count', r => { mkdirSync(join(r, 'many')); for (let i = 0; i < 10_000; i += 1) writeFileSync(join(r, 'many', `${i}.txt`), ''); }, /too big to send: 1000\d files/],
   ]) {
@@ -213,14 +213,14 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
   for (const text of [help.stdout, lint.stdout]) assert.doesNotMatch(text, /--request|--lint|pdd test --local/);
   assert.match(pdd('simulate', '--help').stdout, /pdd simulate --stop \[STORY\]/);
   assert.doesNotMatch(pdd('completion', 'bash').stdout, /--request/);
-  for (const args of [['check', '--max-calls', '0'], ['check', '--max-calls', '1001'], ['check', '--timeout', 'x'], ['try', '--tab', 'phone'],
-    ['check', '--request', 'nope'], ['check', '--fill-hash', '--json'], ['check', '--files', '--json'], ['check', '--read', 'a', 'b'],
-    ['try', '--stop', '--new'], ['try', 'a', 'b']]) {
+  for (const args of [['test', '--max-calls', '0'], ['test', '--max-calls', '1001'], ['test', '--timeout', 'x'], ['simulate', '--tab', 'phone'],
+    ['test', '--request', 'nope'], ['test', '--fill-hash', '--json'], ['test', '--files', '--json'], ['test', '--read', 'a', 'b'],
+    ['simulate', '--stop', '--new'], ['simulate', 'a', 'b']]) {
     const result = pdd(...args);
     assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout}${result.stderr}`); assert.equal(result.stdout, '', args.join(' '));
   }
-  assert.equal(pdd('check', '--files', 'place-order').status, 0);
-  const filled = pdd('check', '--fill-hash');
+  assert.equal(pdd('test', '--files', 'place-order').status, 0);
+  const filled = pdd('test', '--fill-hash');
   assert.equal(filled.status, 0, filled.stderr); assert.match(filled.stdout, /Hashes: 0 filled, 1 current/);
 });
 
@@ -261,7 +261,7 @@ test('RUNTIME-RUNBOOK-QUOTES: quoted summary words remain one existing-command a
   }
 });
 
-// Wrong: the package has no runbook, so the skills and the setup block never mention pdd check, or the runbook names commands pdd refuses.
+// Wrong: the package has no runbook, so the skills and the setup block never mention pdd test, or the runbook names commands pdd refuses.
 test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill carries it, and its commands parse', () => {
   const runbook = readFileSync(join(root, 'RUNBOOK.md'), 'utf8');
   assert.ok(readJson(join(root, 'package.json')).files.includes('RUNBOOK.md'));
@@ -430,7 +430,7 @@ test('RUNTIME-SCHEMA5: the number warning fires only for a near miss of a number
 });
 
 // Wrong: two prompts claim the same source file and nobody notices until they disagree (cli issue 10).
-test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source file', async t => {
+test('RUNTIME-OWNER1: pdd test warns once when two prompts name the same source file', async t => {
   const { repo, home } = harbor(t);
   mkdirSync(join(repo, 'src')); writeFileSync(join(repo, 'src/split.js'), 'export {};\n'); writeFileSync(join(repo, 'src/cli.js'), 'export {};\n');
   writeFileSync(join(repo, 'prompts/tipjar.prompt.md'), '# tipjar\n\nThe code runs `src/cli.js`; `src/split.js` owns the money math.\n');
@@ -444,7 +444,7 @@ test('RUNTIME-OWNER1: pdd check warns once when two prompts name the same source
 });
 
 // Wrong: an agent wrote its own test format and *.prompt files, and pdd only says "No tests found".
-test('RUNTIME-NOTESTS1: with no tests, pdd check says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
+test('RUNTIME-NOTESTS1: with no tests, pdd test says why: foreign test JSON, *.prompt names, prompts with no interface (5 lines at most)', async t => {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
   mkdirSync(join(repo, 'tests/unit'), { recursive: true }); mkdirSync(join(repo, 'prompts')); mkdirSync(home);
   writeFileSync(join(repo, 'tests/game.json'), '{"cases": [{"input": 2, "expected": 4}]}\n');

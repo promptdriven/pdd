@@ -15,7 +15,7 @@ const ROOTS = ['.agents/skills', '.claude/skills'];
 const version = () => JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 const MARKER = '.pdd-skill.json';
 // npx skills update changes only skills that npx skills add recorded; this command replaces any copy (0.1.8 tester).
-const UPDATE = 'npx skills add promptdriven/pdd#alpha -g -a codex -a claude-code -y';
+const UPDATE = 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y';
 
 // A copied package in a quoted path, so install never depends on the source checkout.
 function packageCopy(t) {

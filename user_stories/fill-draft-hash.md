@@ -4,11 +4,11 @@ I can fill my new draft prompt's hash even when my repository contains an unrela
 
 ## Acceptance criteria
 
-1. With one draft prompt and an unrelated interface object without status or prose_sha256 keys, `pdd check --fill-hash` fills the draft hash, warns that the fixture has neither key and was skipped with advice to add "status": "draft" and rerun the command if it is a prompt to check, and exits 0.
+1. With one draft prompt and an unrelated interface object without status or prose_sha256 keys, `pdd test --fill-hash` fills the draft hash, warns that the fixture has neither key and was skipped with advice to add "status": "draft" and rerun the command if it is a prompt to check, and exits 0.
 2. The skipped fixture keeps exactly the same bytes and contributes nothing to the filled, current, refused or stale counts.
 3. An explicitly invalid status, malformed JSON, a non-object interface, multiple interface blocks or a draft without a hash key is refused and makes the command exit 4.
 4. An approved prompt whose text changed stays unchanged and makes the command exit 4, even when no test reaches it.
-5. A prompt with its own prose_sha256 key but no own status key, including a misspelled "Status", stays unchanged, is refused with advice to add "status": "draft" and rerun `pdd check --fill-hash`, and makes the command exit 4.
+5. A prompt with its own prose_sha256 key but no own status key, including a misspelled "Status", stays unchanged, is refused with advice to add "status": "draft" and rerun `pdd test --fill-hash`, and makes the command exit 4.
 6. With only skipped fixtures and nothing filled, the command exits 0 with zero filled, current, refused and stale counts. Warnings print before filled paths, refusals and stale hints; the counts print last.
 7. Hash filling needs no tests, sign-in, network request or AI call, and applies the same rules in every directory.
 

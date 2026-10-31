@@ -16,7 +16,7 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.evidence', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.changes', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'completion', 'workflow.list', 'check', 'lint', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
@@ -164,10 +164,10 @@ test('workflow evidence routes required saved summary file without progressing s
 
 test('Try accepts named local launchers while workflow agent choices stay bounded', () => {
   for (const name of ['Codex (work5)', 'Claude (work3)', 'codex', 'claude', 'gemini']) {
-    const plan=parseArgv(['try','my-story','--agent',name]);
+    const plan=parseArgv(['simulate','my-story','--agent',name]);
     assert.equal(plan.commandId,'try');assert.equal(plan.options['--agent'],name);
   }
-  for (const args of [['try','--agent'],['try','--agent',''],['try','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
+  for (const args of [['simulate','--agent'],['simulate','--agent',''],['simulate','--agent','   '],['workflow','run','bug','42','--agent','Codex (work5)'],['workflow','run','bug','42','--agent','gemini']]) assert.throws(()=>parseArgv(args),CommandInputError);
   for (const shell of ['bash','zsh']) {
     const completion=renderCompletion(shell);
     assert.doesNotMatch(completion,/(?:try|sim|simulate):--agent\)/);

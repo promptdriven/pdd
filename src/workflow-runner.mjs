@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a449f77854367aba224bdef755eec7cd122b2465b2c7dcf5f803dcfab41e43cc).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a31caf73f407957dc7356ac28e55c65370f3cf9bf2e9c160b9d0fe751ddf6cd5).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -10,13 +10,14 @@ import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 import { readWorkflowAreas } from './workflow-areas.mjs';
 import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflowPrStatus } from './workflow-github.mjs';
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
 import { captureSource, findTests, gitFiles, interfaceBlocks, interfaceSchemaProblems, proseSha256 } from './runtime-preflight.mjs';
-import { storyLines } from './runtime-output.mjs';
+import { storyLines, PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
@@ -42,7 +43,7 @@ function execute(file, args, { cwd, input, ...options } = {}) {
 }
 const shell = value => /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
-// A step summary keeps its line breaks (0.1.6: the chat pastes one Runtime check line per line); blank lines go.
+// A step summary keeps its line breaks (0.1.6: the chat pastes one Prompt tests line per line); blank lines go.
 const keepLines = value => String(value ?? '').split('\n').map(oneLine).filter(Boolean).join('\n');
 const done = message => ({ exitCode: 0, message });
 const fail = message => ({ exitCode: 1, message });
@@ -420,16 +421,19 @@ function hideLocalPaths(text, run) {
   return text.split(`${run.root}/`).join('').split(run.root).join('.').split(run.runDir).join('<run folder>')
     .replace(/(?:\/private)?\/(?:Users|home|var\/folders|tmp)\/[^\s)`'"<>\]]*/g, '<local path>');
 }
-// Runtime check lines in a step summary (0.1.6): "Runtime check (<story>) (DRAFT)?: …" per Story, and the overall
-// "Runtime check: …". The chat pastes the lines that pdd check prints, one per line or joined with "; "; a result ends
-// at a line break, ";", a "Report" line, a link or the next Runtime check.
+// Prompt tests lines in a step summary (0.1.6): "Prompt tests (<story>) (DRAFT)?: …" per Story, and the overall
+// "Prompt tests: …"; older summaries say "Runtime check" and read the same way. The chat pastes the lines that pdd test
+// prints, one per line or joined with "; "; a result ends at a line break, ";", a "Report" line, a link or the next line.
+const PROMPT_TESTS = new RegExp(PROMPT_TESTS_WORDS);
+const LABEL_START = new RegExp(`^${PROMPT_TESTS_WORDS}`);
+const LINE_PATTERN = new RegExp(`${PROMPT_TESTS_WORDS}((?:\\s*\\([^)]*\\))*):\\s*(.*?)(?=\\n|\\s*(?:;|\\bReport\\b|https?:\\/\\/|${PROMPT_TESTS_WORDS}|$))`, 'gs');
 export function runtimeLines(text) {
-  return [...String(text ?? '').matchAll(/Runtime check((?:\s*\([^)]*\))*):\s*(.*?)(?=\n|\s*(?:;|\bReport\b|https?:\/\/|Runtime check|$))/gs)].map(match => {
+  return [...String(text ?? '').matchAll(LINE_PATTERN)].map(match => {
     const groups = [...match[1].matchAll(/\(([^)]*)\)/g)].map(group => group[1].trim());
     const story = groups.find(group => group && group.toUpperCase() !== 'DRAFT' && group !== 'all Stories') ?? null;
     const result = match[2].replace(/\s+/g, ' ').trim().replace(/[.,]$/, '');
     return { story, draft: groups.some(group => group.toUpperCase() === 'DRAFT'), result,
-      line: `Runtime check${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
+      line: `${PROMPT_TESTS_LABEL}${match[1].replace(/\s+/g, ' ')}: ${result}`, pass: result.includes('✓') && !result.includes('✗') };
   });
 }
 // One line per Story: a Story checked again keeps its place and takes its latest line.
@@ -446,9 +450,9 @@ function totalLine(stories) {
     calls && `${calls[0]} AI call${calls[0] === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
   const mark = stories.every(line => line.pass) ? '✓' : stories.some(line => line.result.includes('✗')) ? '✗' : stories.find(line => !line.pass).result.split(/[\s·]+/)[0];
   const result = !counts ? mark : /^[✓✗]$/.test(mark) ? `${mark} ${counts}` : `${mark} · ${counts}`;
-  return `Runtime check (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
+  return `${PROMPT_TESTS_LABEL} (all Stories)${stories.some(line => line.draft) ? ' (DRAFT)' : ''}: ${result}`;
 }
-// The Runtime check lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
+// The Prompt tests lines for the top of a PR: with Story names, one line per Story and then pdd's total (when there
 // are two or more); without, the lines as the chat wrote them.
 function runtimeTop(text) {
   const lines = runtimeLines(text), stories = latestStories(lines);
@@ -505,8 +509,10 @@ function reportLinks(text, env) {
 
 // The verdict line (RUNBOOK §14) and the "Before ✗ … → after ✓ …" line (or "Before: no prompt → …") of a bug check summary,
 // one per line or joined with "; ". "; " inside the verdict sentence stays.
-const verdictLine = text => String(text).match(/\bVerdict:[^\n]*?(?=;?\s*(?:\n|\bBefore\s*[✗✓:]|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
-const changeLine = text => String(text).match(/\bBefore\s*[✗✓:][^\n]*?(?=;?\s*(?:\n|\bVerdict:|\bRuntime check\b|\bReport\b|$))/)?.[0].trim() ?? null;
+const VERDICT = new RegExp(`\\bVerdict:[^\\n]*?(?=;?\\s*(?:\\n|\\bBefore\\s*[✗✓:]|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const CHANGE = new RegExp(`\\bBefore\\s*[✗✓:][^\\n]*?(?=;?\\s*(?:\\n|\\bVerdict:|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
+const verdictLine = text => String(text).match(VERDICT)?.[0].trim() ?? null;
+const changeLine = text => String(text).match(CHANGE)?.[0].trim() ?? null;
 
 // verify.md in the PR body (0.1.6 tester: 100 lines of shell came before the vector table). pdd drops a leading "# Verify"
 // (the PR has "## Verify"), nests the "## " headings one level down, and folds each code block of more than 15 lines that is
@@ -678,11 +684,11 @@ function prBody(run, area, env, drafts = [], tests = true, evidence) {
     : [evidence.issueReference];
   // verify writes "✗ N vectors fail" as its first line when cases still fail; the person must see it first.
   const failing = verify?.split('\n').find(row => row.trim())?.trim().startsWith('✗') ? [verify.split('\n').find(row => row.trim()).trim()] : [];
-  // The Runtime check line and its report link go on top (#18).
-  // The check step's result wins; else the latest step that reports a Runtime check. One line per Story (0.1.6), then the overall line.
+  // The Prompt tests line and its report link go on top (#18).
+  // The check step's result wins; else the latest step that reports a Prompt tests line. One line per Story (0.1.6), then the overall line.
   // Lines are read from the summary as stored, with its line breaks.
-  const checked = /Runtime check/.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => /Runtime check/.test(text));
-  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Runtime check
+  const checked = PROMPT_TESTS.test(raw.check ?? '') ? raw.check : Object.values(raw).reverse().find(text => PROMPT_TESTS.test(text));
+  // A bug check starts its summary with the verdict and "Before ✗ … → after ✓ …" (0.1.7): they go above the Prompt tests
   // lines, and their report links are not listed again.
   const sources = [raw.check, ...Object.values(raw).reverse()].filter(Boolean);
   const verdict = sources.map(text => verdictLine(text)).find(Boolean), change = sources.map(text => changeLine(text)).find(Boolean);
@@ -843,9 +849,9 @@ async function askCodeLines(run, area, p) {
   const drafts = await pr1Drafts(run, p), url = prOf(run, area.name).url;
   // The code is built only from approved prompts, so the code PR is not offered while PR 1 has a draft prompt.
   if (drafts.length) return [`PR 1: ${url}`, ...summaries, draftLine(drafts),
-    `Gate: show the person PR 1 and the Runtime check line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`, approvalGuide(run)];
+    `Gate: show the person PR 1 and the Prompt tests line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`, approvalGuide(run)];
   return [`PR 1: ${url}`, ...summaries,
-    `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
+    `Gate: show the person PR 1, the Prompt tests line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     approvalGuide(run, p.pdd),
     `If they stop, tell them exactly: "PR 1 is open: ${prOf(run, area.name).url}. ${codeLater(run)}" pdd never merges.`];
 }
@@ -891,7 +897,9 @@ export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
     });
     const expected = new Map(storyLines(rows));
     lines = rows.map(row => row.summary_line);
-    if (rows.some(row => row.summary_line !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
+    // A saved result of an older pdd says `Runtime check`: read its label as `Prompt tests` before the compare.
+    const label = line => typeof line === 'string' ? line.replace(LABEL_START, PROMPT_TESTS_LABEL) : line;
+    if (rows.some(row => label(row.summary_line) !== expected.get(row.story))) throw Error('Evidence summary_line does not match its structured Story results.');
   } catch (error) { return fail(`Evidence not recorded: ${oneLine(error.message)}`); }
   (run.evidence ??= []).push({ at: p.now(), summary: [...new Set(lines)].join('\n'), source, receipt });
   writeRun(run, p);
@@ -930,7 +938,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
       : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
-    return done(lines.join('\n'));
+    return doneWithRequests(done(lines.join('\n')), run, p);
   }
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
   if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
@@ -939,21 +947,21 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     lines.push(...await showGate(run, p));
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
-        ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
-        : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
+        ? 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
+        : 'Gate: show the person the Prompt tests line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
       approvalGuide(run, p.pdd),
       'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
-    return done(lines.join('\n'));
+    return doneWithRequests(done(lines.join('\n')), run, p);
   }
-  if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
+  if (area.gate === 'pr') return doneWithRequests(await finishPr(run, area, step, p, lines), run, p);
   run.gate = { id: p.randomUUID(), area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
   lines.push(...await showGate(run, p));
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
     approvalGuide(run, p.pdd),
     'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.');
-  return done(lines.join('\n'));
+  return doneWithRequests(done(lines.join('\n')), run, p);
 }
 
 // The code area works on <branch>-code: on PR 1's head while PR 1 is open (PR 2 stacks on it), else on the merged saved base branch.
@@ -1041,7 +1049,7 @@ async function draftDescription(run, pr1, drafts, p) {
     while (at < rows.length && owned.test(rows[at])) at++;
     while (at < rows.length && !rows[at].trim()) at++;
     const headerStart = at;
-    while (at < rows.length && /^(?:Verdict:|Before |Before:|Runtime check|Report(?: \([^)]*\))?:)/.test(rows[at])) at++;
+    while (at < rows.length && new RegExp(String.raw`^(?:Verdict:|Before |Before:|${PROMPT_TESTS_WORDS}|Report(?: \([^)]*\))?:)`).test(rows[at])) at++;
     const ordinaryTop = rows.slice(headerStart, at);
     const introduction = [];
     while (at < rows.length && !rows[at].trim()) at++;
@@ -1347,7 +1355,63 @@ function deliveryClaim(path, p) {
     return release;
   } catch (error) { release(); throw error; }
 }
-async function deliveryJournal(run, p, action) {
+// Pure snapshot reader shared by visibility and the claimed mutation path.
+function readDeliveryJournal(run, p) {
+  const fs = { ...nativeDeliveryFiles, ...p.deliveryFiles };
+  let journal;
+  try { journal = JSON.parse(fs.readFileSync(join(run.runDir, 'delivery-journal.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; return { requests: [] }; }
+  if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
+    typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change'].includes(entry.kind) ||
+    typeof entry.area !== 'string' || !entry.area || typeof entry.paneId !== 'string' || !entry.paneId || !Number.isFinite(entry.at) ||
+    entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
+  return journal;
+}
+const uptakeQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+const uptakeCommand = (id, p) => `${p.pdd ?? pddFor(p, PACKAGE_ROOT)} ${PUBLIC_COMMAND_ROUTES.find(route => route.id === 'workflow.request-uptake').prefix.join(' ')} ${uptakeQuote(id)} --summary ${uptakeQuote('what I changed')}`;
+const deliveryTime = (value, p = {}) => typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 8640000000000000 ? 'unknown' : new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', ...(p.timeZone ? { timeZone: p.timeZone } : {}) }).format(new Date(value));
+const uptakeReceipt = (entry, p) => `Request ${entry.id}: delivered at ${deliveryTime(entry.deliveredAt, p)}; ${entry.ackedAt == null ? 'not yet acknowledged by the agent' : `acknowledged at ${deliveryTime(entry.ackedAt, p)}: ${entry.ackSummary ?? ''}`}.`;
+function requestSnapshot(run, p) {
+  try {
+    const entries = readDeliveryJournal(run, p).requests;
+    return { requests: entries.filter(entry => entry.kind === 'change' && entry.state === 'delivered')
+      .map(entry => ({ id: entry.id, text: entry.text, area: entry.area, deliveredAt: entry.deliveredAt ?? null, ackedAt: entry.ackedAt ?? null, ackSummary: entry.ackSummary ?? null })),
+      pendingRequests: entries.filter(entry => !entry.inFlight && entry.state === 'pending').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
+      uncertainRequests: entries.filter(entry => !entry.inFlight && entry.state === 'uncertain').map(({ id, text, area, paneId }) => ({ id, text, area, paneId })),
+      inFlightRequests: entries.filter(entry => entry.inFlight).map(({ id, text, area, paneId }) => ({ id, text, area, paneId })) };
+  } catch { return { requests: null, inFlightRequests: null, pendingRequests: null, uncertainRequests: null, requestWarning: 'Change-request visibility unavailable: could not read the delivery journal. Check the run folder.' }; }
+}
+const protectedRequestAdvice = entry => `Request ${entry.id}: ${entry.text}. Original area ${entry.area}, pane ${entry.paneId}. Wait for the current send to finish before checking the original chat or typing anything. If it remains stuck after waiting, pdd will not automatically clear or resend protected ownership. First verify the original chat before manually supplying anything absent.`;
+function requestLines(snapshot, { openOnly = false, agent = false, ended = false, p = {} } = {}) {
+  if (snapshot.requestWarning) return [snapshot.requestWarning];
+  return [...snapshot.requests.filter(entry => (!ended || !openOnly) && (!openOnly || entry.ackedAt == null)).map(entry =>
+    `${uptakeReceipt(entry, p)} Area ${entry.area}: ${entry.text}${agent ? `\nTell the person about this outstanding request. After actually addressing this request, run: ${uptakeCommand(entry.id, p)}` : ""}`), ...snapshot.pendingRequests.map(entry => `Request ${entry.id}: ${ended ? 'pending, not sent; run ended. Original' : 'pending, saved for the original'} ${entry.area} chat, pane ${entry.paneId}: ${entry.text}`), ...snapshot.uncertainRequests.map(entry => `Request ${entry.id}: uncertain, may already be in the original ${entry.area} chat, pane ${entry.paneId}: ${entry.text}. Check that original chat.`), ...snapshot.inFlightRequests.map(entry => agent ? `Request ${entry.id}: delivery in progress. Tell the person about this outstanding request.` : protectedRequestAdvice(entry))];
+}
+function doneWithRequests(result, run, p) {
+  if (result.exitCode !== 0) return result;
+  const snapshot = requestSnapshot(run, p);
+  // Completion warnings concern delivered changes; other custody states remain
+  // visible in status without directing an agent to inspect its own chat.
+  const lines = requestLines({ ...snapshot, pendingRequests: [], uncertainRequests: [], inFlightRequests: [] }, { openOnly: true, agent: true, p });
+  return lines.length ? { ...result, message: `${result.message}\nwarning: ${lines.join('\n').split('\n').join('\nwarning: ')}` } : result;
+}
+export async function acknowledgeRequest({ requestId, summary, cwd }, ports) {
+  const p = deps(ports), hint = `Use ${uptakeCommand(typeof requestId === 'string' ? requestId : 'REQUEST_ID', p)}.`;
+  if (typeof requestId !== 'string' || !requestId.trim() || typeof summary !== 'string' || !oneLine(summary)) return fail(`Provide a request id and a short summary. ${hint}`);
+  const run = await runForWorktree(cwd, p);
+  if (!run || !['running', 'waiting'].includes(run.state)) return fail(`Acknowledgement requires an active run worktree. ${hint}`);
+  try {
+    const entry = await deliveryJournal(run, p, journal => {
+      const entry = journal.requests.find(entry => entry.id === requestId);
+      if (!entry || entry.kind !== 'change' || entry.state !== 'delivered' || entry.inFlight) throw Error('Request is not a delivered change in this run');
+      if (entry.ackedAt == null) { entry.ackedAt = p.now(); entry.ackSummary = oneLine(summary).slice(0, 500); }
+      return { ...entry };
+    }, { recover: false });
+    return done(`Agent uptake recorded. ${uptakeReceipt(entry, p)}`);
+  } catch (error) { return fail(`Could not acknowledge request ${requestId}: ${oneLine(error.message).slice(0, 300)}. ${hint}`); }
+}
+
+async function deliveryJournal(run, p, action, { recover = true } = {}) {
   const fs = { ...nativeDeliveryFiles, ...p.deliveryFiles }, path = join(run.runDir, 'delivery-journal.json');
   const elapsed = p.journalElapsedNow ?? monotonicMs, began = elapsed(); let release;
   while (!release) {
@@ -1359,21 +1423,18 @@ async function deliveryJournal(run, p, action) {
     }
   }
   try {
-    let journal;
-    try { journal = JSON.parse(fs.readFileSync(path, 'utf8')); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; journal = { requests: [] }; }
-    if (!journal || !Array.isArray(journal.requests) || journal.requests.some(entry => !entry || typeof entry.id !== 'string' || !entry.id ||
-      typeof entry.text !== 'string' || !['pending', 'uncertain', 'delivered'].includes(entry.state) || !['answer', 'change'].includes(entry.kind) ||
-      typeof entry.area !== 'string' || !entry.area || typeof entry.paneId !== 'string' || !entry.paneId || !Number.isFinite(entry.at) ||
-      entry.inFlight !== undefined && typeof entry.inFlight !== 'boolean') || new Set(journal.requests.map(entry => entry.id)).size !== journal.requests.length) throw Error('Malformed delivery journal');
-    for (const entry of journal.requests) if (entry.inFlight) {
+    const journal = readDeliveryJournal(run, p);
+    const before = JSON.stringify(journal);
+    if (recover) for (const entry of journal.requests) if (entry.inFlight) {
       const owner = entry.owner;
       const verifiable = owner && Number.isInteger(owner.pid) && owner.pid > 0 && typeof owner.hostname === 'string' && owner.hostname && typeof owner.token === 'string' && owner.token;
       const abandoned = verifiable && owner.hostname === deliveryHost(p) &&
         (owner.pid === (p.ownerPid ?? process.pid) ? !activeDeliveries.has(owner.token) : ownerAlive(owner.pid, p) === false);
       if (abandoned) { entry.state = 'uncertain'; entry.code = 'acknowledgement_unknown'; delete entry.inFlight; delete entry.owner; }
     }
-    const result = action(journal), temporary = `${path}.${(p.deliveryToken ?? randomUUID)()}.tmp`;
+    const result = action(journal);
+    if (!recover && JSON.stringify(journal) === before) return result;
+    const temporary = `${path}.${(p.deliveryToken ?? randomUUID)()}.tmp`;
     try { fs.writeFileSync(temporary, JSON.stringify(journal, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, path); }
     finally { try { fs.unlinkSync(temporary); } catch { /* Published or never created. */ } }
     return result;
@@ -1397,8 +1458,8 @@ Nothing was sent to the chat.` };
   const kept = `Your request is kept. Wait briefly or open it: pdd workflow open ${run.number}. ${retry}`;
   const warning = `An earlier request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`;
   const uncertain = () => fail(`Your request is uncertain and may already be in the chat. Check the original chat: pdd workflow open ${run.number}; type it there if absent. pdd will not automatically resend it.`);
-  const progress = () => fail(`Delivery to the original ${area.name} chat is in progress or needs inspection. Check the original chat: pdd workflow open ${run.number}.`);
-  const already = () => done(`Your request was already delivered to the ${area.name} chat.`);
+  const progress = entry => fail(`Delivery to the original ${entry.area} chat is in progress or needs inspection. ${accepted.id !== entry.id ? 'Your request is saved pending. ' : ''}${protectedRequestAdvice(entry)} Open it: pdd workflow open ${run.number}.`);
+  const already = () => done(`Your request was already delivered to the ${area.name} chat.${accepted.kind === 'change' ? `\n${uptakeReceipt(accepted, p)}` : ''}`);
   const failure = sent => {
     if (sent.uncertain) return uncertain();
     if (sent.code === 'chat_target_changed') return fail(`The original ${area.name} chat target changed. ${kept}`);
@@ -1423,13 +1484,13 @@ Nothing was sent to the chat.` };
     if (accepted.state === 'delivered') return already();
     let warnings = queue.some(entry => entry.state === 'uncertain'), sentAccepted = false;
     if (accepted.state === 'uncertain') return uncertain();
-    if (accepted.inFlight) return progress();
+    if (accepted.inFlight) return progress(accepted);
     for (const entry of queue) {
       if (entry.state === 'uncertain') continue;
-      if (entry.inFlight) return entry.id === accepted.id ? progress() : fail(`An earlier delivery to the ${area.name} chat is in progress. ${kept}`);
+      if (entry.inFlight) return progress(entry);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.`;
+        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.\nRequest ${entry.id}. After addressing it, record agent uptake with a short note:\n${uptakeCommand(entry.id, p)}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -1472,21 +1533,21 @@ Nothing was sent to the chat.` };
           writeRun(run, p); return { ...saved };
         });
       } catch { return fail('Could not save the submission acknowledgement. Check the original chat before retrying; delivery may be uncertain.'); }
-      if (!claimed && observed.state === 'delivered') { if (entry.id === accepted.id) return already(); continue; }
-      if (!claimed && observed.inFlight) return entry.id === accepted.id ? progress() : fail(`An earlier delivery to the ${area.name} chat is in progress. ${kept}`);
+      if (!claimed && observed.state === 'delivered') { if (entry.id === accepted.id) { accepted = observed; return already(); } continue; }
+      if (!claimed && observed.inFlight) return progress(observed);
       if (observed.state === 'uncertain') { if (entry.id === accepted.id) return uncertain(); warnings = true; continue; }
-      if (claimed && sent.ok && entry.id === accepted.id) sentAccepted = true;
+      if (claimed && sent.ok && entry.id === accepted.id) { sentAccepted = true; accepted = observed; }
       if (!sent.ok) { const result = failure(sent); return warnings ? { ...result, message: `${result.message}\n${warning}` } : result; }
     }
     if (!sentAccepted) {
       const saved = await deliveryJournal(run, p, journal => ({ ...journal.requests.find(item => item.id === accepted.id) }));
-      if (saved.state === 'delivered') return already();
-      if (saved.inFlight) return progress();
+      if (saved.state === 'delivered') { accepted = saved; return already(); }
+      if (saved.inFlight) return progress(saved);
       if (saved.state === 'uncertain') return uncertain();
       return failure({ code: 'chat_target_changed' });
     }
     return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
-      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`) + (warnings ? `\n${warning}` : ''));
+      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`) + (!answer ? `\n${uptakeReceipt(accepted, p)}` : '') + (warnings ? `\n${warning}` : ''));
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
   finally { activeDeliveries.delete(owner.token); }
 }
@@ -1598,7 +1659,11 @@ async function listStatus(runs, { json, cancelled, scope }, p) {
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   for (const run of runs) if (run.state === 'waiting' && run.pr?.length) { try { await refreshPr(run, p); } catch { /* A PR read failure keeps the saved state. */ } }
   const all = [];
-  for (const run of runs) all.push(summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p)));
+  for (const run of runs) {
+    const item = summary(run, p.timeZone, await chatState(run, p), ended(run) ? {} : await gateFacts(run, p));
+    const snapshot = requestSnapshot(run, p);
+    all.push({ ...item, ...snapshot, line: [item.line, ...requestLines(snapshot, { openOnly: true, ended: ended(run), p })].join('\n') });
+  }
   const hidden = cancelled ? 0 : all.filter(item => item.group === 'cancelled').length;
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -1618,8 +1683,9 @@ export async function runStatus({ ref, cwd, all = false, json = false, cancelled
   if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
   await refreshPr(found.run, p);
   const run = found.run, facts = ended(run) ? {} : await gateFacts(run, p), chat = await chatState(run, p);
-  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [item] }, null, 2)); }
-  return done(detail(run, chat, facts));
+  const snapshot = requestSnapshot(run, p);
+  if (json) { const { line, ...item } = summary(run, p.timeZone, chat, facts); return done(JSON.stringify({ runs: [{ ...item, ...snapshot }] }, null, 2)); }
+  return done([detail(run, chat, facts), ...requestLines(snapshot, { ended: ended(run), p })].join('\n'));
 }
 
 export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {

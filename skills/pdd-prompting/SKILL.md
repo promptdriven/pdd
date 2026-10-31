@@ -33,7 +33,7 @@ Each code module's `.prompt.md` is the source; code implements it.
 3. Write or change the prompt. Then write the Story in the person's words, with no function calls or type names. A Story is one "I can…" behavior, checked in a minute.
 4. Derive normal, limit and error cases. Use one action or about 10 moves/rows/calls. Split long replays with expected state after each part; the server stops a step after 10 minutes.
 5. Show drafts and open choices that affect results.
-6. After changing prompt, Story and tests, run `pdd test` as RUNBOOK.md says, and show the person the `Runtime check` line(s) and the report link(s). Offer `pdd simulate STORY`. If a check fails, show it; never change the expected value yourself.
+6. After changing prompt, Story and tests, run `pdd test` as RUNBOOK.md says, and show the person the `Prompt tests` line(s) and the report link(s). Offer `pdd simulate STORY`. If a check fails, show it; never change the expected value yourself.
 
 Without prompts, use code, callers and tests as evidence. Change no code until asked.
 
