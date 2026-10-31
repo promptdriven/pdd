@@ -1,6 +1,7 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: bcda1bc0c93843aea138f11175da5c33f7d0ef0b63483165b14a8431b0c4a15c).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 51c96beda97099ab10d7ee1566ce70a03796baf0cd918aeeb3b48480c26a85af).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import * as nativeRunFiles from 'node:fs';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -102,16 +103,80 @@ export function statusView(run) {
     links: Array.isArray(run.links) ? run.links : [], controller: null, message: run.message ?? null, cancelled: run.cancelled ?? null };
 }
 
-export function writeRun(run, ports = {}) {
+// One short local owner protects selecting latest state as well as publication.
+// Busy owners are never reclaimed by age or by a guessed process identity.
+const activeRunOwners = new Set();
+const pauseBuffer = new Int32Array(new SharedArrayBuffer(4));
+const identity = run => [run.v, run.runId, run.number, run.repo, run.root, run.commonDir, run.runDir];
+const sameIdentity = (a, b) => JSON.stringify(identity(a)) === JSON.stringify(identity(b));
+function saveError(error) {
+  if (error?.code === 'workflow_run_save_failed') return error;
+  return Object.assign(new Error(`Could not save workflow progress: ${error.message ?? error}. Check the run folder and retry.`), {code:'workflow_run_save_failed',cause:error});
+}
+function claimRun(runDir, fs) {
+  const path = join(runDir, '.ordinary-owner');
+  if (activeRunOwners.has(runDir)) throw Error('A nested ordinary run save is not allowed');
+  // At most five seconds of short waits; a stuck owner fails without removal.
+  for (let attempt = 0; ; attempt++) {
+    try { fs.mkdirSync(path, {mode:0o700}); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (attempt === 500) throw Error('Another command owns workflow progress; wait briefly, then retry');
+      Atomics.wait(pauseBuffer, 0, 0, 10);
+    }
+  }
+  // Capture identity before advertising an active owner. Failure here still
+  // belongs to this just-created acquisition, so clean it up without poisoning
+  // the in-process reentrancy guard. No other ordinary owner can have acquired it.
+  let acquired;
+  try { acquired=fs.lstatSync(path); }
+  catch(error){try{fs.rmdirSync(path);}catch{/* Keep the original acquisition error. */}throw error;}
+  activeRunOwners.add(runDir);
+  return () => {
+    activeRunOwners.delete(runDir);
+    try { const current=fs.lstatSync(path); if (current.dev===acquired.dev && current.ino===acquired.ino) fs.rmdirSync(path); } catch { /* Only release our own directory. */ }
+  };
+}
+function ownedRun(runDir, ports, action, {create=false}={}) {
+  const fs={...nativeRunFiles,...ports.runFiles};
+  let release;
+  try {
+    if (create) fs.mkdirSync(runDir,{recursive:true});
+    release=(ports.acquireRunOwnership ?? (directory=>claimRun(directory,fs)))(runDir);
+    if (typeof release !== 'function') throw Error('Run ownership was not acquired');
+    return action(fs);
+  } catch (error) { throw saveError(error); }
+  finally { if (release) {try{release();}catch{/* Release trouble cannot undo or misreport a published record. */}} }
+}
+function publishRun(run, ports, fs) {
   run.journalSeq = (Number.isSafeInteger(run.journalSeq) ? run.journalSeq : 0) + 1;
   run.updatedAt = (ports.now ?? Date.now)();
   Object.assign(run, statusView(run));
-  mkdirSync(run.runDir, { recursive: true });
   const temporary = join(run.runDir, `.status.json.${randomBytes(6).toString('hex')}.tmp`);
-  writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600 });
-  renameSync(temporary, join(run.runDir, 'status.json'));
-  try { updateIndex(run, ports); } catch { /* The index only helps selection outside a repository. */ }
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(run, null, 2) + '\n', { mode: 0o600, flag:'wx' });
+    fs.renameSync(temporary, join(run.runDir, 'status.json'));
+  } finally { try { fs.unlinkSync(temporary); } catch { /* Published or not created. */ } }
   return run;
+}
+function indexed(run, ports) {
+  try { updateIndex(run, ports); } catch { /* Selection index is best effort after commit. */ }
+  return run;
+}
+export function writeRun(run, ports = {}) {
+  ownedRun(run.runDir, ports, fs=>publishRun(run,ports,fs), {create:true});
+  return indexed(run,ports);
+}
+export function updateRun(runDir, update, ports = {}) {
+  const committed=ownedRun(runDir,ports,fs=>{
+    const run=JSON.parse(fs.readFileSync(join(runDir,'status.json'),'utf8'));
+    if (!object(run) || run.v!==1 || !Number.isSafeInteger(run.number) || run.runDir!==runDir) throw Error('The existing run record is missing, unreadable or invalid');
+    const original=structuredClone(run);
+    const result=update(run);
+    if (!object(result) || typeof result.then==='function' || !sameIdentity(original,result)) throw Error('An ordinary update must return the same run identity synchronously');
+    return publishRun(result,ports,fs);
+  });
+  return indexed(committed,ports);
 }
 
 export async function runForWorktree(cwd, ports = {}) {
