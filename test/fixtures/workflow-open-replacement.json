@@ -1,0 +1,542 @@
+{
+  "format": "pdd.native-case-vectors.v1",
+  "runtime": false,
+  "story": "user_stories/restart-workflow-area-session.md",
+  "boundary": [
+    "src/workflow-chat.mjs:restartChat",
+    "src/workflow-runner.mjs:openRun"
+  ],
+  "notes": "Native specification only; Interpreter effects remain unbound and NOT RUN. Herdr commands use injected fakes; Git/files use isolated resources. Executable replay paths are maintained separately by the test owner; no provider or staging calls.",
+  "cases": [
+    {
+      "id": "ownership-checkout",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with checkout inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "checkout"
+      }
+    },
+    {
+      "id": "ownership-repository",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with repository inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "repository"
+      }
+    },
+    {
+      "id": "ownership-tab-workspace",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with tab-workspace inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "tab-workspace"
+      }
+    },
+    {
+      "id": "ownership-terminal",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with terminal inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "terminal"
+      }
+    },
+    {
+      "id": "ownership-extra-pane",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with extra-pane inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "extra-pane"
+      }
+    },
+    {
+      "id": "ownership-unavailable",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with unavailable inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "unavailable"
+      }
+    },
+    {
+      "id": "ownership-malformed",
+      "criteria": [
+        5,
+        6
+      ],
+      "action": "restartChat with malformed inventory",
+      "expected": "Refuse before checkpoint, close, allocation or launch",
+      "input": {
+        "kind": "ownership",
+        "variant": "malformed"
+      }
+    },
+    {
+      "id": "caller-pane",
+      "criteria": [
+        7
+      ],
+      "action": "Restart from selected pdd pane or undetermined Herdr pane",
+      "expected": "Refuse without native effects or saved-run changes, including PDD_AGENT_SESSION even without Herdr caller variables",
+      "input": {}
+    },
+    {
+      "id": "unconfirmed-original",
+      "criteria": [
+        5
+      ],
+      "action": "Original launch unconfirmed and no same-agent observation",
+      "expected": "Refuse without native effects",
+      "input": {}
+    },
+    {
+      "id": "ordered-checkpoints",
+      "criteria": [
+        2,
+        6,
+        7
+      ],
+      "action": "Replace verified area through acknowledged close and fresh absence",
+      "expected": "Await intent, closeRequested, closed, createRequested, prepared, launchRequested, launched; one launch; exact original bytes archived; new identity prepared before launch",
+      "input": {}
+    },
+    {
+      "id": "reject-intent",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject intent persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "intent"
+      }
+    },
+    {
+      "id": "reject-closeRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject closeRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "closeRequested"
+      }
+    },
+    {
+      "id": "reject-closed",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject closed persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "closed"
+      }
+    },
+    {
+      "id": "reject-createRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject createRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "createRequested"
+      }
+    },
+    {
+      "id": "reject-prepared",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject prepared persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "prepared"
+      }
+    },
+    {
+      "id": "reject-launchRequested",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Reject launchRequested persistence callback",
+      "expected": "No subsequent native effect; no launch",
+      "input": {
+        "kind": "checkpoint-rejection",
+        "phase": "launchRequested"
+      }
+    },
+    {
+      "id": "close-lost",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "lost close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "lost"
+      }
+    },
+    {
+      "id": "close-malformed",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "malformed close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "malformed"
+      }
+    },
+    {
+      "id": "close-still-present",
+      "criteria": [
+        5,
+        6,
+        7
+      ],
+      "action": "still-present close reply or presence after acknowledgement",
+      "expected": "No allocation or launch",
+      "input": {
+        "kind": "close-response",
+        "variant": "still-present"
+      }
+    },
+    {
+      "id": "lost-launch-identity",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Dispatch pane launch then lose reply",
+      "expected": "Error retains exact launchRequested replacement with startUnconfirmed true",
+      "input": {}
+    },
+    {
+      "id": "runner-lost-close",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose close reply then retry public openRun --new",
+      "expected": "Retry inspects original tab/pane and native session; roll back if exact original remains usable, otherwise continue same attempt only after confirmed closure; unavailable or ambiguous inspection is retryable; one archive and no duplicate native session",
+      "input": {
+        "kind": "runner-lost-reply",
+        "variant": "close"
+      }
+    },
+    {
+      "id": "runner-lost-create",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose create reply then retry public openRun --new",
+      "expected": "Retry reconciles preallocation inventory and area label; adopt unique owned allocated tab or allocate only on proof no allocation occurred; finish same attempt with one native session; ambiguous inspection is retryable",
+      "input": {
+        "kind": "runner-lost-reply",
+        "variant": "create"
+      }
+    },
+    {
+      "id": "runner-observe-launch",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Lose launch reply, positively observe replacement on --new retry",
+      "expected": "Same attempt becomes launched; same pane; one launch and archive",
+      "input": {}
+    },
+    {
+      "id": "runner-absent-launch",
+      "criteria": [
+        5,
+        7
+      ],
+      "action": "Lose launch reply and remove replacement tab/pane, then retry --new",
+      "expected": "Inspect exact saved native session identity; confirm or resume that same session, or continue same prepared identity only if dispatch is authoritatively proven absent; otherwise retryable refusal, never blind allocation or fresh native session",
+      "input": {}
+    },
+    {
+      "id": "concurrent-run",
+      "criteria": [
+        7
+      ],
+      "action": "Hold first close while second openRun --new competes",
+      "expected": "Second refuses; one replacement and launch",
+      "input": {}
+    },
+    {
+      "id": "process-interruption",
+      "criteria": [
+        7
+      ],
+      "action": "SIGKILL child public openRun at durable closeRequested; retry from another process",
+      "expected": "Pending attempt survives; retry inspects and rolls back an owned usable original or safely completes same attempt after confirmed closure; unavailable inspection is retryable; no duplicate native session",
+      "input": {}
+    },
+    {
+      "id": "pending-intent",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry --new after intent",
+      "expected": "Roll back to verified usable original, keep archive custody, terminal rolledBack; no close or launch",
+      "input": {}
+    },
+    {
+      "id": "pending-prepared",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry --new before dispatch",
+      "expected": "Verify prepared ownership and empty pane; dispatch same prepared native identity once; one archive",
+      "input": {}
+    },
+    {
+      "id": "pending-nonopen-commands",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Use approve, done, ask, changes, evidence or cancel while replacement pending",
+      "expected": "Legacy command semantics; no pending or replacement-lock refusal; cancel closes chats and remains cancelled",
+      "input": {}
+    },
+    {
+      "id": "status-contention",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Read status during slow gh or Herdr inspection while done records progress",
+      "expected": "Status holds no replacement lock during external calls; done does not fail busy; status names pending phase and pdd workflow open ISSUE --new",
+      "input": {}
+    },
+    {
+      "id": "preclose-refusal-state",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Refuse --new eligibility or ownership before intent",
+      "expected": "Entire saved run unchanged including state and chatFailure; no native effect",
+      "input": {}
+    },
+    {
+      "id": "nonempty-launch-reply",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Herdr pane run returns nonempty JSON without throwing",
+      "expected": "Launch succeeds with same replacement; phase launched; one dispatch",
+      "input": {}
+    },
+    {
+      "id": "cancel-during-recovery",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Cancel after replacement checkpoint and before next effect",
+      "expected": "Replacement stops; no later checkpoint restores running or overwrites cancellation",
+      "input": {}
+    },
+    {
+      "id": "pending-after-area-progress",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Advance run.area through legacy approve/done while replacement is pending; resolve with open ISSUE --new, then separately replace the current area",
+      "expected": "Saved attempt remains valid; recovery only rolls back a verified usable original or safely ends the historical attempt, never launching a fresh native session for the old area; newer area/chat/state/gate/question and progress stay unchanged; terminal history permits a later separate current-area replacement",
+      "input": {}
+    },
+    {
+      "id": "recovery-lost-resume",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Lose exact-session recovery resume reply at intent/closeRequested rollback or launchRequested stopped replacement; retry before and after observing that same agent",
+      "expected": "Wait START_GRACE_MS before resuming an unconfirmed replacement; persist resumeRequested before any allowed dispatch for the same original/current replacement target; no repeated resume while observation is absent/unavailable; positive same-session observation finishes the existing attempt without a new identity",
+      "input": {}
+    },
+    {
+      "id": "historical-lost-close-no-launch",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Lose close acknowledgement, advance with done/approve, then retry --new with saved original session evidence",
+      "expected": "Roll back or safely end the same old-area attempt; zero fresh dispatches, unchanged newer current chat and progress",
+      "input": {}
+    },
+    {
+      "id": "plain-open-versus-new",
+      "criteria": [
+        1,
+        7
+      ],
+      "action": "Pause ordinary open after run selection while its ended session would resume; request --new concurrently",
+      "expected": "Competing --new refuses in plain words while plain open owns the same run lock; only one live recorded agent",
+      "input": {}
+    },
+    {
+      "id": "lost-launch-startup-grace",
+      "criteria": [
+        7
+      ],
+      "action": "Lose launch reply, hide starting agent but expose exact session file, retry within START_GRACE_MS",
+      "expected": "No resume or fresh dispatch; retryable same --new advice; after grace the exact saved-session recovery may proceed",
+      "input": {}
+    },
+    {
+      "id": "pane-not-found-recovery",
+      "criteria": [
+        7
+      ],
+      "action": "Return pane_not_found for exact original/replacement agent inspection",
+      "expected": "Count as missing only if complete inventory also proves pane absent; present or ambiguous inventory refuses without launch",
+      "input": {}
+    },
+    {
+      "id": "pending-status-state-next",
+      "criteria": [
+        9
+      ],
+      "action": "Read detailed status with closeRequested pending",
+      "expected": "Both State and Next name the phase and pdd workflow open ISSUE --new; status holds no run lock during external calls",
+      "input": {}
+    },
+    {
+      "id": "replacement-area-tab-label",
+      "criteria": [
+        6,
+        7
+      ],
+      "action": "Replace or recover a uniquely owned allocation",
+      "expected": "Visible tab label is exactly the area name, no UUID; inventory custody distinguishes the attempt",
+      "input": {}
+    },
+    {
+      "id": "cancel-before-launch-checkpoint",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Cancel immediately before final launchRequested checkpoint",
+      "expected": "Final cancellation reread stops dispatch and never restores running; cancellation after this check is a documented non-atomic legacy boundary",
+      "input": {}
+    },
+    {
+      "id": "attached-open-releases-lock",
+      "criteria": [
+        1,
+        7
+      ],
+      "action": "Keep one plain open attached; invoke a second plain open, then --new",
+      "expected": "Both later opens proceed; read/allocation/resume/save stays serialized before attach; the first attachment does not hold the run lock",
+      "input": {}
+    },
+    {
+      "id": "shell-proves-launch-unsent",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Lose launch request before dispatch; retry --new at START_GRACE_MS with exact owned live pane and authoritative shell-only process-info",
+      "expected": "Record proof and once-only recovery dispatch intent before sending same prepared launch once; retain native identity and one archive; status explains retry",
+      "input": {}
+    },
+    {
+      "id": "agent-process-forbids-launch",
+      "criteria": [
+        7
+      ],
+      "action": "Retry lost launch after START_GRACE_MS with Codex/Claude process present but no native UUID",
+      "expected": "No second launch or blind resume; retain same custody for observation",
+      "input": {}
+    },
+    {
+      "id": "unknown-process-stays-pending",
+      "criteria": [
+        7,
+        9
+      ],
+      "action": "Retry lost launch after START_GRACE_MS with missing, malformed or unknown process-info",
+      "expected": "No fresh dispatch or tab closure; safe pending retains identity and names --new plus cancel",
+      "input": {}
+    },
+    {
+      "id": "historical-empty-prepared-tab",
+      "criteria": [
+        6,
+        7,
+        9
+      ],
+      "action": "Advance current area after prepared but never requested launch; recover with verified owned shell-only pane",
+      "expected": "Close only historical empty owned tab and end attempt; no fresh launch, unchanged newer current chat and progress; unknown or agent process never authorizes close",
+      "input": {}
+    },
+    {
+      "id": "recovery-dispatch-lost-once",
+      "criteria": [
+        7
+      ],
+      "action": "Prove unsent launch after grace, save recovery dispatch intent, lose recovery launch reply, retry --new",
+      "expected": "No repeated recovery dispatch based on the earlier proof; positive same-agent observation may finish same attempt. Another dispatch requires fresh START_GRACE_MS and authoritative process proof that the latest request never ran",
+      "input": {}
+    }
+  ]
+}

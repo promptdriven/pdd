@@ -18,6 +18,8 @@ Read the entire [Prompting guide](../../docs/prompting-guide.md) before authorin
 
 ## Dependencies
 
+- [Command catalog](command-catalog.prompt.md#public-routes): required authoring/generation/runtime/verification/testing context for the catalog-owned workflow.open help form and description.
+
 - [Contract commands](contracts.prompt.md): required generation and verification
   context for local list/sync dispatch; the syntax-only Runtime entry does not
   bind these native effects.
@@ -33,7 +35,7 @@ Native authoring/generation uses existing imported project APIs and their owner 
 
 ## Workflow dispatch
 
-The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. Pass `adoptCorpus` only when `--adopt-corpus` was given, using its text unchanged; the runner owns adoption policy. For status, pass `all`, `cancelled` and `json` only when their flag is given. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
+The runner routes (run, done, ask, approve, changes, cancel, status, open) call the matching export of `src/workflow-runner.mjs` (startRun, stepDone, askPerson, approveRun, changeRun, cancelRun, runStatus, openRun) with the parsed values, cwd and packageRoot. For startRun, pass `base` only when `--base` was given, using its text unchanged; the runner owns branch validation and selection. Pass `adoptCorpus` only when `--adopt-corpus` was given, using its text unchanged; the runner owns adoption policy. For status, pass `all`, `cancelled` and `json` only when their flag is given. For open, pass `area` only when the optional area operand was given and `newSession: true` only when --new was given; otherwise preserve the existing openRun arguments. The runner owns selection, replacement safety and persistence. Tests may inject the runner module. Print the returned message once: stdout when exitCode is 0, stderr otherwise. Return the exitCode. A missing export, an invalid reply or a thrown error prints one finite line and returns 1; never retry.
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
@@ -66,7 +68,7 @@ pdd never merges.
 
 ## Help forms
 
-Help prints exactly these lines, in this order. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix.
+Help prints the lines below in order, with the catalog-derived insertion specified here. Each line is two spaces, the form, two spaces and its description. The [catalog](command-catalog.prompt.md) routes own them; the first words after `pdd` are the route prefix. Immediately after the view line, insert the `workflow.open` route's help form and description from the [catalog public routes](command-catalog.prompt.md#public-routes), using the same line format.
 
 ```text
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
@@ -82,7 +84,6 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd workflow cancel ISSUE  Cancel the run and close its Herdr tabs; keep the worktree and branch.
   pdd workflow status [ISSUE] [--all] [--cancelled] [--json]  Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.
   pdd workflow view ISSUE  Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.
-  pdd workflow open ISSUE  Focus or attach the current area chat; resume it if its session ended.
   pdd  Show local commands.
   pdd --help  Show local commands.
   pdd -h  Show local commands.
@@ -161,7 +162,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "fe90a9f5875c0b99591342f1d806bf3762a911c0a5ed9c9f04590fd2c3194a2b",
+  "prose_sha256": "0d2f4e3f25d5c54483073bff85e6560858ec27d02ffea5658e766d4c12686cdb",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {
