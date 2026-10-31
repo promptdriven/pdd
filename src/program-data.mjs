@@ -1,6 +1,7 @@
-// Generated from prompts/cli/program-data.prompt.md (sha256: a3e4451280ffe7e3da285dc2cf9c3c8855fffebe6f5eabcd0bc4444639a6a582).
-import { constants, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+// Generated from prompts/cli/program-data.prompt.md (sha256: 8c8a025f559dc39f0457e0e656db50be2b3039d1a84dbea9005bf4aa19073e45).
+import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 export const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -27,21 +28,29 @@ export function writePrivate(path,value) {
   try {renameSync(temp,path);}finally{try{unlinkSync(temp);}catch{}}
 }
 export function programData({root,program,flags={}},ports={}) {
-  if(!/^[A-Za-z0-9._-]+$/.test(program)||program==='.'||program==='..')throw localError('Invalid program identity.');
-  const dir=safeDirectory(root,['.pdd','run',program]);
-  const ignore=join(root,'.gitignore');let previous='';
-  try {const st=lstatSync(ignore);if(!st.isFile()||st.nlink!==1)throw localError('Refusing unsafe .gitignore.');previous=readFileSync(ignore,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}
+  const parts=typeof program==='string'?program.split('/'):[];
+  if(!parts.length||parts.some(part=>!(/^[A-Za-z0-9._-]+$/).test(part)||part==='.'||part==='..'))throw localError('Invalid program identity.');
+  const dir=safeDirectory(root,['.pdd','run',...parts]);
+  const git=spawnSync('git',['rev-parse','--git-path','info/exclude'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  if(git.status!==0)throw localError('Cannot locate local Git excludes.');
+  const ignore=resolve(root,git.stdout.trim());let previous='';
+  // Git may not have created info yet, particularly in linked worktrees.
+  mkdirSync(dirname(ignore),{recursive:true});
+  if(realpathSync(dirname(ignore))!==dirname(ignore))throw localError('Refusing a symbolic link in the Git exclude path.');
+  try {const st=lstatSync(ignore);if(!st.isFile()||st.nlink!==1)throw localError('Refusing unsafe Git exclude file.');previous=readFileSync(ignore,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}
   if(!previous.split('\n').some(v=>['.pdd/','/.pdd/'].includes(v))) {
     const fd=openSync(ignore,constants.O_WRONLY|constants.O_APPEND|constants.O_CREAT|constants.O_NOFOLLOW,0o644);
     try{writeFileSync(fd,(previous&&!previous.endsWith('\n')?'\n':'')+'.pdd/\n');}finally{closeSync(fd);}
   }
   let world={},simulation;
   if(flags.data) {
-    const doc=readPrivate(resolve(root,flags.data));
+    let doc;
+    try {doc=readPrivate(resolve(root,flags.data));if(doc===undefined)throw new Error('file does not exist');}
+    catch(e){throw localError(`Cannot read starting data ${flags.data}: ${e.message}.`);}
     if(object(doc)&&Object.hasOwn(doc,'initial_world')) {world=doc.initial_world;simulation=doc.simulation;}
     else world=doc;
   } else if(!flags.fresh)world=readPrivate(join(dir,'data.json'),{});
-  if(!object(world))throw localError('Starting data must be a JSON world object.');
+  if(!object(world))throw localError(`${flags.data??'Starting data'} must be a JSON world object.`);
   if(simulation!==undefined&&!object(simulation))throw localError('Simulation must be a JSON object.');
   return {dir,fresh:!!flags.fresh,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
 }

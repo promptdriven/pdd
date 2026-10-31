@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-session.prompt.md (sha256: 0397a74aa2eeec1d76cfd52190d08505cdab836f42623863fa8a49e082dfac51).
+// Generated from prompts/cli/program-session.prompt.md (sha256: f0fec034310eb85ab47270fbfc06c2ea82fa22564f2ff64b478657d726d0ea7b).
 import { join } from 'node:path';
 import { captureSource } from './runtime-preflight.mjs';
 import { programTransport } from './runtime-client.mjs';

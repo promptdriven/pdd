@@ -1,13 +1,11 @@
-// Generated from prompts/cli/program-run.prompt.md (sha256: 2573b4afdebc7eac4cba26ea39819fae638b198d7cc60dd1d58fba5553213101).
+// Generated from prompts/cli/program-run.prompt.md (sha256: ab46e28caca9a02a015bd16afc9e04824b94be429228e90571c28c7a495876e1).
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, chmodSync, lstatSync, openSync, closeSync, constants } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import { gitFiles, readPrompt, checkInput, interfaceSchemaProblems } from './runtime-preflight.mjs';
 import { programData, readPrivate, writePrivate, safeDirectory, localError, object, acquireProgramLock } from './program-data.mjs';
 import { openProgramSession } from './program-session.mjs';
 import { programTransport } from './runtime-client.mjs';
-const hash=value=>createHash('sha256').update(value).digest('hex');
 const quote=word=>"'"+word.replaceAll("'","'\\''")+"'";
 const fallback='Screen apps and HTTP entries open this way in the next release; for now run pdd simulate STORY.';
 const fail=message=>{throw Object.assign(new Error(message),{exitCode:125});};
@@ -63,7 +61,7 @@ function sessionRecord(session) {
   const {transport,capture,newSession,save,serve,...record}=session;return record;
 }
 async function shellProgram({root,file,name,env,flags,data},ports) {
-  const bin=safeDirectory(root,['.pdd','run',basename(data.dir),'bin']);
+  const bin=safeDirectory(root,[...relative(root,data.dir).split('/'),'bin']);
   const launcher=join(bin,name);
   const moduleUrl=new URL('./program-run.mjs',import.meta.url).href;
   const scriptBody=`import(process.argv[1]).then(async ({runProgram})=>{process.exitCode=await runProgram({root:process.argv[2],file:process.argv[3],args:process.argv.slice(4),env:process.env,once:true,flags:JSON.parse(process.env.PDD_PROGRAM_FLAGS||'{}')});}).catch(()=>{process.stderr.write('The program launcher could not load. Open the prompt shell again.\\n');process.exitCode=125;});`;
@@ -88,7 +86,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     let app=ports.programApp;try{if(!app)app=await import('./program-app.mjs');}catch(e){if(e.code!=='ERR_MODULE_NOT_FOUND'||!e.message.includes('/program-app.mjs'))throw e;}
     const appKind=app?await app.appKind({file,root},ports):null;
     const entries=prompt.interface.entries??[];
-    if(appKind||(!app&&entries.some(e=>/^HTTP\s/i.test(e.input_schema?.title??'')))){if(app)return app.runApp({file,root,env,flags},ports);ports.stderr.write(fallback+'\n');return 2;}
+    if(appKind)return await app.runApp({file,root,env,flags},ports);
     const cliIndex=entries.findIndex((e,i)=>['input_schema','result_schema'].every(key=>(prompt.interface.conventions??[]).some(c=>c.path===`/entries/${i}/${key}`&&c.convention==='cli')));
     const cli=cliIndex>=0;let entry=cli?entries[cliIndex]:entries.length===1?entries[0]:undefined;
     if(!entries.length){ports.stderr.write(fallback+'\n');return 2;}
@@ -97,12 +95,12 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     let input,name;
     const schemaIssues=interfaceSchemaProblems(prompt.interface);if(schemaIssues.length){ports.stderr.write(usageText+schemaIssues.map(i=>i.pointer+' '+i.rule).join('\n')+'\n');return 2;}
     try {
-      if(cli){name=prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');if(!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(name??'')||['pdd','node','gh','git'].includes(name.toLowerCase()))throw localError('Name the program with a safe first heading; pdd, node, gh and git are reserved.');
+      if(cli){name=prompt.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');if(!args.length&&!once&&!flags.read&&(!/^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(name??'')||['pdd','node','gh','git'].includes(name.toLowerCase())))throw localError('Name the program with a safe first heading; pdd, node, gh and git are reserved.');
         input={argv:args};if((args.length||once)&&!flags.read){if(entry.input_schema.properties?.stdin&&!ports.stdin?.isTTY)input.stdin=await stdinText(ports.stdin);else if(entry.input_schema.required?.includes('stdin'))input.stdin='';validate(input,entry.input_schema);}
-      }else if(!flags.read){if(entries.length>1){entry=entries.find(e=>e.operation===args[0]);if(!entry)throw localError('Choose an operation: '+entries.map(e=>e.operation).join(', '));args=args.slice(1);}input=await typedInput(args,entry,root,ports.stdin);validate(input,entry.input_schema);}
+      }else if(!flags.read){if(entries.length>1){entry=entries.find(e=>e.operation===args[0]);if(!entry)throw localError('Choose an operation: '+entries.map(e=>e.operation).join(', '));args=args.slice(1);}input=await typedInput(args,entry,cwd,ports.stdin);validate(input,entry.input_schema);}
     }catch(e){ports.stderr.write(usageText+(e.message??'Invalid input.')+'\n');return 2;}
-    const program=basename(file,'.prompt.md').replace(/[^A-Za-z0-9._-]/g,'_')+'-'+hash(file).slice(0,16);
-    const data=programData({root,program,flags},ports);
+    const program=file.slice(0,-'.prompt.md'.length);
+    const data=programData({root,program,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
     if(flags['show-data']){ports.stdout.write(JSON.stringify(data.startingData.initial_world)+'\n');return 0;}
     unlock=acquireProgramLock(data.dir);
     if(cli&&!args.length&&!flags.read&&!once){
@@ -130,15 +128,15 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
       answer=await transport.finish(await transport.get(flags.read),flags.read,'call',{sessionId:saved.id});
     }else{
       usage={calls:0,seconds:0};
-      const worst=estimate(root,visible,file),cap=flags['max-calls']===undefined?Math.min(worst,100):Number(flags['max-calls']);
-      if(!Number.isInteger(cap)||cap<1||cap>1000)throw localError('--max-calls must be from 1 to 1000.');
+      const worst=estimate(root,visible,file),cap=flags['max-calls']===undefined?worst:Number(flags['max-calls']);
+      if(flags['max-calls']!==undefined&&(!Number.isInteger(cap)||cap<1||cap>1000))throw localError('--max-calls must be from 1 to 1000.');
       if(cap<worst)fail(`This prompt may need ${worst} AI calls. Raise --max-calls; no call was dispatched.`);
       if(cap>20)ports.stderr.write(`pdd: may use up to ${cap} AI calls.\n`);
       usage=undefined;
       session=await openProgramSession({root,file,program,data},ports);session.draft=session.capture.sources.filter(s=>s.path.endsWith('.prompt.md')).some(s=>/"status"\s*:\s*"draft"/.test(s.bytes.toString()));
       record=sessionRecord(session);
       const last=readPrivate(join(data.dir,'last.json'),null);
-      if(!data.fresh&&!data.explicit&&last?.source===session.source&&last.login===session.login&&last.origin===session.origin&&last.operation===entry.operation&&JSON.stringify(last.input)===JSON.stringify(input)&&JSON.stringify(last.data_after)===JSON.stringify(before)&&last.cacheable){
+      if(!data.fresh&&!data.explicit&&last?.source===session.source&&last.login===session.login&&last.origin===session.origin&&last.operation===entry.operation&&JSON.stringify(last.input)===JSON.stringify(input)&&JSON.stringify(last.data_before)===JSON.stringify(before)&&last.cacheable){
         summary(true);if(cli){ports.stdout.write(last.output.stdout);ports.stderr.write(last.output.stderr);return last.output.exit_code;}ports.stdout.write(JSON.stringify(last.output)+'\n');return 0;
       }
       if(session.remaining<cap){usage={calls:0,seconds:0};fail('No AI calls remain for this call. Start fresh with a sufficient session budget.');}
