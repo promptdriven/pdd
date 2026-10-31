@@ -96,7 +96,7 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## PDD names (#2701)
 
 1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.
-2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow start`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
+2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
 
 ## Approval through agent chat (#2755)
 

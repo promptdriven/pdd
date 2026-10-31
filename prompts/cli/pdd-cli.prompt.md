@@ -55,11 +55,11 @@ authentication or runtime-client import belongs to these routes.
 
 ## Help contract
 
-The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [catalog help forms](command-catalog.prompt.md#help-forms), in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the complete catalog help entries whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd simulate` lines and `pdd workflow start --help` the `pdd workflow run` line. `pdd sim --help` gives the `pdd simulate` lines with no notice. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
+The first help line is exactly `PDD: prompt-driven development for your coding agent.` Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints that line, one empty line, every line of the [catalog help forms](command-catalog.prompt.md#help-forms), in order, one empty line, then the three closing lines below. `pdd WORDS --help` prints the same layout with only the complete catalog help entries whose form starts with `pdd WORDS`. For a [former name](argument-parser.prompt.md#former-names) these are the lines of its new route: `pdd check --help` gives the `pdd test` lines (not the `pdd lint` lines), `pdd check --lint --help` gives the `pdd lint` lines, `pdd try --help` the `pdd simulate` lines and `pdd workflow run --help` the `pdd workflow start` line. `pdd sim --help` gives the `pdd simulate` lines with no notice. Print each help-form line exactly as the catalog lists it, never a made-up `Usage:` line. The three closing lines are exactly:
 
 ```text
 Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).
-workflow run opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
+workflow start opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.
 pdd never merges.
 ```
 
@@ -120,7 +120,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "beb7b7b45d735771fd1a164600e5536a3bb337faa6aabfa213b98d4a239570dc",
+  "prose_sha256": "7d03a14f794ae4d383f7612d6d12f59f603203ee8ae811203b9b0e5b7d013097",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

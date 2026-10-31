@@ -8,9 +8,9 @@ Own `src/completion.mjs`; export `renderCompletion(shell)`. Derive suggestions o
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Follow [public alpha boundary](public-boundary.prompt.md) for scope and the shared local command contract.
 
-The words test, lint, simulate and run are the [NAMES](command-catalog.prompt.md#names) words. Offer only these new words, never a `formerly` word.
+The words test, lint, simulate and start are the [NAMES](command-catalog.prompt.md#names) words. Offer only these new words, never a `formerly` word.
 
-Offer the catalog's workflow routes and supported options, including --said for approval. For NAME after canonical workflow run, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke workflow execution/native/network. Invalid/unavailable listing yields no names. Keep catalog-owned option choices and complete them at any argument position, including after NAME and ISSUE.
+Offer the catalog's workflow routes and supported options, including --said for approval. For NAME after workflow start, obtain validated actual project+bundled names from local `pdd workflow list --json`; this local read is the sole exception to the no-application-call completion rule. Parse only its JSON workflows name fields via installed Node, keep safe names, never shell-evaluate output or invoke workflow execution/native/network. Invalid/unavailable listing yields no names. Keep catalog-owned option choices and complete them at any argument position, including after NAME and ISSUE.
 
 Offer `test`, `lint` and `simulate` with their options and the `--tab` choices. Never offer an option marked `hidden` (`--request`, and `--lint` and `--local` on `test`).
 

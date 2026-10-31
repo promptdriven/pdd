@@ -8,16 +8,16 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring 
 
 ## Names
 
-`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'run'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and run. A rename changes `NAMES` and those words together.
+`NAMES` is the one place for the words of four commands: the frozen object `{test: 'test', lint: 'lint', simulate: 'simulate', start: 'start'}`. A later rename changes only `NAMES`. This prompt and the prompts that link here write these words as they are today: test, lint, simulate and start. A rename changes `NAMES` and those words together.
 
-The Interpreter routes below list `formerly`, the words that people typed before; workflow.run keeps former start compatibility. The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms:
+Each of these routes lists `formerly`, the words that people typed before. The `check`, `try` and `workflow.run` routes keep their ids and local dispositions; `lint` is the route for the lint forms:
 
 | Route id | Prefix | Local | `formerly` |
 |---|---|---|---|
 | `check` | `test` | `runtime-check` | `check` |
 | `lint` | `lint` | `runtime-check` | `check` with the flag `--lint` |
 | `try` | `simulate` | `runtime-try` | `try` |
-| `workflow.run` | `workflow run` | `workflow-run` | `workflow start` |
+| `workflow.run` | `workflow start` | `workflow-run` | `workflow run` |
 
 The `try` route also has the short form `sim`: it parses like `simulate` and never gets a notice. Help names it once, in the description of the first `simulate` form; completion does not offer it. Help forms, help text and completion show only the new words. The [argument parser](argument-parser.prompt.md#former-names) owns how the former words still parse and the one-line notice that they get.
 
@@ -26,9 +26,9 @@ The `try` route also has the short form `sim`: it parses like `simulate` and nev
 There is no `session` route and no `workflow feature|bug|small-change` chat route: people call the PDD skills in their own chat. No arbitrary path or workflow creation route.
 
 Catalog the area-chat runner routes ([runner](workflow-runner.prompt.md)):
-- workflow.run `workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
+- workflow.run `workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]`: NAME is a safe workflow name, ISSUE is a number, `owner/repo#number` or `https://github.com/owner/repo/issues/number`. Default agent codex. `--base` is a text option naming an existing origin branch; omitted means the actual repository default. Help describes that selection.
 
-For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
+For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path to an existing-approved-corpus declaration. Its help description says it adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; keep the existing help form unchanged. Example: `pdd workflow run feature 2640 --adopt-corpus approved-corpus.json`. The runner and replay owner define validation and trust, not the parser.
 
 - workflow.done `workflow done STEP [--summary TEXT]`: STEP is a safe step name; the summary is free text.
 - workflow.ask `workflow ask QUESTION…`: the question words join into one text; `--` ends options.
@@ -40,7 +40,7 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT` (local `workflow-prove`): one required issue operand and two text options. Help says it runs committed changed tests on the merge-base of committed head with the fetched base branch and committed head, with a 120-second limit per phase, and saves a non-gating report. No timeout override or native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
 No resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
 
-Both routes support the exact `--said -` marker. It forwards unchanged to the approval owner, which reads all UTF-8 stdin as one payload after strict/configuration prechecks. Help shows the shared quoted-heredoc template, with a delimiter absent from person text. Keep help in short sentences: ask the person; relay their words; latest chat alone never approves. Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Workflow approval help reflects the [runner's approval authority](workflow-runner.prompt.md#approval-through-the-persons-words): one --said approves the gate and all its draft prompts using any nonblank words relayed from the person after the gate prompt in any chat, without grading them. Help tells an agent, non-TTY caller or caller in the current area pane without --said to ask the person then relay their words with --said; latest native chat alone never approves. Person-terminal y/N stays available; root pdd.json strict_approvals true permits only person-terminal y/N. The start route is `workflow run`, without a former-name notice for run; the already-supported `workflow start` spelling remains a former-name alias with the parser-owned notice. Other 0.1.12 names stay unchanged.
+Both routes support the exact `--said -` marker. It forwards unchanged to the approval owner, which reads all UTF-8 stdin as one payload after strict/configuration prechecks. Help shows the shared quoted-heredoc template, with a delimiter absent from person text. Keep help in short sentences: ask the person; relay their words; latest chat alone never approves. Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Workflow approval help reflects the [runner's approval authority](workflow-runner.prompt.md#approval-through-the-persons-words): one --said approves the gate and all its draft prompts using any nonblank words relayed from the person after the gate prompt in any chat, without grading them. Help tells an agent, non-TTY caller or caller in the current area pane without --said to ask the person then relay their words with --said; latest native chat alone never approves. Person-terminal y/N stays available; root pdd.json strict_approvals true permits only person-terminal y/N.
 
 ## Workflow runner help
 
@@ -102,7 +102,7 @@ interpreter calls, and their help says "no interpreter calls". [Product](product
   pdd product status [--json]  Count Stories by part and slice from the product plan; no interpreter calls.
   pdd product next  Show ready planned runs and their start commands; no interpreter calls.
   pdd product start RUN [--no-run] [--agent codex|claude]  Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.
-  pdd workflow run NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR. --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow.
+  pdd workflow start NAME ISSUE [--agent codex|claude] [--base BRANCH]  Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.
   pdd workflow prove ISSUE --test COMMAND --expect TEXT  Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.
   pdd workflow done STEP [--summary TEXT]  For the agent in a run worktree: record a step and print what to do next.
   pdd workflow evidence ISSUE --summary FILE  Record source-verified saved check JSON without rerunning steps, gates or publication.
