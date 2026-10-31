@@ -10,6 +10,7 @@ import { stepDone, approveRun } from '../src/workflow-runner.mjs';
 // Scratch Git and injected gh/Herdr only; no interpreter or provider.
 const verdict = 'Verdict: budget publication reviewed';
 const runtime = 'Runtime check (Budget): ✓ 1 of 1 criteria · 1/1 checks · 0 AI calls';
+const promptTests = 'Prompt tests (Budget): ✓ 1 of 1 criteria · 1/1 checks · 0 AI calls';
 const report = 'Report (Budget): https://runtime.example/r/budget';
 const summary = `${verdict}\n${runtime}\n${report}\nNot checked: external service`;
 const saidPorts = f => f.agentPorts({ readApprovalEvidence: async () => assert.fail('required --said relay must approve without reading native-chat evidence') });
@@ -65,7 +66,7 @@ function bounded(body, expectedWords, { code = false } = {}) {
   for (const row of rows) {
     assert.ok(expectedWords.some(words => row.includes(JSON.stringify(words))), 'a displayed approval contains complete exact words, never a truncated full-words claim');
   }
-  const positions = ['Not checked:', verdict, runtime, 'Report (Budget):', code ? 'Closes #17' : 'Part of #17'].map(text => body.indexOf(text));
+  const positions = ['Not checked:', verdict, promptTests, 'Report (Budget):', code ? 'Closes #17' : 'Part of #17'].map(text => body.indexOf(text));
   positions.forEach((at, i) => assert.ok(at >= 0 && (!i || at > positions[i - 1]), `retained top label and ordinary header order: item ${i}`));
   assert.ok(/\n\n(?:Part of|Closes) #17\n/.test(body), 'ordinary Runtime/report header retains blank separator before issue reference');
   for (const row of rows) assert.ok(body.indexOf(row) > positions.at(-1) && body.indexOf(row) < body.indexOf('## Steps'), 'approval follows ordinary header and precedes step prose');
