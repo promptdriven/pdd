@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync,writeFileSync,rmSync,existsSync,mkdirSync} from 'node:fs';
+import {readFileSync,writeFileSync,rmSync,existsSync,mkdirSync,readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {Readable} from 'node:stream';
 import {runPdd} from '../src/pdd-cli.mjs';
@@ -76,3 +76,36 @@ test('explicit simulation wins over automatic own fake binding',async t=>{const 
 test('unsupported resource kinds keep interpreter defaults without invented fake actions',async t=>{const h=await harness(t,fakeOptions('key-value'));pass(await h.invoke());const req=h.fake.posts.find(p=>p.command==='try').request;assert.equal(req.simulation?.['cloud.lookup'],undefined);});
 test('fresh plus explicit data preserves old backup while selecting explicit world',async t=>{const h=await harness(t,{world:{prior:true}});pass(await h.invoke());writeFileSync(join(h.repo,'seed.json'),'{"chosen":true}');pass(await h.invoke(['next'],['--fresh','--data','seed.json']));assert.deepEqual(h.stored('world.prev.json'),{prior:true});assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').at(-1).request.initial_world,{chosen:true});});
 test('flattened duplicate paths cannot collide with literal delimiter basenames',async t=>{const h=await harness(t);mkdirSync(join(h.repo,'a'));mkdirSync(join(h.repo,'b'));for(const path of ['a/main.prompt.md','b/main.prompt.md','a__main.prompt.md']){writeFileSync(join(h.repo,path),readFileSync(join(h.repo,PLACE)));const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([path,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);}assert.equal(h.fake.posts.filter(p=>p.command==='try').length,3);assert.deepEqual(h.fake.posts.filter(p=>p.command==='try').map(p=>p.request.initial_world),[{},{},{}]);});
+
+for(const [label,mutate] of [
+ ['unknown verdict',job=>{job.result.report.verdict='unknown';}],
+ ['missing verdict',job=>{delete job.result.report.verdict;}],
+ ['nonstring verdict',job=>{job.result.report.verdict={passed:true};}],
+ ['refused wrapper with passed verdict',job=>{job.state='refused';}],
+])test(`malformed terminal receipt: ${label} preserves accepted request without success`,async t=>{
+ const h=await harness(t,{cli:false,world:{unconfirmed:true},reply(e,f,job){mutate(job);return {status:200,json:job};}});
+ const r=await h.invoke(['--input','{}']);
+ assert.equal(r.code,125,r.err);assert.equal(r.out,'');
+ const accepted=h.fake.jsonPosts[0].json.requestId;
+ assert.equal(h.stored('session.json').pending.id,accepted);
+ assert.deepEqual(h.stored('world.json'),{});
+ assert.equal(existsSync(join(h.repo,'.pdd/run/place_order/last-run.json')),false);
+ assert.match(r.err,new RegExp(accepted));
+ const again=await h.invoke(['--input','{}']);assert.equal(again.code,125,again.err);
+ assert.equal(h.fake.jsonPosts.length,1,'uncertain accepted request must never be resent');
+ const json=await h.invoke([],['--json','--read',accepted]);assert.equal(json.code,125,json.err);assert.equal(json.out,'');
+ assert.equal(h.stored('session.json').pending.id,accepted);assert.deepEqual(h.stored('world.json'),{});
+ assert.equal(h.fake.jsonPosts.length,1,'read recovery uses GET only');
+});
+test('flattening isolates underscore segment boundaries through actual runs',async t=>{
+ const paths=['prompts/a_/b.prompt.md','prompts/a/_b.prompt.md','b.prompt.md','_b.prompt.md'];
+ const h=await harness(t,{files(root){for(const path of paths){mkdirSync(join(root,path,'..'),{recursive:true});prompt(root,path,iface());}},reply(e,f,job){job.result.world={owner:e.json.prompt};return {status:200,json:job};}});
+ const env={HOME:h.home,PDD_STATE_DIR:h.state,PDD_RUNTIME_URL:h.fake.origin};
+ for(const path of paths){const io=portsFor(env,{stdin:Readable.from([])});const code=await runPdd([path,'list'],{cwd:h.repo,env,stdout:io.ports.stdout,stderr:io.ports.stderr,stdin:io.ports.stdin,runtimePorts:io.ports});assert.equal(code,0,io.ports.stderr.text);}
+ const starts=h.fake.posts.filter(p=>p.command==='try');assert.equal(starts.length,4);
+ assert.deepEqual(starts.map(p=>p.request.initial_world),[{},{},{},{}]);
+ const dirs=readdirSync(join(h.repo,'.pdd/run'));assert.equal(dirs.length,4);
+ const records=dirs.map(dir=>({world:JSON.parse(readFileSync(join(h.repo,'.pdd/run',dir,'world.json'))),session:JSON.parse(readFileSync(join(h.repo,'.pdd/run',dir,'session.json')))}));
+ assert.deepEqual(records.map(r=>r.world.owner).sort(),[...paths].sort());
+ assert.equal(new Set(records.map(r=>r.session.id)).size,4);
+});

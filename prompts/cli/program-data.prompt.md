@@ -8,7 +8,11 @@ share a basename, flatten the complete relative path with `__` separators.
 Preserve valid spaces, Unicode and punctuation. Escape delimiter occurrences,
 reserved names and literal escape markers injectively and stably, with no hash;
 only unrepresentable or reserved names need encoding. Reject absolute/traversal
-identities and empty segments. Distinct valid entry paths never share metadata.
+identities and empty segments. Distinct valid entry paths never share metadata:
+flattening must remain injective across segment boundaries, including an underscore
+at the end of one segment or start of the next. A unique ordinary basename such as
+place_order remains unchanged; spaces, Unicode and nonreserved punctuation remain
+readable, while literal escape markers cannot alias escaped names.
 Flattened program directories keep a parent program's internal bin/world files
 separate from child prompt identities. programData.dir is the program directory
 itself, so world.json is directly in `.pdd/run/<program>/`. Use this mapping for

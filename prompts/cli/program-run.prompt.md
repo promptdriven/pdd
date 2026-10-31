@@ -93,7 +93,17 @@ ordered `prompt, operation OP` lines, appending `(call I of at most M)` for nest
 frames' call_index/max_calls. Finish `Error CODE: MESSAGE`. Never invent frames.
 Use the final direct-call receipt: result.output is the CLI/typed result and
 result.world is the exact confirmed after-world. Never overwrite it from a later
-state GET. report.verdict passed yields CLI exit_code or typed0; failed with a
+state GET. This module validates the terminal receipt before writing its world,
+acknowledging its pending request or emitting output/last-run metadata. report.verdict
+is required and must be passed, failed or refused; never infer it from outer state.
+Outer passed confirms transport completion and may contain any of those semantic
+verdicts. An outer non-passed terminal state must not contradict the semantic
+outcome or turn into success; successful output requires outer passed and semantic
+passed together. A missing/invalid verdict or contradictory receipt
+exits125 with a plain interpreter-failure reason and same-ID read hint: no result
+stdout (including --json), no world replacement, no cacheable receipt and no pending
+clear. Keep the accepted ID for GET-only recovery until a valid confirmed outcome.
+A valid report.verdict passed yields CLI exit_code or typed0; failed with a
 declared report.error yields1; refused yields125 even when report.error exists.
 Preserve result.refusals and report.error code/message, fix/hint/field and graph
 cap evidence. Render `pdd: refused, N AI calls.` with supplied evidence and Fix
