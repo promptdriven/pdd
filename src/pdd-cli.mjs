@@ -60,7 +60,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   switch (plan.local) {
     case 'prompt-run': {
       const { runProgram } = await import('./program-run.mjs');
-      const flags = Object.fromEntries(Object.entries(plan.options).map(([key,value]) => [key.replace(/^--?/, ''), value]));
+      const flags = Object.fromEntries(Object.entries(plan.options).map(([key,value]) => [key==='-q'?'quiet':key.replace(/^--?/, ''), value]));
       return runProgram({file:plan.operands[0],args:plan.operands.slice(1),root:cwd,env,flags}, {...runtimePorts, stdout,stderr,stdin,env});
     }
     case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;

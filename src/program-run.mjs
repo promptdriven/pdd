@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-run.prompt.md (sha256: 03cbd984fa086474974d24d429190890e555427144813c5db204fe4d49c425d7).
+// Generated from prompts/cli/program-run.prompt.md (sha256: a28f655da778d9624e40f4ab9b6c9381137c5d765fda618e3339b37a5ae72310).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, chmodSync, lstatSync, openSync, closeSync, constants } from 'node:fs';
 import { basename, join, relative, resolve, posix } from 'node:path';
@@ -162,7 +162,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     const program=file.slice(0,-'.prompt.md'.length);
     let data=recoveredData??programData({root,program,flags:{...flags,...(flags.data?{data:resolve(cwd,flags.data)}:{})}},ports);
     if(once){const selected=readPrivate(join(data.dir,'launcher.json'),null);if(selected){data={...data,startingData:{initial_world:selected.pending?selected.initial_world:data.startingData.initial_world,...(selected.simulation===undefined?{}:{simulation:selected.simulation})},fresh:!!selected.pending&&!!selected.fresh};}}
-    if(data.fresh&&!quiet)ports.stderr.write(`pdd: fresh start${readPrivate(join(data.dir,'world.prev.json'),undefined)!==undefined?'. Old data kept in '+join(data.dir,'world.prev.json'):''}\n`);
+    if(data.fresh&&!quiet)ports.stderr.write(`pdd: fresh start${data.backupPath?'. Old data kept in '+relative(root,data.backupPath):''}\n`);
     if(flags['show-data']){ports.stdout.write(JSON.stringify(data.startingData.initial_world)+'\n');return 0;}
     unlock=acquireProgramLock(data.dir);
     if(cli&&!args.length&&!flags.read&&!once){
@@ -245,15 +245,15 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     const receipt={...report,input,operation:entry.operation,output:result??null,data_before:before,data_after:world,ai_calls:usage?.calls,source:session.source,login:session.login,origin:session.origin,simulation:session.simulation,cap:callCap,cacheable:verdict==='passed',session_id:session.id,url:session.url,report_url:reportUrl,exit_code:exit,outside_calls:report.outside_calls??[],call_chain:report.call_chain??[],refusals:answer.result?.refusals??[]};
     if(verdict!=='passed'){
       receipt.cacheable=false;writePrivate(join(data.dir,'last-run.json'),receipt);
-      if(verdict==='refused')ports.stderr.write(`pdd: refused, ${usage?.calls??0} AI calls.\n`);
+      if(verdict==='refused')ports.stderr.write(`pdd: refused, ${usage?.calls??0} AI call${usage?.calls===1?'':'s'}.\n`);
       const error=report.error??refusal;if(error?.fix??error?.hint)ports.stderr.write(`pdd: Fix: ${error.fix??error.hint}\n`);
-      if(verdict==='refused'&&/cap|allowance|budget|max.calls/i.test(JSON.stringify(error??{})))ports.stderr.write(`pdd: Fix: ${capAdvice()}\n`);
+      if(verdict==='refused'&&error?.code==='session-call-cap')ports.stderr.write(`pdd: Fix: ${capAdvice()}\n`);
       else if(verdict==='refused'&&!error?.fix&&!error?.hint)ports.stderr.write('pdd: Fix: Fix the reported prompt or call allowance before trying again.\n');
-      ports.stderr.write(`pdd: details: ${reportUrl}\n`);if(flags.json)ports.stdout.write(JSON.stringify(receipt)+'\n');summary(!!report.replayed);return exit;
+      if(reportUrl)ports.stderr.write(`pdd: details: ${reportUrl}\n`);if(flags.json)ports.stdout.write(JSON.stringify(receipt)+'\n');summary(!!report.replayed);return exit;
     }
     writePrivate(join(data.dir,'last-run.json'),receipt);
     if(!quiet&&receipt.outside_calls.length){ports.stderr.write('pdd: fake calls (nothing real was called):\n');for(const call of receipt.outside_calls)ports.stderr.write(`pdd: ${session.transport.sanitize(call.summary??JSON.stringify(call))} · ${session.transport.sanitize(call.level??'fake')}\n`);}
     if(flags.json)ports.stdout.write(JSON.stringify(receipt)+'\n');else if(cli){ports.stdout.write(result.stdout);ports.stderr.write(result.stderr);if(result.stderr&&!result.stderr.endsWith('\n')&&!quiet)ports.stderr.write('\n');}else ports.stdout.write(JSON.stringify(result)+'\n');
-    summary(!!report.replayed);if(!quiet)ports.stderr.write(`pdd: details: ${reportUrl}\n`);return exit;
+    summary(!!report.replayed);if(!quiet&&reportUrl)ports.stderr.write(`pdd: details: ${reportUrl}\n`);return exit;
   }catch(e){if(e.runtimeCode==='session-call-cap'&&Number.isFinite(admissionBound))ports.stderr.write(`pdd: Fix: ${capAdvice()}\n`);ports.stderr.write('pdd: '+(session?.transport?.sanitize(e.message)??e.message??'The program could not run.').replaceAll('\n','\npdd: ')+'\n');if(e.requestId)ports.stderr.write(`pdd: pdd --read ${e.requestId} ${file}\n`);if(!usagePrinted&&(e.exitCode??125)!==2)summary();return e.exitCode??125;}finally{unlock?.();}
 }

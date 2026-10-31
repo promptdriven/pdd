@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-data.prompt.md (sha256: 2ddc32f2137a6ffbe33adbfe1faadbbebbd5c22f5810c4708e89bfcd141e96fb).
+// Generated from prompts/cli/program-data.prompt.md (sha256: 11adb576bd3ecef31c3484009478f789f44e0ef4308baade2a8867e3fa4670cc).
 import { constants, realpathSync, lstatSync, mkdirSync, readFileSync, openSync, closeSync, writeFileSync, renameSync, unlinkSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -52,7 +52,7 @@ export function programData({root,program,flags={}},ports={}) {
       try{if(ownership(path)===program){dir=safeDirectory(root,['.pdd','run',name]);break;}}catch{ /* An unrelated unusable record cannot identify this entry. Selected paths are checked below. */ }
     }
     if(!dir){
-      const base=encode(leaf),flat=parts.map(part=>encode(part,true)).join('__');
+      const base=encode(leaf),flat=parts.length===1?'%r__'+encode(leaf,true):parts.map(part=>encode(part,true)).join('__');
       let selected=duplicates?flat:base;
       const basePath=join(run,base);
       if(selected===base)try{const st=lstatSync(basePath);if(!st.isDirectory()||st.isSymbolicLink())throw localError('Refusing an unsafe program data directory.');if(ownership(basePath)&&ownership(basePath)!==program)selected=flat;}catch(e){if(e.code!=='ENOENT')throw e;}
@@ -62,7 +62,8 @@ export function programData({root,program,flags={}},ports={}) {
     const releaseMapping=acquireProgramLock(dir);
     try{const owner=ownership(dir);if(owner&&owner!==program)throw localError('Program data directory belongs to another entry.');writePrivate(join(dir,'program.json'),{program});}finally{releaseMapping();}
   }
-  if(flags.fresh){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined)writePrivate(join(dir,'world.prev.json'),prior);}finally{release();}}
+  let backupPath;
+  if(flags.fresh){const release=acquireProgramLock(dir);try{const prior=readPrivate(join(dir,'world.json'),undefined);if(prior!==undefined){backupPath=join(dir,'world.prev.json');writePrivate(backupPath,prior);}}finally{release();}}
   const git=spawnSync('git',['rev-parse','--git-path','info/exclude'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   if(git.status!==0)throw localError('Cannot locate local Git excludes.');
   const ignore=resolve(root,git.stdout.trim());let previous='';
@@ -84,7 +85,7 @@ export function programData({root,program,flags={}},ports={}) {
   } else if(!flags.fresh)world=readPrivate(join(dir,'world.json'),{});
   if(!object(world))throw localError(`${flags.data??'Starting data'} must be a JSON world object.`);
   if(simulation!==undefined&&!object(simulation))throw localError('Simulation must be a JSON object.');
-  return {dir,fresh:!!flags.fresh,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
+  return {dir,...(backupPath?{backupPath}:{}),fresh:!!flags.fresh,startingData:{initial_world:world,...(simulation===undefined?{}:{simulation})},explicit:!!flags.data};
 }
 
 // A dead native owner cannot prevent the saved request from being read after a crash.
