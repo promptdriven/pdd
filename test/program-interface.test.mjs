@@ -31,7 +31,10 @@ test('C session preserves app map, uploads overlay and returns proxy capability 
   let module;
   try {module=await import('../src/program-session.mjs');}catch(error){assert.fail(`Public openProgramSession is required: ${error.code}`);}
   const setup=harbor(t,root=>{rmSync(join(root,'tests'),{recursive:true});rmSync(join(root,'user_stories'),{recursive:true});});
-  const fake=await fakeRuntime(t,(e,f)=>e.command==='lint'?{status:200,json:f.lint(e.request.requestId)}:{status:200,json:f.tryJob(e.request.requestId)});
+  const fake=await fakeRuntime(t,(e,f)=>{
+    if(e.method==='GET'&&e.url.endsWith('/model'))return {status:200,json:{app_map:true,entries:[]}};
+    return e.command==='lint'?{status:200,json:f.lint(e.request.requestId)}:{status:200,json:f.tryJob(e.request.requestId)};
+  });
   const env={HOME:setup.home,PDD_STATE_DIR:setup.state,PDD_RUNTIME_URL:fake.origin};const io=portsFor(env);
   const dir=join(setup.repo,'.pdd/run/app');mkdirSync(dir,{recursive:true});
   const appMap={schema_version:'prompt-runtime.app-map.v1',name:'Example',screens:[]};
