@@ -37,7 +37,7 @@ test('SETUP1: pdd setup creates AGENTS.md with the one short block when no agent
   assert.equal(text, `${skillBlock(pkg, true)}\n`);
   const lines = text.trimEnd().split('\n');
   assert.ok(lines.length <= 10, `${lines.length} lines`);
-  for (const word of ['pdd-prompting (the Prompting guide)', '`$pdd-feature` in Codex', '`/pdd-feature` in Claude Code', 'pdd workflow start NAME ISSUE', 'RUNBOOK.md']) assert.ok(text.includes(word), word);
+  for (const word of ['pdd-prompting (the Prompting guide)', '`$pdd-feature` in Codex', '`/pdd-feature` in Claude Code', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md']) assert.ok(text.includes(word), word);
   assert.equal(text.includes('Give the reader a useful first path'), false);
   const before = statSync(join(project, 'AGENTS.md')).mtimeMs;
   const second = run();

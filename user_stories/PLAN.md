@@ -2,6 +2,12 @@
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.
 
+# Adopt an existing approved regression corpus
+
+1. [Adopt the complete unchanged approved corpus](adopt-approved-corpus.md): start a fresh evidence-enabled workflow with preserved content authorization and explicit external-assertion trust.
+   Test: `test/runtime/adopt-approved-corpus.json`.
+   Interpreter test: NOT RUN (Story gate; snapshot-port cases drafted).
+
 # Shared runtime admission (#2631)
 
 Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
@@ -90,4 +96,9 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## PDD names (#2701)
 
 1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.
-2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
+2. [Use one name for each command](new-command-names.md): #2752 below changes this Story.
+
+## One name for each command (#2752)
+
+1. [Use one name for each command](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd workflow run`. `pdd check …` and `pdd try …`, with any options and also for help, exit 2 with one line such as `pdd check was removed. Use pdd test.` and run nothing. `pdd workflow start` works like `pdd workflow run`, with no extra line. No line that pdd prints names `pdd check` or `pdd try`. A person approved this Story in 0.1.12 (#2701) and approves the changed text again. Test: `test/runtime/new-command-names.json`.
+2. [Read the Prompt tests line](prompt-tests-line.md): `pdd test` prints `Prompt tests (<story>): …`. The PR text, `pdd workflow status`, `pdd workflow view`, `pdd workflow evidence` and `pdd product status` read `Prompt tests` lines and older `Runtime check` lines. Test: `test/runtime/prompt-tests-line.json`.
