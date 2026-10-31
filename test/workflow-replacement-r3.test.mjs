@@ -89,11 +89,17 @@ for (const throws of [false,true]) test(`attach handoff persists observations an
 
 test('ordinary open retains run lock during native resume and releases on opening error',async t=>{
  const f=await fixture(t);await f.run();f.herdr.paneOf(f.record().chats.at(-1)).agent=null;
- const healthy=f.ports.herdr;let finish,entered;
+ const healthy=f.ports.herdr;let finish,entered,resumeAttempts=0;
  const hold=new Promise(r=>finish=r),entering=new Promise(r=>entered=r);
- f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){entered();await hold;throw Object.assign(Error('resume failed'),{code:'server_unavailable'});}return healthy(args);};
+ f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){if(++resumeAttempts>1)throw Error('Concurrent native resume entered');entered();await hold;throw Object.assign(Error('resume failed'),{code:'server_unavailable'});}return healthy(args);};
  const opening=openRun(opts(f),f.ports);
- try{await awaitHandoff(entering,opening,'Native resume');assert.match((await openRun(opts(f),f.ports)).message,/holds this run/);}finally{finish();await opening;}
+ try{
+  await awaitHandoff(entering,opening,'Native resume');
+  const before={record:f.record(),runs:runs(f).length,pushes:f.pushes.length,edits:f.edits.length};
+  assert.equal((await openRun(opts(f),f.ports)).exitCode,1);
+  assert.equal(resumeAttempts,1,'second open cannot enter native resume while the first is paused');
+  assert.deepEqual({record:f.record(),runs:runs(f).length,pushes:f.pushes.length,edits:f.edits.length},before,'second open has no durable or external effects');
+ }finally{finish();await opening;}
  assert.equal(existsSync(join(f.record().runDir,'chat-replacement.lock')),false);
 });
 
