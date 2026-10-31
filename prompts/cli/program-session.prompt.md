@@ -51,6 +51,11 @@ For resources declared by reachable prompts, discover only matching
 hashes in source capture/session identity through existing privacy/prepareSource
 hooks, composing with C's overlay without dropping either callback's files.
 Unrelated fake prompts stay outside upload. Explicit simulation bindings win.
+For each selected http.prompt/port.prompt explicit binding, also capture its
+Git-visible target operation and call/dependency closure even when its target is
+outside the conventional prompts/fakes directory. Apply the same source privacy
+and identity checks; unrelated files remain excluded. Expose the actual prepared
+simulation to direct-run budgeting so automatic binding policy has one owner.
 For kind http or port, auto-bind each resource operation only to the same-named
 fake entry, or its sole entry when unambiguous, with canonically equal argument/
 input and result schemas. Ambiguity, missing operation or incompatible schemas
