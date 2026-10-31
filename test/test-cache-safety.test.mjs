@@ -296,3 +296,50 @@ test('live pending cache claim fails open within a bound and recovers after rele
   assert.equal(cacheWarnings(recovered).length, 0);
   assert.equal((await ctx.invoke()).sent, 0, 'completed uncontended checks restore reuse');
 });
+
+// A partial pass cannot confirm a complete Story pass or clear its known failure.
+test('partial sibling pass retains last failure until the whole Story passes', async t => {
+  const env = harbor(t, repo => {
+    cpSync(join(repo, 'tests/place-order.json'), join(repo, 'tests/place-order-extra.json'));
+  });
+  let mode = 'passed';
+  const fake = await fakeRuntime(t, entry => ({ status: 200, json: entry.command === 'lint'
+    ? fake.lint(entry.request.requestId)
+    : fake.check(entry.request?.requestId ?? entry.url.split('/').at(-1), mode) }));
+  const invoke = async (words = [], options = {}) => {
+    const { ports } = portsFor({ HOME: env.home, PDD_STATE_DIR: env.state, PDD_RUNTIME_URL: fake.origin });
+    const code = await runCheck({ cwd: env.repo, words, options: { '--json': true, ...options }, cache: true }, ports);
+    return { code, json: JSON.parse(ports.stdout.text) };
+  };
+  assert.equal((await invoke()).code, 0);
+  assert.ok(existsSync(join(env.repo, '.pdd/cache/test/stories.json')), 'completed pass writes local Story cache');
+  mode = 'failed';
+  const failed = await invoke([], { '--cache-clear': true });
+  assert.equal(failed.code, 1);
+  assert.deepEqual(failed.json.rows.map(row => row.test).sort(),
+    ['tests/place-order-extra.json', 'tests/place-order.json', 'tests/unknown-item.json']);
+  assert.ok(failed.json.rows.every(row => row.state === 'failed'));
+  mode = 'passed';
+  const partial = await invoke(['tests/place-order.json']);
+  assert.equal(partial.code, 0);
+  assert.deepEqual(partial.json.rows.map(row => row.test), ['tests/place-order.json']);
+  assert.equal(partial.json.rows[0].state, 'passed');
+  // Keep another failed Story so --lf's empty-history fallback cannot hide a loss.
+  mode = 'failed';
+  const retained = await invoke([], { '--lf': true });
+  assert.deepEqual(retained.json.rows.map(row => row.test).sort(),
+    ['tests/place-order-extra.json', 'tests/place-order.json', 'tests/unknown-item.json'],
+    '--lf retains every sibling of the previously failed Story after only a partial pass');
+  assert.equal(retained.code, 1);
+  mode = 'passed';
+  const complete = await invoke(['user_stories/place-order.md']);
+  assert.equal(complete.code, 0);
+  assert.deepEqual(complete.json.rows.map(row => row.test).sort(),
+    ['tests/place-order-extra.json', 'tests/place-order.json']);
+  assert.ok(complete.json.rows.every(row => row.state === 'passed'));
+  mode = 'failed';
+  const remaining = await invoke([], { '--lf': true });
+  assert.equal(remaining.code, 1);
+  assert.deepEqual(remaining.json.rows.map(row => row.test), ['tests/unknown-item.json'],
+    'a complete Story pass clears only that Story from last-failed selection');
+});
