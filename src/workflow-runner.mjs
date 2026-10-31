@@ -166,7 +166,7 @@ async function areaMessage(run, index, p, packageRoot) {
 }
 
 // The one sentence a person gets when they stop at PR 1 (0.1.4: testers saw the chat drop it when it was a hint).
-const approvalGuide = (run, prefix = pddCommand(PACKAGE_ROOT)) => `Show the gate and ask the person. Relay their exact later words with:\n${prefix} workflow approve ${run.number} --said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID\nChoose a quoted delimiter absent as a whole payload line. Or the person can run ${prefix} workflow approve ${run.number} in a terminal and answer y/N.`;
+const approvalGuide = (run, prefix = pddCommand(PACKAGE_ROOT)) => `Show the gate and ask the person. Relay their exact later words with:\n${prefix} workflow approve ${run.number} --said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID\nChoose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: run ${prefix} workflow approve ${run.number} in a normal terminal.`;
 const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. Relay their exact later words with:', 'Use the saved words with:')}`;
 const codeLater = run => `To make the code PR later: ${approvalGuide(run)}`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
