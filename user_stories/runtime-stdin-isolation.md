@@ -4,7 +4,7 @@ I can run pdd from a script whose input comes from an SSH connection and get con
 
 ## Acceptance criteria
 
-1. After `pdd check` or `pdd check --lint` exits, no helper started by that command retains the script's original input socket, including when a helper continues running.
+1. After `pdd test` or `pdd lint` exits, no helper started by that command retains the script's original input socket, including when a helper continues running.
 2. Noninteractive Git lookups do not read the script's input, and their normal results and errors remain unchanged.
 3. GitHub sign-in lookups and opening a Try link keep their existing isolated input behavior; pdd's interactive approvals and explicitly requested Try shell keep their terminal input behavior.
 

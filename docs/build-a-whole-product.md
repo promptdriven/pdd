@@ -2,7 +2,7 @@
 
 Say: "Build a coffee pickup app: a phone app to order, a shop server, and a
 barista screen." Call `$pdd-product` in Codex or `/pdd-product` in Claude Code.
-The skill makes a product issue and starts `pdd workflow start product ISSUE`.
+The skill makes a product issue and starts `pdd workflow run product ISSUE`.
 It makes and tracks the plan. Normal feature runs build each part.
 
 Read the map and answer its questions. Approve the map when it describes what
@@ -84,7 +84,7 @@ body keeps the full IDs and tells the agent how to name the Story files.
 
 Status counts current passing Stories per part and slice, shows stale results,
 PRs and what can start next. A stale pass used older files and needs another
-check. On another machine, status can read Runtime check lines in the run's PR
+check. On another machine, status can read Prompt tests lines in the run's PR
 and labels those results "from PR #N"; these are not locally verified passes.
 Name each Story file with its map id first, for example `P01-menu.md`.
 LATER Stories do not count toward planned progress.

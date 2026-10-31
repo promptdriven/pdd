@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7b9caaaaf83776bdb49a91728870abc73918233b1452136b95739d14426db581).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 3edfe73704ab55a98cdb37159ff3dffbaeef16ff9c109e4b9a9e0a76f3ffe781).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -412,8 +412,8 @@ export function readPrompt(root, visible, path) {
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
-const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd check --fill-hash.`;
-export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
+const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.`;
+export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
@@ -666,8 +666,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
     if (!Object.hasOwn(value, 'status')) {
-      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
-      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd test --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd test --fill-hash again.` });
       continue;
     }
     const hash = proseSha256(text);
@@ -1307,7 +1307,7 @@ export function captureSource(root, { attempts = 3, ...selection } = {}) {
     const captured = captureOnce(root, selection);
     if (captured) return captured;
   }
-  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd test again.`);
 }
 
 // Why a repo has no tests: foreign JSON under tests/, *.prompt names, prompts with no interface.

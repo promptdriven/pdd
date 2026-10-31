@@ -46,11 +46,11 @@ async function opened(t, setup, options = {}, callReply) {
 }
 
 test('doors: CLI flags and optional HTTP port parse without swallowing Story', () => {
-  assert.equal(parseArgv(['try', 'story', '--cli', '--shell']).options['--shell'], true);
-  assert.equal(parseArgv(['try', 'story', '--serve']).options['--serve'], '8080');
-  assert.equal(parseArgv(['try', '--serve', 'story']).operands[0], 'story');
-  assert.equal(parseArgv(['try', 'story', '--serve', '8123']).options['--serve'], '8123');
-  assert.throws(() => parseArgv(['try', 'story', '--serve', '70000']));
+  assert.equal(parseArgv(['simulate', 'story', '--cli', '--shell']).options['--shell'], true);
+  assert.equal(parseArgv(['simulate', 'story', '--serve']).options['--serve'], '8080');
+  assert.equal(parseArgv(['simulate', '--serve', 'story']).operands[0], 'story');
+  assert.equal(parseArgv(['simulate', 'story', '--serve', '8123']).options['--serve'], '8123');
+  assert.throws(() => parseArgv(['simulate', 'story', '--serve', '70000']));
 });
 
 test('doors: create one safe launcher, preserve argv/stdin/streams/exit and reuse Try', async t => {
@@ -102,11 +102,11 @@ test('doors: wrapper failures use 125, never call as another login or follow lau
   const { runShim } = await import('../src/try-doors.mjs');
   const wrong = ready.makePorts({ gh: args => args[0] === 'auth' ? { status: 0, stdout: TOKEN } : { status: 0, stdout: 'other 1234' } });
   assert.equal(await runShim(ready.descriptor, ['--help'], wrong), 125);
-  assert.match(wrong.stderr.text, /^pdd try:.*belong/);
+  assert.match(wrong.stderr.text, /^pdd:.*belong/);
   assert.equal(ready.fake.jsonPosts.length, 0);
   const missing = ready.makePorts();
   assert.equal(await runShim('/missing/config', [], missing), 125);
-  assert.match(missing.stderr.text, /^pdd try:/);
+  assert.match(missing.stderr.text, /^pdd:/);
   const shim = join(setup.repo, '.pdd/try/bin/paperclip'); rmSync(shim); symlinkSync(join(setup.repo, 'README.md'), shim);
   const denied = ready.makePorts();
   assert.notEqual(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, denied), 0);
@@ -143,7 +143,7 @@ test('doors: budget refusal and unknown outcome leave no stale output eligible f
   const io = ready.makePorts();
   assert.equal(await runShim(ready.descriptor, ['again'], io), 125);
   assert.equal(io.stdout.text, '');
-  assert.equal(io.stderr.text, 'pdd try: This Try has no AI calls left.\nTry AI usage: 0 this command · unknown used · unknown remaining (session cap 40).\n');
+  assert.equal(io.stderr.text, 'pdd: This Try has no AI calls left.\nTry AI usage: 0 this command · unknown used · unknown remaining (session cap 40).\n');
   const save = ready.makePorts();
   assert.equal(await runTry({ cwd: setup.repo, options: { '--save-last': true } }, save), 125);
   assert.match(save.stderr.text, /unknown/);
@@ -238,7 +238,7 @@ test('doors: a queued lint ending refused prints the confirmed reason and sends 
   const ports = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }).ports;
   assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'], options: { '--cli': true } }, ports), 125);
   assert.equal(ports.stdout.text, '');
-  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd try: ${message}`);
+  assert.equal(ports.stderr.text.trimEnd().split('\n').at(-1), `pdd: ${message}`);
   assert.deepEqual(fake.posts.map(post => post.command), ['lint']);
 });
 
