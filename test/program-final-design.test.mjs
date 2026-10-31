@@ -259,3 +259,46 @@ test('CLI plus typed with no words still opens default shell',async t=>{
 });
 
 test('remaining session allowance refusal keeps world and recommends no fresh reset',async t=>{const h=await harness(t,{world:{keep:true},report:{remaining_calls:0}});pass(await h.invoke(['first']));const r=await h.invoke(['second']);assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/start fresh|--fresh/i);assert.match(r.err,/session|allowance|budget/i);assert.deepEqual(h.stored('world.json'),{keep:true});assert.equal(h.fake.jsonPosts.length,1);});
+
+for(const mixed of [false,true])test(`same-ID read restores pending typed selection: ${mixed?'CLI plus typed':'multiple typed operations'}`,async t=>{
+ const h=await harness(t,{cli:false,outputs:{quote:{}},world:{confirmed:'typed recovery'},edit(s){
+  const typed={operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]};
+  if(mixed){const cli=iface();s.entries=[cli.entries[0],typed];s.conventions=cli.conventions;}
+  else s.entries=[typed,{...typed,operation:'inspect'}];
+ },reply(e,f,job){delete job.result.report.verdict;return {status:200,json:job};}});
+ const first=await h.invoke(['quote','--input','{}']);
+ assert.equal(first.code,125,first.err);assert.equal(first.out,'');
+ assert.equal(h.fake.jsonPosts.length,1);assert.equal(h.fake.jsonPosts[0].json.operation,'quote');
+ const accepted=h.fake.jsonPosts[0].json.requestId;
+ assert.equal(h.stored('session.json').pending.id,accepted);
+ assert.deepEqual(h.stored('world.json'),{});
+ assert.equal(existsSync(join(h.repo,'.pdd/run/place_order/last-run.json')),false);
+ // The interpreter now has a canonical confirmed receipt for the same accepted call.
+ const job=h.fake.jobs.get(accepted);job.result.report.verdict='passed';job.result.output={};
+ const posts=h.fake.posts.length,gets=h.fake.gets.length;
+ const read=await h.invoke([],['--read',accepted]);
+ pass(read);assert.equal(read.out,'{}\n');
+ assert.deepEqual(h.stored('world.json'),{confirmed:'typed recovery'});
+ assert.equal(h.stored('session.json').pending,undefined);
+ assert.deepEqual(h.stored('last-run.json').output,{});
+ assert.equal(h.fake.posts.length,posts,'recovery sends no setup POST');
+ assert.equal(h.fake.jsonPosts.length,1,'recovery never repeats the accepted call');
+ assert.ok(h.fake.gets.slice(gets).some(e=>e.url.endsWith(accepted)),'read fetches the accepted ID');
+});
+
+test('same-ID read acknowledges pending setup without operation in a typed word table',async t=>{
+ const h=await harness(t,{cli:false,edit(s){s.entries.push({...s.entries[0],operation:'inspect'});}});
+ pass(await h.invoke(['main','--input','{}']));
+ // Keep the actual public run's program/login/source identity; model an accepted lint.
+ const path=join(h.repo,'.pdd/run/place_order/session.json');
+ const saved=h.stored('session.json'),accepted=h.fake.jsonPosts[0].json.requestId;
+ saved.pending={id:accepted,command:'lint'};writeFileSync(path,JSON.stringify(saved));
+ h.fake.jobs.set(accepted,h.fake.lint(accepted));
+ const posts=h.fake.posts.length,gets=h.fake.gets.length;
+ const read=await h.invoke([],['--read',accepted]);
+ pass(read);assert.equal(read.out,'');assert.match(read.err,/setup confirmed/i);
+ assert.equal(h.stored('session.json').pending,undefined);
+ assert.deepEqual(h.stored('world.json'),{});
+ assert.equal(h.fake.posts.length,posts);assert.equal(h.fake.jsonPosts.length,1);
+ assert.ok(h.fake.gets.slice(gets).some(e=>e.url.endsWith(accepted)));
+});
