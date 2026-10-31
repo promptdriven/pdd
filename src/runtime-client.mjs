@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: a38773b0c1bb5aab224c11ff65ace5c12b0cf1314bb32b7a5927cecde7a7fa9d).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 9c6869ae9b1c4c273c380998852bda2f171e0923f95af63f608cf11e63ab71db).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -24,6 +24,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 // pdd's local rules match this engine build (checked Oct 27; spec OPEN 9: warn when the runtime runs another one).
 const ENGINE_SHA = 'eae2202a68d00ab762fcbbf1eba0d8607a132a15';
+const PDD_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 // The same engine: the full sha or a prefix of it with at least 7 hex digits.
 const sameEngine = sha => { const value = sha.toLowerCase(); return /^[0-9a-f]{7,40}$/.test(value) && ENGINE_SHA.startsWith(value); };
 const POST_MS = 90_000, GET_MS = 30_000, TRY_MS = 300_000, MAX_READS = 8, PROGRESS_MS = 30_000;
@@ -802,6 +803,7 @@ function batchRecord(context) {
     source_sha256: capture.sha256, files: capture.files.map(file => file.path), bytes: capture.bytes, timeout_min: context.timeoutMin,
     created_at: new Date(context.startedAt).toISOString(), intent: context.intent, lint, warnings, coverage: context.coverage,
     contract_snapshots: capture.stories,
+    test_cache: context.testCache ? { tokens: [...context.testCache.tokens] } : context.savedTestCache,
     rows: rows.map(row => ({ test: row.test, story: row.story, story_path: row.story_path, title: row.title, request_ids: row.request_ids, state: row.state,
       ...(!row.request_ids.length && Object.hasOwn(row, 'calls') ? { calls: row.calls } : {}),
       phase: row.phase, post_verdict: row.post_verdict ?? null, report_url: row.report_url, refusals: row.refusals, note: row.note ?? null, why: row.why ?? null, next_step: row.next_step ?? null,
@@ -1539,6 +1541,13 @@ async function runRead(context, batchWord, quiet = false, options = {}) {
   });
   const replacements = await recoverRestarts(context);
   if (replacements.length) await runScheduledChecks(context, rows, replacements);
+  context.savedTestCache = saved.test_cache;
+  if (context.cacheEnabled && Array.isArray(saved.test_cache?.tokens)) {
+    const cache = await openTestCache(context, root, false);
+    cache.tokens = new Map(saved.test_cache.tokens);
+    // Tokens refer to the original captured footprint, and generations reject newer attempts.
+    await finishTestAttempts(cache, rows, context.capture);
+  }
   saveBatch(context);
   return quiet ? rows : printResult(context, rows);
 }
@@ -1746,10 +1755,15 @@ const nativeCacheFiles = {
     } finally { closeSync(fd); }
   },
   list: readdirSync, rename: renameSync, unlink: unlinkSync, rmdir: rmdirSync,
+  tracked(root) {
+    const result = spawnSync('git', ['ls-files', '--', '.pdd/cache/test'], { cwd: root, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error('Git tracking unavailable');
+    return !!result.stdout.trim();
+  },
   exclude(root) {
     const result = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     if (result.status !== 0 || !result.stdout.trim()) throw new Error('Git exclude unavailable');
-    return join(result.stdout.trim(), 'info', 'exclude');
+    return join(realpathSync(result.stdout.trim()), 'info', 'exclude');
   }
 };
 const CACHE_LIMIT = 2 * 1024 * 1024;
@@ -1778,13 +1792,13 @@ function validTestCache(value) {
   if (!keys(value, ['schema_version', 'generation', 'epoch', 'stories']) || typeof value.epoch !== 'string' || !UUID.test(value.epoch) || value.schema_version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || !isObject(value.stories) || Object.keys(value.stories).length > 10000) return false;
   return Object.entries(value.stories).every(([name, row]) => path(name) && keys(row, ['generation', 'outcome', 'pass']) && Number.isSafeInteger(row.generation) && row.generation >= 0 && row.generation <= value.generation
     && ['passed', 'failed', 'refused', 'not_run', 'unknown'].includes(row.outcome)
-    && (row.pass === undefined || (row.outcome === 'passed' && keys(row.pass, ['fingerprint', 'passed_at', 'tests', 'rows']) && hash(row.pass.fingerprint)
+    && (row.pass === undefined || (row.outcome === 'passed' && keys(row.pass, ['fingerprint', 'passed_at', 'tests', 'rows', 'engine_sha']) && hash(row.pass.fingerprint)
       && typeof row.pass.passed_at === 'string' && Number.isFinite(Date.parse(row.pass.passed_at)) && new Date(row.pass.passed_at).toISOString() === row.pass.passed_at
       && Array.isArray(row.pass.tests) && row.pass.tests.length > 0 && row.pass.tests.every(path) && new Set(row.pass.tests).size === row.pass.tests.length
       && keys(row.pass.rows, row.pass.tests) && Object.keys(row.pass.rows).length === row.pass.tests.length && row.pass.tests.every(test => evidence(row.pass.rows[test])))));
 }
 function cacheWarning(cache, recovered = false) {
-  if (!cache.warned) cache.context.warnings.push('Warning: test cache unavailable or damaged; running selected Stories without reuse.');
+  if (!cache.warned) cache.context.warnings.push('Warning: test cache unavailable or damaged; running selected Stories without reuse. To reset, run pdd test --cache-clear.');
   if (!recovered) {
     if (!cache.disabled) recordCacheInvalidation(cache);
     cache.disabled = true;
@@ -1822,6 +1836,7 @@ function readTestCache(cache) {
   if (stat.size > CACHE_LIMIT) throw new Error('oversized cache');
   const data = JSON.parse(cache.fs.read(cache.path, 'utf8'));
   if (!validTestCache(data)) throw new Error('invalid cache');
+  if (data.epoch !== cache.epoch) return { data: freshTestCache(cache), history: false };
   return { data, history: true };
 }
 function replaceCacheFile(cache, path, text) {
@@ -1839,14 +1854,35 @@ async function cacheTransaction(cache, operation, clear = false) {
   try {
     safeCachePath(cache.fs, cache.dir, { directory: true });
     for (let attempt = 0; attempt < 30; attempt++) {
-      try { cache.fs.mkdir(cache.lock); locked = true; break; }
-      catch (error) { if (error.code !== 'EEXIST') throw error; safeCachePath(cache.fs, cache.lock, { directory: true }); await cache.context.ports.sleep(10); }
+      try {
+        cache.fs.mkdir(cache.lock); locked = true;
+        cache.fs.write(join(cache.lock, 'owner.json'), JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 });
+        break;
+      } catch (error) {
+        if (locked || error.code !== 'EEXIST') throw error;
+        safeCachePath(cache.fs, cache.lock, { directory: true });
+        const ownerPath = join(cache.lock, 'owner.json');
+        safeCachePath(cache.fs, ownerPath);
+        const ownerStat = cacheStat(cache.fs, ownerPath);
+        let stale = false;
+        if (ownerStat) {
+          const owner = JSON.parse(cache.fs.read(ownerPath, 'utf8', 128));
+          if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error('invalid cache owner');
+          try { process.kill(owner.pid, 0); } catch (cause) { if (cause.code === 'ESRCH') stale = true; }
+        } else stale = Date.now() - cache.fs.lstat(cache.lock).mtimeMs > 60_000;
+        if (stale) {
+          if (ownerStat) cache.fs.unlink(ownerPath);
+          cache.fs.rmdir(cache.lock);
+          cacheWarning(cache, true);
+          continue;
+        }
+        await cache.context.ports.sleep(10);
+      }
     }
     if (!locked) throw new Error('busy cache');
     let snapshot;
     try { snapshot = readTestCache(cache); }
     catch (error) {
-      if (!clear) throw error;
       safeCachePath(cache.fs, cache.path);
       cacheWarning(cache, true);
       // A new namespace prevents an earlier in-flight generation from matching.
@@ -1857,8 +1893,14 @@ async function cacheTransaction(cache, operation, clear = false) {
       snapshot = { data: { ...freshTestCache(cache), generation: snapshot.data.generation + 1 }, history: false };
     }
     const result = operation(snapshot.data, snapshot.history);
+    if (snapshot.data.epoch !== cache.epoch) {
+      replaceCacheFile(cache, cache.bindingPath, JSON.stringify({ schema_version: 1, epoch: snapshot.data.epoch }));
+      cache.epoch = snapshot.data.epoch;
+    }
     const text = JSON.stringify(snapshot.data) + '\n';
     if (Buffer.byteLength(text) > CACHE_LIMIT) throw new Error('oversized cache');
+    const failed = Object.fromEntries(Object.entries(snapshot.data.stories).filter(([, row]) => row.outcome === 'failed').map(([story]) => [story, true]));
+    replaceCacheFile(cache, cache.failedPath, JSON.stringify({ schema_version: 1, epoch: snapshot.data.epoch, generation: snapshot.data.generation, stories: failed }) + '\n');
     replaceCacheFile(cache, cache.path, text);
     cache.data = snapshot.data;
     for (const name of invalidations) {
@@ -1868,12 +1910,29 @@ async function cacheTransaction(cache, operation, clear = false) {
     }
     return result;
   } catch { cacheWarning(cache); return null; }
-  finally { if (locked) try { cache.fs.rmdir(cache.lock); } catch { cacheWarning(cache); } }
+  finally { if (locked) try { cache.fs.unlink(join(cache.lock, 'owner.json')); cache.fs.rmdir(cache.lock); } catch { cacheWarning(cache); } }
 }
 async function openTestCache(context, root, clear) {
-  const fs = context.ports.cacheFiles, dir = join(root, '.pdd', 'test-cache');
-  const cache = { fs, context, dir, path: join(dir, 'stories.json'), lock: join(dir, 'transaction.lock'), tokens: new Map(), data: null, history: false, markerDir: join(context.store.dir, 'test-cache-invalidations', sha256(Buffer.from(root))) };
+  const fs = context.ports.cacheFiles, dir = join(root, '.pdd', 'cache', 'test');
+  const cache = { fs, context, dir, path: join(dir, 'stories.json'), failedPath: join(dir, 'lastfailed.json'), lock: join(dir, 'transaction.lock'), tokens: new Map(), data: null, history: false, markerDir: join(context.store.dir, 'test-cache-invalidations', sha256(Buffer.from(root))) };
   try {
+    // Trust the canonical external root, but never its final symlink.
+    if (cacheStat(fs, context.store.dir)?.isSymbolicLink()) throw new Error('unsafe state root');
+    const stateRoot = realish(context.store.dir);
+    const repoKey = sha256(Buffer.from(realpathSync(root)));
+    cache.markerDir = join(stateRoot, 'test-cache-invalidations', repoKey);
+    const bindingDir = join(stateRoot, 'test-cache-bindings');
+    safeCachePath(fs, bindingDir, { directory: true, create: true });
+    const bindingPath = cache.bindingPath = join(bindingDir, repoKey + '.json');
+    safeCachePath(fs, bindingPath);
+    if (!cacheStat(fs, bindingPath)) {
+      try { fs.write(bindingPath, JSON.stringify({ schema_version: 1, epoch: fs.nonce() }), { flag: 'wx', mode: 0o600 }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    const binding = JSON.parse(fs.read(bindingPath, 'utf8', 128));
+    if (binding.schema_version !== 1 || !UUID.test(binding.epoch)) throw new Error('invalid local binding');
+    cache.epoch = binding.epoch;
+    if ((fs.tracked ?? nativeCacheFiles.tracked)(root)) throw new Error('tracked test cache');
     const marker = cacheStat(fs, join(root, '.git'));
     if (!marker || marker.isSymbolicLink() || (!marker.isFile() && !marker.isDirectory())) throw new Error('unsafe Git marker');
     safeCachePath(fs, dir, { directory: true, create: true });
@@ -1883,7 +1942,7 @@ async function openTestCache(context, root, clear) {
     const stat = cacheStat(fs, exclude);
     if (stat?.size > CACHE_LIMIT) throw new Error('oversized exclude');
     const text = stat ? fs.read(exclude, 'utf8') : '';
-    if (!text.split(/\r?\n/).includes('/.pdd/test-cache/')) replaceCacheFile(cache, exclude, `${text}${text.endsWith('\n') || !text ? '' : '\n'}/.pdd/test-cache/\n`);
+    if (!text.split(/\r?\n/).includes('/.pdd/cache/test/')) replaceCacheFile(cache, exclude, `${text}${text.endsWith('\n') || !text ? '' : '\n'}/.pdd/cache/test/\n`);
     // Clearing replaces only known metadata; unsafe files and directories remain untouched.
     await cacheTransaction(cache, (data, history) => {
       cache.history = history;
@@ -1898,7 +1957,7 @@ function storyFingerprint(cache, capture, story, options, origin) {
   const rawPaths = [...new Set([story, ...footprint.tests, ...footprint.files.filter(file => file.path.endsWith('.prompt.md')).map(file => file.path)])].sort();
   const raw = rawPaths.map(path => [path, capture.raw_file_hashes?.[path] ?? (path.endsWith('.prompt.md') ? capture.raw_prompt_hashes?.[path] : undefined)]);
   if (raw.some(([, hash]) => !hash)) return null;
-  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, model: options['--model'] ?? null })));
+  return cache.context.ports.cacheHash(Buffer.from(JSON.stringify({ footprint, raw, origin, max_calls: options['--max-calls'] ?? null, pdd_version: PDD_VERSION, engine_sha: ENGINE_SHA })));
 }
 async function beginTestAttempts(cache, rows, capture, options, origin) {
   if (cache.disabled || !rows.length) return;
@@ -1915,7 +1974,7 @@ async function beginTestAttempts(cache, rows, capture, options, origin) {
         continue;
       }
       const generation = ++data.generation;
-      data.stories[story] = { generation, outcome: own.some(row => row.state === 'refused') ? 'refused' : 'unknown' };
+      data.stories[story] = { generation, outcome: data.stories[story]?.outcome === 'failed' ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : 'unknown' };
       cache.tokens.set(story, { epoch: data.epoch, generation, fingerprint });
     }
   });
@@ -1928,9 +1987,9 @@ async function finishTestAttempts(cache, rows, capture) {
       if (data.epoch !== token.epoch || data.stories[story]?.generation !== token.generation) continue;
       const own = rows.filter(row => row.story_path === story && !row.cached), footprint = capture.stories?.find(item => item.story_path === story);
       const outcome = own.some(row => row.state === 'failed') ? 'failed' : own.some(row => row.state === 'refused') ? 'refused' : own.some(row => row.state === 'not_run') ? 'not_run' : own.length && own.every(row => row.state === 'passed' && typeof row.calls === 'number') && !cache.context.interrupted && !cache.context.lintUnknown ? 'passed' : 'unknown';
-      const record = data.stories[story] = { generation: token.generation, outcome };
+      const record = data.stories[story] = { generation: token.generation, outcome: outcome !== 'passed' && data.stories[story]?.outcome === 'failed' ? 'failed' : outcome };
       if (outcome === 'passed' && token.fingerprint && footprint?.tests.length === own.length && footprint.tests.every(test => own.some(row => row.test === test))) {
-        record.pass = { fingerprint: token.fingerprint, tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
+        record.pass = { engine_sha: own.find(row => row.engine_sha)?.engine_sha ?? null, fingerprint: token.fingerprint, tests: footprint.tests, passed_at: new Date(cache.context.ports.now()).toISOString(),
           rows: Object.fromEntries(own.map(row => [row.test, { checks: row.checks, criteria: row.criteria, criteria_total: row.criteria_total, draft: !!row.draft }])) };
       }
     }
@@ -1945,11 +2004,11 @@ async function runBatch(context, cwd, words, options, setRelease) {
   // A person has no time limit; an agent has 90 s; --timeout MIN overrides both.
   context.agentLimit = options['--timeout'] === undefined && !ports.interactive;
   context.timeoutMin = options['--timeout'] !== undefined ? Number(options['--timeout']) : context.agentLimit ? AGENT_WAIT_MIN : null;
-  let selected = select(found, options['--cache-clear'] ? [] : normalized, root);
+  let selected = select(found, normalized, root);
   const cache = context.cacheEnabled ? await openTestCache(context, root, !!options['--cache-clear']) : null;
   if (cache && !cache.disabled && options['--lf'] && !options['--cache-clear'] && cache.history) {
-    selected = selected.filter(test => cache.data.stories[test.storyPath]?.outcome === 'failed');
-    if (!selected.length) { context.noFailed = true; return printResult(context, []); }
+    const failures = Object.values(cache.data.stories).some(row => row.outcome === 'failed');
+    if (failures) selected = selected.filter(test => cache.data.stories[test.storyPath]?.outcome === 'failed');
   }
   context.coverage = bindingCoverage({ root, found, selected });
   const checked = preflight({ root, found, selected });
@@ -1968,6 +2027,7 @@ async function runBatch(context, cwd, words, options, setRelease) {
   catch (error) { if (cache) await beginTestAttempts(cache, rows, null, options, origin); throw error; }
   context.warnings.push(...(capture.warnings ?? []));
   if (cache) await beginTestAttempts(cache, rows, capture, options, origin);
+  context.testCache = cache;
   const fresh = rows.filter(row => !row.cached);
   if (!fresh.some(row => row.state === 'ready')) return printResult(context, rows);
   if (!words.length) line(ports.stderr, costLine(fresh.filter(row => row.state === 'ready'), root, found.visible));
