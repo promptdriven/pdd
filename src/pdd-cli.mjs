@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f18e58697e789c7f51b77278a9847202bc53a74fc52f0cc28e26b3fdc34152e6).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 30ed58eff4b9e290e14e5135306b75b2d799c282310612f240b02901853b2868).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -32,11 +32,25 @@ const RUNNER_ROUTES = {
   'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ref: plan.operands[0] }],
 };
-export function renderHelp(prefix = []) {
+const FIRST_HELP_LINE = 'PDD: prompt-driven development for your coding agent.';
+// Learn PDD: the paths of the guide files in this package, never in the cwd. Help reads no file to print them.
+const guidePaths = packageRoot => [`Prompting guide: ${join(packageRoot, 'docs', 'prompting-guide.md')}`,
+  `RUNBOOK: ${join(packageRoot, 'RUNBOOK.md')}`];
+const TOPICS = {
+  prompting: ['In PDD, prompts are the source. Code follows the prompts.',
+    '1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.',
+    '2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.',
+    '3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.',
+    `4. Check: run pdd ${NAMES.test} --fill-hash, then pdd ${NAMES.lint} (0 AI calls), then pdd ${NAMES.test} STORY on the PDD interpreter.`,
+    '5. Approve: a person reads each prompt and runs pdd approve PROMPT. An agent never approves.'],
+};
+const renderTopic = (topic, packageRoot) => [FIRST_HELP_LINE, '', ...TOPICS[topic], '', ...guidePaths(packageRoot)].join('\n');
+export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
   const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
     || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return ['PDD: prompt-driven development for your coding agent.', '',
+  return [FIRST_HELP_LINE, '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
+    ...(prefix.length ? [] : ['Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.', ...guidePaths(packageRoot), '']),
     'Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).',
     `workflow ${NAMES.run} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`,
     'pdd never merges.'].join('\n');
@@ -57,7 +71,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     } catch { /* An optional PATH diagnostic never prevents the requested command. */ }
   }
   switch (plan.local) {
-    case 'help': line(stdout, renderHelp(plan.helpPrefix));return 0;
+    case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
     case 'version':
       try { const metadata = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
         if (typeof metadata.version !== 'string' || !metadata.version) throw Error('version');
