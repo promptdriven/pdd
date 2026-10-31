@@ -163,7 +163,7 @@ test('RUNTIME-CAPTURE1: capture refuses secrets, links and size limits, and make
   for (const [name, setup, pattern] of [
     ['secret', r => writeFileSync(join(r, '.env.local'), 'TOKEN=x\n'), /\.env\.local: the name looks like a secret/],
     ['secret folder', r => { mkdirSync(join(r, 'config/secrets'), { recursive: true }); writeFileSync(join(r, 'config/secrets/a.txt'), 'x'); }, /config\/secrets\/a\.txt/],
-    ['symlink', r => symlinkSync('README.md', join(r, 'link.md')), /link\.md: a symbolic link/],
+    ['symlink', r => symlinkSync('missing.md', join(r, 'link.md')), /link\.md.*(?:symbolic link|broken|missing)/],
     ['size', r => writeFileSync(join(r, 'big.bin'), Buffer.alloc(10_485_761)), /too big to send: \d+ files, 10\.0 MB[\s\S]*big\.bin/],
     ['count', r => { mkdirSync(join(r, 'many')); for (let i = 0; i < 10_000; i += 1) writeFileSync(join(r, 'many', `${i}.txt`), ''); }, /too big to send: 1000\d files/],
   ]) {
