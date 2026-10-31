@@ -17,7 +17,21 @@ callback and publishing its result form one indivisible update for this run,
 including across processes. Successful updates of unrelated fields retain both
 writers' effects. The callback owns its intended changes; storage does not infer
 them from an arbitrary old snapshot.
-Keep the ownership algorithm and private representation free.
+Ordinary ownership uses `<run folder>/.ordinary-owner` and publishes complete owner
+PID, hostname and a unique token atomically. Reclaim only a confirmed dead owner
+on the same host. Live, foreign-host, malformed and unverifiable ownership,
+including permission-check failures, stays protected; age alone proves nothing.
+Release or reclaim only the observed token, so an older owner cannot remove its
+replacement. A dead owner's leftover ownership must not prevent cancellation.
+Keep the private ownership algorithm free.
+
+Module function `readRunOwnership(runDir, ports = {})` returns `null` when ordinary
+ownership is absent, otherwise a snapshot `{path, pid, hostname, token, warning}`.
+`path` names `.ordinary-owner`; unavailable PID, hostname or token fields are
+`null`. A complete readable owner has `warning: null`; unreadable or malformed
+ownership has a finite diagnostic string in `warning`, retaining available facts.
+This public read performs no acquisition, recovery, release or durable write.
+Its native filesystem binding remains unbound to the Interpreter.
 
 The callback may mutate its supplied record, but must preserve its run identity
 and perform only local state changes. A missing or unreadable existing record,
@@ -26,8 +40,10 @@ never create an existing run from a stale fallback. Before publication, retain t
 previous durable bytes on failure. Always release only this invocation's ownership.
 Ownership covers no external Git, GitHub, Herdr or model effects, readiness waits,
 journal claim acquisition or nested ordinary save. Storage/ownership effects have
-injectable native boundaries with production defaults. Do not reclaim an owner
-merely because its record is old.
+injectable native boundaries with production defaults. Contention fails with a
+finite diagnostic naming the ownership path and available owner details, with one retry instruction. Ordinary acquisition while a delivery
+journal claim is held must wait less than its 250 ms claim budget, never block the
+main thread there for five seconds. Retain journal-before-ordinary ordering.
 
 `writeRun(record, ports)` retains its synchronous signature, supplied-object
 mutation and returned record, and its explicit whole-record save capability. Its
