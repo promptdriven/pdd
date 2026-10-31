@@ -18,6 +18,47 @@ Public detailed, list, all-repository and JSON status group this failure as wait
 
 Only a successful start/open or positive observation of the same current chat clears its active failure/unconfirmed flag. Restore `running` only when no person question or approval gate is waiting; recovery never approves, advances an area or discards decisions. If Herdr remains unavailable, keep the precise external failure and preserve custody rather than claiming recovery.
 
+## Preserve concurrent progress
+
+Use the [run-record update boundary](workflow-runs.prompt.md#concurrent-record-updates)
+for every modification of an existing ordinary run record: startup follow-up,
+chat recovery/failure, evidence and replay metadata, steps, questions, decisions,
+area/gate transitions, publication, change-delivery effects, cancellation and
+status refresh. Initial creation retains the explicit whole-record save. Each
+update callback checks the latest `runId` and record/worktree identity against the
+run selected by this invocation before changing anything. A replacement run at
+the same path is not that run: fail without modifying it. This adds no step-order
+or approval gate and does not change existing command validation.
+
+Apply only this invocation's intended effects to the latest record. Retain
+unrelated newer completed steps, questions, gates, decisions, area progress,
+chats, evidence and PR fields; never publish an old whole snapshot. Distinct
+successful concurrent completions retain both records unless the existing rerun
+rule intentionally invalidates one. A known completed step running again clears
+all later known steps of its own area in the latest record, including a later
+step newly added or replaced since the command loaded; unrelated steps survive.
+Done clears only the question it observed, leaving an independently newer
+question intact. Ask deliberately saves its own requested question and derives
+its existing waiting effect from the current gate. Preserve newer gates when
+this invocation has no intentional gate transition.
+
+Status applies its actual fetched PR/CI observations to the matching PR identity
+without replacing unrelated newer PR fields or entries, and retains existing
+completion consequences. Collect external observations before the short local
+update; do not perform Git, GitHub, Herdr or model work under ordinary-record
+ownership. All callers continue from the committed record, not their stale copy.
+A failed existing-record update returns a finite nonzero diagnostic and never
+claims that its progress was saved. Best-effort index failure after a committed
+save remains harmless. No new ordering is promised for competing intentional
+changes to the same field beyond these existing command effects.
+
+Ordinary updates leave accepted requests and acknowledgement fields in the
+authoritative journal untouched. Change delivery retains its existing
+journal-then-ordinary update order; no ordinary update acquires a journal claim.
+Keep existing custody, uptake warnings, side-effect order and approval rules.
+The native callback, ownership and overlapping public saves remain unbound to
+the Interpreter entries below.
+
 ## Commands
 
 Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
@@ -226,6 +267,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status": "approved","prose_sha256":"b1be5e81e5e543d0ab93d57360fa74568fd31842674ee31c7d8365ebe2ec3543","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status": "approved","prose_sha256":"cb7fdd0d69b592a6c468275437257827fcc13de9461e7c70e89984b8a3e1c639","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>

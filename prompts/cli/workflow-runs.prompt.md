@@ -8,6 +8,38 @@ Saved fields: `runId`, `workflow`, `repo`, `issue {number,title,url}`, `number`,
 
 `writeRun(record, ports)` adds the C3 view, increments `journalSeq`, sets `updatedAt`, and writes the file atomically (temporary file, then rename). It also updates the index of known runs in `<stateDir>/runs.json` (default `~/.local/state/pdd`). An index failure is ignored. `readRun(runDir)` returns the record or null.
 
+## Concurrent record updates
+
+Module function `updateRun(runDir, update, ports = {})` synchronously returns the
+committed record. `update` is a synchronous callback receiving the latest durable
+record and returning the record to save. Reading that record, applying the
+callback and publishing its result form one indivisible update for this run,
+including across processes. Successful updates of unrelated fields retain both
+writers' effects. The callback owns its intended changes; storage does not infer
+them from an arbitrary old snapshot.
+Keep the ownership algorithm and private representation free.
+
+The callback may mutate its supplied record, but must preserve its run identity
+and perform only local state changes. A missing or unreadable existing record,
+callback failure or failed publication fails finitely without claiming a commit;
+never create an existing run from a stale fallback. Before publication, retain the
+previous durable bytes on failure. Always release only this invocation's ownership.
+Ownership covers no external Git, GitHub, Herdr or model effects, readiness waits,
+journal claim acquisition or nested ordinary save. Storage/ownership effects have
+injectable native boundaries with production defaults. Do not reclaim an owner
+merely because its record is old.
+
+`writeRun(record, ports)` retains its synchronous signature, supplied-object
+mutation and returned record, and its explicit whole-record save capability. Its
+publication participates in the same ownership boundary; it cannot interrupt an
+`updateRun` between read and commit. It does not infer an untracked caller's intent.
+`updateRun` uses the same C3 derivation, sequence, timestamp and best-effort index
+semantics as `writeRun`, applied to the record being committed. An index failure
+does not undo or misreport that commit.
+Neither function reads or writes the delivery journal. The callback binding and
+native filesystem concurrency are unbound to the Interpreter; no JSON callback
+adapter is part of this API.
+
 Preserve optional `productMarker` when the runner supplies it. Its capture and
 PR propagation belong to [the workflow runner](workflow-runner.prompt.md#product-run-association).
 An older record without the field stays valid; this module does not infer one.
