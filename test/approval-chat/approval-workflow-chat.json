@@ -20,7 +20,7 @@
     },
     {
       "id": "AC5",
-      "text": "Approving PR 1 does not approve the later code-or-stop gate, and a publication failure leaves the gate retryable without losing or duplicating saved evidence."
+      "text": "Approving PR 1 does not approve the later code-or-stop gate; distinct or reopened gates keep separate approvals even at the same clock time, while retrying publication of the same gate reuses its evidence without duplication."
     }
   ],
   "cases": [
@@ -63,6 +63,11 @@
       "id": "scratch-proof",
       "given": "private scratch Herdr session/HOME, stub agents; native local CLI sample ready story/drafts/PR1; repeat strict",
       "required_observation": "easy chat-only decisions approve all gates/prompts and PR records them; strict requests real terminal; no live session/provider; NOT RUN until actual proof"
+    },
+    {
+      "id": "durable-gate-identity",
+      "given": "fixed clock: terminal approve-pr then ask-code said ship it; retry failed publication of same gate; reopen same-kind gate with fresh words; two distinct event ids with identical evidence plus a journal copy of one",
+      "required_observation": "distinct gates retain separate durable gate ids and event ids, original terminal evidence and exact ship it words; retry preserves original event without extra history/journal/PR row; reopened gate gets fresh identity and words; renderer emits two rows for two events and no third row for the journal copy; legacy records remain readable without invented actors or words"
     }
   ]
 }

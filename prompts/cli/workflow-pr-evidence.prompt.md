@@ -27,13 +27,13 @@ Insert every lifted/machine line above every replay status block, including PASS
 
 ## Approval evidence in PRs
 
-After the ordered top evidence block, before ordinary step prose, emit one short line per saved approval in chronological order. The optional `run.decisions` and `run.promptApprovals` input fields carry saved gate decisions and standalone journal entries whose path/hash match currently published prompts. A new decision's `evidence` is authoritative; legacy records remain readable but never acquire invented actor/time/words. Deduplicate identical evidence across gate history/journal. `said` lines begin `Approved in chat:`, terminal lines `Approved in terminal:`, native chat lines `Approved in area chat:`. Include the invoking actor kind/id, epoch-millisecond time, route, verbatim words when present, and every approved prompt path/hash; never silently omit approval records from a successful body. A body budget omission must say approval evidence was omitted, not imply complete evidence.
+After the ordered top evidence block, before ordinary step prose, emit one short line per saved approval in chronological order. The optional `run.decisions` and `run.promptApprovals` input fields carry saved gate decisions and standalone journal entries whose path/hash match currently published prompts. A new decision's `evidence` is authoritative; legacy records remain readable but never acquire invented actor/time/words. Deduplicate copies with the same evidence event `id` across gate history/journal. Different ids produce separate lines even when route, actor, time, words and prompts are identical. For id-less legacy evidence only, retain content-based deduplication; do not collapse an identified event into an id-less one. Event/gate identities need not be displayed. `said` lines begin `Approved in chat:`, terminal lines `Approved in terminal:`, native chat lines `Approved in area chat:`. Include the invoking actor kind/id, epoch-millisecond time, route, verbatim words when present, and every approved prompt path/hash; never silently omit approval records from a successful body. A body budget omission must say approval evidence was omitted, not imply complete evidence.
 
 Every dynamic value, including actor, timestamp, route, path/hash and words, is a quoted JSON literal in a Markdown code span longer than all interior backtick runs. Preserve recoverable raw text: JSON escapes newlines, carriage returns, controls and bidi characters. Escape each exact `pdd-workflow:` prefix colon as `\u003a` inside the JSON literal, preventing an ownership marker. Do not HTML-escape raw identity or allow mentions, issue references, closing instructions, HTML or backticks to escape the span. These approval values use this rule instead of the ordinary lifted-label formatter. Keep exactly one real ownership marker and preserve existing redaction/budget/publication safeguards. A full render through the read-only GitHub Markdown API must show no user-mention/issue anchors or extra workflow markers from supplied evidence.
 
 ## Dependencies
 
-- [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt; this renderer accepts supplied facts and never duplicates run storage policy.
+- [Run records](workflow-runs.prompt.md): required authoring/generation/native-production/verification/testing context for saved approval decisions, including optional legacy-compatible gateAt and gateId; this renderer accepts supplied facts and never duplicates run storage policy.
 
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for supplied evidence values. No filesystem journal read is invented inside this renderer.
 
@@ -46,7 +46,7 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
 ```json
 {
   "status": "approved",
-  "prose_sha256": "36cb9c399dcb7eeeb901d5f2116c42f9bf500dc0c645b4bdc70dd1da50571c93",
+  "prose_sha256": "7157604d356ef51f25d1d5d9f9194080cecc3e750fe47fc12ee3ace99101fef7",
   "entries": [
     {
       "operation": "preparePrEvidence",
@@ -178,6 +178,10 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
                         }
                       },
                       "required": [
@@ -191,6 +195,10 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
                     },
                     "gateAt": {
                       "type": "integer"
+                    },
+                    "gateId": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [
@@ -266,6 +274,10 @@ Every dynamic value, including actor, timestamp, route, path/hash and words, is 
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
                     }
                   },
                   "required": [

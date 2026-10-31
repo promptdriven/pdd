@@ -8,7 +8,7 @@ I can approve a ready workflow gate and its draft prompts with one chat decision
 2. Unrelated unchanged drafts stay draft; a missing gate, malformed selected prompt or invalid policy refuses without advancing or partially approving a different prompt.
 3. PR creation and later updates show all recorded gate and matching standalone prompt approvals with actor, time, route and verbatim chat words safely quoted.
 4. Without --said, a person terminal keeps y/N, while an agent, non-terminal or current area pane must ask me and use --said; strict mode permits only the person terminal.
-5. Approving PR 1 does not approve the later code-or-stop gate, and a publication failure leaves the gate retryable without losing or duplicating saved evidence.
+5. Approving PR 1 does not approve the later code-or-stop gate; distinct or reopened gates keep separate approvals even at the same clock time, while retrying publication of the same gate reuses its evidence without duplication.
 
 ## Rules to check
 
