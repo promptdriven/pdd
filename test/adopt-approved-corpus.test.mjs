@@ -135,7 +135,7 @@ test('2640 immutable corpus reads batch Git blobs across many declared scenarios
   t.diagnostic(`31 declared scenarios: ${batch.length} cat-file --batch starts; zero per-file cat-file starts`);
 });
 
-test('2640 refusal causes are useful, bounded single lines without private paths credentials or Try URLs',async()=>{
+test('2640 refusal causes are useful, bounded single lines without private paths credentials or Simulator URLs',async()=>{
   const result=await adoptReplayCorpus('unused','unused',{readAdoptionSnapshot:async()=>{throw Error('Read failed: ENOENT prompts/missing.prompt.md /private/person/corpus.json password=secret Authorization: Bearer hiddenToken ghp_hiddenCredential https://runtime.invalid/s/capability\nnext');}});
   assert.equal(result.reason,'unavailable');assert.match(result.cause,/Read failed: ENOENT prompts\/missing\.prompt\.md/);assert.ok(result.cause.length<=1000);assert.doesNotMatch(result.cause,/private|person|secret|hiddenToken|hiddenCredential|capability|https:|[\r\n]/);
 });
