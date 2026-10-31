@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: c08b84faad91a78ceba2ea5c9fab9783c5f9e7a65fc116c71a7a03b50125454e).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 7587ba2d791692450c73c6b34e3d196a0eb91139f08cd2104fe8e283f3ac04f5).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -199,7 +199,7 @@ async function readSavedStoryEvidence({ root, comparisonRoot = root }, ports, ca
   const capture = ports.captureSource ?? captureSource;
   const stories = [], warnings = [];
   const warning = (path, error) => warnings.push(`Could not read saved checks ${path} (${cleanText(error?.code ?? error?.message ?? 'invalid record')}).`);
-  const legacyHint = () => warnings.push('Older checks are not counted; run pdd check again.');
+  const legacyHint = () => warnings.push('Older checks are not counted; run pdd test again.');
   const real = async path => { try { return await canonical(path); } catch { return resolve(path); } };
   const wanted = await real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
