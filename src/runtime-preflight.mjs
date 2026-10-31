@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 39f361e8a00b5be56ef5fecc4f7e3798f067794e42b2efd6a0efd1e546abbf18).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 266dc372fa0c134121bde06e54c9c81185dbf968c972bfd86e048f9c844fd999).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -342,6 +342,15 @@ function annotationRules(schema, add) {
 
 // Preserve numeric JSON spelling only for parsed prompt interfaces; ordinary callers supply JSON values.
 const numberSources = new WeakMap();
+export function parseInterfaceJson(text) {
+  return JSON.parse(text, function(key, value, context) {
+    if (typeof value === 'number' && context?.source !== undefined) {
+      if (!numberSources.has(this)) numberSources.set(this, new Map());
+      numberSources.get(this).set(key, context.source);
+    }
+    return value;
+  });
+}
 function limitProblems(iface) {
   const out = [], keys = ['max_steps', 'max_model_calls'];
   const add = (code, pointer, rule, hint) => out.push({code,pointer,rule,hint});
@@ -398,13 +407,7 @@ export function readPrompt(root, visible, path) {
   if (blocks.length > 1) return { path, text, blocks, error: 'pdd-two-interfaces' };
   let value;
   try {
-    value = JSON.parse(blocks[0][1], function(key, value, context) {
-      if (typeof value === 'number' && context?.source !== undefined) {
-        if (!numberSources.has(this)) numberSources.set(this, new Map());
-        numberSources.get(this).set(key, context.source);
-      }
-      return value;
-    });
+    value = parseInterfaceJson(blocks[0][1]);
   } catch (error) { return { path, text, blocks, error: 'invalid-json', detail: error.message }; }
   if (!isObject(value)) return { path, text, blocks, error: 'invalid-json', detail: 'The interface is not a JSON object.' };
   return { path, text, blocks, interface: value, prose: proseSha256(text), references:prepared.references };
