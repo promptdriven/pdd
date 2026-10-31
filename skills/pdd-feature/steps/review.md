@@ -11,3 +11,5 @@ Answer separately, one evidence-based line per question:
 6. Do claims in the PR 1 body, supplied step summaries and Story match the evidence, including failures, skips and unproved criteria?
 
 Write `<run folder>/review.md`; first line: `Review: N must-fix` (unresolved count) or `Review: no must-fix`. Follow with six answers and findings: location, evidence, consequence, required correction. A must-fix is a problem build can fix in this change. Missing pdd-made `Old-code proof:` or `Tests vs base:` lines are limitations, not must-fixes. Other missing evidence is a limitation or finding, never a pass. Keep unresolved must-fixes visible after repair exhaustion; never turn exhaustion into a clean verdict. The skill owns repairs and the PR gate.
+
+Merge only on the person’s explicit chat request under RUNBOOK §2: green current-head checks, safely quoted request comment first, then --merge --match-head-commit.

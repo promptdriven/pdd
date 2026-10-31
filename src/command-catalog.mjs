@@ -1,7 +1,7 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 07c2c184012068906222792b52ed65b950378e672944c5a6e1bc907f6936fe8e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 36f27f248516daae389f4535c1e358f894d33e7ba76c22e4f2449a6b5b78c995).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'run' });
 const { test, lint, simulate, start } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
@@ -11,7 +11,7 @@ const routes = [
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
   { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
     forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
-  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'run'],
+  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
     forms:[form(`pdd workflow ${start} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
@@ -28,8 +28,8 @@ const routes = [
     operands: [{name:'question',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow ask QUESTION', 'For the agent in a run worktree: show the person that the chat waits for their answer.')] },
   { id: 'workflow.approve', prefix: ['workflow', 'approve'], local: 'workflow-approve',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [],
-    forms: [form('pdd workflow approve [ISSUE]', 'Approve the area at its gate and start the next area in a new chat. Only a person approves.')] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd workflow approve [ISSUE] [--said WORDS]', 'Approve the gate and all its draft prompts with the person’s chat words through --said; no-said keeps terminal/native-chat approval. Root pdd.json strict_approvals true requires terminal y/N.')] },
   { id: 'workflow.changes', prefix: ['workflow', 'changes'], local: 'workflow-changes',
     operands: [{name:'issue',type:'issue'},{name:'request',type:'text',repeat:true}], options: [],
     forms: [form('pdd workflow changes ISSUE TEXT', 'Send a change request to the same area chat; the gate stays open.')] },
@@ -69,8 +69,8 @@ const routes = [
     options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--local', kind: 'flag' }],
     forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
-  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
-    forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
+  { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [{name:'--said',kind:'text'}],
+    forms: [form('pdd approve PROMPT [--said WORDS]', 'Show a prompt\'s runtime interface and its text changes since the last approval, and approve with the person’s chat words through --said in easy mode; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.')] },
   // `sim` is the short form of the try route: it parses like `simulate` and never gets a notice.
   { id: 'try', prefix: [simulate], local: 'runtime-try', formerly: ['try'], short: ['sim'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },

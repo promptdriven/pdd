@@ -130,7 +130,7 @@ test('SKILLS7: pdd-setup states one marked block of at most 10 lines that names 
   const block = lines.slice(lines.indexOf('<!-- pdd:start -->'), lines.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.length >= 3 && block.length <= 10, `${block.length} lines`);
   // Codex calls a skill with $name, Claude Code with /name.
-  for (const word of ['Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.', 'pdd workflow start NAME ISSUE', 'RUNBOOK.md'])
+  for (const word of ['Skills: pdd-prompting (the Prompting guide), pdd-feature, pdd-bug, pdd-small-change. Call one with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code, or just ask for it by name.', 'pdd workflow run NAME ISSUE', 'RUNBOOK.md'])
     assert.ok(block.join('\n').includes(word), word);
   assert.equal(lines.filter(line => line === '<!-- pdd:start -->').length, 1);
   assert.ok(Buffer.byteLength(text) <= 3584);
@@ -342,7 +342,7 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
     const skill = read(`${name}/SKILL.md`);
     assert.match(skill, /[Gg]ive the full paths of the Story files/, name);
     // 0.1.7: the person may be in a terminal; `pdd workflow changes N "I approve"` then tells them to run approve.
-    assert.ok(skill.includes(`End with: "Reply 'I approve' here or run \`pdd workflow approve N\`, or tell me what to change."`), name);
+    assert.ok(skill.includes(`End with: "Reply in your own words here or run \`pdd workflow approve N\`, or tell me what to change."`), name);
   }
 });
 
@@ -423,7 +423,7 @@ test('SKILLS27: a page gets a render operation that returns html, an app map and
 test('SKILLS28: before an optional step the main chat asks the person and waits for the answer', () => {
   const ask = 'In a run, run `<pdd> workflow ask` first.';
   const lines = { 'pdd-feature': '- Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". ' + ask,
-    'pdd-bug': '- Before an optional step, ask the person and wait for the answer: "Do you want to try it now? yes/no". ' + ask,
+    'pdd-bug': '- Try is recommended, optional: ask once in one line; accept no at once, record "skipped by the person"; never block. ' + ask,
     'pdd-small-change': '- Before an optional step, ask the person and wait for the answer. ' + ask };
   for (const [name, line] of Object.entries(lines)) {
     const skill = read(`${name}/SKILL.md`);
@@ -667,4 +667,29 @@ test('SKILLS47: actual checks replace missing-check evidence in the run record a
   assert.match(replacement, /never.*both/i);
   for (const name of Object.keys(AREAS))
     assert.match(read(`${name}/SKILL.md`), /read[^\n]*RUNBOOK §17[^\n]*result replacement/i, name);
+});
+
+// #2755: actual chat decisions use pdd; merging requires the person's request and exact checked head.
+test('SKILLS49: chat approval and requested merge keep the person in control', () => {
+  for (const name of Object.keys(AREAS)) {
+    const skill = read(`${name}/SKILL.md`);
+    assert.match(skill, /workflow approve N --said/);
+    assert.doesNotMatch(skill, /Never merge\./);
+  }
+  const book = read('pdd-prompting/RUNBOOK.md');
+  for (const required of ['Nonblank own words are required', 'strict_approvals', 'never authorizes approval',
+    'never manually edit approval fields', "person's explicit chat request", 'all checks green',
+    'Merged at the person', '--merge --match-head-commit <head>', 'A failed comment stops', 'A changed head stops'])
+    assert.ok(book.includes(required), required);
+});
+
+// #2762 final source authority: the agent judges intent; pdd only records explicit approval.
+test('SKILLS50: approval instructions reject automatic chat authority and lexical grading', () => {
+  const book = read('pdd-prompting/RUNBOOK.md');
+  for (const rule of ['Show the gate', 'question, change request', 'before you showed the gate',
+    'No exact approval phrase', 'any nonblank payload', 'without yes-word or semantic grading',
+    'non-TTY or current Herdr chat-pane', 'ask the person, then run with --said',
+    'Only an explicit approve call', 'never authorizes approval', 'no approve gate before code'])
+    assert.ok(book.includes(rule), rule);
+  assert.doesNotMatch(book, /optional native Herdr area-chat evidence work/);
 });

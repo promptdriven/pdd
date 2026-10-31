@@ -28,11 +28,11 @@
     {
       "id": "bad-words",
       "given": "missing option value, empty, whitespace, duplicate said; separately no said and piped y",
-      "required_observation": "exit 2, no prompt/journal changes; absent option on a real person TTY still asks y/N"
+      "required_observation": "exit 2, no prompt/journal changes; absent option on both-TTY input still asks y/N in easy mode, including agent markers"
     },
     {
       "id": "strict",
-      "given": "root pdd.json true; said with TTY and yes; separately no-said agent; separately real person TTY y and n",
+      "given": "root pdd.json true; said with TTY and yes; separately no-said agent with and without both TTYs; separately real person TTY y and n",
       "required_observation": "said/agent refuse with terminal request; person y approves with terminal evidence, n leaves unchanged"
     },
     {

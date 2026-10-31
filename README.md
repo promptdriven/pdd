@@ -71,7 +71,7 @@ The agent writes these files in prompt space:
 
 You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
 
-In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow start feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
+In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow run feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
 
 > [!WARNING]
 > In a workflow run, the agents run with full access. They do not stop to ask for approval. They can change files and run commands as your user.
@@ -146,13 +146,13 @@ In the Simulator, the **Ask your agent** panel connects to an agent on your comp
 
 ### 4. Approve
 
-When the program does what you want, approve each prompt in your terminal:
+When the program does what you want, approve each prompt in chat or your terminal:
 
 ```sh
 pdd approve prompts/NAME.prompt.md
 ```
 
-pdd shows the interface of the prompt and the text changes since the last approval. Then it asks yes or no. Only a person at a terminal can approve. When an agent runs `pdd approve`, pdd refuses and tells it to ask you. You can also click **Approve** in the Simulator while `pdd simulate` runs in your terminal.
+After showing the gate, your agent judges your reply in any chat (your own Claude Code or Codex conversation or Herdr). It must not call approve for a question, change request or a message from before it showed the gate. After your actual chat approval, your agent runs `pdd approve PROMPT --said "<your exact words>"` for one prompt, or `pdd workflow approve N --said "<your exact words>"` for the ready gate and every draft prompt belonging to it in one step. Any nonblank words are accepted by pdd; it records them without a yes-word list or semantic grading. No exact approval phrase is needed. Output lists each prompt path and current prose hash. Without `--said`, only a person at a normal terminal can answer y/N. Agent, non-TTY and current Herdr chat-pane callers get an instruction to ask the person, then run with `--said` and their words; native Herdr evidence never authorizes approval. Root `pdd.json` with `"strict_approvals": true` allows only a person at a terminal; absent or false keeps easy mode. Agents never edit approval fields by hand or decide expected values. Approval records retain the invoking actor, time, route and exact words; PRs show matching approvals safely quoted. Approving PR 1 does not approve the later code-or-stop gate. Only an explicit approve call passes a gate; chat messages, steps and `workflow done` never do. A workflow with no approve gate before code warns without blocking.
 
 ### 5. Code space
 
@@ -161,7 +161,7 @@ Code space is the PDD compiler: your agent writes the code from the approved pro
 1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Runtime check` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
-pdd makes the code only after you approve each draft prompt. pdd never merges. You review and merge on GitHub.
+pdd never merges and has no merge command. You may explicitly ask your agent in chat to merge a PR. It requires green checks for the exact current head, first posts `Merged at the person's request: "…"` with your exact request safely quoted in a code span (JSON-quote controls and use a delimiter longer than embedded backticks), then uses `gh pr merge PR --merge --match-head-commit <head>`. It uses a comment body file, rechecks the head and checks, and stops on a failed comment, pending/failed checks or a changed head. See [RUNBOOK §2](RUNBOOK.md#2-the-files).
 
 ## Commands
 
@@ -178,12 +178,12 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd simulate STORY --agent NAME` | Connect an agent to the **Ask your agent** panel. |
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
-| `pdd approve PROMPT` | Approve a prompt. Only for a person at a terminal. |
-| `pdd workflow start NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
+| `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
+| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
-| `pdd workflow approve [ISSUE]` | Approve the gate of a run, or start code space. |
+| `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd help` | Show all commands. |
 
 `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run` also work. Each one prints one line on stderr with the name to use.
@@ -219,7 +219,7 @@ The skills and the other commands run on your computer.
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Do the install steps again. |
-| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [RUNBOOK §11](RUNBOOK.md#11-pdd-test) lists the usual refusals. |
+| `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [RUNBOOK §21](RUNBOOK.md#11-pdd-test) lists the usual refusals. |
 | `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd test --read` later. Do not send the same check again. |
 | `STOPPED … took more than 10 minutes and was stopped.` | Make the test step smaller, then check that Story again. |

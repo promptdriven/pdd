@@ -266,7 +266,7 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
     .map(text => text.trim()).filter(Boolean);
   assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
-  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1)), command);
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1).map((word, index, words) => word === 'N' && index === 2 && words[0] === 'workflow' && words[1] === 'approve' ? '2594' : word)), command);
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.

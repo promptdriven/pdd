@@ -25,7 +25,7 @@ PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply in your own words here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Runtime check (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
@@ -54,16 +54,16 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 
 | | In your chat | As a run on an issue |
 |---|---|---|
-| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow start NAME ISSUE` |
+| Start | Call `pdd-feature`, `pdd-bug` or `pdd-small-change` in Codex or Claude Code | `pdd workflow run NAME ISSUE` |
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. It never merges | pdd opens them. It never merges |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. It merges only on your explicit chat request after the checks and comment described below | pdd opens them. It merges only on your explicit chat request after the checks and comment described below |
 
 ## How a run works
 
 ```
-pdd workflow start feature 42      returns at once
+pdd workflow run feature 42      returns at once
   |
 chat 1  story: understand, visual?, prompt-story
   |     gate: approve
@@ -76,10 +76,10 @@ chat 3  code (only when you ask): build, verify, formal, review
 you     review and merge on GitHub
 ```
 
-1. `pdd workflow start` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
+1. `pdd workflow run` reads the issue, makes the branch, the worktree and the run folder, and opens the first chat in Herdr. It refuses an issue that already has an active run. Then it returns. You can close the terminal.
 2. The first message of the chat is short. It names the skill, the issue, the worktree, the run folder and the area with its steps.
 3. The main chat coordinates and talks with you. It writes no code and performs no checks.
-4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §17 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
+4. The main chat gives steps to fresh subagents; builders are never reused and never check their own code. Before checking, close finished agents if supported and try fresh startup. Only after startup fails may verify or formal reuse an agent that wrote no code, tests or prompts in this run. Review always needs a fresh agent with no build, verify, formal or prior review of this change and no prior review context, including every repair round. If no fresh reviewer can start, write `Not checked: review (agent limit)`, stop and tell the person. Follow pdd-prompting RUNBOOK §27 for missing-check records, new-session recovery and replacing them after actual checks. Each subagent gets its full brief at once, with file paths, not chat history; the chat waits once with a long time-out and no small follow-ups.
 5. Hold review completion while must-fixes remain and fewer than two repair rounds have run: start a fresh build with the must-fix list. Only after the final review (clear or two repairs used), run `pdd workflow done review`; it opens PR 2. For other steps, the agent runs `pdd workflow done STEP --summary "..."`. pdd records the step and tells the agent what comes next: the next step, a gate, or "pdd opens the PR now". An unknown or out-of-order step gives a warning. It does not stop the run.
 6. At a gate, the chat shows the result, asks you and stops. There is no time limit. When the chat needs your answer in the middle of a step, the agent runs `pdd workflow ask "<question>"` first, so `status` shows that the run waits for you.
 7. If you ask for changes, the same chat revises and asks you again. The gate stays open.
@@ -129,14 +129,13 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 
 The code area is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
 
-PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button in the PDD Simulator while `pdd simulate` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
+PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
 
 ### Who can approve
 
-Only a person approves a gate. The agent never approves for you.
+After showing the gate, your agent judges your reply in any chat (your own Claude Code or Codex conversation or Herdr). It must not call approve for a question, change request or a message from before it showed the gate. After your actual chat approval, your agent runs `pdd approve PROMPT --said "<your exact words>"` for one prompt, or `pdd workflow approve N --said "<your exact words>"` for the ready gate and every draft prompt belonging to it in one step. Any nonblank words are accepted by pdd; it records them without a yes-word list or semantic grading. No exact approval phrase is needed. Output lists each prompt path and current prose hash. Without `--said`, only a person at a normal terminal can answer y/N. Agent, non-TTY and current Herdr chat-pane callers get an instruction to ask the person, then run with `--said` and their words; native Herdr evidence never authorizes approval. Root `pdd.json` with `"strict_approvals": true` allows only a person at a terminal; absent or false keeps easy mode. Agents never edit approval fields by hand or decide expected values. Approval records retain the invoking actor, time, route and exact words; PRs show matching approvals safely quoted. Approving PR 1 does not approve the later code-or-stop gate.
 
 - In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title. At the PR 1 gate, it asks whether to make the code PR now.
-- In the chat: say it in your own words. The agent then runs `pdd workflow approve`. pdd checks that your own message is in the chat after the gate. If it is not there, pdd refuses.
 
 ### The run folder
 
@@ -185,7 +184,7 @@ Read that output before you merge. Passing tests are useful evidence. They are n
 
 If you set `CLAUDE_CONFIG_DIR`, Claude Code reads `$CLAUDE_CONFIG_DIR/skills/` for you, too.
 
-`pdd workflow start NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
+`pdd workflow run NAME` and `pdd workflow list` look for a folder `pdd-NAME` with a `workflow.json`, in this order. The first one found wins.
 
 1. `.agents/skills/` in the project
 2. `.claude/skills/` in the project
@@ -225,7 +224,7 @@ Then use it:
 
 ```sh
 pdd workflow list            # pdd-mybug is in the list
-pdd workflow start mybug 42  # a run on issue 42
+pdd workflow run mybug 42  # a run on issue 42
 ```
 
 In a chat, call `$pdd-mybug` in Codex or `/pdd-mybug` in Claude Code. Commit the folder so that your team gets the same workflow.
@@ -265,4 +264,8 @@ pdd-mybug/
 - Each step has a file `steps/STEP.md`.
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
 
-Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves or merges. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
+Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
+
+pdd never merges and has no merge command. You may explicitly ask your agent in chat to merge a PR. It requires green checks for the exact current head, first posts `Merged at the person's request: "…"` with your exact request safely quoted in a code span (JSON-quote controls and use a delimiter longer than embedded backticks), then uses `gh pr merge PR --merge --match-head-commit <head>`. It uses a comment body file, rechecks the head and checks, and stops on a failed comment, pending/failed checks or a changed head. See [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+
+Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
