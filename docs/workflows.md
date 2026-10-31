@@ -25,7 +25,7 @@ PR 1 holds the prompt, the Story and the test cases (`tests/*.json`). Repo tests
 In `feature`, the understand step counts the separate behaviors in the issue. One behavior gets one Story and no plan. More behaviors get a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order.
 
 - Each Story in the plan has its own test file, `tests/<story>.json`.
-- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
+- At the story gate, the chat gives the paths of the Story files and the plan, and ends with "Reply in your own words here or run `pdd workflow approve N`, or tell me what to change." You can say "make it one Story", "split part 5" or "change Story 5: …". A change names one Story: the chat redoes only that Story and its test file.
 - The check step prints one `Prompt tests (<story>)` line for each Story, then the overall line. If a Story fails, it fixes and checks only the Stories that failed.
 - `pdd workflow status` shows the count, for example `Stories: 4 of 5 pass (✗ refunds)`.
 
@@ -58,7 +58,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. It never merges | pdd opens them. It never merges |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../RUNBOOK.md#2-the-files) |
 
 ## How a run works
 
@@ -129,14 +129,13 @@ Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or sto
 
 The code area is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code.
 
-PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve each one with `pdd approve PROMPT` before you merge. Only a person can do that, at a terminal, or with the Approve button in the PDD Simulator while `pdd simulate` runs in the owner's terminal. An agent never sets `approved`. While PR 1 has a draft prompt, pdd does not offer the code PR. It prints the lines to run instead: `pdd approve PROMPT` in the run's worktree, then `pdd workflow approve N`. It commits your approval, pushes it to PR 1, removes the "Draft prompts" line from PR 1 and starts the code area.
+PR 2 says `Closes #N` and that it builds on PR 1. Warning-light-only work instead starts with `Not fixed yet: this helps find the cause`, uses `Refs #N` and keeps the issue open. PR-top rendering and old-code proof depend on the runner integration (#2594 and #2570). If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
 
 ### Who can approve
 
-Only a person approves a gate. The agent never approves for you.
+See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent commands, prompt snapshots and terminal or strict-mode approval. One workflow approval covers the ready gate and its draft prompts. The later code-or-stop decision is separate.
 
 - In a terminal: `pdd workflow approve N` asks y/N. The question shows the repo, the issue and its title. At the PR 1 gate, it asks whether to make the code PR now.
-- In the chat: say it in your own words. The agent then runs `pdd workflow approve`. pdd checks that your own message is in the chat after the gate. If it is not there, pdd refuses.
 
 ### The run folder
 
@@ -266,4 +265,8 @@ pdd-mybug/
 - Each step has a file `steps/STEP.md`.
 - The last area ends with `pr`. It should have a `verify` step, so that the PR body has the test output.
 
-Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent never approves or merges. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
+Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
+
+pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](../RUNBOOK.md#2-the-files).
+
+Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.

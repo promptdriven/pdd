@@ -9,32 +9,40 @@ metadata:
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-`steps/` briefs; `?` = optional.
+Step briefs are in `steps/`. `?` means optional.
 1. story: understand, visual?, prompt-story → gate: approve
 2. prompt-pr: check, try? → approve, then gate: pr, then ask
 3. code: build, verify, formal, review → gate: pr
 
 - Main chat: coordinate; no code or checks.
-- Use fresh subagents; never reuse builders or let them check their code. Give step file and paths at once, not chat history; wait with one long time-out; no small follow-ups.
-- Checks: fresh first. Only verify/formal may reuse after startup failure; agent wrote no code, tests or prompts in this run.
+- Use fresh subagents; never reuse builders or let them check their code. Give the step file and paths at once, not chat history. Wait once with a long time-out; no small follow-ups.
+- Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Review: always fresh; no build, verify, formal, prior reviews or their context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
-- At gates show results, ask the person, stop; revise and ask again. Outside runs PRs need the person's yes; in runs pdd opens them. Never merge.
-- Use full URLs (`https://…`).
+- At gates, show results, ask and stop. Revise and ask again. Outside runs, ask before PRs. In runs, pdd opens them. Main chat merges only on person request under RUNBOOK §2.
+- Use full URLs.
 - Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". In a run, run `<pdd> workflow ask` first. For a page or a screen, recommend visual: it makes the app map.
-- At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer: "You can also open it now with `pdd simulate <story>` before the check." If visual made an app map, tell the person to run `pdd simulate <story> --new`. End with: "Reply 'I approve' here or run `pdd workflow approve N`, or tell me what to change."
-- Before PR 1, show one `Prompt tests` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, run `pdd workflow approve N`."
-- On verify/formal failure or review must-fixes, go back to build in a new subagent, at most 2 times. 2 repair rounds after initial review: fresh build, verify, formal, then fresh review. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
+- At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. If visual made an app map, tell the person to run `pdd simulate <story> --new`. Ask for approval or changes in their own words.
+- Before PR 1, show one `Prompt tests` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first?"
+- On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with real `Review:` verdict, remaining must-fixes and "✗ N vectors fail" for failing vectors. No new human gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; start a fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
-- A person decides expected values. Never change a test to make it pass. Outside code (databases, files, network, clocks, randomness, programs): injected ports; no direct calls (RUNBOOK §21).
+- A person decides expected values. Never change a test to make it pass. Inject ports for databases, files, network, clocks, randomness and programs. No direct calls (RUNBOOK §21).
 
 ## Try tools
 
-If asked: `try_open`, `try_state`, `try_run` with input, `try_check`, `try_save_case`. Runs spend AI calls and show in Simulator history. Review saved cases with the person, never as approved expected values.
+`try_open`, `try_state`, `try_run`, `try_check`, `try_save_case` if asked. AI calls; Simulator history. Person reviews expected values.
 
 ## In a run
 
 - Steps write `<run folder>/STEP.md` and commit code.
-- When you need the person's answer in the middle of a step, run `<pdd> workflow ask "<question>"` first. Then ask it in a plain chat message (never a question dialog such as request_user_input) and end your turn. The person answers in the chat or with `pdd workflow changes N "answer"`.
-- On their own approval, run `<pdd> workflow approve N`. Never approve for them.
+- For an answer mid-step, run `<pdd> workflow ask "<question>"`. Ask in plain chat, never request_user_input, and end your turn. The person replies in chat or with `<pdd> workflow changes N "answer"`.
+- Show the gate; judge the later chat reply without exact phrases. Never approve questions or changes. Show changed prompts again. Record gate and draft approval:
+
+```sh
+<pdd> workflow approve N --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+```
+
+Quote a delimiter absent as a whole line in the words. Stdin keeps newlines. Blank input fails; no word grading. RUNBOOK §2.

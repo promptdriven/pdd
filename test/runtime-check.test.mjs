@@ -226,6 +226,8 @@ test('RUNTIME-CLI1: check and try help, option ranges and option mixes', t => {
 
 // Split documented shell words without evaluating expansions or commands.
 function runbookWords(command) {
+  // The shell consumes a trailing quoted heredoc redirect; it is not a CLI argument.
+  command = command.replace(/\s+<<(['"])[^'"\r\n]+\1\s*$/, '');
   const words = []; let word = '', quote = '', started = false;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -251,6 +253,12 @@ test('RUNTIME-RUNBOOK-QUOTES: quoted summary words remain one existing-command a
   assert.deepEqual(proof.operands, ['2594']);
   assert.equal(proof.options['--test'], 'node --test test/new.test.mjs');
   assert.equal(proof.options['--expect'], 'defect x');
+  for (const command of ["pdd workflow approve 2594 --said - <<'PDD_SAID'", "pdd approve prompts/review.prompt.md --said - <<'PDD_SAID'"]) {
+    const words=runbookWords(command);
+    assert.equal(words.at(-1),'-','heredoc removal preserves the stdin marker');
+    const plan=parseArgv(words.slice(1));
+    assert.equal(plan.options['--said'],'-','the parser receives the original stdin marker, without shell redirection');
+  }
 });
 
 // Wrong: the package has no runbook, so the skills and the setup block never mention pdd test, or the runbook names commands pdd refuses.
@@ -266,7 +274,7 @@ test('RUNTIME-RUNBOOK1: the package ships RUNBOOK.md, the pdd-prompting skill ca
     .map(text => text.trim()).filter(Boolean);
   assert.match(runbook, /`pdd replay …`"?\. That command does not exist yet\./);
   assert.ok(commands.length >= 6, commands.join(' | '));
-  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1)), command);
+  for (const command of commands) assert.doesNotThrow(() => parseArgv(runbookWords(command.replace(/<run>/g, '2594')).slice(1).map((word, index, words) => word === 'N' && index === 2 && words[0] === 'workflow' && words[1] === 'approve' ? '2594' : word)), command);
 });
 
 // Wrong: steps with saved data or prompt calls run out of AI calls (real-projects issue 6), or pdd refuses a step the live engine accepts.
