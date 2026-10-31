@@ -4,6 +4,18 @@ Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parse
 
 Empty argv, root --help/-h/-help/help, and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. `--version` accepts no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` takes no operands and no options. No route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 
+## Direct prompt invocation
+
+Recognize `pdd [OPTIONS] FILE.prompt.md [ARGS...]` before ordinary command resolution.
+Only words before FILE belong to pdd: `--reset`, `--no-cache`, `--data FILE`, `--show-data`,
+`--max-calls N` (1–1000), `--port N` (decimal integer 1–65535), `-q`/`--quiet`, `--json`, `--read UUID`. Invalid, duplicate,
+unknown or missing option values refuse2. Preserve every word after FILE unchanged,
+including help, pdd options, empty strings and `--`. Return a `prompt-run` local
+plan with FILE first in operands followed by exact ARGS and only prefix options.
+Keep the no-cache option spelling (flags['no-cache']) and reset for --reset. --fresh is an unknown direct
+program prefix option with no migration notice. --data implies reset during data
+selection. This is the sole exception to unknown-command rejection; preserve other commands.
+
 ## Authoring
 
 Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. The [public alpha boundary](public-boundary.prompt.md) remains required native authoring/generation context for scope. These authoring instructions are not inputs to runtime parsing; the pure parser uses the catalog and the validation rules owned here.
