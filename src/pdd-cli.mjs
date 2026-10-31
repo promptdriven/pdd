@@ -1,11 +1,11 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 52381f6889fdc1320aec1a91344fffa08610a711951ae5dd3b9a1bba9d50e59b).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 2678a7cc1bb27510883c5d0b34b42550c888a96b614e617bad4b10f372426816).
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
-import { PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_MANIFEST } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { setupProject } from './project-setup.mjs';
 import { findSkills, setupSkills } from './skills-install.mjs';
@@ -37,18 +37,20 @@ export function renderHelp(prefix = []) {
   return ['PDD: prompt-driven development for your coding agent.', '',
     ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
     'Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).',
-    'workflow run starts the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.',
+    `workflow ${NAMES.start} opens the first area chat in Herdr session pdd and exits. The person approves each area; after the last step pdd pushes the branch and opens a real PR.`,
     'pdd never merges.'].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
-  stdin = process.stdin, confirm, mcpServer, product, productPorts, gitContext, workflowProve, provePorts } = {}) {
+  stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
+  // A former name: its one notice goes to stderr before any other line, so stdout (--json, mcp) stays exact.
+  if (plan.notice) line(stderr, plan.notice);
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
       const mode = plan.local === 'workflow-run' ? 'workflow' : plan.local;
@@ -147,6 +149,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
       return code;
     }
+    case 'runtime-jobs':
+      try { const slots = runtimeSlots ?? await import('./runtime-slots.mjs'); return await slots.runJobs({ env }, { stdout, stderr }); }
+      catch (error) { line(stderr, `Local interpreter jobs could not be read.${reason(error)}`); return 5; }
+    case 'contracts': case 'contracts-sync':
+      try {
+        const commands = contracts ?? await import('./contracts.mjs');
+        return await commands.runContracts({ words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd }, { env, stdout, stderr });
+      } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
       try {
@@ -168,6 +178,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!Array.isArray(workflows)) throw Error('Invalid workflow listing');
         line(stdout, areas.formatWorkflowList(workflows, { json: plan.options['--json'] === true }));return 0;
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
-    default: line(stderr, 'Unsupported command in PDD Alpha. Run pdd --help.');return 2;
+    default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   }
 }

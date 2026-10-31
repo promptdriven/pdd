@@ -57,9 +57,15 @@ function passed(r) {
 test('2675: two same-process retries send one check and keep its receipt and accounting', async t => {
   const r = await fixture(t), before = checks(r.fake).length;
   const gate = r.holdCheck(), first = r.run({ '--retry': r.batch }); await bounded(gate.entered.promise, 'owner POST');
-  const second = await r.run({ '--retry': r.batch }); gate.resume.resolve();
+  const heldBatch = readFileSync(r.file), heldSummary = readFileSync(join(r.folder, 'summary.json'));
+  const heldTraffic = [r.fake.gets.length, r.fake.posts.length];
+  const second = await r.run({ '--retry': r.batch });
+  assert.deepEqual([r.fake.gets.length, r.fake.posts.length], heldTraffic, 'contender performs no GET or POST');
+  assert.deepEqual(readFileSync(r.file), heldBatch, 'contender cannot save the batch');
+  assert.deepEqual(readFileSync(join(r.folder, 'summary.json')), heldSummary, 'contender cannot save the summary');
+  gate.resume.resolve();
   const results = [await bounded(first, 'first retry'), second];
-  assert.equal(results[0].clock.uuids, 1); assert.equal(second.clock.uuids, 0, 'live competitor allocates no request ID');
+  assert.equal(second.clock.uuids, 0, 'live competitor allocates no request ID');
   assert.equal(checks(r.fake).length - before, 1, 'only one held check may be sent');
   assert.equal(results.filter(r => r.code === 0).length, 1);
   passed(results.find(r => r.code === 0));
@@ -67,7 +73,9 @@ test('2675: two same-process retries send one check and keep its receipt and acc
   const ids = read(r.file).rows[0].request_ids;
   assert.deepEqual(ids, [checks(r.fake).at(-1).request.requestId]);
   assert.equal(read(join(r.folder, `${ids[0]}.json`)).usage.calls, 4);
+  assert.equal(read(join(r.folder, 'summary.json')).rows[0].calls, 4);
   const later = await r.run({ '--read': true }, [r.batch]); passed(later);
+  assert.equal(checks(r.fake).length - before, 1, 'later read cannot send another check');
   assert.deepEqual(read(r.file).rows[0].request_ids, ids);
 });
 

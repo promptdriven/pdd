@@ -1,13 +1,13 @@
 # Runtime client
 
-Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD runtime with the person's `gh` login.
+Own `src/runtime-client.mjs`. Export `runCheck({words, options, cwd}, ports)` and `runTry({words, options, cwd}, ports)`. Each returns an exit code. These commands and the Try MCP tools call the PDD interpreter with the person's `gh` login. Lines that pdd writes itself call it the PDD interpreter ([word rule](public-boundary.prompt.md#pdd-interpreter)).
 
 ## Setup
 
 - Repo root = `git rev-parse --show-toplevel` (a worktree is its own root). No Git repo: exit 2.
 - The runtime address is one setting: `PDD_RUNTIME_URL`, else the exported constant `DEFAULT_RUNTIME_URL` in this module. Fixed immutable report links in RUNBOOK evidence are not configuration. No other code, prompt, test or doc names the runtime configuration address; tests use the override or import the constant. It must be an HTTPS origin with no user, password, path, query or fragment. Only for local tests, `http://` is allowed for `127.0.0.1`, `localhost` and `[::1]`. Else exit 2.
 - `PDD_STATE_DIR`, default `~/.pdd/runtime`. Refuse a state folder inside the repo (exit 2).
-- Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`, `interactive` (stdin and stdout are both terminals). Read the environment only from `env`.
+- Ports (tests inject them): `env`, `stdout`, `stderr`, `fetch`, `gh(args)`, `now`, `randomUUID`, `sleep`, `onInterrupt`, `openUrl`, `pollMs`, `postMs`, `interactive` (stdin and stdout are both terminals). Read the environment only from `env`. onInterrupt(handler) covers SIGINT, SIGHUP and SIGTERM and returns an unsubscribe function. Forward supplied slotFiles, isAlive and pid to the matching slots dependencies; optional timers and random bind the slots heartbeat timers and jitter. Optional captureSource(root, options) binds the actual [preflight capture function](runtime-preflight.prompt.md), with that module function as its native default; forward the real selection/options and require its ordinary captured-source result. It cannot supply a verdict or bypass source validation. These dependency ports do not change command arguments or result schemas.
 
 ## Subprocess input
 
@@ -45,43 +45,72 @@ Order:
 1. [Preflight](runtime-preflight.prompt.md), scoped capture and sign-in. Nothing is sent yet. If every selected test is refused locally, print the result and exit 4 with no sign-in. The result warnings include the preflight warning about source files that two prompts name. Before a check of ALL stories (no STORY word), print to stderr `Checking all N stories: about A AI calls (at most M).`: A estimates declared work for each step: one entry execution, one use of each declared saved-data resource operation, and prompt-call max_calls multiplied by the target prompt estimate (including its resource operations and calls); cut dependency cycles rather than recursing forever. Conditional operations may use fewer calls. Bound the estimate by the unchanged hard cap; M = the sum of the tests' `max_calls` (cli 12b).
 2. Batch ID `YYYYMMDD-HHMMSS-xxxx` (local time). Allocate one new `crypto.randomUUID()` for lint at batch creation and write `batch.json`. Allocate each test's first check UUID only at its first authorized dispatch after the applicable dispatch gates; pending lint allocates no check UUID. Print to stderr `If pdd stops, read the results with: pdd check --read <batch>` after lint passes and right before the first check POST, and again at the end of an exit 3. A pending lint also has a saved result to read: name its batch when the wait limit ends.
 3. Lint: write `<id>.posted` (exclusive create), then POST `/v1/lint` multipart (`request` = `{requestId, source_sha256}` (plus `complete: true` only for explicit `--lint`), no `paths`; `source` = the tar). Read until terminal within the caller wait defined below; there is no independent 120-second lint cap. Judge only the prompts that the tests reach (step `entry_path` and their `calls` targets): a prompt in `result.report.program.refused_prompts`, or with `admission_state` neither `approved` nor `draft`, refuses each test that reaches it. A reached `draft` marks the row as a draft. A lint answer with no program report is a refusal when the state is `refused` with refusals, else lint is unknown: exit 3, no checks sent.
-4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Keep at most five submitted, unfinished checks in flight; this is a conservative client window, not an assumed server worker count. Hold remaining tests locally. A confirmed capacity refusal reduces the window to one for this invocation. POST timeout is the earlier 90 s and remaining command budget.
-5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the time limit, counted from the lint POST, ends. The limit depends on who waits. A person (`interactive`) has no limit. An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool. `--timeout MIN` overrides both. `batch.json` keeps the limit as `timeout_min` (1.5 for 90 s, null for none). While rows are open, in both modes, print ONE progress line to stderr every 30 s after the checks are sent, so an agent that is cut off still has output: `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. A Story is done when all its rows have ended; `Story` when there is one; the AI calls are the sum of the known `usage.calls` of all rows, the running ones too; the time is since the checks were sent, `N s` under a minute, else whole minutes. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
+4. Checks: validate an explicit --max-calls as a whole number from1 through1000 before sign-in, capture or network effects, including direct runCheck callers. For each test write `<id>.posted`, then POST `/v1/check` with `{requestId, source_sha256, scenario: <test path>, max_calls}` and the same tar. `max_calls` = `--max-calls` or the preflight default (12 for each step, 18 to 1000). Each remote lint, test and new Simulator setup uses the shared local admission contract below. Hold remaining tests locally only when an explicit local job cap, the per-process upload setting below or confirmed server backpressure requires it; do not reserve a batch slot while its child jobs wait for slots. POST timeout is the earlier 90 s and remaining command budget. Reuse one immutable source Blob per packed tar across all its lint, test, retry and Simulator setup POSTs, preserving exact tar bytes and source hash; multipart request metadata remains distinct for each attempt. Reuse must not copy the source per upload or impose a default job cap.
+5. Read: GET `/v1/runs/<id>` for each open row every 2 s (at most 8 GETs at a time) until all rows end or the time limit, counted from the start of remote admission, including local-slot, maintenance and capacity waiting, ends. The limit depends on who waits. A person (`interactive`) has no limit. An agent (no terminal) waits at most 90 s, below the 2-minute default limit of Claude Code's shell tool. `--timeout MIN` overrides both. `batch.json` keeps the limit as `timeout_min` (1.5 for 90 s, null for none). While rows are open, in both modes, print ONE progress line to stderr every 30 s after the checks are sent, so an agent that is cut off still has output: `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. A Story is done when all its rows have ended; `Story` when there is one; the AI calls are the sum of the known `usage.calls` of all rows, the running ones too; the time is since the checks were sent, `N s` under a minute, else whole minutes. Save each answer as `<id>.json`. Then print the [output](runtime-output.prompt.md), write `summary.json` and return the exit code.
 
 | Answer to a POST | Row | Next step |
 |---|---|---|
 | 200/202 JSON, same `requestId` and `id`, right `command` | accepted | read it |
-| 429 `server-full` with `dispatch: "not_started"` | waiting | a NEW request ID after `Retry-After` (else 5 s) within the bounded capacity recovery below. Keep the old ID |
+| 429 `server-full` with `dispatch: "not_started"` | waiting | a NEW request ID after the command-specific confirmed capacity wait below, within the caller deadline. Keep the old ID |
+| 503 `check-queue-full` or `lint-queue-full`, with authoritative not-started admission | waiting | wait under the capacity rules below |
+| 503 `maintenance`, confirmed not started | waiting | wait/recheck maintenance below |
 | 429 without `dispatch: "not_started"` | not run | no new attempt |
 | 503 JSON `pool-low-room`, `pool-copy-*`, `github-unavailable` | not run | no new attempt; show the server text |
 | 503 text `The runtime opens soon.`, or 401 | not run | send no more POSTs; the gate text or `Run gh auth login` |
 | any status with `code` `update-required` (top level or `error.code`) | not run | stop the batch before anything else is sent: the server's `message` as one plain line (else `Please update pdd: npm install -g github:promptdriven/pdd`), exit 5 (0.1.6: the server retires an old address) |
-| 403 `not-invited` (top-level `code` or `error.code`, with `login` at the top level or in `error.details`) | not run | stop the batch: one plain line `Your GitHub login <login> is not on the PDD runtime invite list yet. Ask the PDD team to add you.`, exit 5 (lint, checks, GETs, `pdd try` and its stop alike) |
-| 403 `no-cloud-access` (top-level `code` or `error.code`; PDD Cloud sign-in did not approve this GitHub account) | not run | final at once, the same stop as `not-invited`: no GET, no wait, no new attempt. One plain line: the server's `message` (top level or `error.message`), else `Your GitHub account does not have PDD runtime access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the runtime when your account is approved.`, exit 5 |
+| 403 `not-invited` (top-level `code` or `error.code`, with `login` at the top level or in `error.details`) | not run | stop the batch: one plain line `Your GitHub login <login> is not on the PDD interpreter invite list yet. Ask the PDD team to add you.`, exit 5 (lint, checks, GETs, `pdd try` and its stop alike) |
+| 403 `no-cloud-access` (top-level `code` or `error.code`; PDD Cloud sign-in did not approve this GitHub account) | not run | final at once, the same stop as `not-invited`: no GET, no wait, no new attempt. One plain line: the server's `message` (top level or `error.message`), else `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.`, exit 5 |
 | 503 `cloud-unavailable` (top-level `code` or `error.code`; PDD Cloud could not confirm access) | not run | the same stop at once: no GET and no silent wait. One plain line `PDD Cloud could not confirm your access. Try again in a minute.` (not the server's text, which says that pdd retries), exit 5. The person runs the same command again |
 | 400, 413, 415, 422 JSON | refused | no new attempt; show code and message |
-| timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch |
+| timeout, lost connection, other 5xx, non-JSON, 409, wrong ID or command | unknown | GET that same ID only. Never POST again for this test in this batch, except a later confirmed service-restarted receipt below |
 - Read the `code` and `message` of these answers from `error` first, else from the top level. A server may also send a top-level `update-required` for pdd 0.1.9 with `error.code` `no-cloud-access`: that is the access answer, not an update. An `update-required` with no `error.code`, or with `error.code` `update-required`, still says to update pdd.
 
 - GET: 200 gives the state. 404 after a POST: keep reading, also when its body says `state: refused` with `job_created: false`; it is never a refusal. A row whose POST answer was lost (timeout, lost connection) is read by the same ID for 5 min after the loss, or until `--timeout` if that is later; then it is unknown. A lost lint answer is read the same way. The agent's 90 s default caps both reads: pdd then exits 3 and `--read` reads the same ID later. 410: unknown, `result expired`. 401: stop reading; open rows stay open (exit 3) and pdd prints `Run gh auth login`. A wrong ID or command: unknown. Server `state: unknown`: show its `why`.
 - A check that pdd proves it never posted has 0 AI calls, including checks held behind an unknown/unfinished lint or stopped before sending. Keep lint uncertainty and the existing exit code; lint failure does not imply a submitted check. Persist this proof and repair older `--read` rows with no check request IDs. Mark usage unknown when a check is about to be posted; a lost or incompletely accounted server run stays unknown. Never replace server `usage.calls: "unknown"` with report `provider_calls: 0` when accounting is incomplete.
-- At the time limit: open rows stay `queued`/`running` (exit 3; the jobs keep running on the server); waiting rows are not run (exit 5, `The runtime stayed busy until the timeout.`). After the table, pdd prints to stderr `Still running. Read the results later with: pdd check --read <batch>` in place of the `If pdd stops` line. `Retry-After` is whole seconds from 1 to 300; no header means 5 s.
+- At the time limit: open rows stay `queued`/`running` (exit 3; the jobs keep running on the server); waiting rows are not run (exit 5, `The interpreter stayed busy until the timeout.`). After the table, pdd prints to stderr `Still running. Read the results later with: pdd check --read <batch>` in place of the `If pdd stops` line. `Retry-After` is whole seconds from 1 to 300; no header means 5 s.
 - A row is marked `sending` before its POST. If pdd was killed, `--read` recovers accepted or uncertain posted rows by their IDs under the recovery lifecycle below (a posted row with no answer is unknown, exit 3) and calls a row with no request ID not run.
 - A server refusal `invalid-input` gets the local P9 rule as its hint. A server `interface-stale` on `steps[N]` gets the P7 hint. A server `interface-unapproved` for a draft row gets the message `The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.` (exit 4), until the server runs drafts.
-- Save `engine_sha` from each answer. The local rules match engine `eae2202a68d00ab762fcbbf1eba0d8607a132a15` (checked on Oct 27: the rules copied from 7b03d3ea are the same there). Warn only when the server's sha is another engine: it is not this sha and not a prefix of it with at least 7 hex digits (case does not matter). The warning: `Warning: the runtime engine is <first 12 of its sha>, but pdd's local checks copy engine eae2202a68d0. The engine stays the judge.` Show it at most once a day for each engine sha (a stamp in `$PDD_STATE_DIR/engine-warnings.json`).
-- Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3. A waiting row is then not run: `pdd stopped while the runtime was busy.`
-- `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. Use the recovery lifecycle below to distinguish final POST outcomes from accepted or uncertain submissions; a request ID alone does not prove acceptance. A local phase on an older row with a known check ID must not suppress recovery. It never makes a request ID or POSTs except the narrowly defined saved-lint continuation below.
+- Save `engine_sha` from each answer. The local rules match engine `eae2202a68d00ab762fcbbf1eba0d8607a132a15` (checked on Oct 27: the rules copied from 7b03d3ea are the same there). Warn only when the server's sha is another engine: it is not this sha and not a prefix of it with at least 7 hex digits (case does not matter). The warning: `Warning: the interpreter engine is <first 12 of its sha>, but pdd's local checks copy engine eae2202a68d0. The engine stays the judge.` Show it at most once a day for each engine sha (a stamp in `$PDD_STATE_DIR/engine-warnings.json`).
+- Ctrl-C after `batch.json` exists: stop all calls, keep the state, print the `--read` line, exit 3. A waiting row is then not run: `pdd stopped while the interpreter was busy.`
+- `--read`: the batch in BATCH, else the last batch of this repo. Use the saved origin. A different gh login: exit 5, `These runs belong to <login>. Run: gh auth switch -u <login>`. Use the recovery lifecycle below to distinguish final POST outcomes from accepted or uncertain submissions; a request ID alone does not prove acceptance. A local phase on an older row with a known check ID must not suppress recovery. It never makes a request ID or POSTs except the narrowly defined saved-lint continuation and confirmed restart recovery below.
 
 
 ## Check admission and confirmed capacity recovery
 
 A terminal same-ID `check` refusal is busy, not a test problem, when it is a queue/capacity/server-full refusal and proves no execution: `usage.calls` is exactly0, no check was evaluated, accounting is not incomplete, and the report says `dispatch:"not_started"` (the known check-queue-timeout contract also guarantees that signal). An explicitly unknown job or lost/wrong-ID response never qualifies. Read raw `result.report.refusal` as well as `result.refusals`; keep every ID and raw answer, including direct admission receipts and the absolute retry-after deadline. Direct check-queue-full/server-full backpressure also needs authoritative not-started admission. Do not retry invalid-source refusals or any request with executed checks, positive/unknown calls, or incomplete accounting.
 
-For confirmed unstarted capacity, wait before a fresh ID using Retry-After, else positive details.retry_after (bound1..300seconds, default5). Keep up to three check attempts per test per invocation and the existing command/agent deadline; honor interruption before waiting, allocating an ID or POSTing. Print a busy progress line and keep reading other submitted jobs. Never duplicate a queued/running/lost job. The current server exposes retry timing, but no concurrency-count hint; use the client window above rather than guessing its configured capacity.
+For each confirmed unstarted Check capacity refusal, use the existing parsed delay: Retry-After first, else positive details.retry_after (bound 1..300 seconds, default 5). Retain the refusal observation time and an absolute minimum retry time equal to that time plus max(the parsed delay, 10 seconds). There is no attempt-count ceiling within the existing caller deadline. This Check wait also applies to explicit batch retry; lint and Try retain their own existing admission waits. After a confirmed busy Check refusal, reduce this command's check dispatch window to 1 while retaining already submitted jobs and reading their original IDs. Print busy progress and keep reading other submitted jobs.
 
-When attempts/time run out, show busy/not-run with zero calls and plain advice that no checks ran; do not display the server's source-repair Fix text. Preserve verified passed and running results under the recovery lifecycle below. Hold tests with no check POST as zero-call not-run, never a failed assertion. `--read` only reads the old IDs; a terminal capacity receipt becomes busy/not-run without posting. JSON distinguishes `busy` and `can_retry`, and text offers `pdd check --retry BATCH` for eligible rows.
+<details>
+<summary>Check retry wait — when another source upload may start</summary>
 
-`pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved retry-after deadline across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs) and at most three attempts per eligible test. `--read` remains GET-only except saved-lint continuation below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
+```mermaid
+flowchart TD
+    W{Minimum retry time reached?} -->|No| B[Wait within caller budget]
+    B --> W
+    W -->|Yes| C{Usable Check occupancy?}
+    C -->|No| A[Ordinary guarded admission]
+    C -->|Yes| F{Free Check slot or 60 s since refusal?}
+    F -->|Yes| A
+    F -->|No| G[Wait and observe capacity]
+    G --> W
+```
+
+Use the [shared capacity observations](#shared-local-admission-and-maintenance), including owner/origin cache scope and authenticated GET safeguards. Usable supported Check running/limit counts show a free slot only when `running < limit`; zero available or limit 0 is full. With usable full occupancy, hold the next Check upload until a free slot is observed or 60 seconds have elapsed since the confirmed busy answer, and always honor the minimum retry time. Unsupported 404 or absent/unusable occupancy follows existing warning/fail-open compatibility after the minimum wait; never invent a free count or a new refusal.
+
+Deadline, interruption, maintenance, authentication/access, source identity and recovery guards apply throughout and before every ID or POST. The 60-second capacity bound waives only the full-occupancy hold: it cannot shorten a longer Retry-After (75 seconds still means at least 75 seconds), maintenance or another guard. Capacity waits use bounded, non-hot GET observation under the shared cache rules, outside every local claim lock. While only waiting, create no new Check attempt/request ID or dispatch claim and upload no archive; ordinary local exclusion remains required before dispatch.
+
+Save both absolute retry time and the refusal's 60-second capacity bound with its evidence. Reads and later explicit retries preserve them rather than starting a new wait or attempt; read-only recovery stays read-only. A new confirmed unstarted refusal establishes its own wait. Missing or unverifiable execution evidence never authorizes capacity retry.
+
+For an older record with authoritative confirmed-unstarted busy proof but without these new timestamps, the first batch read or retry under this rule establishes and saves one conservative anchor at the current observation time: minimum retry no earlier than max(any valid saved retry time, now plus 10 seconds), and capacity bound now plus 60 seconds. Do not infer the busy-answer time from a POST start time. Subsequent operations reuse the saved anchors; a longer saved server delay still wins. This timing repair grants no dispatch eligibility, changes no ID or accounting, and does not apply to a never-posted held row with no busy proof. UUID-only reads keep their existing raw-receipt-only behavior.
+
+</details>
+
+For an accepted queued job, keep its ID and GET it; when supplied, display queue.ahead, queue.slots_in_use and queue.slots on stderr: `Queued on the interpreter: 5 ahead, 8 of 8 slots busy. Your test is fine.` Never resubmit an accepted queued/running/lost job. Missing aggregate fields do not authorize guessed counts or change admission.
+
+When time runs out, show busy/not-run with zero calls and plain advice that no checks ran; do not display the server's source-repair Fix text. Preserve verified passed and running results under the recovery lifecycle below. Hold tests with no check POST as zero-call not-run, never a failed assertion. `--read` only reads the old IDs; a terminal capacity receipt becomes busy/not-run without posting. JSON distinguishes `busy` and `can_retry`, and text offers `pdd check --retry BATCH` for eligible rows.
+
+`pdd check --retry BATCH [--json] [--details] [--timeout MIN]` is explicit recovery for that batch only. Check owner login and repository, refresh prior IDs, recapture the original selected source and require the exact saved source SHA before any POST. Retry only confirmed unstarted capacity rows or locally held eligible rows with no POST. Keep all earlier IDs/answers, original per-test caps and original source identity; never re-execute completed, running or unknown submissions. Recover their evidence under the lifecycle below. Reuse confirmed lint for identical source. A changed capture, missing proof, unresolved lint or expired/unverifiable receipt cannot authorize a retry; explain how to start a fresh selected check. Honor the saved absolute Check retry time and capacity-hold bound across recovery invocations. Each recovery invocation gets its own finite caller wait (including refreshing prior IDs), with no admission-attempt ceiling. `--read` remains GET-only except saved-lint continuation and confirmed restart recovery below. No other check-mode options mix with --retry except json/details/timeout, and it takes no Story words.
 
 ## Concurrent saved-batch operations
 
@@ -91,6 +120,10 @@ including its final batch and summary saves. Batch `--read` and `--retry` acquir
 ownership before loading the saved record and retain it through all refreshes, retry
 decisions, request-ID persistence, POSTs and final saves. Different batches remain independent.
 A later retry loads the current record anew and never resends a submitted/completed check.
+Local ticket, lease and claim IDs may also use the injected randomUUID port. Identify check
+dispatches by actual check POSTs and their request identities, never by total UUID allocations;
+local bookkeeping cannot authorize or create another paid dispatch. A refused live competitor
+allocates no IDs.
 UUID reads keep the raw-receipt-only rule below and do not acquire batch ownership.
 Saved-lint continuation and permanent dispatch-claim adoption run inside this same ownership.
 The lock owner still applies every saved-lint gate and adopts existing claims before deciding
@@ -141,12 +174,12 @@ A verified `pdd check --read UUID` check answer saves only its raw receipt in ma
 For Check's preflight, explicit `--lint`, and Try, a confirmed terminal lint refusal
 `lint-queue-timeout` with literal `details.retryable: true` is busy, never unknown or a prompt
 fault. Read that signal from `result.report.refusal` or `result.refusals`. A direct503
-`lint-queue-full` with the same literal flag is also a confirmed capacity refusal. Never apply
-this exception to a check/paid action, a wrong-ID reply, a nonretryable refusal or a lost result.
+`lint-queue-full` with the same literal flag is also a confirmed capacity refusal. Check admission uses its separate no-execution proof above. Never apply
+this lint exception to a paid Try action, a wrong-ID reply, a nonretryable refusal or a lost result.
 
-Use at most3 total lint attempts for confirmed busy replies, with a fresh saved request ID
-and the same captured archive/options each time. Honor a positive numeric `retry_after` in
-seconds (bound1..30, default5) before retrying. Print `The server is busy. Waiting for a lint
+Retry confirmed busy lint replies until the caller deadline, with no attempt-count ceiling and a fresh saved request ID
+and the same captured archive/options each time. Honor Retry-After first, else positive numeric details.retry_after in
+seconds (bound1..300, default5), before retrying. Print `The server is busy. Waiting for a lint
 slot…` before the wait. No attempt or wait starts after interruption or the total lint deadline:
 the caller deadline. Check (including standalone remote lint) keeps its 90-second agent default,
 unlimited interactive wait and explicit --timeout override; Try keeps its existing total 5-minute
@@ -154,9 +187,8 @@ setup allowance and 90-second agent default, with no independent 120-second lint
 A lost reply still reads only that ID; it may retry only after that read confirms the retryable
 terminal capacity refusal. Do not submit checks or create a Try until lint succeeds.
 
-On exhausted attempts/time, return not-run (exit5; door wrappers retain their125 contract),
-0check AI calls, and plain advice that the server stayed busy, no checks ran, and the person
-can run the same command again later. Preserve every prior ID/answer. Unknown outcomes retain
+When the caller deadline ends, return not-run (exit5; door wrappers retain their125 contract),
+0check AI calls, and plain advice naming the wait that ended (local slot, maintenance or confirmed server capacity), that no checks ran, and that the person can run the same command again later. A local-slot or maintenance wait before the first lint POST must never claim that the server stayed busy after 0 lint attempts. Preserve every prior ID/answer. Unknown outcomes retain
 the existing read-only recovery and unknown wording; do not relabel them as safe capacity.
 
 ## Lint still running when the wait ends
@@ -189,8 +221,8 @@ establish a receipt's success or authorize dispatch by itself.
 ### Continue the original saved Check
 
 Only `--read BATCH` (including latest-batch reads) and `--retry BATCH` may continue a normal
-Check held solely by pending lint. This exception never applies to UUID call reads, hidden
---request, standalone lint, Try, posted-job reads or capacity receipts. New batches save
+Check held solely by pending lint. This lint-continuation exception never applies to UUID call reads, hidden
+--request, standalone lint, Try, posted-job reads or capacity receipts; confirmed restart recovery is separately scoped below. New batches save
 explicit normal-Check versus lint-only intent. For supported version 1 legacy records produced
 by 0.1.9/0.1.10, recover normal-Check intent only when every held row meets
 [saved Check row validity](#saved-check-row-validity). Require
@@ -215,7 +247,20 @@ and proof that each eligible row was held solely for lint and has never had a ch
 A changed capture, unresolved proof or interruption sends nothing. Reuse the completed lint:
 no new lint or redundant lint upload; each check retains its required source multipart from the recaptured identical archive. Preserve original batch/source, selection, call ceilings, all
 prior IDs and answers, completed/running/lost/unknown jobs. An unsent row has zero check calls;
-posted or incompletely accounted usage never becomes zero by inference. Saved reads preserve eligible no-verdict `why` and `next_step` for existing check results; refreshing lint replaces a lint-held row's advice with the fresh lint judgment. Capture original unsent call evidence before normalizing local display rows; dispatch claims and recovered request IDs take precedence over any local zero-call classification. When adopting a recovered claim ID, clear stale local notes, `why` and `next_step`, and clear busy/retry eligibility so an uncertain submission never appears never-sent or safe to retry.
+posted or incompletely accounted usage never becomes zero by inference. Saved reads preserve eligible no-verdict `why` and `next_step` for existing check results; refreshing lint replaces a lint-held row's advice with the fresh lint judgment. Capture original unsent call evidence before normalizing local display rows; dispatch claims and recovered request IDs take precedence over any local zero-call classification.
+
+<a id="interruption-note-precedence"></a>
+**Interruption-note precedence.** Adopting a recovered claim ID clears stale local notes,
+`why`, `next_step` and busy/retry eligibility. Preserve only the truthful `Stopped before sending.`
+note established by this invocation's live knowledge that it interrupted before invoking the
+current POST, even when that request's permanent claim was already recorded or adopted.
+The note describes only that current unsent request, never earlier submissions. This exception
+owns wording alone: claims and the receipt-recovery lifecycle still own request identity,
+execution, known/unknown accounting and retry eligibility. A stored note or older local phase
+alone is never proof of safe retry; older ambiguous saves retain same-ID recovery and uncertainty.
+A later verified same-ID receipt supplies the current result under the recovery lifecycle above
+and supersedes the interruption note. Do not change accounting, receipt projection or dispatch
+authority merely to retain the note.
 
 Each continuation gets a fresh finite wait: --timeout MIN when supplied, otherwise 90 seconds,
 including receipt refresh, source validation and check polling. Allocate the original held
@@ -226,6 +271,97 @@ or uncertain/lost POST is read by the same ID, never replayed,
 even after interruption. A completed read/retry only shows existing results. Existing capacity
 recovery rules remain unchanged. Remote --lint and --read allow --timeout (1..120 minutes),
 with no Story words on --read; standalone/local SVG lint combinations remain separate.
+
+## Shared local admission and maintenance
+
+With no `PDD_MAX_JOBS`, impose no fixed local job cap: send all selected eligible checks, including selections larger than five, without waiting for earlier server jobs to finish, subject to the independent upload setting below. A valid `PDD_MAX_JOBS` is a positive safe integer written as decimal digits with no sign, whitespace or leading zero; honor that explicit shared cap for tests, remote lint and Simulator setup. An invalid value prints one warning line per command naming `PDD_MAX_JOBS` and the absence of a cap, then uses no cap. Resolve and retain this policy once per command so admission and scheduling cannot repeat the warning. Server backpressure, maintenance and all existing dispatch/ownership guards still apply.
+
+Limit outstanding test source POSTs to 8 per pdd process by default. `PDD_MAX_UPLOADS` selects a positive safe integer written as decimal digits (leading zeros allowed); absent means 8. Empty, zero, sign, whitespace, fraction, text or unsafe integer values warn once per command naming `PDD_MAX_UPLOADS` and fallback 8. Resolve this setting once per command. An upload is in flight until its POST request is answered or settles with a transport failure; release that upload place then, allowing the next eligible POST while accepted server jobs still run. GET reads and server-side queued/running jobs consume no upload places. This laptop setting protects the person's own connection from the 90-second POST timeout; it is not a server capacity limit. Do not put upload admission in the shared filesystem job-slot queue. Explicit job caps, busy-window reduction to 1, Retry-After, interruption and duplicate-dispatch safeguards still apply independently.
+
+Use [runtime slots](runtime-slots.prompt.md) for every remote lint, test and new Simulator setup before submission, passing the explicit cap or `Infinity` for no cap. This helper owns local fairness, leases and dead-owner reclamation. Preserve per-row exclusive dispatch claims and immutable .posted evidence: admission never authorizes a duplicate send. Register every allocated request ID on its reservation before POST; record terminal evidence before release. Polling ending, interruption or a lost reply does not end the interpreter job: retain its reservation for later confirmation/reclamation. Capacity attempts proved unstarted may release/rejoin fairly; a batch holds no reservation while waiting for child jobs. Local test modes and paid Simulator actions/open browser session lifetime take no setup slot.
+
+Before each new submission, authenticate GET /v1/capacity at the configured/saved origin with the ordinary credential and redirect safeguards. Its aggregate response is `{slots:{check:{running,limit,waiting},lint:{running,limit,waiting}},tries:{open,limit,yours,per_account},maintenance:null|{until,reason}}`. These counts are progress, not a substitute for local exclusion or confirmed admission. Cache capacity observations for about 10 seconds per process, scoped to the authenticated owner and exact runtime origin (including port); concurrent submissions share the read. Fresh clear and unclear outcomes can each serve later submissions without another GET; retain their distinct meanings. An unclear outcome expires about 10 seconds after the shared read completes, then the next submission refreshes capacity and can discover maintenance. A maintenance observation remains subject to its absolute until and is rechecked when the bounded wait ends; caching cannot turn an ended window into another full pause. No cache crosses owners/origins or changes local exclusion, admission authority or existing gate handling.
+
+HTTP 404 means this runtime lacks capacity: continue using admission replies. An unrecognized capacity response or read failure (including HTML, 405, other unrecognized 5xx, timeout or unreachable read) fails open: print one finite warning per command on stderr, then continue to ordinary submission/admission rules within the remaining wait. Cache that outcome as unclear under the shared cache rule above; each command using it still warns at most once. It never becomes a clear response or suppresses refresh after its TTL. It does not authorize retries of an uncertain POST. Recognized 401, access/cloud/update refusals and the legacy opens-soon gate retain their existing stop behavior and take precedence over fail-open. Only clear maintenance with a valid future until pauses new submissions; malformed, absent or past until does not create an indefinite wait.
+
+Each caller observing a shared capacity GET keeps its own deadline and interruption. Ending that observer must not cancel the shared GET or discard its eventual cached outcome for another caller. Split finite observer waits into positive chunks of at most 60 seconds, rechecking the remaining deadline and interruption between chunks even when --timeout exceeds the native timer range; do not overflow, spin at 1 ms, shorten the promised deadline or report an observer ending as an unclear capacity reply.
+
+A valid future maintenance.until pauses new submission until that time, then rechecks capacity. Each maintenance sleep is positive and at most 60 seconds, further bounded by the remaining caller wait and time to until; recheck after each chunk. A far-future until beyond the native timer range must not overflow into a 1 ms wait, hot polling or repeated notices on each queue tick. Suppress unchanged maintenance notices during the same wait; a changed window/reason may be shown. Show the end time and supplied reason in the maintenance notice. Render human-facing maintenance end times in the host/user-configured local time zone, including the zone applicable at the end instant and respecting daylight-saving changes: for example, `until 19:25 PDT`, or `PST` in winter. The example zone is not a global default. Preserve existing machine JSON schemas, values and accounting, with no new public maintenance-end field or localized maintenance time. Keep existing structured UTC fields and captured raw admission data, including the original UTC `until`, unchanged; local rendering belongs only in human-facing text.
+
+A confirmed not-started 503 maintenance receives the same bounded sleep chunks, wait and local-time notice, honoring Retry-After and rechecking capacity; an older runtime's 404 still allows later admission-code recovery. Invalid/past maintenance is not an indefinite pause. Do not reinterpret unrelated 503, cloud-unavailable or the legacy opens-soon gate as maintenance.
+
+Local waiting, maintenance, HTTP, queue reads and all backoffs share the existing caller deadline: agent Check/lint 90 seconds, interactive Check/lint unlimited, explicit Check --timeout overrides, Try's existing five-minute setup allowance and 90-second agent lint wait. No new Try timeout flag. The effective lint deadline also bounds dead-owner GETs, local claim waits and request-ID recording before lint POST; never substitute the longer Try setup deadline. Check the remaining wait before each outside read/update, and cap each GET by that remainder. At the deadline or interrupt, allocate/send nothing further; keep pending receipts/reservations and valid JSON stdout, with progress only on stderr. For interruption wording, use the interrupted stage and submission history: the admitted-but-unsent boundary follows [interruption-note precedence](#interruption-note-precedence). During a confirmed busy or maintenance pause after a POST, say `Stopped.` and describe what was already submitted and its confirmed or unknown outcome; do not report a wait deadline or imply that nothing was sent. Preserve prior receipts, IDs, known/unknown usage and read-only recovery advice for uncertain submissions. Both interruption cases take precedence over wait-ended wording, keep existing mode-specific exit codes and JSON schemas, and send nothing further. Release only definitely unsent reservations and retain every uncertain dispatched lease under the slots contract. A confirmed admission refusal needs no-execution evidence; positive/unknown usage, evaluated checks and incomplete accounting forbid capacity replay.
+
+## One replacement after a confirmed runtime restart
+
+Only a same-ID, correct-command terminal check receipt with state unknown and structured reason code service-restarted in result.refusals or result.report.refusal authorizes one automatic replacement for that original Story row. result.why is display text, never an authority inferred by matching message text. A generic unknown, lost POST, wrong ID/command, expired/unverifiable receipt or another reason never authorizes it. This exception can follow read-only same-ID recovery; the receipt, not an error message, authorizes dispatch.
+
+Persist the consumed replacement allowance across reads/retries and capacity attempts. Before allocating the replacement UUID, require saved owner, repository, identical recaptured source and original per-row max_calls, a live caller wait and an exclusive per-row replacement claim. Overlapping readers cannot both send. Print `The interpreter restarted during this check. pdd sends it again (1 of 1).` Keep both IDs, raw receipts and their known/unknown call accounting; do not reset usage or enlarge the row ceiling. Apply ordinary admission to the replacement. A second restarted receipt ends unknown with read/report advice, never a second replacement. UUID call reads and paid Try calls remain GET-only. A deadline-ended eligible replacement stays saved for guarded recovery; approval is never inferred. Source identity validation remains mandatory, but reuse one captured identical archive for a recovery decision instead of packing and hashing it twice per scheduler turn. Repeated visits to the same pending replacement without a new dispatch decision do not recapture source. An actual later recovery invocation or newly authorized replacement still validates against the saved source before sending.
+
+## Shared contract advice
+
+Every Check/lint/Try/file-preview capture, held-lint continuation, retry, restart
+and workflow freshness recapture uses preflight's effective reference bytes.
+Validate selected references before sign-in or upload, including explicit lint,
+without adding local engine validation to explicit lint. Missing references send
+nothing. Unused contracts are not added to the selected upload.
+
+Surface capture-provided advisory warnings, including causes under preflight's
+[unavailable-footprint rule](runtime-preflight.prompt.md#source-capture), in Check,
+explicit remote lint, Try and file preview through each mode's existing text and
+JSON warning conventions. Preserve JSON stdout; add no public field, refusal or
+gate, and do not change selected results or exit status for these advisories.
+
+Only explicit remote `pdd check --lint` additionally compares selected prompt
+schemas with the current local contract catalog, reading it with preflight
+safe-file rules. Catalog-only reads do not extend the upload selection. Use the reference module's
+comparison authority. Print differing copies with consumer/schema location,
+canonical target, changed/missing/extra fields or constraints and a `$contract`
+suggestion. Exact copies need no drift warning; ambiguous candidates warn and
+skip. Merge this advice into existing warnings; it changes no server request,
+check expectation, refusal or exit status. Ordinary Check's preliminary lint and
+SVG-only `--lint --local` do not run this catalog comparison.
+
+## Shared contract Check history
+
+Export synchronous module function `readContractHistory({root,env})`, returning
+`{stories,warnings}` without gh, network, slots, model calls or writes. Each story
+row has `story_path`, `baseline` (`checked`, `not-checked`, `unavailable`),
+`checked_at` (timestamp or null), `result_state` (`passed`, `failed` or null),
+`files` (per-Story effective `{path,sha256}` rows)
+and `references` (the resolver's provenance rows). Missing snapshots yield
+`unavailable`, never fabricated values. Keep data private under existing state
+permissions; no repository metadata file or new record-hash pins.
+
+Save each actual terminal Check's source footprint and reference snapshots from
+its submitted capture, individually for each Story, even in a multi-Story batch.
+Advance the baseline only for an actual evaluated Check, never a refusal before
+execution, pending/not-run/unknown receipt, standalone lint, Try or file preview.
+Use the latest actual Check for that Story, retaining its real pass/fail result.
+Persist unavailable submitted footprint or reference provenance honestly with its
+cause; never mark a partial snapshot complete. A latest evaluated failed Check or
+Check with unavailable snapshots must not be hidden by returning an older passed
+or complete baseline. Keep earlier complete evidence on disk; the latest Check's
+unavailable evidence remains unavailable.
+Reading a receipt later can establish that original Check, never substitute the
+current files for its submitted snapshots. Missing legacy snapshots remain
+unavailable until a new actual Check. Do not use unrelated rows' dependencies or
+a whole batch SHA as the Story's freshness identity.
+
+For equal original Check timestamps, prefer a real evaluated failed Check over
+a passed Check. Resolve other equal-time/equal-result choices deterministically
+without implying chronology. A strictly later original Check always wins.
+
+New reference-backed Try records also retain uploaded effective prompt hashes
+and the corresponding contract provenance. Apply the existing pinned-prompt
+freshness promise to the expanded current prompt bytes before connected reuse,
+doors or owner-tool access, so a contract-only prompt change requires `--new`.
+Keep raw authored prompt hashes for compatibility. For legacy records, use the
+existing raw-hash rule; if a currently referenced prompt lacks the matching
+expanded snapshot, explain that its reference baseline is unavailable and ask for
+`--new`. Do not compare the whole scenario/seed/world hash for this guard: an
+existing Try deliberately keeps its original persistent world. Preserve Story
+identity checks and all existing owner/origin/budget guards.
 
 ## State (outside the repo; folders 0700, files 0600; no tar and no token on disk)
 
@@ -274,21 +410,30 @@ owner API binding for this raise is pending the planner's contract; do not inven
 - Open a newly created link with `open` (macOS) or `xdg-open` (Linux) and print the end line `Try ready for "<title>": <link> (open in your browser). It ends in 24 hours, or with: pdd try --stop <story>`. `--no-open`, or a failed open, prints `Try ready for "<title>": <link>` and then how to open it.
 - `--stop [STORY]` finds the Try in the state record by story name, test path or test file name, so it works on a branch without the story (real-user issue 14). No STORY stops the one open Try; none or several is exit 2 with the open names. It sends DELETE `/v1/try/<id>` with the header `X-Request-Id: <new UUID>`; read the stop job until `passed`; then forget the Try. A DELETE answer 404 or 410 counts as stopped. A GET 404 or 410 on a recorded Try counts as ended. In both cases pdd deletes the record, so the next `pdd try` makes a new Try; the person never edits a state file.
 - The note on other files prints once per command, in calm words, to stderr. `pdd check` folds it into its send line: `Lint passed. Sent 2 checks at 10:47:49: 11 files, 55 KB (4 are not prompt, story or test files; run \`pdd check --files\` to see them).` `pdd try` folds it into its start line: `Starting your Try: sending M files, SIZE (N are not prompt, story or test files; run \`pdd check --files\` to see them)…`. It is not a warning.
-- 429: no new attempt; exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd try --stop`.
+- Confirmed not-started 429 server-full or 503 check-queue-full/lint-queue-full during new Try setup waits under admission recovery within the existing setup allowance; accepted setup is read by its ID. Other 429 replies make no new attempt: exit 5 with the server's message, else `Too many Try links are open. Stop one with pdd try --stop`.
 - Approvals from the Try page (#9, agreed fields): with the saved cases, pdd reads `GET /v1/try/<id>/approvals` (`{approvals: [{id, prompt_path, prose_sha256, requested_at, state}]}`). For each `pending` request in a person's terminal it uses [prompt approve](prompt-approve.prompt.md): the path must be a Git-visible `*.prompt.md` inside the repo (else declined), the request's `prose_sha256` must equal the local prose hash (else declined: `the prompt changed since you clicked Approve`), an approved and current prompt is done with no question, otherwise it shows the interface and asks the same y/n; one reader serves all questions. Then it sends `POST /v1/try/<id>/approvals/<request id>` with `{"state": "done" | "declined"}` (JSON). `tries/<id>.approvals.json` keeps each answer, so pdd never asks twice and resends only an answer whose POST failed. Without a terminal (an agent) pdd only prints `The Try page asks to approve <path>. A person answers it in a terminal: pdd try <story>` once and answers nothing. A missing endpoint (404) is skipped. Waiting needs both stdin and stdout to be terminals.
-- Save as test: after the link is shown, pdd reads `GET /v1/try/<id>/tests` (`{tests: [{id, path, name, created, story_path, test}]}`, try-page DESIGN.md). For each saved case that it has not handled (`tries/<id>.tests.json` keeps the handled IDs), it appends the case's steps to the original authored test that seeded this Try when the saved story matches the seed's story, including when that Story has several test files. Keep this identity when reopening a Try. If that original test is missing or no longer belongs to the same story, refuse the import without choosing another test or creating a replacement. For another story, use its test file found by discovery. It keeps every other byte of the file (a one-line `steps` array gets a one-line step). Criterion IDs map by criterion text; a case with a criterion the file does not have is `not added` with the reason. A saved case is untrusted (anyone with the link can save one): its story must be a Git-visible `*.md` file in the repo with no `..`; an existing target must be a regular `*.json` file whose real path is inside the repo, whose top-level `schema_version` is `prompt-runtime.program-scenario.v1`, and that is not `package.json`, a lock or config file or a dot file; a new file goes only to `tests/<story slug>.json` (never a path from the server), created exclusively, and never when `tests/` is a symbolic link or resolves outside the repo. Each refusal prints `not added: <reason>` and writes nothing. Step IDs stay unique (`-2`, `-3`). Only a story with no test file gets a new file, `tests/<story>.json`. Print `added to tests/<file> as step <id>`. In a terminal (stdout is a TTY) pdd stays open and reads every 5 s until Ctrl-C or the Try ends; `--no-wait`, or no terminal (an agent), reads once and returns. A missing endpoint (404) prints `The runtime does not keep saved tests yet.` only while waiting. Exit 0 = link ready or stopped; other exit codes as for `pdd check`.
+- Save as test: after the link is shown, pdd reads `GET /v1/try/<id>/tests` (`{tests: [{id, path, name, created, story_path, test}]}`, try-page DESIGN.md). For each saved case that it has not handled (`tries/<id>.tests.json` keeps the handled IDs), it appends the case's steps to the original authored test that seeded this Try when the saved story matches the seed's story, including when that Story has several test files. Keep this identity when reopening a Try. If that original test is missing or no longer belongs to the same story, refuse the import without choosing another test or creating a replacement. For another story, use its test file found by discovery. It keeps every other byte of the file (a one-line `steps` array gets a one-line step). Criterion IDs map by criterion text; a case with a criterion the file does not have is `not added` with the reason. A saved case is untrusted (anyone with the link can save one): its story must be a Git-visible `*.md` file in the repo with no `..`; an existing target must be a regular `*.json` file whose real path is inside the repo, whose top-level `schema_version` is `prompt-runtime.program-scenario.v1`, and that is not `package.json`, a lock or config file or a dot file; a new file goes only to `tests/<story slug>.json` (never a path from the server), created exclusively, and never when `tests/` is a symbolic link or resolves outside the repo. Each refusal prints `not added: <reason>` and writes nothing. Step IDs stay unique (`-2`, `-3`). Only a story with no test file gets a new file, `tests/<story>.json`. Print `added to tests/<file> as step <id>`. In a terminal (stdout is a TTY) pdd stays open and reads every 5 s until Ctrl-C or the Try ends; `--no-wait`, or no terminal (an agent), reads once and returns. A missing endpoint (404) prints `The interpreter does not keep saved tests yet.` only while waiting. Exit 0 = link ready or stopped; other exit codes as for `pdd check`.
 
 ## Progress and error causes
 
 pdd reports each slow upload, lint and Try setup step. Use the [progress helpers](runtime-output.prompt.md#progress-and-causes): one stderr line before each slow step and a tick line every 15 s while it waits; stdout keeps the result, so `--json` stays valid.
-- Lint (before a check, a Try, the door modes and `--lint`): `Checking N files (SIZE) on the PDD runtime (lint, 0 AI calls)…`, then `Still checking the files: <in line | running>`.
+- Lint (before a check, a Try, the door modes and `--lint`): `Checking N files (SIZE) on the PDD interpreter (lint, 0 AI calls)…`, then `Still checking the files: <in line | running>`.
 - Try: `Stopping the old Try…` before `--new` stops one, `Stopping the Try for "<title>"…` for `--stop`, `Reopening your Try…` for a paused one, `Starting your Try: sending M files, SIZE…` right before the Try POST, then `Still starting your Try: <in line | running>`. Ticks of a check keep the `Still running:` line every 30 s.
-- `--retry`: `Retrying N unstarted checks…`. `--read`: `Reading N results from the PDD runtime…` when it reads any from the server.
+- `--retry`: `Retrying N unstarted checks…`. `--read`: `Reading N results from the PDD interpreter…` when it reads any from the server.
 - `gh` sign-in is quick, so it prints no line; a failed `gh api user` names gh's first error line.
-- A network error that proves the request never reached the server (address not found, connection refused, no route, TLS certificate refused) stops at once, exit 5, nothing else sent: `pdd could not reach the PDD runtime at <origin>: <reason> (<code>). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` A timeout or a lost answer keeps the one-shot rule: read the same request ID and never send it twice; the tick line names the reason while pdd reads again.
-- HTTP 401: `The PDD runtime did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The runtime answered HTTP 500: <message>.`
+- Outside the advisory capacity read's explicit fail-open rule, a network error that proves the request never reached the server (address not found, connection refused, no route, TLS certificate refused) stops at once, exit 5, nothing else sent: `pdd could not reach the PDD interpreter at <origin>: <reason> (<code>). Nothing was sent. Check your network and PDD_RUNTIME_URL, then run the command again.` A timeout or a lost answer keeps the one-shot rule: read the same request ID and never send it twice; the tick line names the reason while pdd reads again.
+- HTTP 401: `The PDD interpreter did not accept your GitHub login (HTTP 401). Run gh auth login, then run the command again.` Another unexpected status keeps the unknown state and adds the server's message: `The interpreter answered HTTP 500: <message>.`
 
 ## Dependencies
+
+- [Preflight](runtime-preflight.prompt.md#source-capture): required generation and
+  verification context for source capture, advisory warnings and Story footprint
+  availability.
+
+- [References](contract-refs.prompt.md): required generation and verification
+  context for canonical provenance and explicit-lint copy comparison.
+
+- [Runtime slots](runtime-slots.prompt.md): required generation and verification context for shared local admission and jobs. Runtime listing binds its own files port; native process exclusion remains a native verification obligation.
 
 - [Local bindings](runtime-bindings.prompt.md): required generation/runtime context for the local inventory helper.
 - [SVG layout lint](svg-layout.prompt.md): required local advisory behavior for generation and tests.

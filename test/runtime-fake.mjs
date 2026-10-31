@@ -32,6 +32,10 @@ const PASSED_CHECKS = [{ criterion_id: 'AC1', target: 'result', path: '/totalCen
 export async function fakeRuntime(t, answer) {
   const fake = { posts: [], jsonPosts: [], gets: [], deletes: [], authorization: new Set(), jobs: new Map() };
   const server = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/capacity') {
+      const reply = fake.capacity ? await fake.capacity({ method: req.method, url: req.url, headers: req.headers }, fake) : { status: 404, json: { error: { code: 'not-found' } } };
+      res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers }); res.end(JSON.stringify(reply.json)); return;
+    }
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks), entry = { method: req.method, url: req.url, headers: req.headers };
@@ -79,11 +83,13 @@ export async function fakeRuntime(t, answer) {
 // In-process ports: a fake clock (sleep moves time), a fake gh and spies on IDs and interrupts.
 export function portsFor(env, extra = {}) {
   const clock = { now: Date.parse('2026-10-27T16:27:47Z'), uuids: 0, gh: [] };
+  const interrupts = new Set();
+  clock.interrupt = () => { for (const handler of [...interrupts]) handler(); };
   const ports = { env, agentBridge: false, stdout: sink(), stderr: sink(), pollMs: 2000, interactive: false,
     now: () => clock.now, sleep: async ms => { clock.now += ms; await new Promise(done => setImmediate(done)); },
     randomUUID: () => { clock.uuids += 1; return randomUUID(); },
     gh: args => { clock.gh.push(args); return args[0] === 'auth' ? { status: 0, stdout: `${TOKEN}\n` } : { status: 0, stdout: 'octo 4242\n' }; },
-    onInterrupt: handler => { clock.interrupt = handler; return () => { clock.interrupt = null; }; }, ...extra };
+    onInterrupt: handler => { interrupts.add(handler); return () => { interrupts.delete(handler); }; }, ...extra };
   return { ports, clock };
 }
 

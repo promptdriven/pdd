@@ -87,14 +87,14 @@ test('RUNTIME-TRY3: a Try link with another host, scheme, path or a user is not 
   }
 });
 
-// Wrong: too many Try links are retried, or pdd picks a test when several exist.
-test('RUNTIME-TRY4: 429 is exit 5 with the server\'s reason; no STORY with many tests lists them (exit 2)', async t => {
+// Confirmed server capacity waits; ambiguous Story selection remains a local error.
+test('RUNTIME-TRY4: confirmed capacity waits until exit 5; no STORY with many tests lists them (exit 2)', async t => {
   const setup = harbor(t);
   const busy = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'try'
     ? { status: 429, headers: { 'retry-after': '5' }, json: { error: { code: 'server-full', message: 'The runtime is busy. Try again later.' }, dispatch: 'not_started' } } : trying()(entry, f));
   const full = await tryStory(setup, busy, ['place-order']);
-  assert.equal(full.code, 5); assert.match(full.err, /The runtime is busy\. Try again later\./);
-  assert.equal(busy.posts.filter(post => post.command === 'try').length, 1);
+  assert.equal(full.code, 5); assert.match(full.err, /busy.*wait|wait.*busy/i);
+  assert.ok(busy.posts.filter(post => post.command === 'try').length > 3);
   const many = await tryStory(setup, busy, []);
   assert.equal(many.code, 2); assert.match(many.err, /place-order/); assert.match(many.err, /unknown-item/);
   const one = harbor(t, repo => rmSync(join(repo, 'tests/unknown-item.json')));
@@ -194,7 +194,7 @@ test('RUNTIME-TRY8: --no-wait returns at once; a runtime with no saved-tests end
   const quick = await tryStory(setup, fake, ['place-order'], { '--no-open': true, '--no-wait': true }, { interactive: true });
   assert.equal(quick.code, 0); assert.doesNotMatch(quick.out, /Waiting/);
   const waiting = await tryStory(setup, fake, ['place-order'], { '--no-open': true }, { interactive: true });
-  assert.equal(waiting.code, 0); assert.match(waiting.out, /The runtime does not keep saved tests yet/);
+  assert.equal(waiting.code, 0); assert.match(waiting.out, /The interpreter does not keep saved tests yet/);
 });
 
 // T3-11: only an explicit owner reopen makes a paused Try usable; its ID, seed and cap stay the same.
@@ -421,7 +421,7 @@ test('RUNTIME-TRY18: without a terminal pdd try only names the approval request;
 
 // Wrong: pdd try hides a not-invited answer behind a Try or link message (invite list, Oct 27).
 test('RUNTIME-TRY19: pdd try says once that the login is not invited, exit 5, and makes no Try', async t => {
-  const line = 'Your GitHub login octo is not on the PDD runtime invite list yet. Ask the PDD team to add you.';
+  const line = 'Your GitHub login octo is not on the PDD interpreter invite list yet. Ask the PDD team to add you.';
   const denied = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'not invited' } };
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => entry.method === 'POST' ? denied : trying()(entry, f));
   const result = await tryStory(setup, fake, ['place-order'], { '--no-open': true });

@@ -1,0 +1,111 @@
+{
+  "schema_version": "pdd.native-cases.v1",
+  "story_path": "user_stories/shared-contract-sync.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Sync previews unique exact or near copy replacements without writing files."
+    },
+    {
+      "id": "AC2",
+      "text": "Sync with --write adopts the selected shared schema and preserves local title and description."
+    },
+    {
+      "id": "AC3",
+      "text": "Ambiguous copies stay unchanged while independent unambiguous copies can migrate."
+    },
+    {
+      "id": "AC4",
+      "text": "Editing an approved interface sets it to draft without approving it."
+    },
+    {
+      "id": "AC5",
+      "text": "All bytes outside replaced schema values and an approved-to-draft status stay exact, and a repeated sync makes no further changes."
+    },
+    {
+      "id": "AC6",
+      "text": "Sync refuses an unsafe destination or concurrent source edit without overwriting it."
+    },
+    {
+      "id": "AC7",
+      "text": "A successful sync replaces the complete file atomically; a failed write leaves the complete original."
+    }
+  ],
+  "cases": [
+    {
+      "id": "preview",
+      "criteria": [
+        "AC1"
+      ],
+      "given": "one equal copy, one unique near copy; capture source bytes before command",
+      "required_observation": "proposals show target, pointer, missing/changed constraints; bytes remain identical"
+    },
+    {
+      "id": "adopt",
+      "criteria": [
+        "AC2"
+      ],
+      "given": "copy has title CLI request, description local, lacks run_id; shared schema requires run_id",
+      "required_observation": "write reference with both annotations; expanded schema now requires run_id; no silently retained local constraint"
+    },
+    {
+      "id": "ambiguous",
+      "criteria": [
+        "AC3"
+      ],
+      "given": "one copy has two near records; separate copy has unique exact record",
+      "required_observation": "ambiguous copy unchanged and warns; unique copy migrates"
+    },
+    {
+      "id": "approved",
+      "criteria": [
+        "AC4"
+      ],
+      "given": "approved interface selected for replacement",
+      "required_observation": "status draft; never approved; prose, hash string and approval state otherwise unchanged"
+    },
+    {
+      "id": "stable",
+      "criteria": [
+        "AC5"
+      ],
+      "given": "unmatched prompt, prose before/after interface, original scenario; apply sync twice",
+      "required_observation": "unrelated bytes exact; second run writes 0 files"
+    },
+    {
+      "id": "safe-write",
+      "criteria": [
+        "AC6"
+      ],
+      "given": "symlink ancestor, secret destination and changed before bytes in separate cases",
+      "required_observation": "refuse unsafe/changed file; no overwrite, upload, authentication or model call"
+    },
+    {
+      "id": "layout-only-selected-spans",
+      "criteria": [
+        "AC2",
+        "AC4",
+        "AC5"
+      ],
+      "given": "CRLF prompt with pretty JSON, unsorted keys, reasoning before answer, two matched four-field schemas, unmatched schema, literal default number 9007199254740993 and __proto__/constructor own keys",
+      "required_observation": "only matched schema value spans and approved status string change; retain annotations in written order; all other bytes exact; inserted reference follows original object layout; second sync writes zero files"
+    },
+    {
+      "id": "atomic-complete-file",
+      "criteria": [
+        "AC7"
+      ],
+      "given": "native observer reads destination during temporary-file preparation and after rename; inject temp-write failure separately",
+      "required_observation": "observer sees only exact before or after; failed temp write retains full original and removes owned temp; never truncate destination"
+    },
+    {
+      "id": "replacement-races",
+      "criteria": [
+        "AC6",
+        "AC7"
+      ],
+      "given": "after temp preparation and before replacement, separately alter destination bytes, replace destination with symlink, replace parent with symlink or change destination identity retaining same bytes",
+      "required_observation": "exit 4; preserve concurrent edit/link/target and original elsewhere; no unsafe rename, external effect or leftover owned temp"
+    }
+  ]
+}

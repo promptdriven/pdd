@@ -2,6 +2,32 @@
 
 1. [Keep the built screen aligned with its drawing](svg-layout-spec.md): local prompt/drawing warnings and a failing browser comparison for missing layout parts.
 
+# Shared runtime admission (#2631)
+
+Build on the saved-lint continuation contract. The existing Stories also cover owner heartbeat expiry, contention progress, bounded maintenance, fail-open advisory capacity, phase-specific lint waits, truthful wait-end text and per-process read reuse. Prompts and expected cases are reviewed before code. Native tests use fake transport/clock plus real temporary state and child processes; do not claim supplied port replies prove atomic exclusion. Follow-up native checks cover wall-clock jumps during acquisition, interruption between admission and submission, long observer timers and cached unclear capacity; check causal order, no resend, exclusion and completion with generous watchdogs. These native timer/process effects are not Runtime-replayed. Each Story has one case file. Five native case files use pdd.native-cases.v1 and are not discovered as executable Runtime scenarios; the jobs snapshot has a real Runtime scenario.
+
+- [runtime-local-slots](runtime-local-slots.md) — [native cases](../test/runtime-admission/runtime-local-slots.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-local-queue](runtime-local-queue.md) — [native cases](../test/runtime-admission/runtime-local-queue.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-capacity-wait](runtime-capacity-wait.md) — [native cases](../test/runtime-admission/runtime-capacity-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-maintenance-wait](runtime-maintenance-wait.md) — [native cases](../test/runtime-admission/runtime-maintenance-wait.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-restart-retry](runtime-restart-retry.md) — [native cases](../test/runtime-admission/runtime-restart-retry.json). Runtime check: NOT REPLAYED (#2548); native cases in Story.
+- [runtime-jobs](runtime-jobs.md) — [scenario](../test/runtime/runtime-jobs.json). Runtime check: snapshot binding only; CLI/native effects NOT REPLAYED.
+
+Live maintenance/drain remains unverified until prompt-runtime #453 supplies a staging window. No runtime-server implementation belongs to this plan.
+
+# Shared records (#2629)
+
+Each Story has one case file. The expansion entries use actual file-resource
+ports; catalog/history, CLI, capture and write effects require native verification.
+
+- [shared-records](shared-records.md) — [scenario](../test/runtime/shared-records.json). Runtime check: expansion binding only.
+- [shared-seed](shared-seed.md) — [scenario](../test/runtime/shared-seed.json). Runtime check: expansion binding only.
+- [shared-contract-status](shared-contract-status.md) — [native cases](../test/shared-contracts/shared-contract-status.json). Runtime check: native effects unbound.
+- [shared-contract-drift](shared-contract-drift.md) — [native cases](../test/shared-contracts/shared-contract-drift.json). Runtime check: CLI advice unbound.
+- [shared-contract-sync](shared-contract-sync.md) — [native cases](../test/shared-contracts/shared-contract-sync.json). Runtime check: native writes unbound.
+
+- [shared-source-limits](shared-source-limits.md) — [native cases](../test/shared-contracts/shared-source-limits.json). Runtime check: native read/allocation/archive effects unbound.
+
 2. [Recognize checks with no verdict](check-no-verdict.md): distinguish failed, no-verdict, open and busy summaries.
 
 3. [Recover retried check results](recover-retried-check-results.md): recover same-ID receipts and accounting without duplicate execution.
@@ -48,3 +74,20 @@ The seven workflow Stories retain their separately approved contracts and all 28
 9. [Keep an uncertain run link](product-unresolved-link.md): retain unresolved hints without blocking other runs.
 10. [Reuse my run link in another checkout](product-worktree-links.md): reuse compatible legacy state across worktrees.
 11. [Keep my other saved run links](product-state-updates.md): preserve other bindings during coordinated updates.
+
+## Runtime interruption and recovery
+
+- [Keep a truthful interruption message during recovery](runtime-interruption-recovery.md) — [native cases](../test/runtime-admission/runtime-interruption-recovery.json). Runtime check: NOT REPLAYED (#2548); native claim, interruption, ownership and retry effects require code-step checks.
+
+## Busy Check upload waits
+
+- [Wait before uploading a busy check again](runtime-busy-upload-wait.md) — [native cases](../test/runtime-admission/runtime-busy-upload-wait.json). Runtime check: NOT REPLAYED (#2548); upload timing, capacity observation and saved-retry effects require code-step checks.
+
+## Optional local interpreter limit (#2704)
+
+- [Send selected jobs without a default limit](runtime-no-default-limit.md) — [native cases](../test/runtime-admission/runtime-no-default-limit.json). Runtime check: NOT REPLAYED; native shared-process admission and dispatch barriers require Node tests.
+
+## PDD names (#2701)
+
+1. [Name the interpreter](name-the-interpreter.md): help, errors and status lines that pdd itself prints say "PDD interpreter" or "the interpreter"; machine-read strings keep "runtime". Test: `test/runtime/name-the-interpreter.json`.
+2. [Use the new command names](new-command-names.md): `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow start` run the same code as `pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run`; each old name still works and prints one stderr line such as `pdd check is now pdd test.` Test: `test/runtime/new-command-names.json`.
