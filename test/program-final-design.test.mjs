@@ -29,6 +29,16 @@ async function harness(t,options={}){
  return {...h,fake,invoke,spec,stored:name=>JSON.parse(readFileSync(join(h.repo,'.pdd/run/place_order',name),'utf8'))};
 }
 const pass=r=>assert.equal(r.code,0,r.err+r.out);
+// A local usage error alone cannot prove that file execution was reached.
+// Keep this valid declaration in a separate world so negative cases still make no requests.
+async function assertDeclaredCliAvailable(t){
+ const h=await harness(t,{edit(s){s.start={default:'cli'};}});
+ const r=await h.invoke(['list']);pass(r);
+ assert.equal(h.fake.jsonPosts.length,1,'valid start must execute CLI once');
+ assert.equal(h.fake.jsonPosts[0].json.operation,'main');
+ assert.deepEqual(h.fake.jsonPosts[0].json.input.argv,['list']);
+}
+
 test('final direct receipt uses output/world, session300, bounded call and explicit false fresh',async t=>{
  const h=await harness(t,{world:{exact:'world'}}),r=await h.invoke();pass(r);assert.equal(r.out,'program only\n');assert.equal(h.fake.posts.find(p=>p.command==='try').request.max_calls,300);assert.equal(h.fake.jsonPosts[0].json.max_calls,1);assert.equal(h.fake.jsonPosts[0].json.fresh,false);assert.deepEqual(h.stored('world.json'),{exact:'world'});
 });
@@ -369,6 +379,7 @@ test('declared default call uses operation even without selector',async t=>{
  const h=await harness(t,{cli:false,edit(s){s.start={default:'call',default_operation:'main'};s.entries[0].input_schema=obj({item:string});}});pass(await h.invoke(['--item','tea']));assert.equal(h.fake.jsonPosts[0].json.operation,'main');assert.deepEqual(h.fake.jsonPosts[0].json.input,{item:'tea'});
 });
 for(const start of [null,'cli',{dispatch:'bad'},{dispatch:[{kind:'cli'}]},{default:'unknown'},{default:'call'},{default:'call',default_operation:'missing'},{default:'http'},{dispatch:[{word:'go'}]},{dispatch:[{word:'go',kind:'cli'},{word:'go',kind:'shell'}]},{dispatch:[{word:'-go',kind:'cli'}]},{dispatch:[{word:'go',kind:'call'}]},{default:'app',dispatch:[]}])test(`invalid start stops before auth: ${JSON.stringify(start)}`,async t=>{
+ await assertDeclaredCliAvailable(t);
  const h=await harness(t,{edit(s){s.start=start;}});const r=await h.invoke(['go'],[],{gh(){assert.fail('invalid start authenticates');}});assert.equal(r.code,2,r.err);assert.equal(r.out,'');assert.equal(r.err.trim().split('\n').length,1);assert.equal(h.fake.posts.length,0);
 });
 test('dispatch only declaration prints usage for unmatched word and forwards matched CLI remainder',async t=>{
@@ -382,12 +393,13 @@ test('custom declared app map reaches C as path and screen kind',async t=>{
  const r=await h.invoke(['open'],[],{programApp:{appKind(){return null;},runApp(input){selected=input;return 0;}}});pass(r);assert.equal(selected.kind,'screen');assert.equal(selected.appMap,'maps/custom.json');assert.equal(h.fake.posts.length,0);
 });
 for(const app_map of ['../escape.json','/tmp/map.json',{}])test(`unsafe declared app map rejects before C: ${JSON.stringify(app_map)}`,async t=>{
+ await assertDeclaredCliAvailable(t);
  const h=await harness(t,{edit(s){s.start={dispatch:[{word:'open',kind:'app',app_map}]};}});const r=await h.invoke(['open'],[],{programApp:{appKind(){return 'screen';},runApp(){assert.fail('bad map reaches C');}}});assert.equal(r.code,2,r.err);assert.equal(r.clock.gh.length,0);
 });
 test('CLI plus typed without declaration refuses even for operation word',async t=>{
  const h=await harness(t,{edit(s){s.entries.push({operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]});}});const r=await h.invoke(['quote']);assert.equal(r.code,2,r.err);assert.match(r.err,/2 kinds.*no "start"/);assert.equal(r.clock.gh.length,0);assert.equal(h.fake.posts.length,0);
 });
-test('removed fresh prefix has no migration notice and no request',async t=>{const h=await harness(t);const r=await h.invoke(['list'],['--fresh']);assert.equal(r.code,2);assert.doesNotMatch(r.err,/now |instead|renamed|migration/i);assert.equal(h.fake.posts.length,0);});
+test('removed fresh prefix has no migration notice and no request',async t=>{await assertDeclaredCliAvailable(t);const h=await harness(t);const r=await h.invoke(['list'],['--fresh']);assert.equal(r.code,2);assert.doesNotMatch(r.err,/now |instead|renamed|migration/i);assert.equal(h.fake.posts.length,0);});
 for(const prefix of [['--reset'],['--data','seed.json']])test(`reset selection permits exact before-world cache: ${prefix.join(' ')}`,async t=>{
  const h=await harness(t,{world:{}});writeFileSync(join(h.repo,'seed.json'),'{}');pass(await h.invoke(['list']));const r=await h.invoke(['list'],prefix);pass(r);assert.equal(h.fake.jsonPosts.length,1);assert.match(r.err,/cached.*0 AI calls/);assert.deepEqual(h.stored('world.prev.json'),{});
 });
