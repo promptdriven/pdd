@@ -589,11 +589,11 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 **Structured record for a workflow run.**
 New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
 custom workflows without that field keep their publication behavior; small-change has no replay policy.
-After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+For ordinary runs, after each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
 hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
-freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.

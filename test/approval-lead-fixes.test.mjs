@@ -7,6 +7,20 @@ import {spawnSync,execFileSync} from 'node:child_process';
 import {Readable} from 'node:stream';
 const root=resolve(process.env.PDD_TEST_SOURCE_ROOT || new URL('../',import.meta.url).pathname);
 const load=p=>import(pathToFileURL(join(root,p)));
+async function requiredJournalBoundary(){
+ let module,missing;
+ try{module=await load('src/approval-policy.mjs');}catch(error){if(error.code!=='ERR_MODULE_NOT_FOUND')throw error;missing=error;}
+ assert.equal(typeof module?.recordPromptApproval,'function','Required approval journal public contract recordPromptApproval must be available; this base cannot exercise its absent boundary'+(missing?' (module missing)':''));
+ return module;
+}
+function readJournal(repo){
+ const path=journal(repo);
+ assert.equal(fs.existsSync(path),true,'Successful approval must create the documented durable approvals.json journal');
+ let saved,error;try{saved=JSON.parse(fs.readFileSync(path,'utf8'));}catch(cause){error=cause;}
+ assert.equal(error,undefined,'Approval journal must contain readable valid JSON');
+ assert.equal(Array.isArray(saved?.approvals),true,'Approval journal must contain an approvals array');
+ return saved;
+}
 const {fixture}=await load('test/helpers/workflow-delivery-fixture.mjs');
 const {harbor,PLACE,sink}=await load('test/runtime-fake.mjs');
 const {runApprove}=await load('src/prompt-approve.mjs');
@@ -34,7 +48,7 @@ for(const route of ['standalone','workflow'])test(`LEAD shell quoted heredoc ${r
  const command=quote(process.execPath)+' '+quote(join(root,'bin/pdd.mjs'))+' '+argv+" --said - <<'PDD_SAID'\n"+words+'PDD_SAID\n';
  const out=spawnSync('/bin/sh',['-c',command],{cwd:repo,env:{PATH:tools+':'+process.env.PATH,HOME:home,CLAUDE_CONFIG_DIR:join(home,'.claude'),PDD_AGENT_SESSION:'1'},encoding:'utf8',timeout:20000});
  assert.equal(out.error,undefined,'shell route completes');assert.equal(fs.existsSync(canary),false,'person text must never execute');
- const saved=JSON.parse(fs.readFileSync(journal(repo),'utf8'));assert.equal(saved.approvals.at(-1).words,words,'stdin payload is exact, including final blank line');
+ const saved=readJournal(repo);assert.equal(saved.approvals.at(-1).words,words,'stdin payload is exact, including final blank line');
  if(route==='standalone')assert.equal(out.status,0,out.stderr);
 });
 for(const route of ['standalone','workflow'])for(const mode of ['strict','blank','bad-config'])test(`LEAD ${route} dash ${mode} refuses without mutation`,async t=>{
@@ -61,7 +75,7 @@ test('LEAD one terminal answer lists and approves gate and both draft hashes',as
  const out=await approveRun({ref:'17',cwd:r.root},{...f.ports,say:text=>display.push(text),confirm:async question=>{answers++;display.push(question);return true;}});
  assert.equal(out.exitCode,0,out.message);assert.equal(answers,1,'one answer covers the complete batch');
  for(const path of selected){const text=fs.readFileSync(join(r.root,path),'utf8');assert.match(text,/"status": "approved"/);assert.ok(display.join('\n').includes(path));assert.ok(display.join('\n').includes(proseSha256(text)));}
- const saved=JSON.parse(fs.readFileSync(journal(r.root),'utf8'));assert.equal(saved.approvals.length,1);assert.equal(saved.approvals[0].prompts.length,2);assert.equal(saved.approvals[0].route,'terminal');
+ const saved=readJournal(r.root);assert.equal(saved.approvals.length,1);assert.equal(saved.approvals[0].prompts.length,2);assert.equal(saved.approvals[0].route,'terminal');
 });
 for(const bad of ['malformed','symlink'])test(`LEAD preservation ${bad} selected prompt never mutates another draft`,async t=>{
  const {f,r,selected}=await ready(t),good=fs.readFileSync(join(r.root,selected[0]),'utf8'),target=join(r.root,selected[1]);
@@ -72,7 +86,7 @@ for(const bad of ['malformed','symlink'])test(`LEAD preservation ${bad} selected
 test('LEAD preservation approval words use adaptive code spans with ISO timestamp and separate top block',async()=>{
  const words='yes ```` @person #17\n"quoted"';const evidence={id:'synthetic-event',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words,prompts:[]};
  const out=await preparePrEvidence({run:{workflow:'feature',number:17,steps:[],decisions:[{decision:'approve',evidence}]},isCode:false},{readStepNotes:async()=>({notes:[]})});
- assert.deepEqual(out.lines,[],'approval must not displace Runtime/verdict top lines');assert.equal(out.approvalLines.length,1);const line=out.approvalLines[0];assert.ok(line.includes('2023-11-14T22:13:20.000Z'));
+ assert.deepEqual(out.lines,[],'approval must not displace Runtime/verdict top lines');assert.equal(Array.isArray(out.approvalLines),true,'Required separate approvalLines result must be an array');assert.equal(out.approvalLines.length,1);const line=out.approvalLines[0];assert.ok(line.includes('2023-11-14T22:13:20.000Z'));
  const match=line.match(/(`{5,})\s*("yes ```` @person #17\\n\\"quoted\\"")\s*\1/);assert.ok(match,'JSON-quoted complete words stay inside an adaptive span longer than interior backticks');assert.equal(JSON.parse(match[2]),words);
 });
 test('LEAD current target checkout is the common policy authority for both commands',async t=>{
@@ -86,7 +100,7 @@ test('LEAD unbound legacy gate refuses said without effects',async t=>{
  const before=fs.readFileSync(join(r.runDir,'status.json'),'utf8');const out=await approveRun({ref:'17',cwd:r.root,said:'approve'},f.agentPorts());assert.equal(out.exitCode,1);assert.match(out.message,/show.*gate.*again/i);assert.equal(fs.readFileSync(join(r.runDir,'status.json'),'utf8'),before);assert.equal(fs.existsSync(journal(r.root)),false);
 });
 test('LEAD stale journal lock reclaims only after its actual local owner dies',async t=>{
- const {spawn}=await import('node:child_process');const {once}=await import('node:events');const {recordPromptApproval}=await load('src/approval-policy.mjs');const f=harbor(t);
+ const {spawn}=await import('node:child_process');const {once}=await import('node:events');const {recordPromptApproval}=await requiredJournalBoundary();const f=harbor(t);
  const commonDir=execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:f.repo,encoding:'utf8'}).trim();
  const evidence={id:'child',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words:'approve',prompts:[]};
  const script=`const fs=await import('node:fs');const {recordPromptApproval}=await import(${JSON.stringify(pathToFileURL(join(root,'src/approval-policy.mjs')).href)});await recordPromptApproval(${JSON.stringify({commonDir,evidence})},{fs:{...fs,renameSync(a,b){if(b.endsWith('approvals.json')){process.send('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}return fs.renameSync(a,b);}}});`;
@@ -96,14 +110,14 @@ test('LEAD stale journal lock reclaims only after its actual local owner dies',a
  await assert.rejects(recordPromptApproval({commonDir,evidence:{...evidence,id:'live-probe'}}),/busy|saving|lock/i);assert.deepEqual(fs.readdirSync(lock).map(name=>[name,fs.readFileSync(join(lock,name),'utf8')]),before,'alive owner remains untouched');
  const exited=once(child,'exit');child.kill('SIGKILL');await exited;
  let failure;try{await recordPromptApproval({commonDir,evidence:{...evidence,id:'after-death'}});}catch(error){failure=error;}
- assert.equal(failure,undefined,'dead local owner is reclaimable through public journal API');assert.equal(JSON.parse(fs.readFileSync(journal(f.repo),'utf8')).approvals.at(-1).id,'after-death');
+ assert.equal(failure,undefined,'dead local owner is reclaimable through public journal API');assert.equal(readJournal(f.repo).approvals.at(-1).id,'after-death');
 });
 test('LEAD preservation unverifiable legacy empty lock is not reclaimed',async t=>{
- const {recordPromptApproval}=await load('src/approval-policy.mjs');const f=harbor(t);const commonDir=execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:f.repo,encoding:'utf8'}).trim();fs.mkdirSync(join(commonDir,'pdd/approvals.lock'),{recursive:true});
+ const {recordPromptApproval}=await requiredJournalBoundary();const f=harbor(t);const commonDir=execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:f.repo,encoding:'utf8'}).trim();fs.mkdirSync(join(commonDir,'pdd/approvals.lock'),{recursive:true});
  await assert.rejects(recordPromptApproval({commonDir,evidence:{id:'probe',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words:'approve',prompts:[]}}),/busy|saving|lock/i);assert.equal(fs.existsSync(join(commonDir,'pdd/approvals.lock')),true);assert.equal(fs.existsSync(journal(f.repo)),false);
 });
 for(const mode of ['foreign','unverifiable','permission-denied'])test(`LEAD preservation ${mode} lock owner is never reclaimed`,async t=>{
- const {spawn}=await import('node:child_process');const {once}=await import('node:events');const {recordPromptApproval}=await load('src/approval-policy.mjs');const f=harbor(t);
+ const {spawn}=await import('node:child_process');const {once}=await import('node:events');const {recordPromptApproval}=await requiredJournalBoundary();const f=harbor(t);
  const commonDir=execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{cwd:f.repo,encoding:'utf8'}).trim();
  const evidence={id:'lock-owner',route:'said',actor:{kind:'agent',id:'synthetic'},at:1700000000000,words:'approve',prompts:[]};
  const script=`const fs=await import('node:fs');const {recordPromptApproval}=await import(${JSON.stringify(pathToFileURL(join(root,'src/approval-policy.mjs')).href)});await recordPromptApproval(${JSON.stringify({commonDir,evidence})},{${mode==='foreign'?"hostname:'synthetic-foreign-host',":''}fs:{...fs,renameSync(a,b){if(b.endsWith('approvals.json')){process.send('ready');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);}return fs.renameSync(a,b);}}});`;

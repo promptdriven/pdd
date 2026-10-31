@@ -163,6 +163,7 @@ pdd does not run tests. The agents do.
 
 Bundled feature/bug code areas declare `replay_evidence: "pdd.replay-evidence.v1"`. The agent writes
 `replay-evidence.json` in the run folder using the [structured replay contract](replay-evidence.md).
+[Corpus adoption](replay-evidence.md#adopt-an-unchanged-approved-corpus) supplies a frozen declared anchor for an existing approved corpus.
 The PR begins with the validated replay status and exact counts, original vector and current source hashes,
 public-boundary execution coverage, semantic mutation control, and formal result with scope and reason.
 Missing, malformed or stale records appear as blocked/not replayed. Assertion failures remain publishable.
