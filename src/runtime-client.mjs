@@ -1871,15 +1871,73 @@ function replaceCacheFile(cache, path, text) {
     cache.fs.rename(temporary, path);
   } finally { try { cache.fs.unlink(temporary); } catch {} }
 }
+// Bakery tickets serialize acquisition, stale recovery and release together. Each
+// attempt owns a never-reused directory, so reclaiming a dead claim cannot erase
+// a successor claim. Publishing the directory first announces ticket selection.
+async function acquireCacheGuard(cache) {
+  const fs = cache.fs, folder = join(cache.dir, 'transaction-claims');
+  try { fs.mkdir(folder, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  safeCachePath(fs, folder, { directory: true });
+  const name = `${process.pid}.${fs.nonce()}`, own = join(folder, name);
+  fs.mkdir(own, { mode: 0o700 });
+  const remove = path => {
+    for (const file of fs.list(path)) {
+      if (!['ticket.json', 'ticket.tmp'].includes(file)) throw new Error('invalid cache claim');
+      const entry = join(path, file); safeCachePath(fs, entry);
+      try { fs.unlink(entry); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    try { fs.rmdir(path); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
+  const peers = () => {
+    const names = fs.list(folder);
+    if (names.length > 64) throw new Error('too many cache claims');
+    const result = [];
+    for (const peer of names) {
+      if (peer === name) continue;
+      const match = /^([1-9][0-9]*)\.([a-f0-9-]+)$/.exec(peer);
+      if (!match || !UUID.test(match[2]) || !Number.isSafeInteger(Number(match[1]))) throw new Error('invalid cache claim');
+      const path = join(folder, peer);
+      try {
+        safeCachePath(fs, path, { directory: true });
+        if (!cacheStat(fs, path)) continue;
+        let dead = false;
+        try { process.kill(Number(match[1]), 0); } catch (error) { if (error.code === 'ESRCH') dead = true; }
+        if (dead) { remove(path); cacheWarning(cache, true); continue; }
+        const ticketPath = join(path, 'ticket.json');
+        safeCachePath(fs, ticketPath);
+        let ticket = null;
+        if (cacheStat(fs, ticketPath)) {
+          ticket = JSON.parse(fs.read(ticketPath, 'utf8', 128));
+          if (!Number.isSafeInteger(ticket) || ticket < 1) throw new Error('invalid cache ticket');
+        }
+        result.push({ name: peer, ticket });
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    return result;
+  };
+  try {
+    const ticket = Math.max(0, ...peers().map(peer => peer.ticket ?? 0)) + 1;
+    if (!Number.isSafeInteger(ticket)) throw new Error('cache ticket overflow');
+    fs.write(join(own, 'ticket.tmp'), JSON.stringify(ticket), { flag: 'wx', mode: 0o600 });
+    fs.rename(join(own, 'ticket.tmp'), join(own, 'ticket.json'));
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (!peers().some(peer => peer.ticket === null || peer.ticket < ticket || peer.ticket === ticket && peer.name < name)) return () => remove(own);
+      await cache.context.ports.sleep(10);
+    }
+    throw new Error('busy cache claims');
+  } catch (error) { try { remove(own); } catch {} throw error; }
+}
 async function cacheTransaction(cache, operation, clear = false) {
   if (cache.disabled) return null;
-  let locked = false;
+  let locked = false, releaseGuard, owner;
   try {
     safeCachePath(cache.fs, cache.dir, { directory: true });
+    releaseGuard = await acquireCacheGuard(cache);
     for (let attempt = 0; attempt < 30; attempt++) {
       try {
         cache.fs.mkdir(cache.lock); locked = true;
-        cache.fs.write(join(cache.lock, 'owner.json'), JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 });
+        owner = { pid: process.pid, token: cache.fs.nonce() };
+        cache.fs.write(join(cache.lock, 'owner.json'), JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
         break;
       } catch (error) {
         if (locked || error.code !== 'EEXIST') throw error;
@@ -1887,14 +1945,20 @@ async function cacheTransaction(cache, operation, clear = false) {
         const ownerPath = join(cache.lock, 'owner.json');
         safeCachePath(cache.fs, ownerPath);
         const ownerStat = cacheStat(cache.fs, ownerPath);
-        let stale = false;
+        let stale = false, previous;
         if (ownerStat) {
-          const owner = JSON.parse(cache.fs.read(ownerPath, 'utf8', 128));
-          if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) throw new Error('invalid cache owner');
-          try { process.kill(owner.pid, 0); } catch (cause) { if (cause.code === 'ESRCH') stale = true; }
+          previous = JSON.parse(cache.fs.read(ownerPath, 'utf8', 128));
+          if (!Number.isSafeInteger(previous.pid) || previous.pid <= 0) throw new Error('invalid cache owner');
+          try { process.kill(previous.pid, 0); } catch (cause) { if (cause.code === 'ESRCH') stale = true; }
         } else stale = Date.now() - cache.fs.lstat(cache.lock).mtimeMs > 60_000;
         if (stale) {
-          if (ownerStat) cache.fs.unlink(ownerPath);
+          // The guard excludes other protocol participants. Reread also rejects
+          // a successor installed by an older process before guard acquisition.
+          if (ownerStat) {
+            const current = JSON.parse(cache.fs.read(ownerPath, 'utf8', 128));
+            if (!isDeepStrictEqual(previous, current)) continue;
+            cache.fs.unlink(ownerPath);
+          }
           cache.fs.rmdir(cache.lock);
           cacheWarning(cache, true);
           continue;
@@ -1935,7 +1999,16 @@ async function cacheTransaction(cache, operation, clear = false) {
     }
     return result;
   } catch { cacheWarning(cache); return null; }
-  finally { if (locked) try { cache.fs.unlink(join(cache.lock, 'owner.json')); cache.fs.rmdir(cache.lock); } catch { cacheWarning(cache); } }
+  finally {
+    if (locked) try {
+      const path = join(cache.lock, 'owner.json');
+      safeCachePath(cache.fs, path);
+      if (owner && isDeepStrictEqual(JSON.parse(cache.fs.read(path, 'utf8', 128)), owner)) {
+        cache.fs.unlink(path); cache.fs.rmdir(cache.lock);
+      } else cacheWarning(cache);
+    } catch { cacheWarning(cache); }
+    if (releaseGuard) try { releaseGuard(); } catch { cacheWarning(cache); }
+  }
 }
 async function openTestCache(context, root, clear) {
   const fs = context.ports.cacheFiles, dir = join(root, '.pdd', 'cache', 'test');
