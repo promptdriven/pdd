@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { runTry } from '../src/runtime-client.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { renderHelp } from '../src/pdd-cli.mjs';
-import { proseSha256, captureSource } from '../src/runtime-preflight.mjs';
+import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
+import { openCli } from '../src/try-doors.mjs';
+import { proseSha256, captureSource, findTests } from '../src/runtime-preflight.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
 // Synthetic expectations come from #2760: no real interpreter, browser or shell.
@@ -36,7 +38,7 @@ function project(t, kinds = ['cli', 'http', 'screen'], map = kinds.includes('htt
 async function harness(t, setup) {
   const fake = await fakeRuntime(t, (entry, f) => {
     if (entry.url.endsWith('/model')) return { status: 200, json: { entries: ['http', 'http-two'].filter(k => existsSync(join(setup.repo, `prompts/${k}.prompt.md`))).map(k => ({ entry_path: `prompts/${k}.prompt.md`, operation: 'main', input_schema: object({}), http: { method: 'GET', path: k === 'http' ? '/health' : '/other' } })), calls: { cap: 400, remaining: 400 }, app_map: existsSync(join(setup.repo, 'app-map.json')) } };
-    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId, ['cli', 'http', 'http-two', 'screen', 'screen-two', 'cli-two'].map(k => ({ path: `prompts/${k}.prompt.md`, admission_state: 'draft', state: 'draft', interface: { calls: [] } }))) };
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId, ['cli', 'http', 'http-two', 'screen', 'screen-two', 'cli-two', 'typed'].map(k => ({ path: `prompts/${k}.prompt.md`, admission_state: 'draft', state: 'draft', interface: { calls: [] } }))) };
     if (entry.command === 'try') { const job = f.tryJob(entry.request.requestId); f.jobs.set(entry.request.requestId, job); return { status: 200, json: job }; }
     return { status: 200, json: f.jobs.get(entry.url.split('/').at(-1)) };
   });
@@ -166,4 +168,83 @@ test('2760: no Story without screens or CLI serves all project HTTP routes', asy
   assert.ok(h.captures.at(-1).includes('prompts/http-two.prompt.md'));
   assert.match(result.ports.stdout.text, /GET \/health/);
   assert.match(result.ports.stdout.text, /GET \/other/);
+});
+
+
+// #2741's supplied shape is a typed operation, not an argv program.
+function typedProject(t, withMap = false) {
+  const setup = project(t, ['cli', 'typed', 'screen'], withMap);
+  const input = object({ commands: { type: 'array', items: text } });
+  const command = object({ advertised: { type: 'boolean' }, canonical: text, error: text, outcome: text, route: { type: 'array', items: text } });
+  const result = object({ commands: { type: 'array', items: command } });
+  const iface = { status: 'draft', prose_sha256: '', entries: [{ operation: 'resolve_command', input_schema: input, result_schema: result, errors: [] }], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 1 }, conventions: [] };
+  const content = () => `# Typed command resolver\n\nClassify the supplied command names and return their declared routes.\n\n## Dependencies\n\nNone.\n\n<details><summary>Runtime interface</summary>\n\n\x60\x60\x60json\n${JSON.stringify(iface)}\n\x60\x60\x60\n</details>\n`;
+  iface.prose_sha256 = proseSha256(content());
+  writeFileSync(join(setup.repo, 'prompts/typed.prompt.md'), content());
+  const file = join(setup.repo, 'tests/typed.json'), doc = JSON.parse(readFileSync(file));
+  doc.steps[0].operation = 'resolve_command';
+  doc.steps[0].input = { commands: ['industry-sim day status'] };
+  doc.steps[0].checks = [{ criterion_id: 'AC1', target: 'result', path: '/commands', op: 'equals', value: [{ advertised: true, canonical: 'industry-sim day status', error: '', outcome: 'route', route: ['day', 'status'] }] }];
+  writeFileSync(file, JSON.stringify(doc));
+  if (withMap) {
+    const file = join(setup.repo, 'app-map.json'), map = JSON.parse(readFileSync(file));
+    map.screens = map.screens.filter(screen => screen.id === 'screen');
+    writeFileSync(file, JSON.stringify(map));
+  }
+  return setup;
+}
+const typedExplanation = "This Story's operation takes typed input, so it opens on the Form tab.";
+const assertTypedRefusal = message => {
+  assert.match(message, /This Story is not a command-line program\. These are: cli\./);
+  assert.match(message, /pdd simulate typed opens its Form tab\./);
+  assert.doesNotMatch(message, /RUNBOOK|schemas?|conventions?|adapters?|Mark both/i);
+};
+
+for (const withMap of [false, true]) {
+  test(`2760 typed: typed operation opens Form with explanation ${withMap ? 'beside unrelated mapped Screen' : 'without app map'}`, async t => {
+    const h = await harness(t, typedProject(t, withMap));
+    if (withMap) {
+      const screen = await h.run('screen');
+      assert.equal(screen.code, 0, screen.ports.stderr.text);
+      assert.equal(h.fake.posts.find(p => p.command === 'try').request.tab, 'screen');
+      h.events.length = 0;
+    }
+    const result = await h.run('typed');
+    assert.equal(result.code, 0, result.ports.stderr.text);
+    assert.deepEqual(h.events.map(e => e.kind), ['page']);
+    const request = h.fake.posts.find(p => p.command === 'try' && p.request.seed === 'tests/typed.json')?.request;
+    assert.equal(request?.tab, 'call', 'Form uses the existing call protocol tab');
+    const output = result.ports.stdout.text + result.ports.stderr.text;
+    assert.ok(output.split('\n').includes(typedExplanation), output);
+    assert.doesNotMatch(output, /Mark both|add[^\n]*(?:convention|adapter)/i);
+    assert.equal(h.fake.jsonPosts.length, 0, 'opening Form must not execute a typed command');
+  });
+}
+for (const flag of ['--cli', '--shell']) {
+  test(`2760 typed: ${flag} refuses with CLI choices and Form recovery`, async t => {
+    const h = await harness(t, typedProject(t, true));
+    const result = await h.run('typed', { [flag]: true });
+    assert.equal(result.code, 125);
+    assertTypedRefusal(result.ports.stderr.text);
+    assert.equal(h.fake.posts.length, 0, 'locally known mismatch must not create a session');
+    assert.deepEqual(h.events, []);
+  });
+}
+
+test('2760 typed: direct CLI adapter refuses without advising conventions or an argv adapter', async t => {
+  const setup = typedProject(t), found = findTests({ root: setup.repo });
+  const selected = found.tests.find(test => test.story === 'typed');
+  assert.ok(selected);
+  await assert.rejects(openCli({ root: setup.repo, visible: found.visible, found }, selected, 'unused', {}), error => {
+    assert.equal(error.exitCode, 125);
+    assertTypedRefusal(error.message);
+    return true;
+  });
+  assert.equal(existsSync(join(setup.repo, '.pdd/try/bin')), false);
+});
+
+test('2760 typed: page override has its own exact public help form', () => {
+  assert.ok(PUBLIC_COMMAND_MANIFEST.some(entry => entry.form === 'pdd simulate [STORY] --page [--new]'));
+  assert.match(renderHelp(['simulate']), /^  pdd simulate \[STORY\] --page \[--new\]  /m);
+  assert.match(renderHelp(['simulate']), /typed operations.*Form tab/i);
 });

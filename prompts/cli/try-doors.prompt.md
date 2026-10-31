@@ -5,7 +5,9 @@ streams and saved session identity. Do not interpret commands, execute a project
 
 `openCli(context, test, sessionId, options)` selects the first distinct CLI entry used by the Story's tests; refuse
 if there are multiple distinct CLI entries. Simulation mode selection and plain eligibility refusals belong to
-[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program). Both input and result schemas carry the cli convention. A safe program
+[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program). For a missing CLI entry, including direct `openCli` calls, use that owner's plain mismatch, eligible-Story list, Form recovery command and exit 125; never recommend
+adding conventions or adapters. Refuse before writing a launcher or calling the runtime.
+Both input and result schemas carry the cli convention. A safe program
 name comes from the prompt's first H1 (optionally backticked): letters/digits/dot/underscore/hyphen, starting with
 a letter, up to 64 characters; pdd, node, gh and git are reserved because putting their shims first on PATH would shadow pdd’s own tools. Record schema, original test and Story criteria privately using
 the runtime state store. Create .pdd/try/bin/<program> with mode 0700 and a POSIX shell shebang that execs the absolute Node executable. Never traverse a symlink

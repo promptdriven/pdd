@@ -12,6 +12,10 @@ or on the Simulator page, without choosing flags first.
 5. Help, feature and bug skill advice, and the Story gate explain the same automatic choice and say I can omit the Story to open the whole project.
 6. If the project has several different command-line programs, `pdd simulate` asks me to name a Story and lists the choices instead of starting an arbitrary program.
 
+7. A Story whose operation takes typed commands and returns a structured answer opens on the Form tab with one plain explanation, including when another Story has the project's screen map; a Story actually mapped to a screen still opens Screen.
+8. For that typed Story, `--cli` or `--shell` exits 125, explains it is not a command-line program, lists eligible command-line Stories and says `pdd simulate typed` opens its Form tab. No message asks me to add conventions or an adapter, including when the CLI adapter is called directly.
+9. Help lists `pdd simulate [STORY] --page [--new]` as its own form.
+
 ## Rules to check
 
 A named Story chooses command-line first, HTTP second, then the page. Explicit
