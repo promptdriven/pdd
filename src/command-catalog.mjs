@@ -1,8 +1,8 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: a3fd7502d814418e6d1c0a39d67024a5f2d6ea4e8b7419cfeb93b4633abac62c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: e990f8ea57fbceae9c6027ee0f2707f1bf9e1a7e66bdf19683fba0b400206f13).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
-export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
-const { test, lint, simulate, start } = NAMES;
+export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });
+const { test, lint, simulate, run } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
 const routes = [
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
@@ -11,10 +11,11 @@ const routes = [
     forms: [form('pdd product next', 'Show ready planned runs and their start commands; no interpreter calls.')] },
   { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'value',choices:['codex','claude']}],
     forms: [form('pdd product start RUN [--no-run] [--agent codex|claude]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue. No interpreter calls.')] },
-  { id: 'workflow.run', prefix: ['workflow', start], local: 'workflow-run', formerly: ['workflow', 'run'],
+  // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
+  { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
     options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
-    forms:[form(`pdd workflow ${start} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
@@ -54,7 +55,8 @@ const routes = [
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   { id: 'workflow.list', prefix: ['workflow', 'list'], local: 'workflow-list', operands: [], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd workflow list [--json]', 'List the bundled workflows with their areas and gates.')] },
-  { id: 'check', prefix: [test], local: 'runtime-check', formerly: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
+  // A removed word runs nothing: the parser refuses it with one line that names the route's prefix.
+  { id: 'check', prefix: [test], local: 'runtime-check', removed: ['check'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--details', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 },
       { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--read', kind: 'flag' }, { name: '--retry', kind: 'text' }, { name: '--fill-hash', kind: 'flag' },
       { name: '--files', kind: 'flag' }, { name: '--app-map', kind: 'text' }, { name: '--lint', kind: 'flag', hidden: true }, { name: '--local', kind: 'flag', hidden: true }, { name: '--screen', kind: 'text' }, { name: '--drawing', kind: 'text' }, { name: '--request', kind: 'uuid', hidden: true }],
@@ -65,14 +67,14 @@ const routes = [
       form(`pdd ${test} --files [STORY...] [--app-map PATH]`, 'List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator\'s app map.'),
       form(`pdd ${test} --screen URL --drawing PATH [--json]`, 'Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium; no AI or interpreter calls.')] },
   // A lint plan always has --lint, so the runtime client runs the same code as for `pdd test --lint`.
-  { id: 'lint', prefix: [lint], local: 'runtime-check', formerly: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
+  { id: 'lint', prefix: [lint], local: 'runtime-check', removed: ['check', '--lint'], implies: ['--lint'], operands: [{ name: 'story', type: 'text', optional: true, repeat: true }],
     options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--local', kind: 'flag' }],
     forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.')] },
   { id: 'approve', prefix: ['approve'], local: 'prompt-approve', operands: [{ name: 'prompt', type: 'text' }], options: [],
     forms: [form('pdd approve PROMPT', 'Show a prompt\'s runtime interface and its text changes since the last approval, and set it to approved after you answer y. For a person at a terminal only.')] },
-  // `sim` is the short form of the try route: it parses like `simulate` and never gets a notice.
-  { id: 'try', prefix: [simulate], local: 'runtime-try', formerly: ['try'], short: ['sim'], operands: [{ name: 'story', type: 'text', optional: true }],
+  // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
+  { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
     options: [{ name: '--agent', kind: 'text' }, { name: '--tab', kind: 'value', choices: ['call', 'screen', 'terminal', 'world'] }, { name: '--new', kind: 'flag' },
       { name: '--cli', kind: 'flag' }, { name: '--shell', kind: 'flag' }, { name: '--save-last', kind: 'flag' },
       { name: '--serve', kind: 'optional-integer', min: 1, max: 65535, default: 8080 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 },
@@ -94,8 +96,8 @@ const routes = [
     forms: [form('pdd setup', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
-  prefix: Object.freeze(route.prefix), ...(route.formerly ? { formerly: Object.freeze(route.formerly) } : {}),
-  ...(route.short ? { short: Object.freeze(route.short) } : {}),
+  prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
+  ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),
   ...(route.implies ? { implies: Object.freeze(route.implies) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
   options: Object.freeze(route.options.map(Object.freeze)), forms: Object.freeze(route.forms) })));
 export const PUBLIC_COMMAND_IDS = Object.freeze(PUBLIC_COMMAND_ROUTES.map(route => route.id));

@@ -47,7 +47,7 @@ function fixture(t, text) {
   writeFileSync(join(root, DOCUMENT), text);
   writeFileSync(join(root, 'docs/real.txt'), 'Real context\n');
   writeFileSync(join(root, 'docs/real.svg'), '<svg/>\n');
-  symlinkSync('real.svg', join(root, 'docs/unsafe.svg'));
+  symlinkSync('missing-link-target.svg', join(root, 'docs/unsafe.svg'));
   return root;
 }
 function outcome(root) {

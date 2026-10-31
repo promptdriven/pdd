@@ -88,15 +88,13 @@ test('fill hash CLI replays succeed beside unrelated prompts in every directory'
     const state = setup(t, replay.cases, placement), bin = join(state.root, 'bin'); mkdirSync(bin);
     const git = spawnSync('which', ['git'], { encoding: 'utf8' }); assert.equal(git.status, 0);
     symlinkSync(git.stdout.trim(), join(bin, 'git'));
-    const result = spawnSync(process.execPath, [cli, 'check', '--fill-hash'], {
+    const result = spawnSync(process.execPath, [cli, 'test', '--fill-hash'], {
       cwd: state.repo, input: '', timeout: 30000, encoding: 'utf8',
       env: { HOME: state.home, PATH: bin, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
     });
     assert.equal(result.error, undefined); assert.equal(result.signal, null);
     assert.equal(result.status, replay.exit_code, `${replay.name}: ${result.stdout}\n${result.stderr}`);
-    // The former name `check` adds only its one notice line on stderr; stdout and exit code stay the same.
-    const notice = result.stderr.split('\n').filter(Boolean);
-    assert.equal(notice.length, 1, result.stderr); assert.ok(notice[0].includes('pdd check') && notice[0].includes('pdd test'), result.stderr);
+    assert.equal(result.stderr, '', result.stderr);
     verifyOutput(result.stdout, state, replay);
     verifyBytes(state);
   }

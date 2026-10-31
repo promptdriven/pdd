@@ -12,7 +12,7 @@ async function check(setup, fake, words = [], options = {}, extra = {}) {
   const { ports, clock } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
   const code = await runCheck({ words, options, cwd: setup.repo }, ports);
   return { code, clock, out: ports.stdout.text, err: ports.stderr.text, json: options['--json'] ? JSON.parse(ports.stdout.text) : null,
-    batch: /pdd check --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(ports.stderr.text)?.[1] };
+    batch: /pdd test --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(ports.stderr.text)?.[1] };
 }
 const batchFile = (setup, batch) => JSON.parse(readFileSync(join(setup.state, 'batches', batch, 'batch.json'), 'utf8'));
 
@@ -40,13 +40,13 @@ test('RUNTIME-SERVER1: one lint, then every check is sent before the first answe
   assert.deepEqual(checks.map(post => post.request.max_calls), [18, 18]);
   assert.equal(new Set(fake.posts.map(post => post.request.requestId)).size, 3);
   assert.deepEqual([...fake.authorization], [`Bearer ${TOKEN}`]);
-  assert.match(result.err, /^Lint passed\. Sent 2 checks at \d\d:\d\d:\d\d: 6 files, \d+ KB \(1 is not prompt, story or test files; run `pdd check --files` to see them\)\.$/m);
+  assert.match(result.err, /^Lint passed\. Sent 2 checks at \d\d:\d\d:\d\d: 6 files, \d+ KB \(1 is not prompt, story or test files; run `pdd test --files` to see them\)\.$/m);
   assert.equal((result.out + result.err).split('not prompt, story or test files').length, 2);
   const json = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
   assert.deepEqual(json.json.warnings, []);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed +1\/1 +2\.0 s$/m);
-  assert.deepEqual(result.out.split('\n').slice(3, 6), ['Runtime check (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
-    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
+  assert.deepEqual(result.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
+    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
   assert.match(result.out, /^2 of 2 stories passed\. Model asked for: gpt-6\.1-sol\.$/m);
   assert.match(result.out, /^Reports \(anyone with a link can open it\):\n {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/[0-9a-f]+$/m);
   assert.doesNotMatch(result.out + result.err, new RegExp(checks[0].request.requestId));
@@ -66,7 +66,7 @@ test('RUNTIME-SERVER2: a lost connection after a POST is read with the same ID a
   assert.equal(lost.code, 3);
   assert.equal(missing.posts.filter(post => post.command === 'check').length, 1);
   assert.ok(missing.gets.length > 100 && missing.gets.every(get => get.url === `/v1/runs/${missing.posts[1].request.requestId}`));
-  assert.equal(lost.out.split('\n')[0], `pdd check --read ${lost.batch}`);
+  assert.equal(lost.out.split('\n')[0], `pdd test --read ${lost.batch}`);
   assert.match(lost.out, /UNKNOWN {2}Place a coffee order: the run may have executed\. Its result is unknown\./);
 });
 
@@ -120,8 +120,8 @@ test('RUNTIME-SERVER5: Ctrl-C prints the read line and exits 3; --read then GETs
   interrupt = () => clock.interrupt?.();
   const code = await runCheck({ words: ['place-order'], options: {}, cwd: setup.repo }, ports);
   assert.equal(code, 3);
-  const batch = /pdd check --read (\S+)/.exec(ports.stderr.text)[1];
-  assert.equal(ports.stdout.text.split('\n')[0], `pdd check --read ${batch}`);
+  const batch = /pdd test --read (\S+)/.exec(ports.stderr.text)[1];
+  assert.equal(ports.stdout.text.split('\n')[0], `pdd test --read ${batch}`);
   assert.match(ports.stdout.text, /STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\./);
   finished = true;
   const posts = fake.posts.length;
@@ -189,7 +189,7 @@ test('RUNTIME-SERVER8: lint refuses tests that reach a bad prompt; unknown lint 
   const lost = await fakeRuntime(t, entry => entry.method === 'POST' ? { destroy: true } : { status: 404, json: { error: { code: 'not-found' } } });
   const unknown = await check(setup, lost, []);
   assert.equal(unknown.code, 3); assert.deepEqual(lost.posts.map(post => post.command), ['lint']);
-  assert.match(unknown.out, /^pdd check --read /);
+  assert.match(unknown.out, /^pdd test --read /);
 });
 
 // Wrong: a failed check is shown as raw JSON, or without the criterion, expected and got values (issue 10).
@@ -292,7 +292,7 @@ test('RUNTIME-XFIX4: reruns attach to each failed check, use diagnosis data, and
   };
   const stable = await check(setup, await fakeRuntime(t, answerFor({ calls: 2, steps: [{ step_id: 'second-step', runs: 3, failed: 1, stable: false }] })), ['place-order']);
   assert.equal(stable.code, 1);
-  assert.match(stable.out, /Runtime check \(place-order\): ✗ [^\n]*5 AI calls \(2 for reruns\)/);
+  assert.match(stable.out, /Prompt tests \(place-order\): ✗ [^\n]*5 AI calls \(2 for reruns\)/);
   assert.match(stable.out, /Rerun: failed 3 of 3 \(stable\)\. A recheck of the same files will not help\./);
   assert.doesNotMatch(stable.out, /passed 2 of 2 reruns/);
   assert.equal((stable.out.match(/Rerun:/g) ?? []).length, 2); assert.doesNotMatch(stable.out, /more AI calls/);
@@ -416,7 +416,7 @@ test('RUNTIME-SERVER10: at --timeout an open check is still running (exit 3) and
   assert.equal(result.code, 3);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.match(result.out, /STILL RUNNING after 1 min: Place a coffee order\. Do not send it again\./);
-  assert.match(result.out, /^Runtime check \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
+  assert.match(result.out, /^Prompt tests \(place-order\): running · 0 of 3 criteria · 0\/0 checks · 1 running · 0 AI calls \+ 1 unknown$/m);
   assert.doesNotMatch(result.out, /✗|failed/);
   assert.ok(fake.gets.length >= 28 && fake.gets.length <= 31, String(fake.gets.length));
   assert.equal(fake.posts.length, 2);
@@ -508,9 +508,9 @@ test('RUNTIME-WAIT1: in a terminal with no --timeout pdd waits until every row e
   assert.ok(oneObserved.lines.length >= 1, 'a waiting single Story reports progress');
   assertCadence(oneObserved);
   for (const line of oneObserved.lines) assert.deepEqual(parseProgress(line), { done: 0, total: 1, noun: 'Story', calls: 1 });
-  const oneBatch = /pdd check --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(oneMade.ports.stderr.text)?.[1];
+  const oneBatch = /pdd test --read (\d{8}-\d{6}-[a-z0-9]{4})/.exec(oneMade.ports.stderr.text)?.[1];
   assert.ok(oneBatch);
-  assert.ok(oneMade.ports.stderr.text.includes(`Still running. Read the results later with: pdd check --read ${oneBatch}`));
+  assert.ok(oneMade.ports.stderr.text.includes(`Still running. Read the results later with: pdd test --read ${oneBatch}`));
   assert.match(oneMade.ports.stdout.text, /^Place a coffee order +tests\/place-order\.json +running +- +-$/m);
   assert.equal(oneFake.posts.filter(post => post.command === 'check').length, 1);
   assert.equal(oneFake.posts.length, 2);
@@ -533,9 +533,9 @@ test('RUNTIME-WAIT3: Ctrl-C after 12 min prints the read line and exits 3; --rea
   const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { interactive: true });
   clock = made.clock;
   const code = await runCheck({ words: [], options: {}, cwd: setup.repo }, made.ports);
-  const out = made.ports.stdout.text, batch = /pdd check --read (\S+)/.exec(made.ports.stderr.text)[1];
+  const out = made.ports.stdout.text, batch = /pdd test --read (\S+)/.exec(made.ports.stderr.text)[1];
   assert.equal(code, 3, out);
-  assert.equal(out.split('\n')[0], `pdd check --read ${batch}`);
+  assert.equal(out.split('\n')[0], `pdd test --read ${batch}`);
   assert.match(out, /^STILL RUNNING when pdd stopped reading: Place a coffee order\. Do not send it again\.$/m);
   const stopped = /^NOT RUN {2}Refuse an item[^:]*: (.+) \(check-busy\)$/m.exec(out)?.[1];
   const submitted = fake.posts.findLast(post => post.command === 'check' && post.request.scenario === 'tests/unknown-item.json');
@@ -565,7 +565,7 @@ test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table a
     const made = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, extra);
     clock = made.clock;
     const code = await runCheck({ words: ['place-order'], options, cwd: setup.repo }, made.ports);
-    return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd check --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
+    return { code, out: made.ports.stdout.text, err: made.ports.stderr.text, batch: /pdd test --read (\S+)/.exec(made.ports.stderr.text)?.[1] };
   };
   const agent = await run({}, { interactive: false });
   assert.equal(agent.code, 3, agent.err + agent.out);
@@ -574,7 +574,7 @@ test('RUNTIME-WAIT4: with no terminal pdd waits at most 90 s, prints the table a
   const err = agent.err.trimEnd().split('\n');
   assert.deepEqual(err.filter(text => text.startsWith('Still running:')), ['Still running: 0 of 1 Story done · 1 AI call so far · 30 s',
     'Still running: 0 of 1 Story done · 1 AI call so far · 1 min']);
-  assert.equal(err.at(-1), `Still running. Read the results later with: pdd check --read ${agent.batch}`);
+  assert.equal(err.at(-1), `Still running. Read the results later with: pdd test --read ${agent.batch}`);
   assert.equal(err.filter(text => text.startsWith('If pdd stops')).length, 1);
   assert.equal(JSON.parse(readFileSync(join(setup.state, 'batches', agent.batch, 'batch.json'), 'utf8')).timeout_min, 1.5);
   const longer = await run({ '--timeout': '20' }, { interactive: false });
@@ -700,16 +700,16 @@ test('RUNTIME-SERVER16: one pasteable summary line with the appropriate verdict 
   });
   const text = await check(setup, fake, []);
   assert.equal(text.code, 1);
-  assert.deepEqual(text.out.split('\n').slice(3, 6), ['Runtime check (place-order): ✗ 1 of 2 criteria · 1/2 checks · 1 AI call',
-    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls']);
+  assert.deepEqual(text.out.split('\n').slice(3, 6), ['Prompt tests (place-order): ✗ 1 of 2 criteria · 1/2 checks · 1 AI call',
+    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
-  assert.equal(json.json.summary_line, 'Runtime check: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
+  assert.equal(json.json.summary_line, 'Prompt tests: ✗ 2 of 3 criteria · 2/3 checks · 2 AI calls');
   const refused = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
   });
   const mixed = await check(refused, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--json': true });
-  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Runtime check: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
+  assert.equal(mixed.code, 4); assert.equal(mixed.json.summary_line, 'Prompt tests: no verdict · 1 of 4 criteria · 1/1 checks · 1 refused · 1 AI call');
 });
 
 // Wrong: the runtime address is written in more than one place, so a move needs many edits.
@@ -800,7 +800,7 @@ test('RUNTIME-WAIT5: with no terminal a lost POST answer is read until 90 s, the
   assert.equal(result.code, 3);
   assert.ok(fake.gets.length >= 44 && fake.gets.length <= 45, String(fake.gets.length));
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
-  assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd check --read ${result.batch}`);
+  assert.equal(result.err.trimEnd().split('\n').at(-1), `Still running. Read the results later with: pdd test --read ${result.batch}`);
 });
 
 // Wrong: an AI provider failure looks like a failed check, or pdd resends it by itself.
@@ -817,7 +817,7 @@ test('RUNTIME-SERVER19: a provider failure gets its own UNKNOWN block, exit 3 an
   assert.equal(result.code, 3);
   assert.match(result.out, /^UNKNOWN {2}Place a coffee order: the AI provider failed during the run\. It is not a failed check\. Do not send it again yet\.$/m);
   assert.doesNotMatch(result.out, /FAILED|REFUSED/);
-  assert.match(result.out, /graph-provider-failure \(transport_unknown, internal-retry\)[^\n]*\n {2}To try again, run `pdd check` again \(a new request\)\.$/m);
+  assert.match(result.out, /graph-provider-failure \(transport_unknown, internal-retry\)[^\n]*\n {2}To try again, run `pdd test` again \(a new request\)\.$/m);
   assert.equal(fake.posts.filter(post => post.command === 'check').length, 1);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.rows[0].reason.code, 'graph-provider-failure');
@@ -922,11 +922,11 @@ test('RUNTIME-DRAFT2: a draft prompt is checked, and every row, link, summary li
   const result = await check(setup, fake, ['place-order']);
   assert.equal(result.code, 0, result.err + result.out);
   assert.match(result.out, /^Place a coffee order +tests\/place-order\.json +passed \(DRAFT\) +1\/1/m);
-  assert.match(result.out, /^Runtime check \(place-order\) \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
+  assert.match(result.out, /^Prompt tests \(place-order\) \(DRAFT\): ✓ 1 of 1 criterion · 1\/1 checks · 1 AI call$/m);
   assert.match(result.out, /^ {2}place-order +http:\/\/127\.0\.0\.1:\d+\/r\/\w+ {2}\(DRAFT\)$/m);
   const json = await check(setup, fake, ['place-order'], { '--json': true });
   assert.equal(json.json.draft, true); assert.equal(json.json.rows[0].draft, true);
-  assert.match(json.json.summary_line, /^Runtime check \(DRAFT\): ✓/);
+  assert.match(json.json.summary_line, /^Prompt tests \(DRAFT\): ✓/);
   const approved = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), ['place-order'], { '--json': true });
   assert.equal(approved.json.draft, false); assert.doesNotMatch(approved.json.summary_line, /DRAFT/);
 });
@@ -953,7 +953,7 @@ test('RUNTIME-DRAFT4: the draft_prompts list of the server decides DRAFT; withou
   assert.equal(cleared.json.rows[0].draft, false); assert.doesNotMatch(cleared.json.summary_line, /DRAFT/);
   const plain = harbor(t);
   const flagged = await check(plain, await fakeRuntime(t, await said([PLACE])), ['place-order'], { '--json': true });
-  assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Runtime check \(DRAFT\)/);
+  assert.equal(flagged.json.rows[0].draft, true); assert.match(flagged.json.summary_line, /^Prompt tests \(DRAFT\)/);
 });
 
 // Wrong: the runtime runs on a bare IP, and pdd refuses its own links or accepts a link to another host.
@@ -989,10 +989,10 @@ test('RUNTIME-COST1: a check of all stories says about how many AI calls it uses
 test('RUNTIME-COST2: the summary line shows running or no verdict, never a cross, until a row really fails', async () => {
   const { summaryLine } = await import('../src/runtime-output.mjs');
   const row = (state, extra = {}) => ({ state, phase: 'server', criteria_total: 1, calls: 1, ...extra });
-  assert.match(summaryLine([row('passed'), row('running')]), /^Runtime check: running · /);
-  assert.match(summaryLine([row('passed'), row('unknown')]), /^Runtime check: no verdict · /);
-  assert.match(summaryLine([row('failed'), row('running')]), /^Runtime check: ✗ /);
-  assert.match(summaryLine([row('passed')]), /^Runtime check: ✓ /);
+  assert.match(summaryLine([row('passed'), row('running')]), /^Prompt tests: running · /);
+  assert.match(summaryLine([row('passed'), row('unknown')]), /^Prompt tests: no verdict · /);
+  assert.match(summaryLine([row('failed'), row('running')]), /^Prompt tests: ✗ /);
+  assert.match(summaryLine([row('passed')]), /^Prompt tests: ✓ /);
 });
 
 const NOT_INVITED = { status: 403, json: { code: 'not-invited', login: 'octo', message: 'This GitHub login is not on the invite list.' } };
@@ -1066,7 +1066,7 @@ test('RUNTIME-CLOUD2: 503 cloud-unavailable says at once to try again in a minut
   // A check that the server took keeps running: pdd stops reading, says why, and names the --read line.
   const atRead = await fakeRuntime(t, (entry, f) => entry.method === 'GET' ? CLOUD_DOWN : f.normal(entry));
   const reading = await check(setup, atRead, ['place-order']);
-  assert.equal(reading.code, 3); assert.match(reading.err, again); assert.match(reading.err, /pdd check --read /);
+  assert.equal(reading.code, 3); assert.match(reading.err, again); assert.match(reading.err, /pdd test --read /);
   assert.equal(atRead.gets.length, 1); assert.deepEqual(atRead.posts.map(post => post.command), ['lint', 'check']);
 });
 
@@ -1088,7 +1088,7 @@ test('RUNTIME-CLOUD3: update-required still says to update pdd, and not-invited 
 test('RUNTIME-READLINE1: "If pdd stops" prints after lint passes and before the checks are sent', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
   const result = await check(setup, fake, ['place-order']);
-  const lines = result.err.split('\n'), read = lines.findIndex(text => text.startsWith('If pdd stops, read the results with: pdd check --read '));
+  const lines = result.err.split('\n'), read = lines.findIndex(text => text.startsWith('If pdd stops, read the results with: pdd test --read '));
   assert.ok(read > lines.findIndex(text => text.startsWith('Lint passed.')), result.err);
   assert.equal(lines.filter(text => text.startsWith('If pdd stops')).length, 1);
   const refused = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
@@ -1104,27 +1104,27 @@ test('RUNTIME-STORYLINE1: one paste line per Story after the table, the overall 
   const result = await check(setup, fake, []);
   assert.equal(result.code, 0, result.err);
   const lines = result.out.split('\n'), table = lines.findIndex(text => text.startsWith('Story '));
-  assert.deepEqual(lines.slice(table + 4, table + 7), ['Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls',
-    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls']);
+  assert.deepEqual(lines.slice(table + 4, table + 7), ['Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls',
+    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls']);
   const json = await check(setup, fake, [], { '--json': true });
   assert.deepEqual(json.json.rows.map(row => [row.test, row.summary_line]), [
-    ['tests/place-order-2.json', 'Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
-    ['tests/place-order.json', 'Runtime check (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
-    ['tests/unknown-item.json', 'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']]);
-  assert.equal(json.json.summary_line, 'Runtime check: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
+    ['tests/place-order-2.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/place-order.json', 'Prompt tests (place-order): ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls'],
+    ['tests/unknown-item.json', 'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']]);
+  assert.equal(json.json.summary_line, 'Prompt tests: ✓ 3 of 3 criteria · 3/3 checks · 3 AI calls');
   const draft = await check(draftRepo(t), await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry)), ['place-order']);
-  assert.ok(draft.out.split('\n').includes('Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
+  assert.ok(draft.out.split('\n').includes('Prompt tests (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call'), draft.out);
 });
 
 // Wrong: one Story prints its line twice, once with its name and once as the overall line (round-2 tester, Oct 27).
-test('RUNTIME-STORYLINE2: one Story prints only its own Runtime check line; two Stories add the overall line', async t => {
+test('RUNTIME-STORYLINE2: one Story prints only its own Prompt tests line; two Stories add the overall line', async t => {
   const fake = await fakeRuntime(t, (entry, f) => draftLint(entry, f) ?? f.normal(entry));
   const one = await check(draftRepo(t), fake, ['place-order']);
-  assert.deepEqual(one.out.split('\n').filter(text => text.startsWith('Runtime check')),
-    ['Runtime check (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']);
+  assert.deepEqual(one.out.split('\n').filter(text => text.startsWith('Prompt tests')),
+    ['Prompt tests (place-order) (DRAFT): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call']);
   const two = await check(harbor(t), await fakeRuntime(t, (entry, f) => f.normal(entry)), []);
-  assert.deepEqual(two.out.split('\n').filter(text => text.startsWith('Runtime check')), ['Runtime check (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
-    'Runtime check (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Runtime check: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
+  assert.deepEqual(two.out.split('\n').filter(text => text.startsWith('Prompt tests')), ['Prompt tests (place-order): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call',
+    'Prompt tests (unknown-item): ✓ 1 of 1 criterion · 1/1 checks · 1 AI call', 'Prompt tests: ✓ 2 of 2 criteria · 2/2 checks · 2 AI calls']);
 });
 
 // Wrong: when the server retires an address it answers "update required", and an old pdd shows a failure table or retries (0.1.6).
@@ -1146,7 +1146,7 @@ test('RUNTIME-UPDATE1: code update-required (any status, top level or error.code
 });
 
 // Wrong: agents import pdd's source for a lint, or a lint runs pdd's local copy of the engine rules.
-test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
+test('RUNTIME-LINT1: pdd lint sends one lint and no checks, prints every server problem, and skips the local rules', async t => {
   const setup = harbor(t, repo => {
     const file = join(repo, 'tests/place-order.json'), doc = JSON.parse(readFileSync(file, 'utf8'));
     doc.steps[0].input.items[0].quantity = 0; writeFileSync(file, JSON.stringify(doc));
@@ -1154,7 +1154,7 @@ test('RUNTIME-LINT1: pdd check --lint sends one lint and no checks, prints every
   const ok = await check(setup, await fakeRuntime(t, (entry, f) => f.normal(entry)), [], { '--lint': true });
   assert.equal(ok.code, 0, ok.err + ok.out);
   assert.match(ok.out, /^Lint: 2 of 2 tests pass\. 0 AI calls\. No checks were sent\.$/m);
-  assert.doesNotMatch(ok.out + ok.err, /invalid-input|Runtime check|If pdd stops/);
+  assert.doesNotMatch(ok.out + ok.err, /invalid-input|Prompt tests|If pdd stops/);
   const refusing = await fakeRuntime(t, (entry, f) => entry.method === 'POST' && entry.command === 'lint'
     ? { status: 200, json: f.lint(entry.request.requestId, [{ path: PLACE, state: 'refused', admission_state: 'refused', interface: null }],
       [{ code: 'graph-schema-type-list', path: PLACE, section: 'Runtime interface.entries[0].input_schema', message: 'graph executable schema is invalid: type list' },
@@ -1282,7 +1282,7 @@ test('hcli-2: saved-data and nested prompt calls contribute to the estimate with
     const prompt = value => text.replace(/```json\s*[\s\S]*?```/, '```json\n' + JSON.stringify(value) + '\n```');
     writeFileSync(file, prompt(iface)); writeFileSync(join(repo, 'prompts/shared.prompt.md'), prompt(shared));
   });
-  const fill = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'check', '--fill-hash'], { cwd: setup.repo, encoding: 'utf8' }); assert.equal(fill.status, 0, fill.stderr);
+  const fill = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', '--fill-hash'], { cwd: setup.repo, encoding: 'utf8' }); assert.equal(fill.status, 0, fill.stderr);
   const fake = await fakeRuntime(t, (e, f) => f.normal(e));
   const result = await check(setup, fake, [], { '--max-calls': '32' });
   assert.equal(result.code, 0, result.out + result.err);

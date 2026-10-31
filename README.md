@@ -21,14 +21,14 @@ You need [Node.js](https://nodejs.org) 22.20 or newer, [Git](https://git-scm.com
 
 ```sh
 npm install -g github:promptdriven/pdd
-npx skills add promptdriven/pdd#alpha -g
+npx skills add promptdriven/pdd -g
 pdd --version
 cd your-repo
 pdd setup
 ```
 
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
-2. `npx skills add promptdriven/pdd#alpha -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
+2. `npx skills add promptdriven/pdd -g` adds the PDD skills for your agents. The installer finds the agents on your computer, or asks you which agents get the skills. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
 3. `pdd --version` must print `0.1.12`. When your skills are older than pdd, it also prints the command that updates them.
 4. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. A second run changes nothing.
 
@@ -71,7 +71,7 @@ The agent writes these files in prompt space:
 
 You read the Stories and approve them in the chat. The expected values come from you and the Stories, not from a run.
 
-In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow start feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
+In a chat, the agent opens a pull request only when you say yes. For a full run with pull requests, start from a GitHub issue: `pdd workflow run feature 42`, where 42 is the issue number. A run needs [Herdr](https://herdr.dev). pdd opens the agent chats in Herdr, and you follow the same steps.
 
 > [!WARNING]
 > In a workflow run, the agents run with full access. They do not stop to ask for approval. They can change files and run commands as your user.
@@ -89,9 +89,9 @@ pdd test
 Story        Test                    Result  Checks  Time
 My story     tests/my-story.json     passed  20/20   41.4 s
 Other story  tests/other-story.json  passed  34/34   89.1 s
-Runtime check (my-story): ✓ 2 of 2 criteria · 20/20 checks · 2 AI calls
-Runtime check (other-story): ✓ 5 of 5 criteria · 34/34 checks · 10 AI calls
-Runtime check: ✓ 7 of 7 criteria · 54/54 checks · 12 AI calls
+Prompt tests (my-story): ✓ 2 of 2 criteria · 20/20 checks · 2 AI calls
+Prompt tests (other-story): ✓ 5 of 5 criteria · 34/34 checks · 10 AI calls
+Prompt tests: ✓ 7 of 7 criteria · 54/54 checks · 12 AI calls
 2 of 2 stories passed.
 Reports (anyone with a link can open it):
   my-story     https://…/r/…
@@ -160,7 +160,7 @@ See [Record a chat approval](docs/cli.md#record-a-chat-approval) for safe comman
 
 Code space is the PDD compiler: your agent writes the code from the approved prompts, and the same tests run on that code. In a workflow run, pdd opens two pull requests:
 
-1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Runtime check` lines and the report links.
+1. **Prompt space.** The prompts, the Stories and the tests. The pull request text starts with the `Prompt tests` lines and the report links.
 2. **Code space.** The code. To get it, say so in the chat, or run `pdd workflow approve 42`. The agent runs the unchanged tests from prompt space on the code and records the results, mutation control and formal check. pdd validates the source identity and report structure and shows missing or stale evidence as **BLOCKED**. These are agent-reported results, not independent proof of execution.
 
 pdd never merges and has no merge command. To ask your agent to merge, follow [RUNBOOK §2](RUNBOOK.md#2-the-files).
@@ -181,14 +181,12 @@ pdd never merges and has no merge command. To ask your agent to merge, follow [R
 | `pdd simulate STORY --new --max-calls N` | Start a new simulation with a limit of N AI calls. |
 | `pdd simulate --stop STORY` | Stop the Simulator link of a Story. |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd workflow start NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
+| `pdd workflow run NAME ISSUE` | Start a run on a GitHub issue. NAME is `feature`, `bug` or `small-change`. |
 | `pdd workflow status [ISSUE]` | Show where each run is and what it waits for. |
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
 | `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd help` | Show all commands. |
-
-`pdd check`, `pdd check --lint`, `pdd try` and `pdd workflow run` also work. Each one prints one line on stderr with the name to use.
 
 The [CLI reference](docs/cli.md) has every command and option.
 

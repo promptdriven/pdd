@@ -37,7 +37,7 @@ test('CHAT5 signed-out choice explains state without subprocess or fallback',asy
 });
 
 test('CHAT6 public parser and mode conflicts fail before sign-in',async t=>{
- const {parseArgv}=await import('../src/argument-parser.mjs');assert.equal(parseArgv(['try','story','--agent','claude']).options['--agent'],'claude');assert.equal(parseArgv(['try','--agent','Codex (work5)']).options['--agent'],'Codex (work5)');
+ const {parseArgv}=await import('../src/argument-parser.mjs');assert.equal(parseArgv(['simulate','story','--agent','claude']).options['--agent'],'claude');assert.equal(parseArgv(['simulate','--agent','Codex (work5)']).options['--agent'],'Codex (work5)');
  const {runTry}=await import('../src/runtime-client.mjs'),{harbor,portsFor}=await import('./runtime-fake.mjs');const fixture=harbor(t),{ports,clock}=portsFor({HOME:fixture.home,PDD_STATE_DIR:fixture.state});
  for(const mode of ['--no-wait','--cli','--serve','--stop','--save-last'])assert.equal(await runTry({cwd:fixture.repo,words:['place-order'],options:{'--agent':'codex',[mode]:true}},ports),2);
  assert.equal(clock.gh.length,0);

@@ -102,3 +102,16 @@ test('RELEASE5: ancestor aliases show artifacts and notes; redirected notes are 
   assert.match(blocked.stdout, /Gate notes unavailable/);
   assert.doesNotMatch(blocked.stdout, /private.md/);
 });
+
+// user_stories/prompt-tests-line.md: view shows Prompt tests lines and older Runtime check lines alike, and the Try links.
+test('VIEW-PROMPT-TESTS: view shows new and old summary lines, joined with "; " or one per line, and Try links', t => {
+  const f = fixture(t);
+  f.run.done = { check: { summary: 'Prompt tests (greet) (DRAFT): ✓ 1 of 1 criterion; Runtime check (wave): ✗ 0 of 1 criterion; Report: https://runtime.example.test/r/report-id' },
+    verify: { summary: 'Prompt tests (greet): ✓ 1 of 1 criterion\nPrompt tests: ✓ 1 of 1 criterion' },
+    try: { summary: 'Try: https://runtime.example.test/s/review-token/' } }; f.save();
+  const r = f.cli('workflow', 'view', '2442'); assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.split('\n');
+  for (const start of ['Prompt tests (greet) (DRAFT):', 'Runtime check (wave):', 'Prompt tests (greet):', 'Prompt tests:']) assert.ok(lines.some(line => line.startsWith(start)), start);
+  assert.ok(!lines.some(line => /^(?:Prompt tests|Runtime check).*(?:Prompt tests|Runtime check)/.test(line)), 'one line each');
+  assert.ok(lines.includes('Try: https://runtime.example.test/s/review-token/'), r.stdout);
+});
