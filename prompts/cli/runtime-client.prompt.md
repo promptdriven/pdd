@@ -207,14 +207,25 @@ cannot authorize dispatch. Clear stale unknown/pending wording on confirmed term
 report global and reached prompt refusals with their paths. Never rejudge posted check rows
 or local preflight refusals. Terminal busy lint stays busy without resubmission.
 
+### Saved Check row validity
+
+Use one shared row predicate for legacy Check identification and saved-lint
+continuation. A valid row has integer `max_calls` in 1..1000, positive integer
+`criteria_total`, and a nonempty `steps` array. Each step is an object with
+nonblank string `step_id`, `entry_path` and `operation`; step IDs are unique.
+Each step has a nonempty `checks` array of objects with nonblank string
+`criterion_id`. The number of distinct criterion IDs across those checks equals
+`criteria_total`. This predicate identifies authored Check rows; it does not
+establish a receipt's success or authorize dispatch by itself.
+
 ### Continue the original saved Check
 
 Only `--read BATCH` (including latest-batch reads) and `--retry BATCH` may continue a normal
 Check held solely by pending lint. This lint-continuation exception never applies to UUID call reads, hidden
 --request, standalone lint, Try, posted-job reads or capacity receipts; confirmed restart recovery is separately scoped below. New batches save
 explicit normal-Check versus lint-only intent. For supported version 1 legacy records produced
-by 0.1.9/0.1.10, recover normal-Check intent only when every held row has its valid original
-max_calls (1..1000), positive integer criteria_total and consistent authored steps. Require
+by 0.1.9/0.1.10, recover normal-Check intent only when every held row meets
+[saved Check row validity](#saved-check-row-validity). Require
 producer evidence of an unsent lint-held row: pending-lint evidence, prior unknown-lint
 `not_run` evidence, or the known already-read state with phase `lint`, state `not_run`,
 no check request IDs and note.code `lint-finished`. The latter is written by the
@@ -517,3 +528,79 @@ Door errors carry `unknownOutcome: true` whenever dispatch may have occurred and
 For a confirmed door run, obtain exact before/after worlds from the owner state endpoint when its action list contains the receipt report.action_id. Match that immutable action ID exactly; never use another action or the top-level current world as this run's observation. These snapshots were captured under the server's action lock. A failed observation read cannot erase the confirmed program result or trigger a new dispatch; leave unavailable snapshots missing. Preserve existing receipt snapshots when no matched owner observation is available. This uses B1 state reads, not a new server endpoint or model call.
 
 If owner metadata refuses a saved Try with session-stopped, read that same owner run record. A confirmed paused session is reopened through runTry without --new or a budget change, retaining its session ID, data and allowance; then read owner metadata again. Do not treat another refusal or an uncertain state as confirmation of pause. This makes an explicit tool request resume the same idle-paused Try without resetting it.
+
+
+## Read saved Story evidence locally
+
+Export module function `savedStoryEvidence({root, comparisonRoot=root}, ports={})`,
+returning `{stories, warnings}`. Each Story row is
+`{story, pass, current, result, at}`: repository-relative Story path, Boolean
+pass/current, `result` equal to "✓" for pass and "no verdict" otherwise, and
+Unix epoch milliseconds `at`. This read-only capability never resolves runtime
+configuration, signs in, calls a service, creates a directory, writes saved state
+or dispatches work. Use the injected `env` for the existing state-directory
+selection. The optional raw ports are `readFile(path)` returning UTF-8 text,
+`readDir(path)` returning entry names, `realpath(path)` returning a canonical
+path, and `captureSource(root,{tests,appMap})` returning the existing capture.
+Defaults use their native local owners; they supply file observations and
+captured hashes, never Story verdicts.
+
+Export module function `createSavedStoryEvidenceReader(ports={})`, returning an
+async reader with the same input and result as `savedStoryEvidence`. The reader
+owns a source-capture memo for its lifetime; `savedStoryEvidence` uses a fresh
+reader for each standalone call. Share captures by canonical compared folder
+and sorted unique original selected test paths, regardless of saved-record root
+or test order. Store the captured source SHA, never a batch's currentness: each
+batch compares its own saved SHA separately. Capture each such key at most once
+per reader, including overlapping reads. Remember failed captures only for that
+reader; affected evidence stays unverified. A fresh reader retries the capture.
+
+Only check batches belonging to root supply evidence; lint and Try results do
+not. Explicit `intent: "check"` retains the normal identification rules. An
+absent intent is eligible only when every saved row meets
+[saved Check row validity](#saved-check-row-validity); use the same row predicate,
+without a second legacy policy. Any explicit other intent, including null,
+lint-only or Try, is ineligible. For an otherwise readable batch belonging to
+root with absent intent and any invalid row, count none of its rows and emit
+one deduplicated hint explaining that older checks are not counted and advising
+the person to run `pdd test` again.
+This advice adds no gate or dispatch. Eligible legacy batches use the same
+source identity, Story identity and receipt rules as explicit Check batches.
+For eligible legacy rows whose `criterion_texts` cannot supply the complete
+authored criterion IDs, recover those IDs from the stored step checks validated
+by the shared predicate. Require the receipt's criterion results to cover
+exactly that complete ID set, every criterion passed and every selected check
+passed. Text metadata is not required to prove these IDs. Incomplete authored
+or receipt criterion coverage supplies no pass and adds the same single hint;
+a complete failed result remains a failure. Explicit Check intent retains its
+existing receipt rules.
+Preserve the recorded Story/test identity. A well-formed row with empty
+`request_ids` has no sent Check attempt: ignore it as evidence, regardless of its
+saved state or lint receipt. It supplies no pass, failure, unknown or stale
+result, and cannot supersede earlier evidence. A batch's lint request IDs are
+not Check request IDs. Nonempty Check request IDs retain the existing latest
+attempt and receipt rules: a saved pass label alone is insufficient; require
+the latest attempt's matching-ID check receipt. Unknown, failed, refused,
+missing or unverifiable receipts do not pass, even when an older attempt passed.
+
+Whole-Story coverage uses the batch's original unique selected test paths for
+that Story, including unsent rows. A pass requires sent, passing evidence for
+every such test and complete criterion coverage. An unsent duplicate of a test
+already covered by sent evidence adds no missing coverage or failure. If any
+selected test has no sent attempt, omit an otherwise all-passing Story summary;
+do not invent whole-Story success or erase an earlier pass with an unsent
+failure. A genuinely sent nonpassing attempt still supplies a negative summary
+under the existing receipt rules, even with incomplete sent coverage. An
+all-unsent Story supplies no summary. Aggregate before exposing one row per
+Story per batch, using its newest sent result time, otherwise batch creation time.
+
+Currentness belongs here, not to the product reader. Recapture the batch's full
+original selected test set using source capture with no app map, and compare
+that capture hash with the saved batch source hash. Never compare a one-test
+hash with a multi-test batch hash or shorten the selection to sent rows.
+Missing source identity, changed inputs,
+failed capture or explicit null comparisonRoot make the evidence unverified,
+not current. root still identifies the saved records when comparisonRoot names
+a merged run's current base. Missing state is empty. Malformed or unreadable
+records produce finite warnings and no invented pass, while unrelated readable
+batches remain usable. Do not recover by a network read or change saved caches.

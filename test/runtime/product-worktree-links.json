@@ -34,7 +34,7 @@
       "example/coffee": "{\"version\": 1, \"repository\": \"example/coffee\", \"productRoot\": \"/project\", \"bindings\": [{\"run\": \"phone-1\", \"issue\": 82}]}"
     }
   },
-  "simulation": {
+  "simulation": {"savedChecks.evidence": {"action":"port.write","world_pointer":"/requests","result_template":{"json":"{\"stories\":[],\"warnings\":[]}"}},
     "productState.lock": {
       "action": "port.write",
       "world_pointer": "/requests",

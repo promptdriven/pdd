@@ -1,0 +1,863 @@
+{
+  "schema_version": "pdd.native-saved-evidence-followup-cases.v1",
+  "story_path": "user_stories/product-saved-checks-followup.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "In one product status, next or start command, batches compared with the same folder and selected tests share one source capture even when the test order differs; different folders or test sets use separate captures."
+    },
+    {
+      "id": "AC2",
+      "text": "Each batch is compared with its own saved source hash, and a later command captures files again so an edit cannot reuse a previous current result."
+    },
+    {
+      "id": "AC3",
+      "text": "Saved Check batches without an intent label count when every saved row has complete original Check information and the existing source and receipt checks pass, including when criterion text metadata is absent but all authored criterion IDs remain in the stored checks; lint, Try and other explicit intents do not count."
+    },
+    {
+      "id": "AC4",
+      "text": "Multiple batches without an intent label that lack complete original Check information or complete receipt criterion coverage count no passing Stories and show one hint that older checks are not counted and I should run pdd test again."
+    },
+    {
+      "id": "AC5",
+      "text": "A failed source capture can be reused only within that command and leaves its results unverified; the next command retries the capture. Reading saved checks makes no Runtime request, changes no saved check and dispatches no work."
+    }
+  ],
+  "synthetic": true,
+  "execution": "Native-only cases; no Runtime interface is added to runtime-client. Expectations are Source requirements, not captured code output.",
+  "boundaries": {
+    "reader": "src/runtime-client.mjs#createSavedStoryEvidenceReader",
+    "savedStoryEvidence": "src/runtime-client.mjs#savedStoryEvidence",
+    "product": "src/product.mjs#productStatus/productNext/productStart"
+  },
+  "default_input": {
+    "root": "/project"
+  },
+  "default_capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "canonical_full_record": {
+    "version": 1,
+    "batch": "20261030-120000-abcd",
+    "root": "/project",
+    "intent": "check",
+    "created_at": "1970-01-01T00:00:01.000Z",
+    "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rows": [
+      {
+        "story": "user_stories/server/S01-one.md",
+        "test": "test/runtime/one.json",
+        "request_ids": [
+          "11111111-1111-4111-8111-111111111111"
+        ],
+        "state": "passed",
+        "ended_at": 2000,
+        "max_calls": 18,
+        "criteria_total": 1,
+        "criterion_texts": {
+          "AC1": "Synthetic complete criterion."
+        },
+        "steps": [
+          {
+            "step_id": "synthetic-check",
+            "entry_path": "prompts/server.prompt.md",
+            "operation": "check_order",
+            "checks": [
+              {
+                "criterion_id": "AC1",
+                "target": "result",
+                "path": "/ok",
+                "op": "equals",
+                "value": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "receipts": {
+    "11111111-1111-4111-8111-111111111111": {
+      "requestId": "11111111-1111-4111-8111-111111111111",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "command": "check",
+      "state": "passed",
+      "usage": {
+        "calls": 1
+      },
+      "result": {
+        "report": {
+          "criterion_results": [
+            {
+              "criterion_id": "AC1",
+              "status": "passed"
+            }
+          ],
+          "samples": [
+            {
+              "sample": 1,
+              "steps": [
+                {
+                  "step_id": "synthetic-check",
+                  "result": {
+                    "ok": true
+                  },
+                  "checks": [
+                    {
+                      "criterion_id": "AC1",
+                      "target": "result",
+                      "path": "/ok",
+                      "op": "equals",
+                      "expected": true,
+                      "actual": true,
+                      "passed": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "fixture_rules": [
+    "Each owner case starts from a fresh deep copy of canonical_full_record and receipts, except reads expressly share one reader. All keys not overridden retain the canonical values.",
+    "Replicated batches receive distinct valid batch directory names and matching batch fields. Replicated rows receive distinct Story/test paths as specified and matching valid receipt IDs; duplicate_test_row_on_last_batch duplicates a selected test to check unique-key normalization.",
+    "Capture replies are injected; capture_tests asserts exact sorted unique original paths and appMap null. Saved SHA overrides do not alter captured SHA.",
+    "Missing-key mutations delete fields; explicit null retains the field. independent variants and row mutations run with separate readers.",
+    "legacy_hints counts hints matching legacy_hint_fragments; do not assert the complete sentence. finite_warnings requires finite deduplicated strings, not a passing current result.",
+    "All reader/standalone cases spy on forbidden effects, and product cases snapshot saved Runtime state around only the read operation."
+  ],
+  "cases": [
+    {
+      "case": "many-batches-permuted-unique-tests",
+      "criteria": [
+        "AC1",
+        "AC2"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "batch_count": 300,
+        "rows_per_batch": 2,
+        "test_paths": [
+          "test/runtime/one.json",
+          "test/runtime/two.json"
+        ],
+        "alternate_reverse_rows": true,
+        "duplicate_test_row_on_last_batch": true,
+        "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reads": [
+        {
+          "root": "/project"
+        }
+      ],
+      "expected": {
+        "capture_calls": 1,
+        "capture_tests": [
+          "test/runtime/one.json",
+          "test/runtime/two.json"
+        ],
+        "all_rows_current": true,
+        "warnings": 0
+      }
+    },
+    {
+      "case": "same-folder-different-original-test-sets",
+      "criteria": [
+        "AC1"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "batches": [
+          {
+            "tests": [
+              "test/runtime/one.json"
+            ],
+            "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "tests": [
+              "test/runtime/one.json",
+              "test/runtime/two.json"
+            ],
+            "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reads": [
+        {
+          "root": "/project"
+        }
+      ],
+      "expected": {
+        "capture_calls": 2,
+        "all_rows_current": true
+      }
+    },
+    {
+      "case": "different-compared-folders",
+      "criteria": [
+        "AC1"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reads": [
+        {
+          "root": "/project",
+          "comparisonRoot": "/base-one"
+        },
+        {
+          "root": "/project",
+          "comparisonRoot": "/base-two"
+        }
+      ],
+      "expected": {
+        "capture_calls": 2,
+        "all_rows_current": true
+      }
+    },
+    {
+      "case": "canonical-compared-folder-across-saved-roots",
+      "criteria": [
+        "AC1"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "batches": [
+          {
+            "root": "/project",
+            "tests": [
+              "test/runtime/one.json"
+            ],
+            "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "root": "/worktree",
+            "tests": [
+              "test/runtime/one.json"
+            ],
+            "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "realpath_aliases": {
+          "/base-alias": "/base"
+        },
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reads": [
+        {
+          "root": "/project",
+          "comparisonRoot": "/base"
+        },
+        {
+          "root": "/worktree",
+          "comparisonRoot": "/base-alias"
+        }
+      ],
+      "expected": {
+        "capture_calls": 1,
+        "all_rows_current": true
+      }
+    },
+    {
+      "case": "compare-each-saved-sha",
+      "criteria": [
+        "AC2"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "batches": [
+          {
+            "saved_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "saved_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "saved_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reads": [
+        {
+          "root": "/project"
+        }
+      ],
+      "expected": {
+        "capture_calls": 1,
+        "current_by_batch": [
+          false,
+          true,
+          false
+        ],
+        "pass_by_batch": [
+          true,
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "case": "overlapping-reads-share-capture",
+      "criteria": [
+        "AC1"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "capture_pending_until_both_reads_started": true,
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "concurrent_reads": [
+        {
+          "root": "/project"
+        },
+        {
+          "root": "/project"
+        }
+      ],
+      "expected": {
+        "capture_calls": 1,
+        "all_rows_current": true
+      }
+    },
+    {
+      "case": "standalone-calls-do-not-share",
+      "criteria": [
+        "AC2"
+      ],
+      "boundary": "savedStoryEvidence",
+      "reads": [
+        {
+          "root": "/project",
+          "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "root": "/project",
+          "capture_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": {
+        "capture_calls": 2,
+        "current_by_read": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "case": "fresh-reader-after-file-edit",
+      "criteria": [
+        "AC2"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "new_reader_per_read": true
+      },
+      "reads": [
+        {
+          "root": "/project",
+          "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "root": "/project",
+          "capture_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": {
+        "capture_calls": 2,
+        "current_by_read": [
+          true,
+          false
+        ]
+      }
+    },
+    {
+      "case": "failed-capture-cached-only-in-reader",
+      "criteria": [
+        "AC5"
+      ],
+      "boundary": "reader",
+      "setup": {
+        "batch_count": 3,
+        "capture_error": "EACCES"
+      },
+      "reads": [
+        {
+          "root": "/project"
+        },
+        {
+          "root": "/project"
+        }
+      ],
+      "next_reader": {
+        "read": {
+          "root": "/project"
+        },
+        "capture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "capture_calls_before_new_reader": 1,
+        "all_rows_current_before_new_reader": false,
+        "capture_calls_total": 2,
+        "all_rows_current_after_new_reader": true,
+        "finite_warnings": true
+      }
+    },
+    {
+      "case": "legacy-complete-row",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "expected": {
+        "stories": 1,
+        "pass": 1,
+        "current": 1,
+        "warnings": 0
+      }
+    },
+    {
+      "case": "legacy-without-text-metadata",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "remove_row_keys": [
+        "criterion_texts"
+      ],
+      "expected": {
+        "stories": 1,
+        "pass": 1,
+        "current": 1,
+        "warnings": 0
+      }
+    },
+    {
+      "case": "legacy-invalid-row-table",
+      "criteria": [
+        "AC4",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "independent_row_mutations": [
+        {
+          "remove": [
+            "max_calls"
+          ]
+        },
+        {
+          "set": {
+            "max_calls": 0
+          }
+        },
+        {
+          "set": {
+            "max_calls": 1001
+          }
+        },
+        {
+          "set": {
+            "max_calls": 1.5
+          }
+        },
+        {
+          "remove": [
+            "criteria_total"
+          ]
+        },
+        {
+          "set": {
+            "criteria_total": 0
+          }
+        },
+        {
+          "set": {
+            "criteria_total": 2
+          }
+        },
+        {
+          "set": {
+            "steps": []
+          }
+        },
+        {
+          "remove_step_keys": [
+            "step_id"
+          ]
+        },
+        {
+          "remove_step_keys": [
+            "entry_path"
+          ]
+        },
+        {
+          "remove_step_keys": [
+            "operation"
+          ]
+        },
+        {
+          "set_step": {
+            "operation": " "
+          }
+        },
+        {
+          "duplicate_step": true
+        },
+        {
+          "set_step": {
+            "checks": []
+          }
+        },
+        {
+          "set_first_check": {
+            "criterion_id": " "
+          }
+        }
+      ],
+      "expected_each": {
+        "stories": 0,
+        "legacy_hints": 1,
+        "capture_calls": 0
+      }
+    },
+    {
+      "case": "legacy-one-invalid-row-rejects-whole-batch",
+      "criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "setup": {
+        "rows_per_batch": 2,
+        "remove_second_row_keys": [
+          "max_calls"
+        ]
+      },
+      "expected": {
+        "stories": 0,
+        "legacy_hints": 1,
+        "capture_calls": 0
+      }
+    },
+    {
+      "case": "legacy-incomplete-receipt-criterion-coverage",
+      "criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "remove_row_keys": [
+        "criterion_texts"
+      ],
+      "receipt_patch": {
+        "criterion_results": []
+      },
+      "expected": {
+        "pass": 0,
+        "legacy_hints": 1
+      }
+    },
+    {
+      "case": "legacy-full-failed-receipt",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "remove_row_keys": [
+        "criterion_texts"
+      ],
+      "receipt_patch": {
+        "state": "failed",
+        "all_criterion_status": "failed",
+        "all_checks_passed": false
+      },
+      "expected": {
+        "stories": 1,
+        "pass": 0,
+        "current": 1,
+        "legacy_hints": 0
+      }
+    },
+    {
+      "case": "explicit-check-retains-current-row-rules",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_row_keys": [
+        "max_calls"
+      ],
+      "expected": {
+        "stories": 1,
+        "pass": 1,
+        "current": 1,
+        "warnings": 0
+      }
+    },
+    {
+      "case": "mixed-ineligible-batches-one-hint",
+      "criteria": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "setup": {
+        "batches": [
+          {
+            "remove_intent": true,
+            "remove_row_keys": [
+              "max_calls"
+            ]
+          },
+          {
+            "remove_intent": true,
+            "remove_step_keys": [
+              "entry_path"
+            ]
+          },
+          {
+            "intent": "lint-only"
+          },
+          {
+            "intent": "try"
+          },
+          {
+            "intent": "other"
+          },
+          {
+            "intent": null
+          }
+        ]
+      },
+      "expected": {
+        "stories": 0,
+        "legacy_hints": 1,
+        "capture_calls": 0
+      }
+    },
+    {
+      "case": "legacy-currentness-and-receipts-still-required",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "boundary": "savedStoryEvidence",
+      "remove_batch_keys": [
+        "intent"
+      ],
+      "independent_variants": [
+        {
+          "capture_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "expected": {
+            "pass": 1,
+            "current": 0
+          }
+        },
+        {
+          "comparisonRoot": null,
+          "expected": {
+            "pass": 1,
+            "current": 0,
+            "capture_calls": 0
+          }
+        },
+        {
+          "receipt_patch": {
+            "command": "try"
+          },
+          "expected": {
+            "pass": 0
+          }
+        },
+        {
+          "receipt_patch": {
+            "id": "33333333-3333-4333-8333-333333333333"
+          },
+          "expected": {
+            "pass": 0
+          }
+        }
+      ]
+    }
+  ],
+  "integration_cases": [
+    {
+      "case": "authentic-producer-remove-intent-default-product",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "setup": {
+        "boundary": "src/runtime-client.mjs#runCheck",
+        "seed": "test/fixtures/harbor/tests/place-order.json",
+        "replies": "Inject deterministic passing lint and complete matching-ID check receipts for every authored criterion/check; no external Runtime.",
+        "product": "Use existing synthetic coffee product map/plan from test/runtime/product-saved-checks.json; create S01, S02, S03, S04 and S010 copies of the Harbor Story/scenario, preserving authored criteria/steps; select those five tests.",
+        "conversion": "Read the actual producer batch, remove only intent, and retain every row field, source hash and raw receipt. Do not repair the old owner fixture or fabricate its missing producer fields."
+      },
+      "operations": [
+        "productStatus",
+        "productNext"
+      ],
+      "default_saved_reader": true,
+      "expected": {
+        "server": {
+          "total": 4,
+          "pass": 4,
+          "stale": 0,
+          "notRun": 0
+        },
+        "slice": {
+          "total": 13,
+          "pass": 4,
+          "stale": 0,
+          "notRun": 9
+        },
+        "runState": "running (step: prompt-story)",
+        "journeyReady": false,
+        "legacy_hints": 0
+      }
+    },
+    {
+      "case": "authentic-producer-remove-intent-and-texts",
+      "criteria": [
+        "AC3",
+        "AC5"
+      ],
+      "setup": {
+        "boundary": "src/runtime-client.mjs#runCheck",
+        "seed": "test/fixtures/harbor/tests/place-order.json",
+        "replies": "Inject deterministic passing lint and complete matching-ID check receipts for every authored criterion/check; no external Runtime.",
+        "product": "Use existing synthetic coffee product map/plan from test/runtime/product-saved-checks.json; create S01, S02, S03, S04 and S010 copies of the Harbor Story/scenario, preserving authored criteria/steps; select those five tests.",
+        "conversion": "Read the actual producer batch, remove only intent, and retain every row field, source hash and raw receipt. Do not repair the old owner fixture or fabricate its missing producer fields."
+      },
+      "also_remove_every_row_keys": [
+        "criterion_texts"
+      ],
+      "operations": [
+        "productStatus"
+      ],
+      "default_saved_reader": true,
+      "expected": {
+        "serverPass": 4,
+        "slicePass": 4,
+        "legacy_hints": 0
+      }
+    },
+    {
+      "case": "default-product-reader-command-scope",
+      "criteria": [
+        "AC1",
+        "AC2",
+        "AC5"
+      ],
+      "independent_operations": [
+        "productStatus",
+        "productNext",
+        "productStart"
+      ],
+      "setup": "For each public operation use a verified merged local run whose cwd/run-root saved batches share the same original test set and canonical comparison base. Use the authentic producer records and valid merged-code PR metadata. Invoke the public operation twice with identical comparison inputs. productStart targets the existing linked issue with noRun true. Count actual native capture dependency executions; retain the product default saved reader without an injected savedStoryEvidence callback.",
+      "expected": {
+        "captures_first_command": 1,
+        "captures_second_command": 1,
+        "second_command_reuses_first_capture": false,
+        "saved_check_state_changed": false,
+        "runtime_requests": 0,
+        "workflow_dispatches": 0,
+        "captures_total": 2
+      }
+    },
+    {
+      "case": "default-product-status-observes-next-file-edit",
+      "criteria": [
+        "AC2",
+        "AC5"
+      ],
+      "setup": {
+        "boundary": "src/runtime-client.mjs#runCheck",
+        "seed": "test/fixtures/harbor/tests/place-order.json",
+        "replies": "Inject deterministic passing lint and complete matching-ID check receipts for every authored criterion/check; no external Runtime.",
+        "product": "Use existing synthetic coffee product map/plan from test/runtime/product-saved-checks.json; create S01, S02, S03, S04 and S010 copies of the Harbor Story/scenario, preserving authored criteria/steps; select those five tests.",
+        "conversion": "Read the actual producer batch, remove only intent, and retain every row field, source hash and raw receipt. Do not repair the old owner fixture or fabricate its missing producer fields."
+      },
+      "default_saved_reader": true,
+      "workflow": "Verified unmerged server run in product cwd; no completed workflow step.",
+      "actions": [
+        "productStatus",
+        "Edit one selected server Story in cwd without changing the saved batch or receipts.",
+        "productStatus"
+      ],
+      "expected": {
+        "first_server": {
+          "pass": 4,
+          "stale": 0,
+          "notRun": 0
+        },
+        "second_server": {
+          "pass": 0,
+          "stale": 4,
+          "notRun": 0
+        },
+        "saved_check_state_changed": false,
+        "runtime_requests": 0,
+        "workflow_dispatches": 0
+      }
+    }
+  ],
+  "forbidden_during_read": [
+    "fetch",
+    "gh auth",
+    "Runtime network",
+    "saved-check-state writes",
+    "saved-check-state directory creation",
+    "workflow.start"
+  ],
+  "permitted_existing_product_effects": [
+    "GitHub metadata reads",
+    "existing product issue-link cache operations"
+  ],
+  "forbidden_reader_effects": [
+    "fetch",
+    "gh",
+    "writeFile",
+    "mkdir",
+    "workflow.start"
+  ],
+  "legacy_hint_fragments": {
+    "case_insensitive": true,
+    "contains": [
+      "older checks",
+      "not counted",
+      "pdd test"
+    ]
+  }
+}
