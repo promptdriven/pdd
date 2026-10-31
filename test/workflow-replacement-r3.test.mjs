@@ -63,9 +63,11 @@ for (const throws of [false,true]) test(`attach handoff persists observations an
  let detach,entered;
  const hold=new Promise(r=>detach=r),entering=new Promise(r=>entered=r);
  const watching=openRun(opts(f),{...f.ports,attach:async()=>{
-  assert.equal(f.record().chats.at(-1).session.id,session,'native observations saved before attach');
-  assert.equal(existsSync(join(f.record().runDir,'chat-replacement.lock')),false,'lock released before attach');
-  entered();await hold;if(throws)throw Error('attach failed');return 0;
+  const savedSession=f.record().chats.at(-1).session.id,locked=existsSync(join(f.record().runDir,'chat-replacement.lock'));
+  entered();await hold;
+  assert.equal(savedSession,session,'native observations saved before attach');
+  assert.equal(locked,false,'lock released before attach');
+  if(throws)throw Error('attach failed');return 0;
  }});
  await entering;
  try{
