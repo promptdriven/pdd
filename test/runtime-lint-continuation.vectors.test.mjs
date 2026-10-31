@@ -99,7 +99,7 @@ for (const retry of [false, true]) test(`CONTINUATION native table: concurrent r
   assert.equal(final.code, 0); assert.equal(final.clock.uuids, 0);
   assert.deepEqual(replies.map(reply => reply.code).sort(), [0, 3], 'one owner and one live-owner refusal');
   for (const reply of replies) {
-    if (reply.code === 3) { assert.equal(reply.json, null); assert.match(reply.ports.stderr.text, /pdd check --read/); }
+    if (reply.code === 3) { assert.equal(reply.json, null); assert.match(reply.ports.stderr.text, /pdd test --read/); }
     else assert.deepEqual(reply.json.rows.map(row => row.request_id).sort(), final.json.rows.map(row => row.request_id).sort());
   }
 });
@@ -186,7 +186,7 @@ for (const when of ['before-claim', 'after-claim', 'incomplete-claim']) test(`CO
 });
 test('CONTINUATION native table: parser accepts timeout on remote lint and saved read', () => {
   for (const mode of ['--lint', '--read']) {
-    const parsed = parseArgv(['check', mode, '--timeout', '4']);
+    const parsed = parseArgv(['test', mode, '--timeout', '4']);
     assert.equal(parsed.options['--timeout'], '4');
   }
 });
@@ -444,11 +444,11 @@ for (const broken of [null, {}, { criterion_id: '' }]) test(`CONTINUATION native
 
 test('CONTINUATION native table: parsed remote lint timeout and parsed recovery timeout reach public boundary', async t => {
   const lint = await setup(t, { mode: 'lint' }); lint.state.readyAt = START + 150000;
-  const plan = parseArgv(['check', '--lint', 'place-order', '--timeout', '4', '--json']);
+  const plan = parseArgv(['lint', 'place-order', '--timeout', '4', '--json']);
   assert.equal(await runCheck({ cwd: lint.h.repo, words: plan.operands, options: plan.options }, lint.p.ports), 0);
   assert.equal(lint.p.clock.now - START, 150000); assert.equal(paid(lint).length, 0);
   const r = await setup(t); const { batch } = await r.first(); r.state.lint = 'passed'; r.state.checks = 'running';
-  const readPlan = parseArgv(['check', '--read', batch, '--timeout', '4', '--json']);
+  const readPlan = parseArgv(['test', '--read', batch, '--timeout', '4', '--json']);
   const p = portsFor(r.env); r.state.clock = p.clock;
   assert.equal(await runCheck({ cwd: r.h.repo, words: readPlan.operands, options: readPlan.options }, p.ports), 3);
   assert.equal(p.clock.now - START, 240000);
@@ -522,7 +522,7 @@ for (const legacy of [false, true]) test(`CONTINUATION H: refused ${legacy ? 'le
   assert.ok(!readdirSync(join(r.h.state, 'batches', batch)).includes(heldClaim));
   assert.equal(next.ports.stderr.text.split('\n').filter(line => /zero-call lint-held proof/.test(line)).length, 1);
   assert.match(next.ports.stderr.text, /No checks were sent for the lint-held rows:/);
-  assert.doesNotMatch(next.ports.stderr.text, /No checks were sent[.:]|no checks ran|pdd check --retry/i);
+  assert.doesNotMatch(next.ports.stderr.text, /No checks were sent[.:]|no checks ran|pdd test --retry/i);
 });
 
 test('CONTINUATION: two real CLI read processes send the original held check exactly once', { timeout: 30000 }, async t => {
@@ -532,7 +532,7 @@ test('CONTINUATION: two real CLI read processes send the original held check exa
   writeFileSync(join(bin, 'gh'), '#!/bin/sh\nif [ "$1" = auth ]; then echo local-fake-token; else echo "octo 4242"; fi\n', { mode: 0o755 });
   const cli = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
   const child = () => new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [cli, 'check', '--read', batch, '--json'], { cwd: r.h.repo, env: { ...process.env, ...r.env, PATH: bin + ':' + process.env.PATH } });
+    const proc = spawn(process.execPath, [cli, 'test', '--read', batch, '--json'], { cwd: r.h.repo, env: { ...process.env, ...r.env, PATH: bin + ':' + process.env.PATH } });
     t.after(() => { if (proc.exitCode === null) proc.kill(); });
     let stdout = '', stderr = ''; proc.stdout.on('data', chunk => stdout += chunk); proc.stderr.on('data', chunk => stderr += chunk);
     proc.on('error', reject); proc.on('close', code => resolve({ code, stdout, stderr }));
@@ -543,7 +543,7 @@ test('CONTINUATION: two real CLI read processes send the original held check exa
   assert.ok(replies.some(reply => reply.code === 0), 'at least one CLI owns recovery');
   for (const reply of replies) {
     assert.ok([0, 3].includes(reply.code), reply.stderr);
-    if (reply.code === 3) { assert.equal(reply.stdout, ''); assert.match(reply.stderr, /pdd check --read/); }
+    if (reply.code === 3) { assert.equal(reply.stdout, ''); assert.match(reply.stderr, /pdd test --read/); }
     else assert.equal(JSON.parse(reply.stdout).rows[0].request_id, id);
   }
   assert.deepEqual(saved(r, batch).doc.rows[0].request_ids, [id]);

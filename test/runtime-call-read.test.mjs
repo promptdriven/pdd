@@ -28,7 +28,7 @@ test('call read: a running receipt stays pending and supplies its exact recovery
   const { ports } = portsFor(envFor(setup, fake));
   const code = await runCheck({ cwd: setup.repo, words: [CALL], options: { '--read': true } }, ports);
   assert.equal(code, 3, ports.stderr.text);
-  assert.ok((ports.stdout.text + ports.stderr.text).includes(`pdd check --read ${CALL}`));
+  assert.ok((ports.stdout.text + ports.stderr.text).includes(`pdd test --read ${CALL}`));
   assert.equal(fake.posts.length + fake.jsonPosts.length, 0);
 });
 
@@ -50,7 +50,7 @@ test('call recovery: an interrupted dispatched door names the UUID and its later
   const env = envFor(setup, fake);
   const { ports } = portsFor(env, { signal: controller.signal, randomUUID: () => CALL });
   await assert.rejects(runDoorCall({ root: setup.repo, origin: fake.origin, sessionId: 'session', login: 'octo', prompt: PLACE, operation: 'main' }, { argv: ['save'] }, ports), error => {
-    assert.ok(error.message.includes(`pdd check --read ${CALL}`), error.message);
+    assert.ok(error.message.includes(`pdd test --read ${CALL}`), error.message);
     return true;
   });
   const next = portsFor(env).ports;
