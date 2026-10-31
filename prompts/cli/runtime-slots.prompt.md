@@ -59,6 +59,8 @@ The optional timers port supplies setInterval(callback, milliseconds) and clearI
 
 Module function `listRuntimeJobs({stateDir,origin}, ports={})` calls `ports.files.listRecords({directory})` exactly once with the resolved host folder above, and returns `{jobs}`. The native files port reads the private active/ticket records and normalizes each to `{id,state,pid,kind,started_at,request_ids}`; absent folder means an empty list. Incomplete/unreadable state throws an error with code local-state-unavailable, never silently shown as no work. Wrap files.listRecords read failures with that same code. Listing neither reclaims records nor contacts gh/runtime/processes. Return active rows first, then waiting, ordered within each state by started_at and id. Preserve record IDs, PIDs, request IDs and timestamps. The declared port is this actual filesystem dependency, not an admission decision supplied by a test.
 
+Saved records keep the job kind words `check`, `lint` and `try`, because older pdd versions on the same machine read and write the same files. `pdd jobs` maps the kind only when it prints a row, to the command word from [NAMES](command-catalog.prompt.md#names): `check` → `test`, `lint` → `lint`, `try` → `simulate`.
+
 Module function `runJobs({env}, {stdout,stderr,files,now}={})` resolves the same default state directory and uses the existing public runtimeOrigin(env) export of src/runtime-client.mjs for the runtime origin (no sign-in or network effect) and calls listRuntimeJobs. It requires no repository or authentication. Use the optional now() clock port (native default Date.now) for ages. Print active/waiting rows with kind, PID, age and request IDs, or a plain empty message; return 0. Read errors print a finite cause on stderr and return 5; do not present a successful empty snapshot. Output lines end with a newline. No additional command options are introduced.
 
 The [lock pattern](workflow-herdr-layout.prompt.md) is a navigation-only native implementation example for exclusive creation and process liveness. This module owns the reservation and reclamation rules above.
@@ -74,7 +76,7 @@ Only listRuntimeJobs is bound below. The files.listRecords resource uses write a
 ```json
 {
   "status": "draft",
-  "prose_sha256": "2c92c91bae5a1b6c22fe5050992acf1adf2d719a84850d43c43ddfc92e6d5ea7",
+  "prose_sha256": "bcfb5679600bd9b69c08bb2b086b147f676fac05f10fdab65b45f02599bb1640",
   "entries": [
     {
       "operation": "listRuntimeJobs",
