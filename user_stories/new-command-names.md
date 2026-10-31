@@ -21,7 +21,7 @@ I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd wor
 
 ## What must not change
 
-`pdd test`, `pdd lint` and `pdd simulate` keep every option, effect, exit code and stdout byte that they have today. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json, and with no Story it tests every Story. `pdd simulate` keeps --cli, --shell, --serve, --save-last, --stop, --tab, --app-map, --new, --no-open, --no-wait, --agent and --max-calls. The machine-read words keep `check` and `try`: the wire commands, the `/v1/try/…` paths, the `.pdd/try` folder, saved records and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command.
+`pdd test`, `pdd lint` and `pdd simulate` keep every option, effect, exit code and stdout byte that they have today. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json, and with no Story it tests every Story. `pdd simulate` keeps --cli, --shell, --serve, --save-last, --stop, --tab, --app-map, --new, --no-open, --no-wait, --agent and --max-calls. The machine-read words keep `check` and `try`: the wire commands, the `/v1/try/…` paths, the `.pdd/try` folder, saved records and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command. The MCP tool names of `pdd mcp` stay as they are.
 
 ## Rules to check
 
@@ -29,8 +29,6 @@ I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd wor
 
 `pdd sim` and `pdd workflow start` are quiet forms of `pdd simulate` and `pdd workflow run`: the same plan and the same result, with no extra line. Help and shell completion show only `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`. `pdd test --lint` still works like `pdd lint`, and `--lint` and `--local` stay hidden on `pdd test`. Forbidden: a notice for a quiet form, a different result from the main name, `workflow start`, `check` or `try` in help or completion, or a new refusal for `pdd test --lint`.
 
-No line that pdd prints names `pdd check` or `pdd try`, except the removal line. This covers next-step hints, errors, progress lines, status lines, PR text and the Simulator guide text. The lines that pdd writes about the simulation say Simulator, for example `Simulator ready for "<title>": <link>`, and the error label is `pdd simulate:`. Forbidden: `Read the results later with: pdd check --read BATCH`, `Run pdd try <story> --new`, `Try ready for "<title>"` or `pdd try:` in a line that pdd writes.
+No line that pdd prints names `pdd check` or `pdd try`, except the removal line. This covers next-step hints, errors, progress lines, status lines, PR text and the guide text. Forbidden: `Read the results later with: pdd check --read BATCH`, `Run pdd try <story> --new` or `pdd try:` in a line that pdd writes.
 
-The MCP tools of `pdd mcp` are `simulate_open`, `simulate_state`, `simulate_input`, `simulate_test` and `simulate_save_case`. Forbidden: a `try_*` tool name, or an alias for one.
-
-The new words are data in one place, so a later rename is one edit. The test file checks help, removal lines, quiet forms and usage errors. That nothing runs, completion, the hint and Simulator lines and the MCP tool names need Node tests in the code area.
+The new words are data in one place, so a later rename is one edit. The test file checks help, removal lines, quiet forms and usage errors. That nothing runs, completion and the hint lines need Node tests in the code area.

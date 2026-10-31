@@ -53,9 +53,9 @@ an explicit `pdd simulate` reconnect. Provider credentials and token values neve
 ## Terminal lines
 
 The owner watches the terminal where `pdd simulate` runs. The terminal reports connection and reply outcomes even when the page can show only a safe summary. Write every line to stderr in the [progress](runtime-output.prompt.md#progress-and-causes) style:
-- Before discovery: `Connecting your agent to the Simulator…`.
-- When connected: `Ask your agent is connected (<Name>). Keep this window open for Ask your agent; Ctrl-C disconnects the chat and keeps the Simulator open.`
-- For each message: `<Name> is answering a question from the Simulator…`, then `<Name> answered.` (plus ` It proposed input for the form.` with a fill), or `<Name> could not answer: <the adapter's message>`.
+- Before discovery: `Connecting your agent to the Try page…`.
+- When connected: `Ask your agent is connected (<Name>). Keep this window open for Ask your agent; Ctrl-C disconnects the chat and keeps the Try open.`
+- For each message: `<Name> is answering a question from the Try page…`, then `<Name> answered.` (plus ` It proposed input for the form.` with a fill), or `<Name> could not answer: <the adapter's message>`.
 - A deterministic guide reply uses `PDD checked the run against the local test cases.` rather than claiming that an unavailable agent answered or could not answer.
 - A failed model read or connect names its reason: the network cause, else the server's message, else the HTTP status.
 

@@ -33,7 +33,7 @@ its value; otherwise serialize the result fields other than status and headers a
 program response headers, including arrays of header values; validate names and values, remove hop-by-hop
 headers and recompute content-length. Use application/json for JSON values unless the program supplies a
 content-type. Responses to HEAD and statuses 204/304 have no body. Malformed program responses, stopped
-sessions, exhausted budgets, lost outcomes and other wrapper failures return 502 with a plain `pdd simulate:` reason;
+sessions, exhausted budgets, lost outcomes and other wrapper failures return 502 with a plain `pdd:` reason;
 program-generated error statuses remain intact. Never return gh credentials, stacks or engine URLs.
 
 When the model has an app map, serve its real Screen at GET/HEAD / using the owner-authenticated Screen
@@ -72,4 +72,4 @@ Use authenticated owner model calls.cap/remaining at startup and print the short
 Usage normalization/formatting/header names are owned by [runtime output](runtime-output.prompt.md#try-usage), required generation/runtime context.
 
 ## Progress in the pdd window
-Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Simulator…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd simulate: port N is in use by another program. Stop it, or run pdd simulate <story> --serve <N+1>.` (exit 125).
+Each API call can take many seconds, so the pdd window logs each request on stderr, like a local server: `<METHOD> <path>: running on the Try…` before the call, then `<METHOD> <path>: <status> in N s`, or the error status and its plain reason. Screen requests log only their failures. A busy port stops startup with `pdd: port N is in use by another program. Stop it, or run pdd simulate <story> --serve <N+1>.` (exit 125).

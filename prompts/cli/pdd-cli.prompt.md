@@ -107,7 +107,7 @@ Help prints exactly these lines, in this order. Each line is two spaces, the for
   pdd jobs  List active and waiting interpreter jobs on this machine without contacting the interpreter.
   pdd contracts  List shared records, their users and Stories stale since their last check; local working files only.
   pdd contracts sync [--write]  Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls.
-  pdd mcp  Serve the current repository’s Simulator tools over stdio MCP.
+  pdd mcp  Serve the current repository’s Try tools over stdio MCP.
   pdd setup  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. A second run changes nothing.
 ```
 
@@ -161,7 +161,7 @@ finite local cause and returns 5. Catalog owns all syntax.
 ```json
 {
   "status": "draft",
-  "prose_sha256": "b60790f7c01745e244180600970f7ef43cd0737d6dc22bb4372e094392d03656",
+  "prose_sha256": "e3ef3b7c1833d98f5f98b61877826ef268d39a0b1d0180d53108809d9d1c3523",
   "entries": [{
     "operation": "runPdd",
     "input_schema": {

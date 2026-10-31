@@ -19,7 +19,7 @@ These machine-read words keep "runtime": the schema ids `prompt-runtime.*`, the 
 
 ## Rules to check
 
-Every line that pdd writes itself for a person calls the hosted service "the PDD interpreter", or "the interpreter" after the first mention. This includes help, errors, progress lines, status lines, PR text and the Simulator guide text. Forbidden: "PDD runtime" or "the runtime" for the service in such a line, for example "Your GitHub login sam is not on the PDD runtime invite list yet." or "Checking 3 files (29 KB) on the PDD runtime (lint, 0 AI calls)…".
+Every line that pdd writes itself for a person calls the hosted service "the PDD interpreter", or "the interpreter" after the first mention. This includes help, errors, progress lines, status lines, PR text and the Try guide text. Forbidden: "PDD runtime" or "the runtime" for the service in such a line, for example "Your GitHub login sam is not on the PDD runtime invite list yet." or "Checking 3 files (29 KB) on the PDD runtime (lint, 0 AI calls)…".
 
 A machine-read word from the list above must not change. Forbidden: a changed schema id, host, setting name or folder; a prompt block that pdd no longer finds; an older `Runtime check` line that the PR and status readers no longer read; or a gate answer "The runtime opens soon." that pdd no longer detects. A message that tells me to add or fix the block keeps the words "Runtime interface", because I must find them in the file.
 
