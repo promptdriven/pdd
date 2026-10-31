@@ -26,8 +26,10 @@ async function fixture(t) {
     if (missingAccounting) answer.usage.accounting_complete = false;
     return { status: 200, json: answer };
   });
+  const { clock: sharedClock } = portsFor({});
   const invoke = async ({ options = {}, words = ['place-order'], repo = env.repo, state = env.state, trouble } = {}) => {
     const { ports, clock } = portsFor({ HOME: env.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: state });
+    Object.defineProperty(clock, 'now', { get: () => sharedClock.now, set: value => { sharedClock.now = value; } });
     if (trouble === 'auth') ports.gh = () => ({ status: 1, stdout: '', stderr: 'not logged in' });
     if (trouble === 'interrupt') ports.sleep = async ms => { clock.now += ms; clock.interrupt(); };
     if (trouble === 'timeout') ports.sleep = async ms => { clock.now += 120000; };
