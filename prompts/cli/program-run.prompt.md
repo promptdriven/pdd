@@ -99,7 +99,13 @@ is required and must be passed, failed or refused; never infer it from outer sta
 Outer passed confirms transport completion and may contain any of those semantic
 verdicts. An outer non-passed terminal state must not contradict the semantic
 outcome or turn into success; successful output requires outer passed and semantic
-passed together. A missing/invalid verdict or contradictory receipt
+passed together. If result.refusals is supplied it must be an array, and every
+entry must be a refusal object with string code and message; null entries and
+nonarray containers are invalid. An absent result.refusals remains equivalent to
+an empty array for legacy receipts. Semantic passed requires that array to be
+empty, irrespective of any individual entry. These checks also precede world
+persistence, pending acknowledgment and output/cache publication. A missing/invalid
+verdict, malformed refusal container or entry, or contradictory receipt
 exits125 with a plain interpreter-failure reason and same-ID read hint: no result
 stdout (including --json), no world replacement, no cacheable receipt and no pending
 clear. Keep the accepted ID for GET-only recovery until a valid confirmed outcome.

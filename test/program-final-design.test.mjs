@@ -82,6 +82,12 @@ for(const [label,mutate] of [
  ['missing verdict',job=>{delete job.result.report.verdict;}],
  ['nonstring verdict',job=>{job.result.report.verdict={passed:true};}],
  ['refused wrapper with passed verdict',job=>{job.state='refused';}],
+ ['null first refusal followed by refusal',job=>{job.result.refusals=[null,{code:'refused',message:'NO'}];}],
+ ['nonempty valid refusals with passed verdict',job=>{job.result.refusals=[{code:'refused',message:'NO'}];}],
+ ['object refusal container',job=>{job.result.refusals={bad:'shape'};}],
+ ['empty string refusal container',job=>{job.result.refusals='';}],
+ ['null refusal container',job=>{job.result.refusals=null;}],
+ ['malformed refusal object',job=>{job.result.refusals=[{code:'refused'}];}],
 ])test(`malformed terminal receipt: ${label} preserves accepted request without success`,async t=>{
  const h=await harness(t,{cli:false,world:{unconfirmed:true},reply(e,f,job){mutate(job);return {status:200,json:job};}});
  const r=await h.invoke(['--input','{}']);
@@ -108,4 +114,9 @@ test('flattening isolates underscore segment boundaries through actual runs',asy
  const records=dirs.map(dir=>({world:JSON.parse(readFileSync(join(h.repo,'.pdd/run',dir,'world.json'))),session:JSON.parse(readFileSync(join(h.repo,'.pdd/run',dir,'session.json')))}));
  assert.deepEqual(records.map(r=>r.world.owner).sort(),[...paths].sort());
  assert.equal(new Set(records.map(r=>r.session.id)).size,4);
+});
+
+test('legacy receipt without refusals remains a valid semantic pass',async t=>{
+ const h=await harness(t,{cli:false,reply(e,f,job){delete job.result.refusals;return {status:200,json:job};}});
+ const r=await h.invoke(['--input','{}']);pass(r);assert.equal(r.out,'{\"ok\":true}\n');
 });
