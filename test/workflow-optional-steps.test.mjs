@@ -48,15 +48,19 @@ test('2756: bundled startup guidance, waiting visibility, revision refresh and n
  run=f.record();run.area=1;run.done={check:{at:1,area:'prompt-pr',summary:'Proactive result https://example.invalid/s/private/'}};run.question=null;run.gate=null;run.state='running';writeFileSync(join(run.runDir,'status.json'),JSON.stringify(run));
  const question=await runner.stepDone({step:'check',summary:run.done.check.summary,cwd:run.root,packageRoot},f.agentPorts());assert.match(question.message,/Do you want to try it now\? yes\/no Recommended: yes\./,DEFECT);
  const before=f.record(),receipt=clone(before.optionalDecisions.try);f.herdr.idle();
+ await runner.openRun({ref:'17',cwd:run.root,packageRoot},f.agentPorts());
  const status=await runner.runStatus({ref:'17',cwd:run.root},f.agentPorts());assert.match(status.message,/Do you want to try it now/,DEFECT);
- await runner.openRun({ref:'17',cwd:run.root,packageRoot},f.agentPorts());assert.deepEqual(f.record().optionalDecisions.try,receipt,DEFECT);assert.equal(f.record().question.text,before.question.text,DEFECT);
+ assert.deepEqual(f.record().optionalDecisions.try,receipt,DEFECT);assert.equal(f.record().question.text,before.question.text,DEFECT);
  const repeated=await runner.stepDone({step:'check',summary:run.done.check.summary,cwd:run.root,packageRoot},f.agentPorts());assert.equal(repeated.message,'pdd recorded check.\nOptional step try is waiting for your answer.',DEFECT);
  f.tick();const answer=await runner.changeRun({ref:'17',text:'no',cwd:run.root},f.agentPorts());assert.equal(answer.exitCode,0);assert.equal(f.record().optionalRevision??0,0,DEFECT);
+ const afterAnswer=await runner.stepDone({step:'check',summary:run.done.check.summary,cwd:run.root,packageRoot},f.agentPorts());assert.doesNotMatch(afterAnswer.message,/Do you want to try it now/,DEFECT);assert.equal(f.record().question,null,DEFECT);
  f.tick();const declined=await runner.stepDone({step:'try',summary:'skipped',cwd:run.root,packageRoot},f.agentPorts());assert.equal(declined.exitCode,0,declined.message);assert.equal(f.record().done.try.summary,'skipped by the person',DEFECT);
  assert.ok(declined.message.includes('The person skipped trying it. Ask them to approve or ask for changes.'),DEFECT);assert.doesNotMatch(declined.message,/Ask them to try it|nothing to try/i,DEFECT);
  assert.ok(f.record().done.check.summary.includes('/s/private/'),DEFECT);assert.deepEqual(f.record().decisions,[],DEFECT);assert.equal(f.prs.length,0,DEFECT);assert.equal(f.record().gate.kind,'approve-pr',DEFECT);
+ assert.equal(f.record().waitingFor.what,'The person skipped trying it. Ask them to approve or ask for changes.',`${DEFECT} Saved C3 status must not nag after a decline`);assert.deepEqual(f.record().waitingFor.decisions,['approve','changes'],DEFECT);assert.deepEqual(f.record().resumeDecisions,['approve','changes'],DEFECT);
  f.herdr.idle();const noNag=await runner.runStatus({ref:'17',cwd:run.root},f.agentPorts());assert.doesNotMatch(noNag.message,/try it, then/i,DEFECT);
  f.tick();const changed=await runner.changeRun({ref:'17',text:'add another response',cwd:run.root},f.agentPorts());assert.equal(changed.exitCode,0);assert.equal(f.record().optionalRevision,1,DEFECT);assert.deepEqual(f.record().optionalDecisions,{},DEFECT);
+ const refreshed=f.herdr.paneOf(f.record().chats.at(-1)).agent.prompts.at(-1);assert.ok(refreshed.includes('"revision":1'),`${DEFECT} Changed brief guidance must carry the new revision`);
  f.tick();const revised=await runner.stepDone({step:'check',summary:'revised check',cwd:run.root,packageRoot},f.agentPorts());assert.match(revised.message,/Do you want to try it now/,DEFECT);assert.equal(f.record().optionalDecisions.try.revision,1,DEFECT);assert.equal(f.record().done.try,undefined,DEFECT);
 });
 for(const h1 of ['pdd','NODE','gh','git','0invalid','a'.repeat(65),'unsafe name'])test(`2756: CLI advice does not invent a shell for unsafe H1 ${h1}`,async t=>{
@@ -88,4 +92,12 @@ for(const limit of ['file-count','byte-count'])test(`2756: oversized evidence sn
  if(limit==='file-count')snapshot.files.push(...Array.from({length:10001},(_,i)=>({path:`data/${i}.json`,text:'{}',error:''})));
  else snapshot.files.push({path:'docs/oversized.txt',text:'x'.repeat(10*1024*1024+1),error:''});
  const f=fixture(t,run,{snapshot}),out=await f.done('understand','understood');assert.ok(out.message.includes(unknownVisual),`${DEFECT} ${limit}`);assert.equal(f.record().done.visual,undefined,DEFECT);
+});
+for(const shape of ['malformed selected map','scenario criteria mismatch','scenario empty checks','missing prompt interface'])test(`2756: locally invalid evidence stays unknown: ${shape}`,async t=>{
+ const {run,snapshot}=seedFor(shape==='malformed selected map'?'server-no-screen':'backend-door-no-app-map');
+ if(shape==='malformed selected map')snapshot.files.push({path:'app-map.json',text:'{}',error:''});
+ if(shape==='scenario criteria mismatch'){const file=snapshot.files.find(file=>file.path==='test/runtime/api.json'),doc=JSON.parse(file.text);doc.criteria[0].text='Different requirement';file.text=JSON.stringify(doc);}
+ if(shape==='scenario empty checks'){const file=snapshot.files.find(file=>file.path==='test/runtime/api.json'),doc=JSON.parse(file.text);doc.steps[0].checks=[];file.text=JSON.stringify(doc);}
+ if(shape==='missing prompt interface')snapshot.files.find(file=>file.path==='prompts/api.prompt.md').text='# Missing interface\n';
+ const f=fixture(t,run,{snapshot}),step=shape==='malformed selected map'?'understand':'check',out=await f.done(step,step==='understand'?'understood':'checked');assert.match(out.message,/Recommended: yes\./,DEFECT);assert.ok(out.message.includes(shape==='malformed selected map'?unknownVisual:"PDD cannot determine this change's runnable interface from current scoped facts."),`${DEFECT} ${shape}`);assert.equal(f.record().done.visual,undefined,DEFECT);
 });

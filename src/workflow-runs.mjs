@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runs.prompt.md (sha256: 14f116a36cb3a4269af50fd71855df635cc0132010e75ad8d1f0af93724a8cc4).
+// Generated from prompts/cli/workflow-runs.prompt.md (sha256: e23e0ce25f40f896487e5c6a17c62ca09bfaef242484f66827cc095baa0e1d8e).
 import { execFile as execFileCallback } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
@@ -92,7 +92,7 @@ export function statusView(run) {
   const asked = run.question && !ended(run);
   const failure = !ended(run) && run.chatFailure?.area === area?.name ? run.chatFailure : null;
   const waitingFor = failure ? { decisions: [], what: `Chat ${failure.phase} not confirmed (${failure.code}): ${failure.message}. Run pdd workflow open ${run.number}.` } : asked ? { decisions: ['changes'], what: run.question.text.split('\n')[0].slice(0, 200) } : gate ? { decisions: ['approve', 'changes'], what: run.gate.kind === 'ask-code' ? 'Make the code PR now, or stop here and merge PR 1'
-      : run.gate.kind === 'approve-pr' ? 'Try it, then approve to open the PR, or ask for changes' : `Approve the ${run.gate.area} area or ask for changes` }
+      : run.gate.kind === 'approve-pr' ? (done.try?.summary === 'skipped by the person' ? 'The person skipped trying it. Ask them to approve or ask for changes.' : 'Try it, then approve to open the PR, or ask for changes') : `Approve the ${run.gate.area} area or ask for changes` }
     : run.state === 'waiting' && lastPr ? { decisions: [], what: 'Review and merge the PR on GitHub' } : { decisions: [], what: null };
   const chat = ended(run) ? null : currentChat(run);
   return { v: 1, stage, steps, waitingFor, resumeDecisions: gate ? ['approve', 'changes'] : [],

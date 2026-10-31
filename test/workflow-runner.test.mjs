@@ -269,7 +269,7 @@ for (const name of ['bug', 'feature']) {
       for (const step of steps) {
         if (step === 'prompt-story' || step === 'build') { writeFileSync(join(run.root, `${step}.txt`), `${step}\n`); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', step); }
         f.tick();
-        const summary = optional.includes(step) ? 'skipped' : step === 'check' ? `Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}` : `${step} done`;
+        const summary = optional.includes(step) ? (step === 'try' ? 'skipped by the person' : 'skipped') : step === 'check' ? `Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}` : `${step} done`;
         const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts());
         assert.equal(out.exitCode, 0, out.message);
         const next = steps[steps.indexOf(step) + 1];
@@ -608,7 +608,7 @@ test('code area build → verify → formal: a loop back to build only warns, as
   const run = f.record(), done = async (step, summary) => { f.tick(); const out = await stepDone({ step, summary, cwd: run.root }, f.agentPorts()); assert.equal(out.exitCode, 0, out.message); return out; };
   await done('reproduce', 'seen'); writeFileSync(join(run.root, 'story.md'), 'Story\n'); f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'story');
   await done('prompt-story', 'Story and cases'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  await done('check', 'Runtime check: ✓ 1 of 1'); await done('try', 'skipped'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  await done('check', 'Runtime check: ✓ 1 of 1'); await done('try', 'skipped by the person'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   writeFileSync(join(run.root, 'value.mjs'), 'export const value = 3;\n'); f.git(run.root, 'commit', '-qam', 'first try');
   assert.match((await done('build', 'first build')).message, /Next step: verify/);
   assert.match((await done('verify', '✗ 2 vectors fail')).message, /Next step: formal/);
@@ -632,7 +632,7 @@ test('pushing more commits to PR 1 at the code gate keeps the gate time, so the 
   const { f, run } = await featureToPr1(t);
   const gateAt = f.record().gate.at;
   f.tick(); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two. Approved.\n'); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
-  const pushed = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  const pushed = await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   assert.match(pushed.message, /Pushed the new commits to PR 1/); assert.equal(f.record().gate.at, gateAt); assert.equal(f.prs.length, 1);
   const requests = [];
   f.tick();
@@ -761,7 +761,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   f.tick();
   const done = await stepDone({ step: 'check', summary: `Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls; Report: https://rt.example.test/r/d379-42; ran from ${local} with /Users/someone/toolbox/node/bin/node and /home/ci/bin/node ${'and a very long tail of words that keeps going '.repeat(8)}`, cwd: run.root }, f.agentPorts());
   assert.equal(done.exitCode, 0, done.message);
-  f.tick(); await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); f.ports.confirm = async () => false;
   await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const body = f.prs[0].body, top = body.split('\n');
@@ -823,7 +823,7 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total p
   assert.deepEqual(JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories, { pass: 2, total: 3, failing: ['merge-tiles'] });
   // The chat re-checks only merge-tiles and sends all current lines again; pdd counts only the latest summary.
   f.tick(); await stepDone({ step: 'check', summary: storyLines.replace('(DRAFT): ✗ 2 of 3 criteria · 8/10 checks', '(DRAFT): ✓ 3 of 3 criteria · 10/10 checks').replace('Runtime check: ✗ 7 of 8', 'Runtime check: ✓ 8 of 8'), cwd: run.root }, f.agentPorts());
-  const gate = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  const gate = await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   assert.match(gate.message, /Runtime check line of each Story/);
   shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
@@ -855,7 +855,7 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   const shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
   assert.match(shown, /^Stories: 1 of 2 Stories pass \(✗ merge-tiles\)$/m);
   assert.match(shown, /check done \("Runtime check \(move-tiles\): ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call Checked each Story\. Report: https:/);
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
@@ -871,7 +871,7 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
     + 'Runtime check (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls; Report (move-tiles): https://rt.example.test/r/one; '
     + 'Report (merge-tiles): https://rt.example.test/r/two; Report (merge-tiles): https://rt.example.test/r/three';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
@@ -891,7 +891,7 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
     + 'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 '
     + 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d';
   f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
@@ -914,7 +914,7 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
   // A chat that adds the re-check after the old lines: the later merge-tiles line wins and keeps its place.
   f.tick(); await stepDone({ step: 'check', summary: `${summary}; Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (merge-tiles): https://rt.example.test/r/three`, cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
     'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
@@ -930,7 +930,7 @@ test('0.1.7: a summary with only one named Runtime check line lifts that line in
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (unread-filter): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 1 of 1 Stories pass$/m);
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
     'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
@@ -940,7 +940,7 @@ test('0.1.7: a summary with only one named Runtime check line lifts that line in
 test('0.1.6: one named Story gets no total line; its line is the total', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Runtime check (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call; Report (move-tiles): https://rt.example.test/r/one', cwd: run.root }, f.agentPorts());
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
     'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
@@ -1140,10 +1140,10 @@ test('0.1.7 #7: when done opens PR 1 with a draft prompt, the chat tells the per
 // Tester B14, B16: PR 1 of a page-only Story had no test file, but its title said "tests"; the chat called the draft prompt
 // "approved"; status said "try it" when there was nothing to try.
 test('0.1.7 #8: without a test file PR 1 is "(prompt and Story)", the gate words name the approved Story and the draft prompt, and nothing to try drops "try it"', async t => {
-  const { f, gate } = await featureAtTryGate(t, { prompt: runtimePrompt('draft'), tried: 'skipped' });
+  const { f, gate } = await featureAtTryGate(t, { prompt: runtimePrompt('draft'), tried: 'skipped by the person' });
   f.ports.timeZone = 'UTC';
   assert.match(gate.message, /Tell the person what PR 1 holds, in these words: "PR 1 is ready with the approved Story and the draft prompt feature\.prompt\.md\. It has no test file\."/);
-  assert.match(gate.message, /There is nothing to try\. Ask them to approve or ask for changes\./); assert.doesNotMatch(gate.message, /try it/);
+  assert.match(gate.message, /The person skipped trying it\. Ask them to approve or ask for changes\./); assert.doesNotMatch(gate.message, /try it/);
   f.herdr.idle();
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: waiting for you: approve to open PR 1 \(or ask for changes\)$/m);
   assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· prompt-pr · waiting for you: approve to open PR 1 · /);
@@ -1354,7 +1354,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
   test(`0.1.7 #15: PR 1 starts with the Verdict line and the Before → after line from the check summary (${name})`, async t => {
     const { f, run } = await featureAtTryGate(t);
     f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
-    await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+    await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
     f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
     assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
       'Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
@@ -1369,7 +1369,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
 test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without a verdict keeps the 0.1.6 top', async t => {
   const { f, run } = await featureAtTryGate(t);
   f.tick(); await stepDone({ step: 'check', summary: 'Verdict: no prompt covers this yet; the bug can only be in the code.\nBefore: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3\nRuntime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls\nReport: https://rt.example.test/r/after-3', cwd: run.root }, f.agentPorts());
-  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  await stepDone({ step: 'try', summary: 'skipped by the person', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
     'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);

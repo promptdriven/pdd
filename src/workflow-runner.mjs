@@ -1,10 +1,10 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e1ecee319bca00a2a98a47e78cbf8922dc20fcfe5d4c0ea17aed271e9915d37d).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f784305842f7cbe26dc8eb25326824ecc7574700bd122998fe3aaadec6f3a6e0).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as nativeDeliveryFiles from 'node:fs';
 import { homedir, hostname } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, posix } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -13,13 +13,15 @@ import { resolveWorkflowIssue, prepareWorkflowPr, publishWorkflowPr, readWorkflo
 import { allocateIssueWorktree, releaseIssueClaim } from './workflow-worktree.mjs';
 import { allRuns, currentChat, gitContext, listRuns, readRun, resolveRun, runDirFor, runForWorktree, writeRun } from './workflow-runs.mjs';
 import { startChat, sendToChat, herdrCommand, chatSession, openChat, closeChats, expandHome, homeVariable, isFolder } from './workflow-chat.mjs';
-import { captureSource, findTests, gitFiles, interfaceBlocks } from './runtime-preflight.mjs';
+import { captureSource, findTests, gitFiles, interfaceBlocks, isSecretPath, storyCriteria, interfaceSchemaProblems, checkInput, proseSha256 } from './runtime-preflight.mjs';
 import { storyLines } from './runtime-output.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+
+import { chooseSimulationCommand } from './simulate-command.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -153,8 +155,9 @@ async function areaMessage(run, index, p, packageRoot) {
     `Worktree: ${run.root} (branch ${run.branch}). Work and commit only here.`,
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
     ...(index ? [`Approved so far: ${summaries.join('; ') || 'no step summaries'}.`, `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
-    `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => area.optional.includes(step) ? `${step} (optional: ask the person)` : step).join(', ')}.`,
+    `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => area.optional.includes(step) ? `${step} (optional: follow PDD's next-step decision)` : step).join(', ')}.`,
     `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
+    ...optionalFactsGuidance(run,packageRoot),
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
     area.gate === 'approve'
       ? `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: they approve in their own words, or run pdd workflow approve ${run.number}.`
@@ -213,7 +216,8 @@ function holdsLine({ drafts, approved, other, tests, stories }) {
 // Nothing to try before the PR: no step of the area left a Try link, and the try step was skipped or the run has no test
 // file (0.1.6 tester: status said "try it" for a browser-only Story with no runtime test).
 const hasTryLink = text => redactTry(text) !== String(text);
-const nothingToTry = (run, area, contents) => !area.steps.some(step => hasTryLink(run.done[step]?.summary ?? ''))
+const personDeclinedTry = run => run.done.try?.summary==='skipped by the person';
+const nothingToTry = (run, area, contents) => personDeclinedTry(run) || !area.steps.some(step => hasTryLink(run.done[step]?.summary ?? ''))
   && (/\bskip/i.test(run.done.try?.summary ?? '') || !contents.tests.length);
 async function pr1Drafts(run, p) {
   const ask = askArea(run), pr1 = ask && prOf(run, ask.name);
@@ -325,6 +329,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     issue: { number, title: binding.issue.title, url: binding.issue.url }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
     configDir,
+    ...(workflow.source==='package' && ['feature','bug'].includes(name)?{optionalPolicy:OPTIONAL_POLICY,optionalRevision:0}:{}),
     startedAt: p.now(), state: 'running', areas: workflow.areas, area: 0, done: {}, gate: null, chats: [], decisions: [], changes: [],
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
@@ -794,13 +799,258 @@ export async function recordEvidence({ ref, summaryFile, cwd }, ports) {
   return done(`Recorded source-verified saved evidence for ${run.repo}#${run.number}. Steps, gates and PRs are unchanged. This records evidence, not fresh execution or approval.`);
 }
 
+const OPTIONAL_POLICY = 'pdd.optional-facts.v1';
+const emptyOptionalSnapshot = () => ({note:'',error:'',complete:false,files:[]});
+const optionalObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const optionalKeys = (value, keys) => optionalObject(value) && Object.keys(value).length===keys.length && keys.every(key=>Object.hasOwn(value,key));
+const optionalPath = path => typeof path==='string' && path.length>0 && !path.startsWith('/') && !/^[A-Za-z]:/.test(path) && !/[\\\0]/.test(path) && !path.split('/').includes('..') && !isSecretPath(path);
+const optionalHash = (p,text) => (p.hashUtf8 ?? (text=>createHash('sha256').update(text,'utf8').digest('hex')))(text);
+function optionalBlock(note) {
+  const blocks = [...String(note).matchAll(/^```pdd-optional-facts\s*\n([\s\S]*?)^```\s*$/gm)];
+  if (blocks.length!==1) return null;
+  try { return JSON.parse(blocks[0][1]); } catch { return null; }
+}
+// This adapter owns all filesystem/Git reads; the decision below sees raw supplied facts only.
+async function readOptionalEvidence({root,notePath},p) {
+  const fs = {lstatSync,readFileSync,...p.optionalFiles},snapshot=emptyOptionalSnapshot();
+  function readRegular(path) {
+    const absolute=resolve(path); let cursor=absolute;
+    while (cursor!==dirname(cursor)) { const stat=fs.lstatSync(cursor); if(stat.isSymbolicLink())throw Error('symlink'); cursor=dirname(cursor); }
+    const stat=fs.lstatSync(absolute);
+    if(!stat.isFile() || stat.size>10*1024*1024)throw Error('not a bounded regular file');
+    return fs.readFileSync(absolute,'utf8');
+  }
+  try { snapshot.note=readRegular(notePath); } catch { snapshot.error='unreadable note'; }
+  try {
+    const visible=new Set((await rawGit(p,root,'ls-files','-z','-co','--exclude-standard')).split('\0').filter(Boolean));
+    const fact=optionalBlock(snapshot.note),planned=new Set((Array.isArray(fact?.scope)?fact.scope:[]).filter(row=>row?.planned===true).map(row=>row.path));
+    const selected=new Set([...visible].filter(path=>path.endsWith('.json')));
+    for(const row of [...(Array.isArray(fact?.scope)?fact.scope:[]),...(Array.isArray(fact?.evidence)?fact.evidence:[])])if(typeof row?.path==='string')selected.add(row.path);
+    let bytes=Buffer.byteLength(snapshot.note,'utf8');snapshot.complete=true;
+    for(const path of selected) {
+      if(selected.size>10000 || bytes>10*1024*1024)throw Error('inventory limit');
+      if(!visible.has(path) && planned.has(path))continue;
+      let text='',error='';
+      try { if(!optionalPath(path) || !visible.has(path))throw Error('unsafe or missing path');text=readRegular(join(root,path)); }
+      catch { error='unreadable source';snapshot.complete=false; }
+      snapshot.files.push({path,text,error});bytes+=Buffer.byteLength(text,'utf8');
+      // Follow only local Markdown source/drawing dependencies, never remote or secret paths.
+      if(path.endsWith('.md') && !error)for(const link of text.matchAll(/\]\(([^\s)#]+)(?:#[^\s)]*)?\)/g)) {
+        if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(link[1]))continue;
+        const target=posix.normalize(posix.join(posix.dirname(path),link[1]));
+        if(/(?:\.prompt\.md|\.ui\.svg)$/.test(target)) {if(!optionalPath(target))snapshot.complete=false;else selected.add(target);}
+      }
+      // A scenario/map's prompt references are actual local dependencies, including alternate maps.
+      if(path.endsWith('.json') && !error)try {
+        const doc=JSON.parse(text);
+        if(['prompt-runtime.app-map.v1','prompt-runtime.program-scenario.v1'].includes(doc?.schema_version)) {
+          const walk=value=>{if(Array.isArray(value))value.forEach(walk);else if(optionalObject(value))for(const [key,item]of Object.entries(value)){if(['prompt_path','entry_path','story_path'].includes(key)&&typeof item==='string')selected.add(item);else walk(item);}};walk(doc);
+        }
+      } catch { /* The decision classifies malformed JSON as unknown. */ }
+    }
+    if(bytes>10*1024*1024 || snapshot.files.length>10000)throw Error('inventory limit');
+  } catch { snapshot.complete=false; }
+  return {snapshot};
+}
+function optionalFacts(snapshot,run,p) {
+  const unknown={visual:null,simulation:null};
+  if(!optionalObject(snapshot) || typeof snapshot.note!=='string' || snapshot.error || snapshot.complete!==true || !Array.isArray(snapshot.files) || snapshot.files.length>10000)return unknown;
+  if(Buffer.byteLength(snapshot.note,'utf8')+snapshot.files.reduce((n,f)=>n+Buffer.byteLength(typeof f?.text==='string'?f.text:'','utf8'),0)>10*1024*1024)return unknown;
+  const files=new Map();
+  for(const file of snapshot.files) {
+    if(!optionalKeys(file,['path','text','error']) || !optionalPath(file.path) || typeof file.text!=='string' || typeof file.error!=='string' || file.error || files.has(file.path))return unknown;
+    files.set(file.path,file.text);
+  }
+  const facts=optionalBlock(snapshot.note);
+  if(!optionalKeys(facts,['schema_version','base_sha','revision','basis','scope','evidence','screens','simulation']) || facts.schema_version!==OPTIONAL_POLICY || facts.base_sha!==run.baseSha || facts.revision!==(run.optionalRevision??0) || typeof facts.basis!=='string' || !facts.basis.trim() || !Array.isArray(facts.scope) || !facts.scope.length || !Array.isArray(facts.evidence))return unknown;
+  const scope=new Map();
+  for(const row of facts.scope) {
+    if(!optionalKeys(row,['path','planned']) || !optionalPath(row.path) || !row.path.endsWith('.prompt.md') || typeof row.planned!=='boolean' || scope.has(row.path) || !row.planned&&!files.has(row.path))return unknown;
+    scope.set(row.path,row.planned);
+  }
+  const evidence=new Set();
+  for(const row of facts.evidence) {
+    if(!optionalKeys(row,['path','sha256']) || !optionalPath(row.path) || evidence.has(row.path) || !/^[a-f0-9]{64}$/.test(row.sha256??'') || !files.has(row.path) || optionalHash(p,files.get(row.path))!==row.sha256)return unknown;
+    evidence.add(row.path);
+  }
+  const maps=new Map(),scenarios=[],prompts=new Map();let visualValid=true,simulationValid=true;
+  const prompt=path=>{
+    if(prompts.has(path))return prompts.get(path);
+    let value=null;
+    try {const text=files.get(path),blocks=interfaceBlocks(text??'');if(blocks.length===1){const declaration=JSON.parse(blocks[0][1]);if(Array.isArray(declaration.entries) && ['draft','approved'].includes(declaration.status) && declaration.prose_sha256===proseSha256(text) && !interfaceSchemaProblems(declaration).length && new Set(declaration.entries.map(entry=>entry.operation)).size===declaration.entries.length)value={text,interface:declaration};}}catch{}
+    prompts.set(path,value);return value;
+  };
+  for(const [path,text]of files)if(path.endsWith('.json')) {
+    let doc;try{doc=JSON.parse(text);}catch{visualValid=false;simulationValid=false;continue;}
+    if(['app-map.json','app/app-map.json'].includes(path) && doc?.schema_version!=='prompt-runtime.app-map.v1')visualValid=false;
+    if(doc?.schema_version==='prompt-runtime.app-map.v1') {
+      if(typeof doc.name!=='string' || !doc.name.trim() || !Array.isArray(doc.screens) || doc.handlers!==undefined&&!Array.isArray(doc.handlers) || doc.routes!==undefined&&!Array.isArray(doc.routes)){visualValid=false;continue;}
+      const ids=new Set();let usable=true;
+      for(const screen of doc.screens) {
+        if(!optionalObject(screen) || typeof screen.id!=='string' || !screen.id || ids.has(screen.id) || !optionalPath(screen.prompt_path) || !files.has(screen.prompt_path) || !optionalObject(screen.input) ||
+          !(screen.source==='operation' && typeof screen.operation==='string' && screen.operation && ['html','text','grid'].includes(screen.format) && typeof screen.result_pointer==='string' || screen.source==='mockup' && screen.operation===null && screen.result_pointer===null && screen.format==='svg')) {usable=false;break;}
+        ids.add(screen.id);
+      }
+      if(!usable){visualValid=false;continue;}
+      maps.set(path,doc);
+    }
+    if(doc?.schema_version==='prompt-runtime.program-scenario.v1') {
+      if(!optionalPath(doc.story_path) || !Array.isArray(doc.steps) || !Array.isArray(doc.criteria) || !optionalObject(doc.initial_world)) {simulationValid=false;continue;}
+      const story=files.get(doc.story_path);
+      if(!story || !doc.story_path.split('/').slice(0,-1).includes('user_stories') || /(?:^|\/)(?:README|PLAN)\.md$/i.test(doc.story_path) || !/(?:^|\n)##\s+Acceptance(?:\s+criteria)?\s*\n/i.test(story) || !storyCriteria(story).length){simulationValid=false;continue;}
+      const criteria=doc.criteria;
+      if(!criteria.length || criteria.some(row=>!optionalKeys(row,['id','text']) || typeof row.id!=='string' || !row.id || typeof row.text!=='string' || !row.text) || new Set(criteria.map(row=>row.id)).size!==criteria.length || JSON.stringify(criteria.map(row=>row.text).sort())!==JSON.stringify(storyCriteria(story).sort()) || !doc.steps.length){simulationValid=false;continue;}
+      const checked=new Set(),exact=new Set(),ids=new Set(criteria.map(row=>row.id)),stepIds=new Set();
+      const entries=[];
+      for(const step of doc.steps) {
+        if(!optionalPath(step?.entry_path) || typeof step.operation!=='string' || typeof step.step_id!=='string' || !step.step_id || stepIds.has(step.step_id) || !Object.hasOwn(step,'input') || !Array.isArray(step.checks)){simulationValid=false;continue;}
+        stepIds.add(step.step_id);
+        const owner=prompt(step.entry_path),index=owner?.interface.entries.findIndex(entry=>entry.operation===step.operation);
+        if(!(index>=0)){simulationValid=false;continue;}
+        const entry=owner.interface.entries[index];
+        if(checkInput(step.input,entry.input_schema,0).refusals.length)simulationValid=false;
+        for(const check of step.checks) {
+          if(!optionalObject(check) || !ids.has(check.criterion_id) || !['result','world','calls','error'].includes(check.target) || typeof check.path!=='string' || typeof check.op!=='string'){simulationValid=false;continue;}
+          checked.add(check.criterion_id);
+          if(['equals','not_equals','one_of','count','at_most','at_least','not_contains','all_in','equals_ignore_case'].includes(check.op) || check.html&&check.op==='exists')exact.add(check.criterion_id);
+        }
+        if(Object.hasOwn(step,'expected_error') && (!(entry.errors??[]).includes(step.expected_error) || !step.checks.some(check=>check.target==='error'&&check.path==='/code'&&check.op==='equals'&&check.value===step.expected_error)))simulationValid=false;
+        entries.push({story_path:doc.story_path,scenario_path:path,entry_path:step.entry_path,operation:step.operation,entry:owner.interface.entries[index],owner,index});
+      }
+      if([...ids].some(id=>!checked.has(id)||!exact.has(id)))simulationValid=false;
+      if(entries.length)scenarios.push({path,doc,entries});
+    }
+  }
+  const affected=[];
+  for(const [path,map]of maps) {
+    const ids=new Set(map.screens.filter(screen=>scope.has(screen.prompt_path)).map(screen=>screen.id));
+    for(const handler of map.handlers??[]) {
+      const refs=[];const walk=value=>{if(Array.isArray(value))value.forEach(walk);else if(optionalObject(value)){if(scope.has(value.prompt_path))refs.push(value);Object.values(value).forEach(walk);}};walk(handler);
+      if(!refs.length)continue;
+      if(handler.screen==='*')map.screens.forEach(screen=>ids.add(screen.id));
+      else if(map.screens.some(screen=>screen.id===handler.screen))ids.add(handler.screen);
+      else visualValid=false;
+    }
+    for(const route of [map.router,...(map.routes??[])].filter(Boolean)) {
+      const refs=[];const walk=value=>{if(Array.isArray(value))value.forEach(walk);else if(optionalObject(value)){if(scope.has(value.prompt_path))refs.push(value);Object.values(value).forEach(walk);}};walk(route);
+      if(refs.length) {const id=route.screen??route.next?.screen;if(typeof id==='string'&&map.screens.some(screen=>screen.id===id))ids.add(id);else visualValid=false;}
+    }
+    for(const screen of map.screens)if(ids.has(screen.id))affected.push({id:screen.id,prompt_path:screen.prompt_path,app_map_path:path,planned:false});
+  }
+  let visual=null;
+  if(Array.isArray(facts.screens)) {
+    const seen=new Set();
+    for(const row of facts.screens) {
+      if(!optionalKeys(row,['id','prompt_path','app_map_path','planned']) || typeof row.id!=='string' || !row.id || !scope.has(row.prompt_path) || typeof row.planned!=='boolean') {visualValid=false;continue;}
+      const identity=JSON.stringify([row.planned?row.prompt_path:row.app_map_path,row.id]);
+      if(seen.has(identity)){visualValid=false;continue;}seen.add(identity);
+      if(row.planned) {if(row.app_map_path!==null || scope.get(row.prompt_path)!==true)visualValid=false;}
+      else if(!optionalPath(row.app_map_path) || !maps.get(row.app_map_path)?.screens.some(screen=>screen.id===row.id && screen.prompt_path===row.prompt_path))visualValid=false;
+    }
+    if(affected.some(screen=>!facts.screens.some(row=>!row.planned && row.id===screen.id && row.prompt_path===screen.prompt_path && row.app_map_path===screen.app_map_path)))visualValid=false;
+    for(const [path]of scope)if(/\]\([^)]*\.ui\.svg(?:#[^)]*)?\)/.test(files.get(path)??'') && !facts.screens.some(row=>row.prompt_path===path))visualValid=false;
+    if(visualValid)visual=facts.screens.length;
+  }
+  let simulation=null;
+  if(Array.isArray(facts.simulation)) {
+    const seen=new Set(),declared=[];
+    for(const row of facts.simulation) {
+      if(!optionalKeys(row,['story_path','scenario_path','entry_path','operation']) || ![row.story_path,row.scenario_path,row.entry_path].every(optionalPath) || !scope.has(row.entry_path) || typeof row.operation!=='string' || !row.operation){simulationValid=false;continue;}
+      const id=JSON.stringify(row);if(seen.has(id)){simulationValid=false;continue;}seen.add(id);
+      const found=scenarios.find(test=>test.path===row.scenario_path && test.doc.story_path===row.story_path)?.entries.find(entry=>entry.entry_path===row.entry_path && entry.operation===row.operation);
+      if(!found)simulationValid=false;else declared.push(found);
+    }
+    for(const test of scenarios)for(const entry of test.entries)if(scope.has(entry.entry_path) && !facts.simulation.some(row=>row.story_path===entry.story_path && row.scenario_path===entry.scenario_path && row.entry_path===entry.entry_path))simulationValid=false;
+    if(simulationValid && declared.length) {
+      const first=declared[0],selection=scenarios.filter(test=>test.doc.story_path===first.story_path);
+      if(selection.length===1 && new Set(declared.map(row=>row.story_path)).size===1) {
+        const entries=[...new Map(selection[0].entries.map(entry=>[`${entry.entry_path}\0${entry.operation}`,entry])).values()];
+        let cliEntries=0,httpRoutes=0;const routes=[];
+        for(const {owner,index,entry}of entries) {
+          const cli=['input_schema','result_schema'].every(key=>(owner.interface.conventions??[]).some(c=>c.path===`/entries/${index}/${key}`&&c.convention==='cli'));
+          const h1=owner.text.match(/^#\s+(.+?)\s*$/m)?.[1]?.replace(/^`([^`]+)`$/,'$1');
+          if(cli && /^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(h1??'') && !['pdd','node','gh','git'].includes(h1.toLowerCase()))cliEntries++;
+          const route=entry.input_schema?.title?.match(/^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (\/[^\s?#]*)$/);
+          if(route) {
+            const parameters=route[2].split('/').filter(part=>part.startsWith(':'));
+            const props=entry.input_schema?.properties??{},valid=parameters.every(part=>/^:[A-Za-z_][A-Za-z0-9_]*$/.test(part) && (props[part.slice(1)]??props.params?.properties?.[part.slice(1)])?.type==='string');
+            if(!valid){httpRoutes=null;continue;}
+            const pattern=route[2].replace(/:[^/]+/g,':');
+            if(routes.some(other=>other.method===route[1] && other.pattern===pattern))httpRoutes=null;
+            routes.push({method:route[1],pattern});if(httpRoutes!==null)httpRoutes++;
+          }
+        }
+        const selected=maps.get('app-map.json')??maps.get('app/app-map.json');
+        const screens=visualValid ? (selected?.screens.filter(screen=>affected.some(row=>row.app_map_path===(maps.has('app-map.json')?'app-map.json':'app/app-map.json') && row.id===screen.id)).length??0) : null;
+        simulation={story:first.story_path,complete:true,hasDoor:true,cliEntries,httpRoutes,screens};
+      }
+    }
+  }
+  return {visual,simulation};
+}
+async function optionalDecision(run,step,predecessorSummary,p,fingerprintOnly=false) {
+  const enabled=run.optionalPolicy===OPTIONAL_POLICY && (step==='visual'&&run.workflow==='feature' || step==='try'&&['feature','bug'].includes(run.workflow));
+  let snapshot=emptyOptionalSnapshot();
+  if(enabled)try{const notePath=join(run.runDir,step==='visual'?'understand.md':'prompt-story.md');snapshot=(await (p.readOptionalEvidence??(input=>readOptionalEvidence(input,p)))({root:run.root,notePath}))?.snapshot??snapshot;}catch{}
+  const fingerprint=optionalHash(p,JSON.stringify([step,run.baseSha,run.optionalRevision??0,predecessorSummary,snapshot.note??'',snapshot.error??'',snapshot.complete??false,(Array.isArray(snapshot.files)?snapshot.files:[]).map(file=>[file?.path,file?.text,file?.error]).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)]));
+  if(fingerprintOnly)return {fingerprint};
+  let facts={visual:null,simulation:null};
+  if(enabled)try{facts=optionalFacts(snapshot,run,p);}catch{ /* Malformed local evidence remains unknown. */ }
+  if(step==='visual'&&enabled&&facts.visual===0)return {skip:true,fingerprint};
+  let question,reason,advice;
+  if(!enabled){question=`Do you want the ${step} step? yes/no`;reason='PDD has no applicability rule for this optional step.';}
+  else if(step==='visual'){question='Do you want a visual design step? yes/no';reason=facts.visual===null?"PDD cannot determine this change's screens from current scoped facts.":`This change has ${facts.visual} screen${facts.visual===1?'':'s'}.`;}
+  else {question='Do you want to try it now? yes/no';reason="PDD cannot determine this change's runnable interface from current scoped facts.";
+    if(facts.simulation){advice=(p.chooseSimulationCommand??chooseSimulationCommand)(facts.simulation);reason=advice.reason;}}
+  const command=advice?.command?(()=>{const fence='`'.repeat(Math.max(0,...[...advice.command.matchAll(/`+/g)].map(match=>match[0].length))+1);return ` Command: ${fence}${advice.command}${fence}; time: ${advice.timeHint}.`;})():'';
+  return {fingerprint,question:`${question}${step==='try'?' ':'\n'}Recommended: yes. ${reason}${command}`};
+}
+async function personTryDecline(run,summary,p) {
+  const area=run.areas[run.area].name,receipt=run.optionalDecisions?.try;
+  if(!receipt || receipt.revision!==(run.optionalRevision??0) || receipt.area!==area)return null;
+  if(summary==='skipped by the person')return {via:'relay',text:summary,at:p.now()};
+  const answers=(run.changes??[]).filter(row=>row.stage===area && row.answer===true && row.at>receipt.at).map(row=>({via:'changes',text:row.text,at:row.at}));
+  const chat=currentChat(run);
+  if(chat)try {
+    const read=p.readApprovalEvidence??(await import('./approval-evidence.mjs')).readApprovalEvidence;
+    const configDir=expandHome(chat.configDir,p.env),sessionId=chat.session?.id;
+    const evidence=await read({stage:{agent:run.agent,root:run.root,startedAt:chat.startedAt,endedAt:p.now(),...(sessionId?{sessionId}:{})},gateAskedAt:receipt.at,decision:'changes',ignorePrefixes:[CHANGE_PREFIX,ANSWER_PREFIX]},
+      {env:p.env,now:p.now,...(configDir?(run.agent==='claude'?{claudeConfigDir:configDir}:{codexHome:configDir}):{})});
+    if(evidence?.ok===true && evidence.userMessageAt>receipt.at)answers.push({via:'chat',text:evidence.userMessage,at:evidence.userMessageAt,sessionId:evidence.sessionId});
+  }catch{}
+  if(!answers.length)return null;
+  const newest=Math.max(...answers.map(row=>row.at)),latest=answers.filter(row=>row.at===newest);
+  return latest.every(row=>/^(?:no|skip|skip try|skip it)[.!]?$/i.test(String(row.text).trim()))?latest[0]:null;
+}
+function optionalFactsGuidance(run,packageRoot) {
+  if(run.optionalPolicy!==OPTIONAL_POLICY)return [];
+  const schema={schema_version:OPTIONAL_POLICY,base_sha:run.baseSha,revision:run.optionalRevision??0,basis:'Quote the requirement/source here',scope:[{path:'prompts/CHANGE.prompt.md',planned:false}],evidence:[],screens:null,simulation:null};
+  return [`Optional steps: follow PDD's next-step decision from workflow done; relay its question and recommendation verbatim and wait.`,
+    `Facts for understand: ${join(run.runDir,'understand.md')}; facts for prompt-story: ${join(run.runDir,'prompt-story.md')}. Read ${join(packageRoot??PACKAGE_ROOT,'prompts/cli/workflow-runner.prompt.md')}#optional-step-decisions. Replace the placeholders using current scoped sources; use planned:true only for new prompt paths. Screens rows: {id,prompt_path,app_map_path,planned}; simulation rows: {story_path,scenario_path,entry_path,operation}; evidence rows: {path,sha256} (exact UTF-8 SHA-256).`,
+    'Write exactly one fenced pdd-optional-facts JSON block in the owning note:\n```pdd-optional-facts\n'+JSON.stringify(schema)+'\n```'];
+}
+
 export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
-  const run = await runForWorktree(cwd, p);
+  const run = await (p.runForWorktree??runForWorktree)(cwd, p);
   if (!run) return fail('pdd workflow done works only in a run worktree. cd to the worktree that pdd made for this run.');
   if (run.state === 'cancelled') return done(`The run for #${run.number} was cancelled. Stop working on it.`);
   if (run.state === 'completed') return done(`The run for #${run.number} is complete. Stop.`);
-  const area = run.areas[run.area], lines = [];
+  const area = run.areas[run.area], lines = [],save=()=> (p.writeRun??writeRun)(run,p);
+  let personAnswer;
+  if(step==='try' && area.optional.includes(step) && /^skipped\b/i.test(keepLines(summary))) {
+    personAnswer=await personTryDecline(run,keepLines(summary),p);
+    if(!personAnswer)return fail('Only the person can skip try. Record their answer; do not skip it for them.');
+    summary='skipped by the person';
+  }
+  const pending=area.steps.find(item=>!run.done[item]);
+  if(pending && area.optional.includes(pending) && run.done[step]?.summary===keepLines(summary)) {
+    const decision=await optionalDecision(run,pending,keepLines(summary),p,true),receipt=run.optionalDecisions?.[pending];
+    if(receipt?.fingerprint===decision.fingerprint && receipt.revision===(run.optionalRevision??0) && receipt.area===area.name) {
+      save();
+      return done(run.question?`pdd recorded ${step}.\nOptional step ${pending} is waiting for your answer.`:`pdd recorded ${step}.\nNext step: ${pending}.\nWhen it is done, run: ${p.pdd} workflow done ${pending} --summary "one line"`);
+    }
+  }
   if (!area.steps.includes(step)) lines.push(`warning: "${step}" is not a step of the ${area.name} area (${area.steps.join(', ')}). pdd recorded it anyway.`);
   else {
     const before = area.steps.slice(0, area.steps.indexOf(step)).filter(item => !run.done[item] && !area.optional.includes(item));
@@ -813,27 +1063,39 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     for (const item of later) delete run.done[item];
     lines.push(`warning: ${step} ran again after ${later.join(', ')}. pdd cleared ${later.length > 1 ? 'those steps' : 'that step'}; run ${later.length > 1 ? 'them' : 'it'} again.`);
   }
-  const record = { at: p.now(), summary: keepLines(summary), area: area.name };
+  const record = { at: p.now(), summary: keepLines(summary), area: area.name, ...(personAnswer?{personAnswer}:{}) };
   if (runtimeLines(record.summary).length) {
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
   if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
-  const next = area.steps.find(item => !run.done[item]);
+  let next = area.steps.find(item => !run.done[item]);
+  const skips=[];let decision;
+  while(next && area.optional.includes(next)) {
+    decision=await optionalDecision(run,next,record.summary,p);
+    if(!decision.skip)break;
+    run.done[next]={at:p.now(),area:area.name,summary:'skipped: no screen'};
+    skips.push('Skipped visual: no screen.');next=area.steps.find(item=>!run.done[item]);
+  }
   if (next) {
-    run.state = 'running'; run.gate = null; writeRun(run, p);
-    lines.push(`pdd recorded ${step}.`, area.optional.includes(next)
-      ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
-      : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
+    run.gate=null;run.state=area.optional.includes(next)?'waiting':'running';
+    if(area.optional.includes(next)) {
+      const at=p.now();run.question={text:decision.question,at,area:area.name};
+      (run.optionalDecisions??={})[next]={revision:run.optionalRevision??0,fingerprint:decision.fingerprint,question:decision.question,at,area:area.name};
+    }
+    save();lines.push(`pdd recorded ${step}.`,...skips,`Next step: ${next}${area.optional.includes(next)?' (optional)':''}.`,...(area.optional.includes(next)?[decision.question]:[]),`When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
     return done(lines.join('\n'));
   }
+  lines.push(...skips);
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
   if (area.gate === 'pr' && area.before === 'approve' && !prOf(run, area.name)) {
     const contents = await worktreeContents(run, p);
-    run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; writeRun(run, p);
+    run.gate = { area: area.name, at: p.now(), kind: 'approve-pr' }; run.state = 'waiting'; save();
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
-      nothingToTry(run, area, contents)
+      personDeclinedTry(run)
+        ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. The person skipped trying it. Ask them to approve or ask for changes. Stop. Do not approve for them.'
+        : nothingToTry(run, area, contents)
         ? 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, if there is one. There is nothing to try. Ask them to approve or ask for changes. Stop. Do not approve for them.'
         : 'Gate: show the person the Runtime check line of each Story (one per Story: ✓, ✗ or no verdict) with the report link, and the Try link(s). Ask them to try it, then approve or ask for changes. Stop. Do not approve for them.',
       ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
@@ -842,7 +1104,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     return done(lines.join('\n'));
   }
   if (area.gate === 'pr') return finishPr(run, area, step, p, lines);
-  run.gate = { area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; writeRun(run, p);
+  run.gate = { area: area.name, at: p.now(), kind: 'approve' }; run.state = 'waiting'; save();
   lines.push(`pdd recorded ${step}. The ${area.name} area is done.`,
     'Gate: show the person the result, ask them to approve it or ask for changes, and stop. Do not approve for them.',
     `When the person approves in their own words, run: ${p.pdd} workflow approve ${run.number}`,
@@ -1206,7 +1468,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
       if (entry.inFlight) return entry.id === accepted.id ? progress() : fail(`An earlier delivery to the ${area.name} chat is in progress. ${kept}`);
       run = latest(); if (!targetCurrent(run)) return failure({ code: 'chat_target_changed' });
       const message = entry.kind === 'answer' ? `${ANSWER_PREFIX}: ${entry.text} Go on with the step.`
-        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.`;
+        : `${CHANGE_PREFIX}: ${entry.text} Revise in this chat, run done again for the step you changed, then show the result and ask again.${run.optionalPolicy===OPTIONAL_POLICY?'\n'+optionalFactsGuidance({...run,optionalRevision:(run.optionalRevision??0)+1},PACKAGE_ROOT).join('\n'):''}`;
       let custodyFailed = false, claimed = false;
       const transport = herdrCommand(p), guardedHerdr = async args => {
         try { return await transport(args); }
@@ -1244,7 +1506,10 @@ export async function changeRun({ ref, text, cwd }, ports) {
           if (targetCurrent(run)) {
             if (JSON.stringify(run.question ?? null) === JSON.stringify(entry.question)) run.question = null;
             if (entry.kind === 'answer') { if (!run.gate && !run.question) run.state = 'running'; }
-            else if (run.gate && JSON.stringify(run.gate) === JSON.stringify(entry.gate)) run.gate.at = now;
+            else {
+              if(run.optionalPolicy || run.optionalDecisions || run.optionalRevision!==undefined){run.optionalRevision=(run.optionalRevision??0)+1;run.optionalDecisions={};}
+              if (run.gate && JSON.stringify(run.gate) === JSON.stringify(entry.gate)) run.gate.at = now;
+            }
           }
           writeRun(run, p); return { ...saved };
         });
