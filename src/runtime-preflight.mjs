@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a97cc2c3f3c36564296f08018d4c1c01648e7193635e7cf4b16bf0d660cd7501).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 8935ab1cf864e10d60eec5bd25b6e82cff21c02d91f8d908095654f54d03d859).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -431,8 +431,8 @@ export function readPrompt(root, visible, path) {
 
 // Drafts may run; until the server takes them, its refusal gets this plain text.
 export const DRAFT_SERVER_TEXT = 'The server does not run draft prompts yet. Approve the prompt first, or wait for the server update.';
-const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd check --fill-hash.`;
-export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd check --fill-hash, ask the person';
+const draftStaleHint = path => `pdd: ${path} is a draft whose text changed after its hash was filled. Run pdd test --fill-hash.`;
+export const STALE_HINT = 'the text changed after approval: set status to draft, run pdd test --fill-hash, ask the person';
 export const staleHint = `pdd: ${STALE_HINT}.`;
 const PROMPT_MESSAGES = {
   'entry-missing': path => `${path} is not a Git-visible *.prompt.md file.`,
@@ -685,8 +685,8 @@ export function fillHashes({ root, files = gitFiles(root) }) {
     try { value = JSON.parse(body); } catch { result.refused.push({ path, message: `The Runtime interface of ${path} is not valid JSON.` }); continue; }
     if (!isObject(value)) { result.refused.push({ path, message: `The Runtime interface of ${path} is not a JSON object.` }); continue; }
     if (!Object.hasOwn(value, 'status')) {
-      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd check --fill-hash again.` });
-      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd check --fill-hash again.` });
+      if (Object.hasOwn(value, 'prose_sha256')) result.refused.push({ path, message: `The Runtime interface of ${path} has no status. Add "status": "draft" and run pdd test --fill-hash again.` });
+      else result.warnings.push({ path, message: `The Runtime interface of ${path} has no status and no prose_sha256, so pdd skipped it. If this is a prompt you check, add "status": "draft" and run pdd test --fill-hash again.` });
       continue;
     }
     const hash = proseSha256(text);
@@ -1412,7 +1412,7 @@ function captureWithPolicy(root, { attempts = 3, ...selection } = {}, strict = f
     const captured = captureOnce(root, selection, strict);
     if (captured) return captured;
   }
-  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd check again.`);
+  throw new PreflightError(5, `The files changed while pdd read them (${attempts} times). Stop other edits, then run pdd test again.`);
 }
 
 // A bound capability keeps strict command reads isolated from source-upload reads.

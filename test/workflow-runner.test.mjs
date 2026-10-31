@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync, readdirSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
@@ -285,7 +285,7 @@ for (const name of ['bug', 'feature']) {
     }
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
-    assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
+    assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
     assert.equal(nothing.exitCode, 1); assert.match(nothing.message, /Nothing to approve/);
@@ -419,7 +419,7 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
+  assert.match(f.prs[0].body, /^Prompt tests: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
   assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
@@ -713,7 +713,7 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
 test('#13: after check and try the chat asks the person to try and approve; PR 1 opens only after approval, then the code question', async t => {
   const { f, run, gate } = await featureAtTryGate(t);
   assert.equal(f.prs.length, 0, 'no PR 1 before the person approves');
-  assert.match(gate.message, /Runtime check line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
+  assert.match(gate.message, /Prompt tests line/); assert.match(gate.message, /Try link/); assert.match(gate.message, /approve/); assert.match(gate.message, /Stop/);
   assert.doesNotMatch(gate.message, /pdd opens PR 1 now/);
   let record = f.record();
   assert.equal(record.gate.kind, 'approve-pr'); assert.equal(record.state, 'waiting');
@@ -765,7 +765,7 @@ test('#18: the PR body puts the Runtime check and report link on top, cuts steps
   f.tick(); f.ports.confirm = async () => false;
   await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const body = f.prs[0].body, top = body.split('\n');
-  assert.equal(top[0], 'Runtime check (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
+  assert.equal(top[0], 'Prompt tests (DRAFT): ✓ 3 of 3 criteria · 18/18 checks · 12 AI calls');
   assert.equal(top[1], 'Report: https://rt.example.test/r/d379-42 (report links expire after 7 days)');
   assert.equal(top[3], 'Part of #17');
   for (const row of body.split('\n').filter(row => row.startsWith('- **'))) assert.ok(row.length <= 220, row);
@@ -806,7 +806,7 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); await stepDone({ step: 'prompt-story', summary: 'Story; Runtime check (DRAFT): ✓ 1 of 2 criteria; Report: https://rt.example.test/r/first', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
-  assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
+  assert.match(f.prs[0].body, /^Prompt tests: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
   assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
 });
 
@@ -824,16 +824,16 @@ test('0.1.6: PR 1 starts with one Runtime check line per Story, then the total p
   // The chat re-checks only merge-tiles and sends all current lines again; pdd counts only the latest summary.
   f.tick(); await stepDone({ step: 'check', summary: storyLines.replace('(DRAFT): ✗ 2 of 3 criteria · 8/10 checks', '(DRAFT): ✓ 3 of 3 criteria · 10/10 checks').replace('Runtime check: ✗ 7 of 8', 'Runtime check: ✓ 8 of 8'), cwd: run.root }, f.agentPorts());
   const gate = await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
-  assert.match(gate.message, /Runtime check line of each Story/);
+  assert.match(gate.message, /Prompt tests line of each Story/);
   shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
   assert.match(shown.message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   const top = f.prs[0].body.split('\n');
   assert.deepEqual(top.slice(0, 6), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Runtime check (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
-    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    'Prompt tests (score): ✓ 2 of 2 criteria · 6/6 checks · 1 AI call',
+    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 26/26 checks · 4 AI calls',
     'Report: https://rt.example.test/r/batch-1 (report links expire after 7 days)', '']);
 });
 
@@ -858,9 +858,9 @@ test('0.1.6: the skills format (one line each, with a Report line per Story) giv
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 6), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✗ 5 of 6 criteria · 18/20 checks · 3 AI calls',
     'Report: https://rt.example.test/r/one (report links expire after 7 days)',
     'Report: https://rt.example.test/r/two (report links expire after 7 days)', '']);
 });
@@ -875,9 +875,9 @@ test('0.1.6: the agreed format ("; ", one "Report (<story>): <url>" per report r
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 2 of 2 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 2 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✓ 6 of 6 criteria · 20/20 checks · 3 AI calls',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
@@ -895,10 +895,10 @@ test('0.1.6 real run (pdd-trial-2048-1027): the pasted overall line repeated one
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^Stories: 3 of 3 Stories pass$/m);
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 8), [
-    'Runtime check (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
-    'Runtime check (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
-    'Runtime check (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
-    'Runtime check (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
+    'Prompt tests (swipe-play) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 8 AI calls',
+    'Prompt tests (game-result) (DRAFT): ✓ 3 of 3 criteria · 13/13 checks · 5 AI calls',
+    'Prompt tests (new-game) (DRAFT): ✓ 2 of 2 criteria · 12/12 checks · 4 AI calls',
+    'Prompt tests (all Stories) (DRAFT): ✓ 8 of 8 criteria · 35/35 checks · 17 AI calls',
     'Report: https://rt.example.test/r/7a5cc123-32d4-434b-bc1e-43edcb1f643d (report links expire after 7 days)',
     'Report: https://rt.example.test/r/ddab0595-645e-47e5-9bff-74c47614d9a1 (report links expire after 7 days)',
     'Report: https://rt.example.test/r/5a866c47-e4d3-4746-9036-9fe86c9b8937 (report links expire after 7 days)', '']);
@@ -917,9 +917,9 @@ test('0.1.6: a summary with no overall line works; a Story checked again takes i
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 7), [
-    'Runtime check (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
-    'Runtime check (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
+    'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (merge-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (all Stories): ✓ 6 of 6 criteria · 20/20 checks · 2 AI calls',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/two (report links expire after 7 days)',
     'Report (merge-tiles): https://rt.example.test/r/three (report links expire after 7 days)', '']);
@@ -933,7 +933,7 @@ test('0.1.7: a summary with only one named Runtime check line lifts that line in
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Runtime check (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (unread-filter) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (unread-filter): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
@@ -943,7 +943,7 @@ test('0.1.6: one named Story gets no total line; its line is the total', async t
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 3), [
-    'Runtime check (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Prompt tests (move-tiles) (DRAFT): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
     'Report (move-tiles): https://rt.example.test/r/one (report links expire after 7 days)', '']);
 });
 
@@ -1359,7 +1359,7 @@ for (const [name, summary] of [['one per line', verdictSummary.join('\n')], ['jo
     assert.deepEqual(f.prs[0].body.split('\n').slice(0, 5), [
       'Verdict: the bug is in the PROMPT (its check fails on the issue\'s case).',
       'Before ✗ 0 of 1 criteria https://rt.example.test/r/da176d28-b1a3 → after ✓ 5 of 5 criteria https://rt.example.test/r/526de1aa-e631 (report links expire after 7 days)',
-      'Runtime check (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
+      'Prompt tests (split-cent-conservation) (DRAFT): ✓ 5 of 5 criteria · 20/20 checks · 15 AI calls',
       '', 'Part of #17']);
     assert.deepEqual(f.prs[0].body.split('\n').filter(line => line.startsWith('Report')), [], 'the report links of the Before → after line are not listed again');
     assert.doesNotMatch(f.prs[0].body, /^\S+ report links expire after 7 days\.$/m, 'the top line says it already');
@@ -1372,7 +1372,7 @@ test('0.1.7 #15: "Before: no prompt" is lifted too, and a check summary without 
   await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
   assert.deepEqual(f.prs[0].body.split('\n').slice(0, 4), ['Verdict: no prompt covers this yet; the bug can only be in the code.',
-    'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Runtime check: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
+    'Before: no prompt → after ✓ 3 of 3 criteria https://rt.example.test/r/after-3 (report links expire after 7 days)', 'Prompt tests: ✓ 3 of 3 criteria · 9/9 checks · 2 AI calls', '']);
 });
 
 function topicBase(f, name = 'round3/workflow-base') {
@@ -2276,6 +2276,164 @@ test('2553: merged prompt branch retains its published anchor on final code entr
   assert.deepEqual(f.record().replayBaseline,saved);
 });
 
+// #2640 uses the native Git/blob/current-file adapter, never supplied snapshot facts.
+async function adoptedCorpusRun(t,{adopt=true,multi=false,start=true}={}) {
+  const f=await fixture(t,{name:'replay',agent:'codex'});
+  const skill=join(f.source,'.agents/skills/pdd-replay');mkdirSync(skill,{recursive:true});
+  const code={name:'code',steps:['verify'],gate:'pr',replay_evidence:'pdd.replay-evidence.v1'};
+  writeFileSync(join(skill,'workflow.json'),JSON.stringify({version:2,areas:multi?[{name:'story',steps:['scope'],gate:'approve'},{name:'prompt',steps:['check'],gate:'pr',before:'approve',then:'ask-code'},code]:[code]}));
+  mkdirSync(join(f.source,'tests'));mkdirSync(join(f.source,'prompts'));mkdirSync(join(f.source,'rules'));
+  writeFileSync(join(f.source,'prompts/add.prompt.md'),'# Add\n## Dependencies\n[Rule](../rules/add.md)\n');writeFileSync(join(f.source,'rules/add.md'),'Addition rule.\n');
+  const vector={schema_version:'prompt-runtime.program-scenario.v1',steps:[{step_id:'add',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]};
+  writeFileSync(join(f.source,'tests/add.json'),JSON.stringify(vector));
+  f.git(f.source,'add','.');f.git(f.source,'commit','-qm','Approved synthetic corpus');const commit=f.git(f.source,'rev-parse','HEAD');f.git(f.source,'update-ref','refs/remotes/origin/main',commit);
+  const declaration=join(f.base,'adoption.json');writeFileSync(declaration,JSON.stringify({schema_version:'pdd.replay-adoption.v1',repository:'example/project',commit,prompts:['prompts/add.prompt.md'],scenarios:['tests/add.json'],approval:{kind:'external-human-assertion',reference:'review:fixture',asserted_by:'Synthetic human'}}));
+  // Keep the canonical origin; perform real fetch/push/ls-remote against a local bare
+  // server through a transport-only URL substitution. gh/Herdr remain boundary fakes.
+  const bare=join(f.base,'remote.git');execFileSync('git',['init','--bare','-q',bare]);f.git(f.source,'push','-q',bare,'HEAD:refs/heads/main');
+  const original=f.ports.execFile;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git'&&['fetch','push','ls-remote'].includes(args[0])) {
+      if(args[0]==='push')f.pushes.push(args);
+      return exec('git',['-c',`url.${bare}.insteadOf=https://github.com/example/project.git`,...args],{...options,encoding:'utf8'});
+    }
+    return original(file,args,options);
+  };
+  const begin=()=>startRun({name:'replay',issue:'17',agent:'codex',cwd:f.source,packageRoot,...(adopt?{adoptCorpus:declaration}:{})},f.ports);
+  if(start){const out=await begin();assert.equal(out.exitCode,0,out.message);if(adopt)assert.match(out.message,/external-assertion-unverified/);}
+  return {f,declaration,vector,commit,begin,bare};
+}
+test('2640 custom first/only replay code area adopts without prompt publication, freezes authority, and publishes source-bound evidence',async t=>{
+  const {f,declaration,vector,bare}=await adoptedCorpusRun(t);const run=f.record(),anchor=structuredClone(run.replayBaseline);
+  assert.equal(run.area,0);assert.equal(run.areas.length,1);assert.equal(run.pr.length,0);assert.deepEqual(anchor.vectors.map(v=>v.path),['tests/add.json']);
+  rmSync(declaration);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'Original public replay executed',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
+  assert.equal(f.prs.length,1);assert.match(f.prs[0].body,/^Code replay: PASS/m);assert.deepEqual(f.record().replayBaseline,anchor);
+  const remote=execFileSync('git',['--git-dir',bare,'rev-parse',`refs/heads/${run.branch}`],{encoding:'utf8'}).trim();assert.equal(remote,f.git(run.root,'rev-parse','HEAD'));
+});
+test('2640 same custom first code area without adoption stays truthful BLOCKED',async t=>{
+  const {f,vector}=await adoptedCorpusRun(t,{adopt:false});const run=f.record();assert.equal(run.replayBaseline,undefined);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const out=await stepDone({step:'verify',summary:'PASS in prose',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);assert.match(f.prs[0].body,/^Code replay: BLOCKED/m);
+});
+for(const mode of ['prompt','dependency','vector','added','removed','frozen-declaration'])test(`2640 adopted code publication refuses ${mode} changes without repinning`,async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  if(mode==='prompt')writeFileSync(join(run.root,'prompts/add.prompt.md'),'Changed prompt.\n');
+  if(mode==='dependency')writeFileSync(join(run.root,'rules/add.md'),'Changed rule.\n');
+  if(mode==='vector')writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector)+'\n');
+  if(mode==='added')writeFileSync(join(run.root,'tests/new.json'),JSON.stringify(vector));
+  if(mode==='removed')rmSync(join(run.root,'tests/add.json'));
+  if(mode==='frozen-declaration')writeFileSync(join(run.runDir,'replay-adoption.json'),'{}');
+  const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.prs.length,0);assert.equal(f.pushes.length,0);assert.deepEqual(f.record().replayBaseline,anchor);
+});
+test('2640 startup validates selected base rather than dirty caller tree',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});writeFileSync(join(f.source,'rules/add.md'),'Dirty caller rule.\n');
+  const out=await begin();assert.equal(out.exitCode,0,out.message);assert.equal(readFileSync(join(f.record().root,'rules/add.md'),'utf8'),'Addition rule.\n');
+});
+test('2640 foreign source refusal occurs before allocating or starting Herdr',async t=>{
+  const {f,begin,declaration}=await adoptedCorpusRun(t,{start:false});const d=JSON.parse(readFileSync(declaration));d.repository='foreign/project';writeFileSync(declaration,JSON.stringify(d));
+  const before=f.git(f.source,'worktree','list','--porcelain');const out=await begin();assert.equal(out.exitCode,2,out.message);assert.equal(f.herdr.calls.length,0);assert.equal(f.git(f.source,'worktree','list','--porcelain'),before);assert.throws(()=>f.record());
+});
+test('2640 allocation race retains named files, releases new claim and never saves an active run',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});const original=f.ports.execFile;let allocated;
+  f.ports.execFile=async(file,args,opts)=>{
+    const reply=await original(file,args,opts);
+    if(file==='git'&&args[0]==='worktree'&&args[1]==='add') {allocated=args.at(-2);writeFileSync(join(allocated,'rules/add.md'),'Racing write.\n');}
+    return reply;
+  };
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/Retained worktree:/);assert.ok(out.message.includes(allocated));assert.match(out.message,/claim was released/);assert.equal(f.herdr.calls.length,0);assert.throws(()=>f.record());assert.ok(existsSync(allocated));
+});
+test('2640 adopted prompt publication and code entry retain anchor and ignore caller declaration edits',async t=>{
+  const {f,declaration}=await adoptedCorpusRun(t,{multi:true}),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(declaration,'{}');await stepDone({step:'scope',summary:'Scope unchanged',cwd:run.root},f.agentPorts());assert.equal((await approveRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  writeFileSync(join(run.root,'note.txt'),'Implementation note.\n');await stepDone({step:'check',summary:'Runtime unavailable; original corpus retained',cwd:run.root},f.agentPorts());
+  const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,0,out.message);assert.equal(f.record().areas[f.record().area].name,'code');assert.deepEqual(f.record().replayBaseline,anchor);
+});
+test('2640 adopted prompt publication refuses changed covered context before a push',async t=>{
+  const {f}=await adoptedCorpusRun(t,{multi:true}),run=f.record();await stepDone({step:'scope',summary:'Scope',cwd:run.root},f.agentPorts());await approveRun({ref:'17',cwd:f.source},f.ports);
+  writeFileSync(join(run.root,'rules/add.md'),'Changed requirement.\n');await stepDone({step:'check',summary:'Check',cwd:run.root},f.agentPorts());
+  const out=await approveRun({ref:'17',cwd:f.source},f.ports);assert.equal(out.exitCode,1,out.message);assert.equal(f.pushes.length,0);assert.equal(f.prs.length,0);
+});
+test('2640 publication retry revalidates frozen context before updating an open PR',async t=>{
+  const {f,vector}=await adoptedCorpusRun(t),run=f.record(),anchor=structuredClone(run.replayBaseline);
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  assert.equal((await stepDone({step:'verify',summary:'Replay',cwd:run.root},f.agentPorts())).exitCode,0);
+  const pushes=f.pushes.length,edits=f.edits.length;writeFileSync(join(run.root,'rules/add.md'),'Changed after publication.\n');
+  const out=await stepDone({step:'verify',summary:'Retry',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,1,out.message);assert.match(out.message,/ordinary approval workflow/);assert.equal(f.pushes.length,pushes);assert.equal(f.edits.length,edits);assert.deepEqual(f.record().replayBaseline,anchor);assert.equal(f.record().replayEvidence.outcome,'blocked');assert.equal(f.record().done.verify.replayEvidence.outcome,'blocked');
+});
+test('2640 invalid adoption preserves cancelled historical run and its claim before restart',async t=>{
+  const {f,begin,declaration}=await adoptedCorpusRun(t);const run=f.record();assert.equal((await cancelRun({ref:'17',cwd:f.source},f.ports)).exitCode,0);
+  const status=readFileSync(join(run.runDir,'status.json')),worktrees=f.git(f.source,'worktree','list','--porcelain');
+  writeFileSync(declaration,'{}');const out=await begin();assert.equal(out.exitCode,2,out.message);assert.deepEqual(readFileSync(join(run.runDir,'status.json')),status);assert.equal(f.git(f.source,'worktree','list','--porcelain'),worktrees);assert.ok(existsSync(run.root));
+});
+test('2640 adoption requires explicit workflow policy before starting Git/Herdr work',async t=>{
+  const f=await fixture(t);const out=await startRun({name:'small-change',issue:'17',cwd:f.source,packageRoot,adoptCorpus:'missing.json'},f.ports);
+  assert.equal(out.exitCode,2);assert.match(out.message,/explicitly replay-evidence-enabled/);assert.equal(f.fetches,0);assert.equal(f.herdr.calls.length,0);assert.throws(()=>f.record());
+});
+for(const mode of ['cancelled-claim-refusal','allocation-refusal'])test(`2640 declaration scratch cleanup after ${mode}`,async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:mode==='cancelled-claim-refusal'});
+  let savedStatus;
+  if(mode==='cancelled-claim-refusal') {
+    const run=f.record();await cancelRun({ref:'17',cwd:f.source},f.ports);savedStatus=readFileSync(join(run.runDir,'status.json'));
+    const claim=join(f.source,'.git/pdd/worktree-assignments/issues/17.json');const data=JSON.parse(readFileSync(claim));data.runId='foreign-run';writeFileSync(claim,JSON.stringify(data));
+  } else {
+    const original=f.ports.execFile;f.ports.execFile=async(file,args,options)=>{
+      if(file==='git'&&args[0]==='worktree'&&args[1]==='add')throw Error('Allocation refused');
+      return original(file,args,options);
+    };
+  }
+  const previous=process.env.TMPDIR;process.env.TMPDIR=f.base;
+  try {
+    const out=await begin();assert.notEqual(out.exitCode,0,out.message);assert.deepEqual(readdirSync(f.base).filter(name=>name.startsWith('pdd-adoption-declaration-')),[]);
+    if(savedStatus)assert.deepEqual(readFileSync(join(f.record().runDir,'status.json')),savedStatus);else assert.throws(()=>f.record());
+  } finally {if(previous===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previous;}
+});
+
+test('2640 positive runner supports symlink TMPDIR for both native scratch locations',async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});
+  const alias=join(f.base,'tmp-alias');symlinkSync(f.base,alias);
+  const old=process.env.TMPDIR;process.env.TMPDIR=alias;
+  try {const out=await begin();assert.equal(out.exitCode,0,out.message);assert.ok(f.record().replayAdoption);}
+  finally {if(old===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=old;}
+});
+
+test('2640 final step publication validates adoption once after automatic commit and persists step evidence',async t=>{
+  const {f}=await adoptedCorpusRun(t),run=f.record();
+  const bin=join(f.base,'git-bin');mkdirSync(bin);const log=join(f.base,'git.log');
+  const git=execFileSync('which',['git'],{encoding:'utf8'}).trim();
+  writeFileSync(join(bin,'git'),`#!/bin/sh\nprintf '%s\\n' "$*" >> "$PDD_GIT_LOG"\nexec '${git.replaceAll("'","'\\''")}' "$@"\n`,{mode:0o755});
+  writeFileSync(join(run.root,'value.mjs'),'export const value=3;\n');
+  const oldPath=process.env.PATH,oldLog=process.env.PDD_GIT_LOG;process.env.PATH=`${bin}:${oldPath}`;process.env.PDD_GIT_LOG=log;
+  try {const out=await stepDone({step:'verify',summary:'Finished',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);}
+  finally {process.env.PATH=oldPath;if(oldLog===undefined)delete process.env.PDD_GIT_LOG;else process.env.PDD_GIT_LOG=oldLog;}
+  const commands=readFileSync(log,'utf8').trim().split('\n');
+  assert.equal(commands.filter(c=>c.startsWith('merge-base --is-ancestor ')).length,1);
+  const committed=commands.findIndex(c=>c.startsWith('commit ')),validated=commands.findIndex(c=>c.startsWith('merge-base --is-ancestor '));
+  assert.ok(committed>=0 && committed<validated);assert.deepEqual(f.record().done.verify.replayEvidence,f.record().replayEvidence);
+  assert.match(f.prs[0].body,/Anchor adopted from example\/project@.*approval reference review:fixture by Synthetic human; external-assertion-unverified/);
+  assert.match(f.prs[0].body,/Code replay: BLOCKED/);
+  t.diagnostic('final step + automatic publication commit: one full adoption validation (one actual Git ancestry check)');
+});
+
+for(const mode of ['throw','exit-code'])test(`2640 rework startup fetch failure ${mode} names fetch and never allocates or leaks stderr`,async t=>{
+  const {f,begin}=await adoptedCorpusRun(t,{start:false});const original=f.ports.execFile;
+  const before=f.git(f.source,'worktree','list','--porcelain');let allocations=0,fetches=0;
+  f.ports.execFile=async(file,args,options)=>{
+    if(file==='git'&&args[0]==='worktree'&&args[1]==='add')allocations++;
+    if(file==='git'&&args[0]==='fetch'){
+      fetches++;const error=Error(`fetch refused ${f.base} password=hiddenPassword ghp_hiddenCredential`);
+      error.stderr=`fatal: /private/person/remote https://runtime.invalid/s/capability Authorization: Bearer hiddenToken`;
+      if(mode==='exit-code')return {code:128,stderr:error.stderr,stdout:error.message};
+      throw error;
+    }
+    return original(file,args,options);
+  };
+  const out=await begin();assert.equal(out.exitCode,2,out.message);assert.match(out.message,/fetch failed/i);assert.equal(fetches,1);assert.equal(allocations,0);
+  assert.ok(!out.message.includes(f.base));assert.doesNotMatch(out.message,/hiddenPassword|hiddenCredential|hiddenToken|capability|private|person|Authorization|fatal:/);
+  assert.equal(f.herdr.calls.length,0);assert.equal(f.git(f.source,'worktree','list','--porcelain'),before);assert.throws(()=>f.record());
+});
 
 test('product association: start saves one issue marker and both producer PRs preserve it independently of branch identity', async t => {
   const marker = '<!-- pdd-product: run=phone-1 -->';
@@ -2299,4 +2457,44 @@ test('product association: conflicting markers warn and ordinary issues keep the
     assert.equal(Object.hasOwn(f.record(),'productMarker'),false);
     if(body.includes('pdd-product')) assert.match(f.record().warnings.join(' '),/multiple.*marker/i);
   }
+});
+
+// user_stories/prompt-tests-line.md: pdd writes `Prompt tests`; every reader takes old `Runtime check` lines the same way.
+test('Prompt tests lines: PR 1 top, total and Story count read new and old labels alike; a verdict stops at either label', async t => {
+  const { f, run } = await featureAtTryGate(t);
+  const summary = ['Verdict: the bug is in the PROMPT.', 'Prompt tests (move-tiles): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call',
+    'Runtime check (merge-tiles) (DRAFT): ✗ 2 of 3 criteria · 8/10 checks · 2 AI calls', 'Report (move-tiles): https://rt.example.test/r/one'].join('; ');
+  f.tick(); await stepDone({ step: 'check', summary, cwd: run.root }, f.agentPorts());
+  const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(stories.total, 2); assert.equal(stories.pass, 1); assert.deepEqual(stories.failing, ['merge-tiles']);
+  await stepDone({ step: 'try', summary: 'skipped', cwd: run.root }, f.agentPorts());
+  f.tick(); await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, confirm: async question => /open PR 1/.test(question) });
+  const top = f.prs[0].body.split('\n').slice(0, 4);
+  assert.ok(top[0].startsWith('Verdict:') && !/Prompt tests|Runtime check/.test(top[0]), top[0]);
+  assert.deepEqual(top.slice(1).map(line => line.split(':')[0]), ['Prompt tests (move-tiles)', 'Prompt tests (merge-tiles) (DRAFT)', 'Prompt tests (all Stories) (DRAFT)']);
+  assert.match(top[3], /: ✗ 5 of 6 criteria · 18\/20 checks · 3 AI calls$/);
+  assert.doesNotMatch(f.prs[0].body, /^Runtime check/m, 'pdd writes only the new label');
+});
+
+test('Prompt tests lines: workflow evidence records a saved result with the new or the old label', async t => {
+  const { recordEvidence } = await import('../src/workflow-runner.mjs');
+  const { captureSource } = await import('../src/runtime-preflight.mjs');
+  const { cpSync } = await import('node:fs');
+  const { f, run } = await featureAtTryGate(t);
+  for (const dir of ['prompts', 'tests', 'user_stories']) cpSync(join(packageRoot, 'test/fixtures/harbor', dir), join(run.root, dir), { recursive: true });
+  const tests = ['tests/place-order.json', 'tests/unknown-item.json'], source = captureSource(run.root, { tests, appMap: null });
+  for (const label of ['Prompt tests', 'Runtime check']) {
+    const rows = tests.map(test => { const story = test.split('/').at(-1).replace('.json', '');
+      return { test, story, state: 'passed', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 0, summary_line: `${label} (${story}): ✓ 1 of 1 criterion · 1/1 checks · 0 AI calls` }; });
+    const file = join(f.base, `evidence-${label.split(' ')[0]}.json`);
+    writeFileSync(file, JSON.stringify({ repo: run.root, source_sha256: source.sha256, rows }));
+    f.tick(); const result = await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, f.ports);
+    assert.equal(result.exitCode, 0, `${label}: ${result.message}`);
+    // A changed result word still refuses: only the label is read as new.
+    writeFileSync(file, JSON.stringify({ repo: run.root, source_sha256: source.sha256, rows: rows.map(row => ({ ...row, summary_line: row.summary_line.replace('✓', '✗') })) }));
+    assert.notEqual((await recordEvidence({ ref: '17', summaryFile: file, cwd: run.root }, f.ports)).exitCode, 0, label);
+  }
+  assert.equal(f.record().evidence.length, 2);
+  const stories = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, f.ports)).message).runs[0].stories;
+  assert.equal(stories.pass, 2); assert.equal(stories.total, 2);
 });

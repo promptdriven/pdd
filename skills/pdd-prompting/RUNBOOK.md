@@ -497,12 +497,12 @@ Cut from the Harbor Coffee app map (`…` marks cut parts):
 
 ## 15. PR text
 
-Put the `Runtime check` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
-Story gives one line, `Runtime check (<story>): …`. 2 or more Stories give one line each and a last `Runtime check:`
+Put the `Prompt tests` line(s) that `pdd test` prints, with their report links, at the top of the PR text. One
+Story gives one line, `Prompt tests (<story>): …`. 2 or more Stories give one line each and a last `Prompt tests:`
 line for all. The link expires after 7 days. Anyone with the link can open it. Do not paste logs, warnings or full
 paths of this computer (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
 ```
-Runtime check (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
+Prompt tests (place-order): ✓ 3 of 3 criteria · 10/10 checks · 1 AI call
 Report: https://…/r/617480ac-…
 ```
 
@@ -569,11 +569,11 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
 **Structured record for a workflow run.**
 New bundled feature/bug code areas opt in with `replay_evidence: "pdd.replay-evidence.v1"`. Saved areas and
 custom workflows without that field keep their publication behavior; small-change has no replay policy.
-After each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
+For ordinary runs, after each prompt-space publication or push, pdd refreshes the changed scenario files, their original byte
 hashes and step/check identities in `status.json` as `replayBaseline`, including empty or blocked selections.
 This continues through the final approval publication before code space. Final approval refuses unpublished
 scenario edits; publish approved edits in prompt space first. On entry into code space the published anchor
-freezes; a code-space retry cannot replace it. No selected vectors means not replayed.
+freezes; a code-space retry cannot replace it. No selected vectors means not replayed. Adopted runs instead keep their frozen declared scenario inventory, bytes and authority through prompt publication, code entry and every retry; publication never refreshes that adopted anchor.
 
 Before completing each code-space step, the agent writes `<run-folder>/replay-evidence.json`; update it
 with the formal result after that step. Use the versioned contract in the package's `docs/replay-evidence.md`.
@@ -633,7 +633,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
 `--shell` opens bash or zsh with that PATH. Each command uses your gh login and the same simulation's saved data.
 `pdd simulate --save-last` appends the last command and its observed result to the original test file; review the
 recorded expectation and its saved-data setup. `pdd simulate --stop STORY` stops the session. A wrapper error prints
-**pdd try:** on stderr and exits 125; program errors preserve the program's other exit codes.
+**pdd:** on stderr and exits 125; program errors preserve the program's other exit codes.
 
 `pdd simulate STORY --serve 8080` exposes named HTTP routes at `http://127.0.0.1:8080`. A prompt names an inbound
 route by setting the entry's `input_schema.title`, for example `"title": "HTTP GET /api/books"`. Each entry names
@@ -650,7 +650,7 @@ A JSON body is parsed; a string `body` receives exact UTF-8 text. Inputs still m
 Return `status`, an optional object of response `headers`, and `body` (a string or JSON value). An existing
 result such as `{"status":200,"books":[...]}` returns `{"books":[...]}` as its JSON body. HTTP status and headers
 come from the prompt; hop-by-hop headers are removed and Content-Length is calculated by pdd. An unknown
-route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd try:** reason.
+route returns 404 without an AI call. Interpreter or wrapper trouble returns 502 with a plain **pdd:** reason.
 The listener binds only to loopback and accepts browser requests only from its own origin. Ctrl-C closes the
 local server while the simulation keeps its data. Use curl or fetch for API routes; browser page, image, script and
 stylesheet loads cannot spend calls through an API route.

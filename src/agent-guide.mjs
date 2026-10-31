@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-guide.prompt.md (sha256: 07e3035e17c58f1e3d18937164f16dbf23fd960e793e87ebffe6b809c2462962).
+// Generated from prompts/cli/agent-guide.prompt.md (sha256: 3553676cff839ba33793ee0836d1898eaeb89f65d408721ae5930cdcd6db9a21).
 import {createHash} from 'node:crypto';
 import {buildProjectCard,readAgentScenarios} from './agent-project.mjs';
 import {createRunJudge,compareExpectation} from './agent-judge.mjs';
@@ -124,7 +124,7 @@ export function createTryGuide({root,env={},model,test={},features=[],secrets=[]
   let fast=null;
   if(message.kind==='run'&&features.includes('run_events')&&verdict?.state==='pass'&&!ownCases.some(c=>c.state!=='saved')){
    const ids=[...new Set(verdict.items.filter(i=>i.state==='pass').map(i=>i.id).filter(x=>/^AC\d+$/.test(x)))];
-   fast={say:`${ids.join(', ')||'Compared checks'} pass: the compared checks match. Other checks remain for pdd check.`,fill:null};
+   fast={say:`${ids.join(', ')||'Compared checks'} pass: the compared checks match. Other checks remain for pdd test.`,fill:null};
    const next=criteria.find(c=>c.state!=='pass'&&c.entry&&object(c.input));if(next){fast.next={text:`Next: ${next.id}. Fill it?`,criterion:next.id};if(mode==='walk'){fast.fill={entry:next.entry,input:clone(next.input)};fast.apply=features.includes('apply');fast.criterion=next.id;}}
   }
   return{context:clone(lastContext),fast};

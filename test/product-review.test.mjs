@@ -108,6 +108,15 @@ test('remote progress keeps the newest owned PR with named check lines, not a la
   assert.equal(status.parts[0].pass, 1); assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 32);
 });
 
+// user_stories/prompt-tests-line.md: a PR body with Prompt tests lines counts like an older one with Runtime check lines.
+test('remote progress reads Prompt tests lines and older Runtime check lines in one PR body alike', async t => {
+  const f = fixture(t); f.state.issues = [item('phone-1')];
+  f.state.events[81] = [xref(30)];
+  f.state.prs = [pr('phone-1', 30, { body: `${marker('phone-1')}\nPrompt tests (P01-menu): ✓ 1 of 1 criteria\nRuntime check (P02-order): ✓ 1 of 1 criteria\nPrompt tests (all Stories): ✓ 2 of 2 criteria`, updatedAt: '2026-10-01T00:00:00Z' })];
+  const status = await productStatus({ cwd: f.cwd }, f.ports);
+  assert.equal(status.parts[0].pass, 2); assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 30);
+});
+
 test('forks, comment links and other runs cannot supply progress or satisfy dependencies', async t => {
   const f = fixture(t);
   f.state.issues = ['server-1', 'phone-1', 'barista-1'].map((name, i) => item(name, 81 + i));

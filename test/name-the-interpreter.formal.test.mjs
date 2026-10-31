@@ -120,7 +120,7 @@ test('pdd\'s own strings: no string literal in src or bin calls the service "PDD
 
 // The keep-list: each machine-read word, checked where code reads it.
 const sourceOf = file => readFileSync(join(root, 'src', file), 'utf8');
-test('keep-list: schema ids, host, setting, folder, block label, Runtime check line and gate text stay', async t => {
+test('keep-list: schema ids, host, setting, folder, block label and gate text stay; the Prompt tests line reads old lines', async t => {
   // Schema ids `prompt-runtime.*`: tests are still found by their schema id; the app map id stays where it is read.
   assert.equal(TEST_SCHEMA, 'prompt-runtime.program-scenario.v1');
   for (const file of ['runtime-client.mjs', 'workflow-view.mjs']) assert.ok(sourceOf(file).includes('\'prompt-runtime.app-map.v1\''), file);
@@ -144,11 +144,11 @@ test('keep-list: schema ids, host, setting, folder, block label, Runtime check l
   assert.equal(interfaceBlocks(block('Interpreter interface')).length, 0);
   for (const file of ['runtime-preflight.mjs', 'prompt-approve.mjs']) assert.ok(tokens(sourceOf(file)).some(token => token.kind === 'string'
     && sourceOf(file).slice(token.start, token.end).includes('Runtime interface')), file);
-  // The `Runtime check (story): ...` line that pdd writes is the line that the PR reader reads.
+  // The `Prompt tests (story): ...` line that pdd writes is the line that the PR reader reads; an older `Runtime check` line reads the same way.
   const line = summaryLine([{ story: 'place-order', state: 'passed', criteria: { passed: 1, total: 1 }, checks: { passed: 1, total: 1 }, calls: 1 }], 'place-order');
-  assert.match(line, /^Runtime check \(place-order\): /);
-  assert.deepEqual(runtimeLines(line).map(item => [item.story, item.pass]), [['place-order', true]]);
-  assert.match(sourceOf('workflow-view.mjs'), /\/\^Runtime check\//);
+  assert.match(line, /^Prompt tests \(place-order\): /);
+  for (const text of [line, line.replace('Prompt tests', 'Runtime check')]) assert.deepEqual(runtimeLines(text).map(item => [item.story, item.pass]), [['place-order', true]]);
+  assert.match(sourceOf('workflow-view.mjs'), /PROMPT_TESTS_WORDS/);
   // The gate answer "The runtime opens soon." is still detected, and a server text is printed as the server sent it.
   const said = [];
   for (const [status, text, json] of [[503, 'The runtime opens soon.'], [429, null, { error: { code: 'other', message: 'The runtime is busy. Try again later.' } }], [503, 'Other text.']]) {
@@ -162,5 +162,5 @@ test('keep-list: schema ids, host, setting, folder, block label, Runtime check l
   assert.equal(said[0].code, 5, said[0].out); assert.equal(said[0].requests, 1, said[0].out); assert.ok(said[0].out.includes('The runtime opens soon.'), said[0].out);
   assert.equal(said[1].code, 5, said[1].out); assert.ok(said[1].out.includes('The runtime is busy. Try again later.'), said[1].out);
   assert.notEqual(said[2].code, 5, said[2].out); assert.ok(said[2].requests > 1, said[2].out);
-  t.diagnostic('bounds: 7 keep-list words (schema ids: 2, host, setting, folder: 4 readers, block label, Runtime check line, gate text) and 1 server text');
+  t.diagnostic('bounds: 6 keep-list words (schema ids: 2, host, setting, folder: 4 readers, block label, gate text), the Prompt tests line with both labels and 1 server text');
 });

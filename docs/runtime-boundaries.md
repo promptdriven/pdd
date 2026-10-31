@@ -48,7 +48,7 @@ by the interpreter simulation; a simulated result does not establish a live effe
 
 Never invent a fake API only for a check. Use the module's public operations and available
 dependency contracts, declare the supported instance and resource bindings, and name any
-missing contract or unbound criterion. Report what the Runtime check covers and what the
+missing contract or unbound criterion. Report what the prompt tests cover and what the
 native tests cover. Neither a passing check nor a simulation approves a workflow gate.
 
 ## Read call usage as evidence

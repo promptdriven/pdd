@@ -72,7 +72,7 @@ async function refuseCompetitor(t, r, retry) {
   const posts = r.fake.posts.length, gets = r.fake.gets.length;
   const second = await bounded(worker(t, r, retry).done, 'competing process');
   assert.equal(second.code, 3, second.err); assert.equal(second.out, '');
-  assert.match(second.err, /pdd check --read/);
+  assert.match(second.err, /pdd test --read/);
   assert.equal(r.fake.posts.length, posts); assert.equal(r.fake.gets.length, gets);
   assert.deepEqual(readFileSync(r.file), bytes);
   assert.deepEqual(existsSync(summaryPath) ? readFileSync(summaryPath) : null, summary);
