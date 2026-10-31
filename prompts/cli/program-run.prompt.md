@@ -75,8 +75,24 @@ prints JSON without executing a call; fresh invalidates cached answers.
 Use runtime-client's direct transport and runtime-preflight's entry graph capture.
 No Story or synthetic scenario is uploaded. Outside resources stay fake; absent
 bindings use interpreter defaults, never real files/databases/services.
-Entry worst case is: 1 plus each declared call's
-max_calls times (child worst case +1). Default per-call cap is min(worst case,100). Explicit --max-calls accepts1–1000
+Compute the selected effective graph's admission bound, including projected fake
+calls, before choosing the default cap. For each selected entry n,
+W(n)=1+SUM(bound*(W(child)+1)) over its effective internal calls; the extra1
+charges caller resume. Follow declared calls using target_operation and respect
+entry call_operations and resource_operations when supplied. Unselected operations
+and unrelated resources contribute nothing. A default http/command/model/port
+service (except clock.now) projects to a leaf W=1 with bound
+min(20, declaring prompt limits.max_steps). A selected http.prompt/port.prompt
+simulation binding instead follows its target operation and entire nested closure
+with the binding's max_calls. Explicit simulation always wins over automatic
+bindings/defaults. Dependencies affect source identity but add no call cost unless
+reached as an effective call. Deterministic resources, clock and explicit fixture
+bindings remain external edges and add no fake-provider term. If any reachable
+selected external edge remains after projection, admission bound is
+max(W(root),20,root prompt limits.max_model_calls); otherwise it is W(root).
+This ceiling is required for interpreter admission even when a deterministic
+resource itself uses0 fake-provider calls. Default per-call cap is
+min(admission bound,100). Explicit --max-calls accepts1–1000
 and changes only this per-call cap. Always send max_calls and boolean fresh in
 the call request, including fresh:false. The interpreter enforces insufficient
 caps; never refuse locally because cap is below worst case. Cycles/indeterminate estimates
