@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: de3bc9fcb8c7088dad9fb3b92770230af758659a6ecc45831bd5ad53c6117731).
+// Generated from prompts/cli/workflow-herdr-layout.prompt.md (sha256: 819bced650201068a8258c3d5dcf3837f5037eac57f2027b248251ec1945f750).
 import { mkdir, open, readFile, rename, rm, lstat, realpath } from 'node:fs/promises';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, unlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -67,7 +67,7 @@ async function inventory(command) {
 function literal(value) {
   if(value===undefined||value===null)return 'missing';
   const text=String(value),bounded=text.length>240?`${text.slice(0,240)}…[truncated]`:text;
-  return JSON.stringify(bounded).replace(/[\u007f-\u009f\u2028\u2029]/g,c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`);
+  return JSON.stringify(bounded).replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,c=>`\\u${c.charCodeAt(0).toString(16).padStart(4,'0')}`);
 }
 function identityChanged(saved,field,expected,found) {
   const message=`herdr_layout_identity_changed: Herdr workspace ${literal(saved.workspaceId)}: ${field} expected ${literal(expected)}, found ${literal(found)}. Inspect this workspace in Herdr session pdd; restore its expected identity, then retry your command. If the original identity is missing, manually inspect ownership and layout before restoring it.`;
