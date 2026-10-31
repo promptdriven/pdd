@@ -19,7 +19,7 @@ function slow() {
 }
 const plain = text => !/[\r\x1b]/.test(text);
 
-// Wrong (Oct 28): pdd try was silent for about a minute while it linted and made the Try.
+// Wrong (Oct 28): pdd simulate was silent for about a minute while it linted and made the Try.
 test('PROGRESS1: a slow lint and Try setup print progress lines on stderr; stdout keeps only the result', async t => {
   const setup = harbor(t), fake = await fakeRuntime(t, slow());
   const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { openUrl: async () => true });
