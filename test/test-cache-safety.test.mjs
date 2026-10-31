@@ -1,6 +1,7 @@
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import * as disk from 'node:fs';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, utimesSync, chmodSync, readFileSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -208,4 +209,45 @@ test('fingerprint includes local package and engine identity and pass keeps obse
   assert.equal(fingerprint.engine_sha, engine);
   const records = JSON.parse(readFileSync(ctx.path, 'utf8')).stories;
   assert.ok(Object.values(records).every(row => row.pass?.engine_sha === engine), 'pass retains observed server engine');
+});
+
+// AC6: a dead-owner recovery must still protect a live successor owner.
+test('stale lock recovery preserves a successor live owner', async t => {
+  const ctx = await fixture(t);
+  const lock = join(ctx.repo, '.pdd/cache/test/transaction.lock');
+  const ownerPath = join(lock, 'owner.json');
+  mkdirSync(lock);
+  writeFileSync(ownerPath, JSON.stringify({ pid: 2147483647 }));
+  let successorAcquired = false, removedSuccessor = false, ownAcquired = false;
+  const cacheFiles = {
+    nonce: randomUUID, lstat: disk.lstatSync, write: disk.writeFileSync,
+    list: disk.readdirSync, rename: disk.renameSync, rmdir: disk.rmdirSync,
+    exclude(root) { return join(root, '.git/info/exclude'); },
+    mkdir(path, ...args) {
+      const result = disk.mkdirSync(path, ...args);
+      if (path === lock) ownAcquired = true;
+      return result;
+    },
+    read(path, ...args) {
+      const result = disk.readFileSync(path, ...args);
+      if (path === ownerPath && !successorAcquired) {
+        // A second stale contender recovers and acquires while our read returns
+        // the earlier dead-owner bytes. This invocation has not acquired yet.
+        successorAcquired = true;
+        disk.writeFileSync(ownerPath, JSON.stringify({ pid: process.pid }));
+      }
+      return result;
+    },
+    unlink(path) {
+      if (path === ownerPath && successorAcquired && !ownAcquired &&
+          disk.existsSync(path) && JSON.parse(disk.readFileSync(path)).pid === process.pid) {
+        removedSuccessor = true;
+      }
+      return disk.unlinkSync(path);
+    }
+  };
+  await ctx.invoke({}, [], { cacheFiles });
+  assert.equal(successorAcquired, true, 'the recovery race must be exercised');
+  assert.equal(removedSuccessor, false, 'stale contender must never unlink successor live owner');
+  assert.ok(existsSync(ownerPath), 'the live successor retains its lock');
 });
