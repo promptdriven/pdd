@@ -28,17 +28,20 @@ test('LINK preservation references: linked contract and seed stat/read expand wi
   assert.ok(!captured.files.some(f=>['alias.json','shared/data.json'].includes(f.path)));
 });
 
-test('LINK preservation bindings: root metadata follows safe source policy while executable declarations stay banned',async t=>{
-  const {repo}=fixture(t);
-  write(repo,'inventory.json','{"schema_version":"pdd.bindings.v1","modules":[]}');
-  symlinkSync('inventory.json',join(repo,'pdd-bindings.json'));
+test('LINK preservation bindings: root metadata and executable declarations retain strict no-link policy',async t=>{
+  const {repo}=fixture(t); accepted(repo);
+  const empty='{"schema_version":"pdd.bindings.v1","modules":[]}';
+  write(repo,'inventory.json',empty);write(repo,'pdd-bindings.json',empty);
   const found={visible:new Set(['pdd-bindings.json','inventory.json','alias.json','shared/data.json']),stories:[]};
-  let coverage;
-  assert.doesNotThrow(()=>{coverage=bindingCoverage({root:repo,found,selected:[]});},'linked root binding metadata must follow source-reading policy');
-  assert.deepEqual(coverage,{available:true,bound:0,total:0,modules:[]});
+  assert.deepEqual(bindingCoverage({root:repo,found,selected:[]}),{available:true,bound:0,total:0,modules:[]});
   const {ports}=portsFor({HOME:join(repo,'..','home')},{gh:()=>assert.fail('offline auth'),fetch:()=>assert.fail('offline upload')});
   assert.equal(await runCheck({cwd:repo,words:['place-order'],options:{'--files':true}},ports),0,ports.stderr.text);
-  write(repo,'inventory.json',JSON.stringify({schema_version:'pdd.bindings.v1',modules:[{module:'alias.json',stories:['missing.md'],reason:'native',port_attempt:'native filesystem'}]}));
+  unlinkSync(join(repo,'pdd-bindings.json'));symlinkSync('inventory.json',join(repo,'pdd-bindings.json'));
+  assert.throws(()=>bindingCoverage({root:repo,found,selected:[]}),error=>error.exitCode===4 && /pdd-bindings\.json.*symlinks are not allowed/.test(error.message));
+  assert.equal(await runCheck({cwd:repo,words:['place-order'],options:{'--files':true}},ports),4);
+  assert.match(ports.stderr.text,/pdd-bindings\.json.*symlink/);
+  unlinkSync(join(repo,'pdd-bindings.json'));
+  write(repo,'pdd-bindings.json',JSON.stringify({schema_version:'pdd.bindings.v1',modules:[{module:'alias.json',stories:['missing.md'],reason:'native',port_attempt:'native filesystem'}]}));
   assert.throws(()=>bindingCoverage({root:repo,found,selected:[]}),/symlinks are not allowed/);
 });
 

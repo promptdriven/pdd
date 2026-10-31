@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: 7de2a465eadde1d6b3fcf04cb6d8d091b269915e028fdc176194af9fb261a26f).
+// Generated from prompts/cli/runtime-preflight.prompt.md (sha256: a97cc2c3f3c36564296f08018d4c1c01648e7193635e7cf4b16bf0d660cd7501).
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs';
@@ -95,7 +95,7 @@ export function findTests({ root, files = gitFiles(root) }) {
 }
 
 function discoverTests(root, files, strict = false) {
-  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [];
+  const visible = new Set(), tests = [], stories = [], discoveryWarnings = [], linkedPaths = new Set();
   let linkedFiles = strict ? filePort(root, new Set(files), true) : undefined;
   for (const path of files) {
     let stat = strict ? null : statOf(join(root, path)), linked = false;
@@ -108,6 +108,7 @@ function discoverTests(root, files, strict = false) {
     }
     if (!stat?.isFile()) continue;
     visible.add(path);
+    if (linked) linkedPaths.add(path);
     if (path.endsWith('.json') && stat.size <= LIMITS.test) {
       const text = linked ? linkedFiles.read({path}).content : readText(root, path);
       if (!text.includes('prompt-runtime.program-scenario')) continue;
@@ -128,7 +129,7 @@ function discoverTests(root, files, strict = false) {
     test.story = storyPath ? storyName(storyPath) : storyName(test.path.replace(/\.json$/, ''));
     let fallback = null;
     if (!story?.title && storyPath && visible.has(storyPath)) {
-      if (strict) {
+      if (strict || linkedPaths.has(storyPath)) {
         try { if (linkedFiles.stat({path:storyPath}).size <= LIMITS.bytes) fallback = titleOf(linkedFiles.read({path:storyPath}).content); } catch {}
       } else if (Number(statOf(join(root,storyPath))?.size ?? 0) <= LIMITS.bytes) fallback = titleOf(readText(root,storyPath));
     }
@@ -1057,23 +1058,38 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
   observe('');
   function inspectRaw(path, from, allowMissing = false, noLinks = false) {
     path = sourcePath(path, from);
+    if (isSecretPath(path)) {
+      // Refusal is already decided. Enrich it only along non-following metadata
+      // whose ancestors have each been checked as directories.
+      let detail = '';
+      try {
+        const parts = path.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          const current = parts.slice(0, i).join('/');
+          const stat = statOf(join(root, current));
+          if (stat?.isSymbolicLink()) { detail = `link ${current} -> ${readlinkSync(join(root, current))}: `; break; }
+          if (!stat?.isDirectory()) break;
+        }
+      } catch {} // Metadata failure cannot override the secret refusal.
+      throw sourceProblem(from, path, `: ${detail}the name looks like a secret. pdd never sends it.`);
+    }
     if (snapshots.has(path)) {
       const file = snapshots.get(path);
       if (noLinks && file.target) throw sourceProblem(from, path, ': symbolic links are not allowed for prepared output.');
       return file;
     }
-    let pending = path.split('/'), resolved = [], lastLink = null, linkedVisible = false, authored = true;
+    let pending = path.split('/').map(part => ({part, context:null})), resolved = [], lastLink = null, firstLink = null, linkedVisible = false, authored = true;
     const seen = new Set(), observed = new Set(['']);
-    const refuse = reason => {
-      throw sourceProblem(from, path, lastLink ? `: link ${lastLink.path} -> ${lastLink.link}: ${reason}` : `: ${reason}`);
+    const refuse = (reason, context = lastLink, plain = false) => {
+      throw sourceProblem(from, path, context ? `: link ${context.path} -> ${context.link}: ${reason}` : `${plain ? '' : ': '}${reason}`);
     };
     // Resolve components individually: an ancestor link must be checked before any
     // descendant is inspected. No host lookup follows an unchecked link.
     while (pending.length) {
-      const part = pending.shift();
+      const {part, context} = pending.shift();
       if (!part || part === '.') continue;
       if (part === '..') {
-        if (!resolved.length) refuse('resolution is outside the repository.');
+        if (!resolved.length) refuse('resolution is outside the repository.', context);
         resolved.pop(); continue;
       }
       resolved.push(part);
@@ -1082,6 +1098,7 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
       const { stat, link } = observe(current);
       if (link !== null) {
         lastLink = { path: current, link };
+        firstLink ??= lastLink;
         // Only an ancestor in the authored spelling can authorize that spelling.
         // Links encountered after substitution cannot grant authored visibility.
         linkedVisible ||= authored && current !== path && diskVisible.has(current);
@@ -1089,27 +1106,29 @@ function snapshotReader(root, diskVisible, beforeRead = () => {}, strict = false
         if (strict) refuse(current === path ? 'symbolic links are not allowed.' : 'symbolic link ancestor: symbolic links are not allowed.');
         if (noLinks) refuse('symbolic links are not allowed for prepared output.');
         if (isSecretPath(path) || isSecretPath(current)) refuse('the name looks like a secret. pdd never sends it.');
-        const state = `${current}\0${pending.join('/')}`;
-        if (seen.has(state) || seen.size >= 40) refuse('symbolic link loop.');
+        const state = `${current}\0${pending.map(item => item.part).join('/')}`;
+        if (seen.has(state)) refuse('symbolic link loop.');
+        if (seen.size >= 40) refuse('too many links (loop or chain longer than 40).');
         seen.add(state);
         resolved.pop();
         if (isAbsolute(link)) {
           if (!link.startsWith(`${root}/`)) refuse('resolution is outside the repository.');
           const local = link.slice(root.length + 1);
-          resolved = []; pending = [...local.split('/'), ...pending];
-        } else pending = [...link.split('/'), ...pending];
+          resolved = []; pending = [...local.split('/').map(part => ({part, context:lastLink})), ...pending];
+        } else pending = [...link.split('/').map(part => ({part, context:lastLink})), ...pending];
         continue;
       }
-      if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.');
+      if (isSecretPath(current) || (!pending.length && isSecretPath(path))) refuse('the name looks like a secret. pdd never sends it.', context ?? lastLink);
       if (!stat) {
-        if (lastLink) refuse('broken link: target does not exist.');
-        if (!allowMissing) refuse('is not a Git-visible file on disk. Restore it or correct the declared dependency.');
+        if (lastLink) refuse('broken link: target does not exist.', context ?? lastLink);
+        if (!allowMissing) refuse('is not a Git-visible file on disk. Restore it or correct the declared dependency.', null, true);
         const file = { path, stat: null, size: 0, observed }; snapshots.set(path, file); return file;
       }
-      if (pending.length && !stat.isDirectory()) refuse(`non-directory ancestor (${current}).`);
+      if (pending.length && !stat.isDirectory()) refuse(`${lastLink ? 'non-directory ancestor' : 'has a non-directory ancestor'} (${current}).`, context ?? lastLink, !lastLink);
       if (!pending.length) {
-        if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.');
-        if (!diskVisible.has(current) || (!diskVisible.has(path) && !linkedVisible)) refuse('target is not a Git-visible file. Add it to Git or correct the declared dependency.');
+        if (!stat.isFile()) refuse('a submodule, folder or other non-regular file. pdd sends only regular files.', context ?? lastLink);
+        if (!diskVisible.has(path) && !linkedVisible && firstLink) refuse('link itself is not a Git-visible file. Add it to Git or correct the declared dependency.', firstLink);
+        if (!diskVisible.has(current)) refuse(`${lastLink ? 'target is not' : 'is not'} a Git-visible file. Add it to Git or correct the declared dependency.`, context ?? lastLink, !lastLink);
         const file = { path, stat, size: Number(stat.size), observed, ...(lastLink ? { target: current } : {}) };
         snapshots.set(path, file); return file;
       }

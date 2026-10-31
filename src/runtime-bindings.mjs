@@ -19,6 +19,7 @@ export function bindingCoverage({ root, found, selected }) {
     return path;
   };
   try { lstatSync(join(root, 'pdd-bindings.json')); } catch (error) { if (error.code === 'ENOENT') return unavailable; throw error; }
+  regular('pdd-bindings.json');
   const files = sourceFilePort(root);
   if (files.stat({path:'pdd-bindings.json'}).size > 65536) fail('inventory', 'exceeds 64 KiB');
   let inventory; try { inventory = JSON.parse(files.read({path:'pdd-bindings.json'}).content); } catch { fail('inventory', 'invalid JSON'); }

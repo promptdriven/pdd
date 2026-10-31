@@ -7,11 +7,13 @@ import { fileURLToPath } from 'node:url';
 test('LINK native inventory replay: every frozen case executes its named public-boundary test',()=>{
   const inventory=JSON.parse(readFileSync(new URL('./runtime/read-in-repo-links.json',import.meta.url),'utf8'));
   assert.equal(inventory.schema_version,'pdd.native-cases.v1');
-  const replay=spawnSync(process.execPath,['--test','--test-reporter=tap',inventory.native_test],{
+  const files=[...new Set([inventory.native_test,...(inventory.command.match(/test\/[^ ]+\.test\.mjs/g) ?? [])])];
+  assert.ok(files.length>0);
+  const replay=spawnSync(process.execPath,['--test','--test-reporter=tap',...files],{
     cwd:fileURLToPath(new URL('../',import.meta.url)),env:Object.fromEntries(Object.entries(process.env).filter(([key])=>key!=='NODE_TEST_CONTEXT')),encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:8*1024*1024,
   });
   assert.equal(replay.status,0,`${replay.stdout}\n${replay.stderr}`);
   const executed=[...replay.stdout.matchAll(/^ok \d+ - (.+)$/gm)].map(match=>match[1]);
-  assert.deepEqual(executed,inventory.cases.map(item=>item.name));
+  assert.deepEqual([...executed].sort(),inventory.cases.map(item=>item.name).sort());
   assert.equal(executed.length,inventory.cases.length);
 });
