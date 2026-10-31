@@ -187,6 +187,7 @@ pdd never merges and has no merge command. To ask your agent to merge, follow [R
 | `pdd workflow open ISSUE` | Open the chat of a run. |
 | `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
 | `pdd help` | Show all commands. |
+| `pdd help prompting` | Show how to write a prompt, a Story and its test, and where the Prompting guide and RUNBOOK are. |
 
 The [CLI reference](docs/cli.md) has every command and option.
 
