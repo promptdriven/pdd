@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile as callbackExec, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { proseSha256 } from '../src/runtime-preflight.mjs';
 import { startRun, stepDone, approveRun, changeRun, cancelRun, runStatus, openRun, askPerson } from '../src/workflow-runner.mjs';
 
 const exec = promisify(callbackExec);
@@ -19,6 +20,17 @@ async function lastSteps(f, run, out) {
 }
 
 import { fakeHerdr } from './helpers/workflow-delivery-fixture.mjs';
+
+
+function assertSafeApprovalAdvice(text) {
+  assert.match(text,/show the gate.*ask the person/i);
+  const command=text.split('\n').find(line=>line.endsWith(" workflow approve 17 --said - <<'PDD_SAID'"));
+  assert.ok(command,'show the actual quoted-heredoc stdin command');
+  assert.match(command,/^(?:'[^']+'|\/\S+)\s+(?:'[^']*pdd\.mjs'|\/\S*pdd\.mjs)\s+workflow approve 17/, 'use absolute package Node and bin paths');
+  assert.match(text,/\nPDD_SAID(?:\n|$)/);
+  assert.match(text,/delimiter.*absent/i);
+  assert.match(text,/terminal y\/N/);
+}
 
 async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
@@ -117,7 +129,7 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   const f = await fixture(t);
   const started = await f.run();
   assert.equal(started.exitCode, 0, started.message);
-  assert.match(started.message, /pdd workflow open 17/); assert.match(started.message, /pdd workflow approve 17/);
+  assert.match(started.message, /pdd workflow open 17/); assertSafeApprovalAdvice(started.message);
   let run = f.record();
   assert.equal(run.v, 1); assert.equal(run.state, 'running'); assert.equal(run.area, 0); assert.equal(run.chats.length, 1);
   assert.equal(run.workflow, 'small-change'); assert.equal(run.issue.number, 17); assert.equal(f.fetches, 1);
@@ -197,28 +209,27 @@ test('small-change: run exits at once, done reaches the gate, changes go to the 
   assert.ok(f.record().journalSeq > 5);
 });
 
-test('an agent session cannot approve without the person reply in the chat, and a chat reply approves', async t => {
+test('an agent session asks for person words without reading chat evidence, and explicit said approves', async t => {
   const f = await fixture(t);
   await f.run(); const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   const requests = [];
   const refused = await approveRun({ ref: undefined, cwd: run.root }, f.agentPorts({ isTTY: true,
     readApprovalEvidence: async request => { requests.push(request); return { ok: false, code: 'user_message_missing', message: 'No user message was found after the gate question in this native session.' }; } }));
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /Only the person can approve/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, /ask the person/i); assert.match(refused.message, /--said/);
   assert.equal(f.prompts.length, 0, 'an agent never gets the y/N question');
   assert.equal(f.record().area, 0); assert.equal(f.record().chats.length, 1);
-  assert.equal(requests[0].stage.agent, 'claude'); assert.equal(requests[0].stage.root, run.root); assert.equal(requests[0].stage.sessionId, run.chats[0].session.id);
-  assert.equal(requests[0].gateAskedAt, f.record().gate.at); assert.ok(requests[0].ignorePrefixes.some(prefix => prefix.startsWith('The person asks for changes')));
+  assert.deepEqual(requests, [], 'No-said agents never read native approval evidence.');
   f.tick();
-  const approved = await approveRun({ ref: undefined, cwd: run.root }, f.agentPorts({
+  const approved = await approveRun({ ref: undefined, cwd: run.root, said: 'looks right, go' }, f.agentPorts({
     readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'claude', sessionId: run.chats[0].session.id, userMessage: 'looks right, go', userMessageAt: f.clock - 10 }) }));
   assert.equal(approved.exitCode, 0, approved.message); assert.match(approved.message, /looks right, go/); assert.match(approved.message, /Stop here/);
   const after = f.record();
-  assert.equal(after.area, 1); assert.equal(after.decisions.at(-1).via, 'chat'); assert.equal(after.decisions.at(-1).text, 'looks right, go');
-  assert.equal(after.approvalRecord.sessionId, run.chats[0].session.id);
+  assert.equal(after.area, 1); assert.equal(after.decisions.at(-1).via, 'said'); assert.equal(after.decisions.at(-1).text, 'looks right, go');
+  assert.equal(after.approvalRecord.evidence.words, 'looks right, go');
 });
 
-test('real chat evidence: a Claude transcript reply after the gate approves; the change request pdd sent does not', async t => {
+test('real chat evidence: neither a Claude transcript approval nor the sent change request authorizes a gate', async t => {
   const f = await fixture(t);
   f.ports.readApprovalEvidence = undefined;
   await f.run(); const run = f.record(); const chat = run.chats[0];
@@ -237,7 +248,8 @@ test('real chat evidence: a Claude transcript reply after the gate approves; the
   assert.equal(refused.exitCode, 1, refused.message); assert.equal(f.record().area, 0);
   writeFileSync(file, readFileSync(file, 'utf8') + row('user', 'ok ship it', gateAt + 3) + '\n' + row('assistant', 'Approving.', gateAt + 4) + '\n');
   const approved = await approveRun({ ref: '17', cwd: run.root }, agent);
-  assert.equal(approved.exitCode, 0, approved.message); assert.equal(f.record().decisions.at(-1).text, 'ok ship it');
+  assert.equal(approved.exitCode, 1, approved.message); assert.equal(f.record().area, 0);
+  assert.deepEqual(f.record().decisions, []); assert.match(approved.message, /--said/);
 });
 
 test('done warns on unknown and out-of-order steps but records them and never breaks the run', async t => {
@@ -285,6 +297,8 @@ for (const name of ['bug', 'feature']) {
     }
     assert.equal(f.prs.length, 2); assert.equal(f.record().stage.id, 'merge');
     assert.ok(f.prs[0].body.includes(`Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call ${report}`), 'the check result stays in PR 1');
+    assert.match(f.prs[0].body, /^Approved in terminal:/m);
+    assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval follows runtime prose');
     assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y-123 \(report links expire after 7 days\)/);
     assert.equal(f.prs[1].baseRefName, f.prs[0].headRefName, 'PR 2 is stacked on the open PR 1');
     const nothing = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -405,6 +419,8 @@ async function featureToPr1(t, promptText = 'Return two.\n', base, issueBody) {
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt, Story and tests');
   await done('prompt-story', 'Story and cases written');
   f.tick(); assert.equal((await approveRun({ ref: '17', cwd: f.source }, f.ports)).exitCode, 0);
+  // A later prompt revision is a fresh draft in the prompt-pr area.
+  writeFileSync(join(run.root, 'feature.prompt.md'), promptText);
   const promptMessage = readFileSync(join(run.runDir, 'prompt-pr-start.md'), 'utf8');
   assert.match(promptMessage, /opens PR 1 \(prompt, Story and tests\)/);
   await done('check', 'Runtime check: ✓ 3 of 3 criteria · 10/10 checks · 1 AI call https://checks.example.test/r/k3y');
@@ -419,15 +435,17 @@ test('feature: story, approve, PR 1 with prompt work only, then the person asks 
   assert.match(pr1.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/); assert.match(pr1.message, /workflow approve 17/);
   assert.equal(f.prs.length, 1);
   assert.equal(f.prs[0].title, 'Use value two (prompt, Story and tests)'); assert.equal(f.prs[0].baseRefName, 'main'); assert.equal(f.prs[0].headRefName, run.branch);
+  assert.match(f.prs[0].body, /^Approved in terminal:/m);
+  assert.ok(f.prs[0].body.indexOf('Approved in terminal:') > f.prs[0].body.indexOf('Runtime check:'), 'recorded terminal approval follows runtime prose');
   assert.match(f.prs[0].body, /^Runtime check: ✓ 3 of 3 criteria · 10\/10 checks · 1 AI call\nReport: https:\/\/checks\.example\.test\/r\/k3y \(report links expire after 7 days\)\n\nPart of #17/);
   assert.doesNotMatch(f.prs[0].body, /Closes #17/); assert.doesNotMatch(f.prs[0].body, /## Verify/);
   let record = f.record();
   assert.equal(record.state, 'waiting'); assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.waitingFor.what, 'Make the code PR now, or stop here and merge PR 1');
   f.herdr.idle();
   const shown = await runStatus({ ref: '17', cwd: f.source }, f.ports);
-  assert.match(shown.message, /PR 1 open/); assert.match(shown.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assert.match(shown.message, /PR 1 open/); assertSafeApprovalAdvice(shown.message);
   // The chat gets the exact sentence to say when the person stops (testers saw it dropped when it was a hint).
-  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\. To make the code PR later, run `pdd workflow approve 17`\."/);
+  assert.match(pr1.message, /If they stop, tell them exactly: "PR 1 is open: https:\/\/github\.com\/example\/project\/pull\/23\./); assertSafeApprovalAdvice(pr1.message);
 
   f.tick();
   const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
@@ -472,23 +490,23 @@ test('feature: when PR 1 merges while the run waits, the run is done at PR 1, an
   assert.equal(f.prs[1].baseRefName, 'main'); assert.doesNotMatch(f.prs[1].body, /stacked/);
 });
 
-const runtimePrompt = status => ['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
-  JSON.stringify({ status, prose_sha256: '', entries: [] }), '```', '</details>', ''].join('\n');
+const runtimePrompt = status => {
+  const text=['# Value', '', 'Return two.', '', '<details><summary>Runtime interface</summary>', '', '```json',
+    JSON.stringify({ status, prose_sha256: '', entries: [], limits: { max_steps: 1, max_model_calls: 1 } }), '```', '</details>', ''].join('\n');
+  return status==='approved' ? text.replace('\"prose_sha256\":\"\"',JSON.stringify('prose_sha256')+':'+JSON.stringify(proseSha256(text))) : text;
+};
 
-test('draft prompts in PR 1 are named in its body and status, and block the code PR until the person approves them', async t => {
+test('draft prompts in PR 1 are shown and a terminal answer approves the drafts and code gate together', async t => {
   const { f, run } = await featureToPr1(t, runtimePrompt('draft'));
-  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
-  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts: feature\.prompt\.md\. Approve them before you merge\./);
-  f.tick();
-  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, /^Approve the prompt first: cd .+ && pdd approve feature\.prompt\.md\. Then run pdd workflow approve 17 to start the code PR\.$/);
-  assert.equal(f.prompts.length, 1, 'no y/N question while drafts remain'); assert.equal(f.record().chats.length, 2); assert.equal(f.record().area, 1);
-  assert.equal(readFileSync(join(run.root, 'feature.prompt.md'), 'utf8'), runtimePrompt('draft'), 'pdd never sets approved itself');
-  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved')); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
-  assert.doesNotMatch((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /Draft prompts/);
-  f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.match(f.prs[0].body, /Draft prompts: feature\.prompt\.md/);
+  assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /feature\.prompt\.md/);
+  const prior=f.prompts.length; f.tick();
+  const code=await approveRun({ ref:'17', cwd:f.source },f.ports);
+  assert.equal(code.exitCode,0,code.message);
+  assert.equal(f.prompts.length,prior+1,'one fresh terminal question covers gate and drafts');
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);
 });
 
 test('status --all lists every run on this machine across repositories, person-waiting first, and hides cancelled runs', async t => {
@@ -545,17 +563,19 @@ test('status --all shows PR states, done runs last, and reads the Herdr registry
   assert.match(merged.message, /^example\/project#17 · small-change · build · done · PR #23 · /);
 });
 
-test('R4: at the code gate a chat reply needs a yes-word; other words are refused', async t => {
+test('R4: at the code gate native replies alone never authorize, including a genuine approval', async t => {
   const { f } = await featureToPr1(t);
-  const reply = text => f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: text, userMessageAt: f.clock - 1 }) });
+  let reads = 0;
+  const reply = text => f.agentPorts({ readApprovalEvidence: async () => { reads++; return { ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: text, userMessageAt: f.clock - 1 }; } });
   f.tick();
-  for (const text of ['sounds good', 'hmm, let me think']) {
+  for (const text of ['sounds good', 'hmm, let me think', 'Yes, build the code.']) {
+    const before = f.record();
     const refused = await approveRun({ ref: '17', cwd: f.source }, reply(text));
-    assert.equal(refused.exitCode, 1); assert.equal(refused.message, 'Not sure you approved. Run `pdd workflow approve 17` in your terminal.');
+    assert.equal(refused.exitCode, 1); assert.match(refused.message, /ask the person/i); assert.match(refused.message, /--said/);
     assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
+    assert.deepEqual(f.record(), before, 'No-said refusal preserves the gate and decisions.');
   }
-  const ok = await approveRun({ ref: '17', cwd: f.source }, reply('Yes, build the code.'));
-  assert.equal(ok.exitCode, 0, ok.message); assert.equal(f.record().areas[f.record().area].name, 'code');
+  assert.equal(reads, 0);
 });
 
 test('R5: Try links (/s/<token>/) are removed from PR bodies; report links (/r/) stay', async t => {
@@ -577,7 +597,7 @@ for (const state of ['unknown', 'closed']) test(`R7: when PR 1 is ${state}, appr
   const before = f.record();
   f.tick();
   const refused = await approveRun({ ref: '17', cwd: f.source }, { ...f.ports, readPrStatus: async () => ({ state, ci: 'unknown' }) });
-  assert.equal(refused.exitCode, 1); assert.match(refused.message, new RegExp(`PR 1 is ${state}`)); assert.match(refused.message, /pdd workflow approve 17/);
+  assert.equal(refused.exitCode, 1); assert.match(refused.message, new RegExp(`PR 1 is ${state}`)); assertSafeApprovalAdvice(refused.message);
   const after = f.record();
   assert.deepEqual([after.area, after.branch, after.gate, after.chats.length, after.decisions.length], [before.area, before.branch, before.gate, before.chats.length, before.decisions.length]);
   assert.equal(f.git(run.root, 'branch', '--list', `${run.branch}-code`), ''); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
@@ -628,7 +648,7 @@ test('code area build → verify → formal: a loop back to build only warns, as
 
 // Seen in a real run: the person said "I approve the prompt. Yes, build the code."; the chat committed the approval
 // and ran done again to push it to PR 1, which moved the gate past the person's answer.
-test('pushing more commits to PR 1 at the code gate keeps the gate time, so the person need not say yes twice', async t => {
+test('pushing more commits to PR 1 at the code gate keeps the gate time before explicit person words approve', async t => {
   const { f, run } = await featureToPr1(t);
   const gateAt = f.record().gate.at;
   f.tick(); writeFileSync(join(run.root, 'feature.prompt.md'), 'Return two. Approved.\n'); f.git(run.root, 'commit', '-qam', 'person approved the prompt');
@@ -636,9 +656,9 @@ test('pushing more commits to PR 1 at the code gate keeps the gate time, so the 
   assert.match(pushed.message, /Pushed the new commits to PR 1/); assert.equal(f.record().gate.at, gateAt); assert.equal(f.prs.length, 1);
   const requests = [];
   f.tick();
-  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async request => { requests.push(request);
+  const code = await approveRun({ ref: '17', cwd: run.root, said: 'I approve the prompt. Yes, build the code.' }, f.agentPorts({ readApprovalEvidence: async request => { requests.push(request);
     return { ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve the prompt. Yes, build the code.', userMessageAt: gateAt + 1 }; } }));
-  assert.equal(code.exitCode, 0, code.message); assert.equal(requests[0].gateAskedAt, gateAt);
+  assert.equal(code.exitCode, 0, code.message); assert.deepEqual(requests, [], 'Explicit words authorize without reading native history.');
 });
 
 test('a first verify.md line that starts with ✗ stays directly below the lifted evidence', async t => {
@@ -705,6 +725,8 @@ async function featureAtTryGate(t, { prompt = 'Return two.\n', tests = false, tr
   if (tests) { mkdirSync(join(run.root, 'tests')); writeFileSync(join(run.root, 'tests', 'value.json'), JSON.stringify({ schema_version: 'prompt-runtime.program-scenario.v1', criteria: [], initial_world: {}, steps: [] })); }
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'prompt');
   await done('prompt-story', 'Story'); f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
+  // A later revision must be reviewed at the prompt-pr gate.
+  writeFileSync(join(run.root, 'feature.prompt.md'), prompt);
   await done('check', 'Runtime check: ✓ 2 of 2 criteria · Report: https://rt.example.test/r/abc');
   const gate = await done('try', tried);
   return { f, run, done, gate };
@@ -720,16 +742,16 @@ test('#13: after check and try the chat asks the person to try and approve; PR 1
   f.herdr.idle();
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /waiting for you: try it, then approve to open PR 1/);
   f.tick();
-  const opened = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
+  const opened = await approveRun({ ref: '17', cwd: run.root, said: 'Tried it, it splits right.' }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Tried it, it splits right.', userMessageAt: f.clock - 1 }) }));
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.prs.length, 1); assert.match(opened.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(opened.message, /Do you want the code PR now, or stop here and merge PR 1 first\?/);
+  assert.match(opened.message, /Stopped at PR 1/); assertSafeApprovalAdvice(opened.message);
   record = f.record();
   assert.equal(record.gate.kind, 'ask-code'); assert.equal(record.areas[record.area].name, 'prompt-pr'); assert.equal(record.chats.length, 2);
   assert.equal(record.decisions.at(-1).stage, 'prompt-pr');
   assert.doesNotMatch(f.prs[0].body, /\/s\/TOKEN/);
   f.tick();
-  const code = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Yes, build the code.', userMessageAt: f.clock - 1 }) }));
+  const code = await approveRun({ ref: '17', cwd: run.root, said: 'Yes, build the code.' }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'Yes, build the code.', userMessageAt: f.clock - 1 }) }));
   assert.equal(code.exitCode, 0, code.message); assert.equal(f.record().areas[f.record().area].name, 'code');
 });
 
@@ -740,11 +762,11 @@ test('#13: from the terminal, approve opens PR 1 and asks about the code PR; no 
   f.tick();
   const stopped = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(stopped.exitCode, 0, stopped.message);
-  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
+  assert.match(f.prompts.at(-2), /Approve the prompt-pr area and all selected draft prompts and open PR 1 for example\/project#17/); assert.match(f.prompts.at(-1), /Make the code PR now/);
   assert.equal(f.prs.length, 1); assert.match(stopped.message, /PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(stopped.message, /To make the code PR later, run `pdd workflow approve 17`\./);
+  assertSafeApprovalAdvice(stopped.message);
   assert.match(pane.agent.prompts.at(-1), /pdd opened PR 1: https:\/\/github\.com\/example\/project\/pull\/23/);
-  assert.match(pane.agent.prompts.at(-1), /To make the code PR later, run `pdd workflow approve 17`\./);
+  assertSafeApprovalAdvice(pane.agent.prompts.at(-1));
   assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().chats.length, 2);
   f.ports.confirm = async question => { f.prompts.push(question); return true; };
   f.tick();
@@ -807,7 +829,11 @@ test('#18: the check step\'s Runtime check wins the top of PR 1; the code questi
   f.tick(); await approveRun({ ref: '17', cwd: f.source }, f.ports);
   f.tick(); const gate = await stepDone({ step: 'check', summary: 'Runtime check: ✓ 2 of 2 criteria; Report: https://rt.example.test/r/second', cwd: run.root }, f.agentPorts());
   assert.match(f.prs[0].body, /^Runtime check: ✓ 2 of 2 criteria\nReport: https:\/\/rt\.example\.test\/r\/second /);
-  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\? To make the code PR later, run `pdd workflow approve 17`\."/);
+  assert.match(gate.message, /ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first\?/);
+  assert.match(gate.message, /show the gate.*ask the person/i);
+  assert.ok(gate.message.includes(`${f.ports.pdd} workflow approve 17 --said - <<'PDD_SAID'\n`), 'safe retry uses the injected absolute package command and quoted heredoc');
+  assert.match(gate.message, /\nPDD_SAID(?:\n|$)/);
+  assert.match(gate.message, /terminal y\/N/);
 });
 
 // 0.1.6 items 6 and 7: many Stories in one run.
@@ -1038,7 +1064,7 @@ test('0.1.7 #3: changes at a gate refuses a plain approval and says how to appro
     f.tick();
     const out = await changeRun({ ref: '17', text, cwd: f.source }, f.ports);
     assert.equal(out.exitCode, 2, text);
-    assert.equal(out.message, 'This looks like an approval. To approve, run: pdd workflow approve 17\nNothing was sent to the chat.');
+    assert.match(out.message,/^This looks like an approval\./); assertSafeApprovalAdvice(out.message); assert.match(out.message,/\nNothing was sent to the chat\.$/);
   }
   assert.equal(pane.agent.prompts.length, 0); assert.deepEqual(f.record().changes, []); assert.equal(f.record().gate.at, gateAt);
   for (const text of ['approve it but rename X to Y', 'I approve, but please use the exact text', 'Please use the exact text from the issue', 'looks good', "I don't approve", 'Approve after you add a test']) {
@@ -1055,7 +1081,7 @@ test('0.1.7 #3: changes at a gate refuses a plain approval and says how to appro
 });
 
 // Tester B9: "pdd workflow approve 3" in a terminal inside Claude Code (CLAUDECODE=1) got the text meant for the chat agent.
-test('0.1.7 #4: approve in an agent environment tells the person how to approve; the chat-evidence rule does not change', async t => {
+test('0.1.7 #4: approve in an agent environment requires explicit person words even with native evidence', async t => {
   const f = await fixture(t);
   await f.run(); const run = f.record(); f.tick();
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
@@ -1063,17 +1089,15 @@ test('0.1.7 #4: approve in an agent environment tells the person how to approve;
   const person = (env, extra = {}) => ({ ...f.ports, env: { HOME: f.ports.env.HOME, ...env }, readApprovalEvidence: noReply, ...extra });
   const claudeCode = await approveRun({ ref: '17', cwd: f.source }, person({ CLAUDECODE: '1' }));
   assert.equal(claudeCode.exitCode, 1);
-  assert.equal(claudeCode.message, ['pdd sees an agent environment (CLAUDECODE=1), so it cannot ask you y/N here.',
-    'No approval was found in the plan chat: there is no reply from you after the gate question.',
-    'To approve, run pdd workflow approve 17 in a normal terminal. Or answer the gate question in the plan chat: pdd workflow open 17'].join('\n'));
+  assert.match(claudeCode.message, /ask the person/i); assert.match(claudeCode.message, /--said/);
   const piped = await approveRun({ ref: '17', cwd: f.source }, person({}, { isTTY: false }));
-  assert.equal(piped.exitCode, 1); assert.match(piped.message, /^pdd sees an agent environment \(stdin is not a terminal\), so it cannot ask you y\/N here\./);
+  assert.equal(piped.exitCode, 1); assert.match(piped.message, /ask the person/i); assert.match(piped.message, /--said/);
   assert.equal(f.prompts.length, 0, 'still no y/N question'); assert.equal(f.record().area, 0);
   // The chat agent itself keeps the words meant for it.
-  assert.match((await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: noReply }))).message, /^Only the person can approve/);
-  // A reply from the person in the chat still approves, also from that terminal.
+  assert.match((await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: noReply }))).message, /--said/);
+  // A native reply alone never approves, also from that terminal.
   const replied = await approveRun({ ref: '17', cwd: f.source }, person({ CLAUDECODE: '1' }, { readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'claude', sessionId: run.chats[0].session.id, userMessage: 'I approve', userMessageAt: f.clock - 1 }) }));
-  assert.equal(replied.exitCode, 0, replied.message); assert.equal(f.record().area, 1);
+  assert.equal(replied.exitCode, 1, replied.message); assert.equal(f.record().area, 0); assert.match(replied.message, /--said/);
 });
 
 // Tester B6: status said "waiting for you: approve the story area" about a minute before the chat wrote its gate message.
@@ -1096,45 +1120,26 @@ test('0.1.7 #6: at a gate, status says the agent writes the gate message until t
 });
 
 // Tester B15 and the other tester's run: "Make the code PR now? (y/N)" while PR 1's prompt was still draft; a "y" was refused.
-test('0.1.7 #7: with a draft prompt in PR 1, pdd does not offer the code PR; it says how to approve the prompt, and approve then carries the approval to PR 1', async t => {
+test('0.1.7 #7: terminal opens PR 1 with approved drafts and asks separately before the code PR', async t => {
   const { f, run } = await featureAtTryGate(t, { prompt: runtimePrompt('draft') });
-  const pane = f.herdr.paneOf(f.record().chats[1]);
-  f.tick();
-  const opened = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(opened.exitCode, 0, opened.message);
-  assert.match(f.prompts.at(-1), /Approve the prompt-pr area and open PR 1/, 'no code PR question');
-  const first = `Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR.`;
-  assert.ok(opened.message.includes(`PR 1: https://github.com/example/project/pull/23\n${first}`), opened.message);
-  assert.ok(pane.agent.prompts.at(-1).includes(`Tell them exactly: "PR 1 is open: https://github.com/example/project/pull/23. ${first}"`), pane.agent.prompts.at(-1));
-  assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.record().area, 1);
-  f.herdr.idle();
-  const shown = (await runStatus({ ref: '17', cwd: f.source }, f.ports)).message;
-  assert.match(shown, /^State: PR 1 open \(https:\/\/github\.com\/example\/project\/pull\/23\); waiting for you: approve the draft prompt first, then make the code PR\.$/m);
-  assert.ok(shown.includes(`\nNext: cd ${run.root} && pdd approve feature.prompt.md, then pdd workflow approve 17 (make the code PR)`), shown);
-  assert.match((await runStatus({ all: true, cwd: f.source }, f.ports)).message, /· prompt-pr · waiting for you: approve the draft prompt, then the code PR \(PR 1 open\) · /);
-  // The person approves the prompt in the worktree; pdd approve writes the file and commits nothing.
-  writeFileSync(join(run.root, 'feature.prompt.md'), runtimePrompt('approved'));
-  f.tick();
-  const code = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(code.exitCode, 0, code.message);
-  assert.match(code.message, /pdd committed your approval of feature\.prompt\.md and pushed it to PR 1\./);
-  assert.equal(f.git(run.root, 'log', '-1', '--format=%s', run.branch), 'Approve feature.prompt.md');
-  assert.match(code.message, /pdd updated the PR 1 description: no draft prompts are left\./);
-  assert.doesNotMatch(f.prs[0].body, /Draft prompts/); assert.match(f.prs[0].body, /<!-- pdd-workflow:/, 'the PR marker stays');
-  assert.match(f.prompts.at(-1), /Make the code PR now/);
-  assert.equal(f.git(run.root, 'show', `${run.branch}:feature.prompt.md`), runtimePrompt('approved').trim());
-  assert.equal(f.git(run.root, 'rev-parse', `refs/remotes/origin/${run.branch}`), f.git(run.root, 'rev-parse', run.branch), 'PR 1 has the approval');
-  assert.equal(f.record().areas[f.record().area].name, 'code'); assert.equal(f.record().branch, `${run.branch}-code`);
+  f.tick(); let questions=0;
+  const opened=await approveRun({ref:'17',cwd:f.source},{...f.ports,confirm:async question=>{f.prompts.push(question);return ++questions===1;}});
+  assert.equal(opened.exitCode,0,opened.message);assert.equal(questions,2,'PR1 approval and later code decision are distinct gates');
+  assert.equal(f.record().gate.kind,'ask-code');assert.equal(f.record().area,1);
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);assert.match(f.prs[0].body,/<!-- pdd-workflow:/);
+  f.herdr.idle();const code=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(code.exitCode,0,code.message);assert.equal(f.record().areas[f.record().area].name,'code');
+  assert.equal(f.record().branch,`${run.branch}-code`);
 });
 
-test('0.1.7 #7: when done opens PR 1 with a draft prompt, the chat tells the person to approve the prompt and does not ask about the code PR', async t => {
-  const { f, run, pr1 } = await featureToPr1(t, runtimePrompt('draft'));
-  assert.doesNotMatch(pr1.message, /Do you want the code PR now/);
-  assert.ok(pr1.message.includes(`Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: https://github.com/example/project/pull/23. Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR." Stop there.`), pr1.message);
-  f.tick();
-  const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
-  assert.equal(refused.exitCode, 1);
-  assert.equal(refused.message, `Approve the prompt first: cd ${run.root} && pdd approve feature.prompt.md. Then run pdd workflow approve 17 to start the code PR.`);
+test('0.1.7 #7: done may publish a fresh draft but terminal approval covers it before starting code', async t => {
+  const {f,run,pr1}=await featureToPr1(t,runtimePrompt('draft'));
+  assert.match(pr1.message,/feature\.prompt\.md/);assert.match(pr1.message,/--said/);
+  const before=f.prompts.length;const out=await approveRun({ref:'17',cwd:f.source},f.ports);
+  assert.equal(out.exitCode,0,out.message);assert.equal(f.prompts.length,before+1);
+  assert.match(readFileSync(join(run.root,'feature.prompt.md'),'utf8'), /"status":"approved"/);
+  assert.doesNotMatch(f.prs[0].body,/Draft prompts/);assert.equal(f.record().areas[f.record().area].name,'code');
 });
 
 // Tester B14, B16: PR 1 of a page-only Story had no test file, but its title said "tests"; the chat called the draft prompt
@@ -1208,7 +1213,8 @@ test('0.1.7 #9: when pdd cannot push the approval to PR 1, it changes nothing el
   f.tick();
   const refused = await approveRun({ ref: '17', cwd: f.source }, f.ports);
   assert.equal(refused.exitCode, 1);
-  assert.equal(refused.message, `pdd could not push your approval of feature.prompt.md to PR 1. Run: cd ${run.root} && git push origin HEAD:refs/heads/${run.branch}\nThen run pdd workflow approve 17 again.`);
+  assert.equal(refused.message.split('\n')[0], `pdd could not push your approval of feature.prompt.md to PR 1. Run: cd ${run.root} && git push origin HEAD:refs/heads/${run.branch}`);
+  assertSafeApprovalAdvice(refused.message);
   assert.equal(f.record().area, 1); assert.equal(f.record().gate.kind, 'ask-code'); assert.equal(f.git(run.root, 'branch', '--show-current'), run.branch);
   assert.equal(f.prompts.length, 1, 'no code question');
   f.ports.execFile = execFile; f.tick();
@@ -1228,8 +1234,7 @@ test('0.1.7 #10: a person terminal in a Herdr tab approves with y/N; the run cha
   const chatPane = herdrTab(run.chats[0].paneId, pddSocket);
   const refused = await approveRun({ ref: '17', cwd: f.source }, chatPane);
   assert.equal(refused.exitCode, 1); assert.equal(f.prompts.length, 0);
-  assert.match(refused.message, new RegExp(`^pdd sees the plan chat's own Herdr pane \\(${run.chats[0].paneId}\\), so it cannot ask you y/N here\\.\\n`));
-  assert.match(refused.message, /To approve, run pdd workflow approve 17 in another terminal tab\. Or answer the gate question in the plan chat: pdd workflow open 17$/);
+  assert.match(refused.message, /ask the person/i); assert.match(refused.message, /--said/);
   assert.equal((await approveRun({ ref: '17', cwd: f.source }, herdrTab(run.chats[0].paneId, pddSocket, { CODEX_THREAD_ID: 't' }))).exitCode, 1);
   assert.equal(f.prompts.length, 0, 'an agent environment in a Herdr tab gets no y/N');
   // The same pane id in the person's default Herdr session is another pane.
@@ -1246,7 +1251,7 @@ test('0.1.7 #11: an approval clears the question that the chat asked at the gate
   await askPerson({ text: 'Try is skipped. Do you approve this revision so PDD can open PR 1?', cwd: run.root }, f.agentPorts());
   assert.match((await runStatus({ ref: '17', cwd: f.source }, f.ports)).message, /^State: waiting for you: Try is skipped\. Do you approve/m);
   f.tick();
-  const opened = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve, open PR 1.', userMessageAt: f.clock - 1 }) }));
+  const opened = await approveRun({ ref: '17', cwd: run.root, said: 'I approve, open PR 1.' }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: true, decision: 'approve', agent: 'codex', sessionId: '11111111-1111-4111-8111-111111111111', userMessage: 'I approve, open PR 1.', userMessageAt: f.clock - 1 }) }));
   assert.equal(opened.exitCode, 0, opened.message);
   assert.equal(f.record().question, null);
   f.herdr.idle();
@@ -1286,11 +1291,10 @@ test('0.1.7 #13: a refused chat approval gives the agent plain words for the per
   await stepDone({ step: 'scope', summary: 'plan', cwd: run.root }, f.agentPorts());
   const refused = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: false, code: 'user_message_missing', message: 'No user message was found after the gate question in this native session.' }) }));
   assert.equal(refused.exitCode, 1);
-  assert.equal(refused.message, ['Only the person can approve, with a reply after your gate question. pdd found none: there is no reply from the person after the gate question.',
-    'Do not explain this check to the person. Tell them plainly: "I still need your approval for this step. Reply "I approve" here, or run pdd workflow approve 17 in your terminal." Then stop and wait.'].join('\n'));
+  assert.match(refused.message, /ask the person/i); assert.match(refused.message, /--said/);
   assert.doesNotMatch(refused.message, /native session/);
   const unreadable = await approveRun({ ref: '17', cwd: run.root }, f.agentPorts({ readApprovalEvidence: async () => ({ ok: false, code: 'session_unreadable', message: 'Cannot verify chat approval because native session evidence could not be read.' }) }));
-  assert.match(unreadable.message, /^Only the person can approve, with a reply after your gate question\. pdd found none: pdd could not read this chat\.\n/);
+  assert.equal(unreadable.message, refused.message, 'Native log availability cannot affect no-said refusal.');
 });
 
 // Tester 4.22: the PR 2 body pasted verify.md as written: 100 lines of shell before the vector table and the Formal check.

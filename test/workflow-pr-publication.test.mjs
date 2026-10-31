@@ -56,7 +56,7 @@ else if(a[1]==='create'||a[1]==='edit'){
     const verify=String(summary).split('\n').filter(row=>/^(?:Not fixed yet:|Proof \()/.test(row)).join('\n');if(verify)writeFileSync(join(runDir,'verify.md'),verify);
     const scope=String(summary).split('\n').filter(row=>row.startsWith('Not caught because:')).join('\n');if(scope)writeFileSync(join(runDir,'scope.md'),scope);
 
-    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))}});process.stdout.write(JSON.stringify(r));`;
+    const script = `import {${method}} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await ${method}({ref:'17',step:${JSON.stringify(prompt ? 'check' : 'formal')},summary:${JSON.stringify(summary)},cwd:${JSON.stringify(root)}},{stateDir:${JSON.stringify(join(base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(base)}},confirm:async()=>false});process.stdout.write(JSON.stringify(r));`;
     return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: state, GIT_ALLOW_PROTOCOL: 'file' } }));
   };
   const machine = () => writeFileSync(join(runDir, 'old-code-proof.json'), JSON.stringify({ v: 2, origin: 'pdd.workflow-prove.v2',interruptSignal:'', runId: run.runId, baseSha, headSha: head, test: 'node --test test/value.test.mjs', expect: 'defect', paths: ['test/value.test.mjs'], base: phase(1, true), head: phase(0), outcome: 'proved', cleanupError: '', setupError: '' }));
@@ -171,7 +171,7 @@ test('real PR1 approval synchronization refreshes note labels while preserving e
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   f.change();
   const out = f.invoke('', 'approveRun');
-  assert.equal(out.exitCode, 1, 'No chat exists to approve; synchronization does not fabricate approval.');
+  assert.equal(out.exitCode, 1, 'A person terminal declines; synchronization does not fabricate approval.');
   const body = f.data().prs[0].body;
   assert.match(body, /^Not fixed yet: `diagnosis only`\nNot checked: `external`/); assert.match(body, /Review: `refreshed`/);
   assert.match(body, /Preserved reviewer prose/); assert.match(body, /^Refs #17$/m); assert.doesNotMatch(body, /Closes #17|Old-code proof:/);
@@ -194,7 +194,7 @@ test('PR1-REFRESH-BUDGET: real approval synchronization bounds the complete body
     writeFileSync(join(f.runDir, 'check.md'), `Not checked: ${'y'.repeat(2000)}`);
     const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
     const out = f.invoke('', 'approveRun');
-    assert.equal(out.exitCode, 1, 'Synchronization cannot approve an absent chat.');
+    assert.equal(out.exitCode, 1, 'A person terminal declines after synchronization.');
     assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1, 'Each approval synchronization edits PR 1 once.');
     const body = f.data().prs[0].body;
     assert.ok([...body].length <= 60000, `Whole PR 1 description has ${[...body].length} code points.`);
@@ -230,7 +230,7 @@ for (const [kind, ordinary] of [
   writeFileSync(join(f.runDir,'review.md'),'Review: refreshed');writeFileSync(join(f.runDir,'check.md'),'Not checked: external');
   writeFileSync(join(f.runDir, 'scope.md'), 'Not fixed yet: diagnosis only\nNot checked: external\nReview: refreshed');
   const editsBefore = f.data().events.filter(event => event.kind === 'edit').length;
-  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'Synchronization cannot approve an absent chat.');
+  assert.equal(f.invoke('', 'approveRun').exitCode, 1, 'A person terminal declines after synchronization.');
   const body = f.data().prs[0].body;
   assert.equal(f.data().events.filter(event => event.kind === 'edit').length, editsBefore + 1);
   assert.ok(body.includes(ordinary), 'Preserve the complete ordinary reviewer context when room remains.');
