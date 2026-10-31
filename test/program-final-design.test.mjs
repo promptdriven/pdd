@@ -260,7 +260,7 @@ test('CLI plus typed with no words still opens default shell',async t=>{
 
 test('remaining session allowance refusal keeps world and recommends no fresh reset',async t=>{const h=await harness(t,{world:{keep:true},report:{remaining_calls:0}});pass(await h.invoke(['first']));const r=await h.invoke(['second']);assert.equal(r.code,125,r.err);assert.doesNotMatch(r.err,/start fresh|--fresh/i);assert.match(r.err,/session|allowance|budget/i);assert.deepEqual(h.stored('world.json'),{keep:true});assert.equal(h.fake.jsonPosts.length,1);});
 
-for(const mixed of [false,true])test(`same-ID read restores pending typed selection: ${mixed?'CLI plus typed':'multiple typed operations'}`,async t=>{
+for(const mixed of [false,true])for(const differentSuffix of [false,true])test(`same-ID read restores pending typed selection: ${mixed?'CLI plus typed':'multiple typed operations'}, ${differentSuffix?'different suffix':'no suffix'}`,async t=>{
  const h=await harness(t,{cli:false,outputs:{quote:{}},world:{confirmed:'typed recovery'},edit(s){
   const typed={operation:'quote',input_schema:obj({}),result_schema:obj({}),errors:[]};
   if(mixed){const cli=iface();s.entries=[cli.entries[0],typed];s.conventions=cli.conventions;}
@@ -276,7 +276,7 @@ for(const mixed of [false,true])test(`same-ID read restores pending typed select
  // The interpreter now has a canonical confirmed receipt for the same accepted call.
  const job=h.fake.jobs.get(accepted);job.result.report.verdict='passed';job.result.output={};
  const posts=h.fake.posts.length,gets=h.fake.gets.length;
- const read=await h.invoke([mixed?'final':'inspect'],['--read',accepted]);
+ const read=await h.invoke(differentSuffix?[mixed?'final':'inspect']:[],['--read',accepted]);
  pass(read);assert.equal(read.out,'{}\n');
  assert.deepEqual(h.stored('world.json'),{confirmed:'typed recovery'});
  assert.equal(h.stored('session.json').pending,undefined);

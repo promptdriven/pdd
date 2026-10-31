@@ -184,8 +184,9 @@ Preserve result.refusals and report.error code/message, fix/hint/field and graph
 cap evidence. Render `pdd: refused, N AI calls.` with supplied evidence and Fix
 advice. A declared failure prints only its supplied fix/hint, never a generic
 Fix line. Both a semantic refused receipt and a structured HTTP admission refusal
-with report.error.code exactly `session-call-cap` (or structured HTTP
-error.code exactly `session-call-cap`) supply a concrete `pdd --max-calls N FILE ARGS`
+whose resolved semantic error/refusal code is exactly `session-call-cap`
+(including a supplied result.refusals entry), or whose structured HTTP
+error.code is exactly `session-call-cap`, supply a concrete `pdd --max-calls N FILE ARGS`
 command with an increased suitable cap supported by the graph or supplied refusal
 evidence. Preserve the original FILE and all original selector/program words in
 ARGS, and preserve any supplied fix too. Other refusal codes/messages, including capture and capacity, never earn this
