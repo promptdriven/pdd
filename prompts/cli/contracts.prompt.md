@@ -128,6 +128,10 @@ markup as for existing actor labels and trim whitespace. The exact labels
 `test data`, `seed` and `initial world`, case-insensitively, identify initialization,
 not runtime actors; `seed-worker` remains an actor. A nonempty declaration made
 only of initialization labels is valid initial-only data, with no runtime writer.
+Warn once per unique exact declared path with initialization provenance and zero
+runtime actors, whether its seed value is present, absent or symbolic. Repeated
+initial-only claims coalesce; any runtime actor on that same exact path suppresses
+this advisory.
 Aggregate claims across rows for the same exact path: with no runtime actor or
 initialization provenance, the Writer is a problem. A blank row supplies neither
 claim; it does not invalidate another row's actor or initial-only declaration.
@@ -137,7 +141,7 @@ or `by` qualifies the preceding writer. Discard that whole piece as descriptive
 text before splitting actors, even if it contains `and`, `/`, `&` or `;`. The next
 comma begins another piece; an ordinary actor there still counts. A first piece
 is not a comma qualifier, and `throughput` or `bystander` is not a qualifier word.
-Split the remaining pieces on commas, whitespace-delimited standalone `and`,
+Split the remaining pieces on commas, whitespace-delimited standalone `and` case-insensitively,
 `/`, `&` and `;`, never inside a hyphenated word such as `search-and-rescue bot`.
 Remove initialization labels, trim and coalesce identical actors across rows for
 the same exact key/path. More than one unique runtime actor is a Writer problem.
@@ -185,11 +189,23 @@ advisory, never a problem. Coverage here describes a declared value, not inherit
 writer ownership: an exact concrete declaration covers its whole seed value,
 including an initial-only declaration. Where only descendant rows exist, inspect
 the concrete namespace branches. Report the closest present branch with neither
-an exact declaration nor a concrete declared descendant; do not list every field
+a matching declaration nor a matching declared descendant; do not list every field
 inside that uncovered value. Thus a lone `/kv/menu` row with seed siblings
 `orders` and `tickets` warns about `/kv/orders` and `/kv/tickets`. A `/kv` row
 covers its whole value for this advisory but never assigns its writer to a
-separately declared child. Symbolic paths do not match concrete seed paths.
+separately declared child.
+
+For this missing-writer-row advisory only, match placeholders against decoded
+JSON Pointer segments. A whole `<name>` segment matches any one existing seed
+segment, including an empty key, never zero or multiple segments. A segment may
+also combine literal pieces and `<name>` parts: each placeholder matches an
+arbitrary string within that one segment, while every literal piece stays exact.
+Thus `/screens/<machine>:<session>:<pane>` can cover `/screens/m:work:w1:p1`;
+its literal colons remain required. Repeated placeholder names match independently.
+Decoded slashes and tildes remain part of their one segment. Matching a declaration
+covers that concrete value for this advisory, including all its descendants.
+Templates never expand ownership claims, select schemas or validate matched seed
+values: those decisions still use exact literal declared paths.
 If a present prefix ends at a scalar or empty container before a declared
 descendant, warn at that present prefix: `/kv/orders/tickets` does not cover an
 empty or scalar `/kv/orders`. Absent seed values and an empty root seed add no
@@ -217,9 +233,13 @@ Missing-writer-row warnings have `kind: "world-writer-missing"`,
 `file: "contracts/seed-world.json"`, sorted `world_keys` and a finite nonblank
 `message` naming every uncovered path and the quantity, using singular for one.
 They remain separate from missing-schema warnings, including when both apply.
+Initial-only warnings have `kind: "world-writer-initial-only"`,
+`file: "contracts/world.md"`, `world_keys: [declared_path]` and a finite nonblank
+`message` naming that path. Emit one per unique exact path, separate from the
+aggregate missing-schema and missing-writer-row warnings.
 Declared-record warnings have `kind: "declared-record-disagreement"`, sorted
 `records` (two canonical IDs) and a nonempty `message`. Sort warnings by kind,
-then file/record identities. Text prints the same advisory facts once.
+then file/record identities and exact path identities. Text prints the same advisory facts once.
 Native I/O and syntax retain their existing exit semantics.
 
 ## Listing and freshness
