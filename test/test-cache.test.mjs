@@ -122,7 +122,10 @@ for (const vector of vectors.cases) test(`TEST-CACHE ${vector.id} (${vector.crit
     assert.equal(result.code, 0, result.err); return;
   }
   if (id === 'origin' || id === 'max-calls') {
-    if (id === 'origin') ctx.ports.env.PDD_RUNTIME_URL = ctx.fake.origin.replace('127.0.0.1', 'localhost');
+    if (id === 'origin') {
+      ctx.ports.env.PDD_RUNTIME_URL = ctx.fake.origin.replace('127.0.0.1', 'localhost');
+      ctx.ports.fetch = (url, options) => globalThis.fetch(String(url).replace('localhost', '127.0.0.1'), options);
+    }
     const result = await ctx.invoke([], id === 'max-calls' ? { '--max-calls': '50' } : {});
     assert.equal(result.sent, 3, 'changed execution origin or budget reruns every selected Story'); return;
   }
