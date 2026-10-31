@@ -4,11 +4,19 @@ Own src/program-run.mjs; export module function
 `runProgram({file, args, root, env, flags}, ports)` returning an exit code. Run an entry
 prompt as a CLI or typed operation with fake outside resources and no Story.
 Preserve existing simulate, Try and test behavior. Screen/HTTP launches belong to
-other owners. Detect screen apps via a selected app map and named HTTP entries
-via their input_schema title. Lazily import ./program-app.mjs and return
-runApp({file,root,env,flags},ports). If that module is missing, print exactly
+C's src/program-app.mjs. Before B's CLI or typed classification, lazily load
+that module and call its exported `appKind({file,root},ports)`; it returns
+`'screen'`, `'http'` or null. A non-null result delegates to its exported
+`runApp({file,root,env,flags},ports)` and returns its exit code. Pass the parsed
+pdd prefix flags unchanged; program suffix words never become pdd flags.
+Null or a missing module continues B's CLI/typed classification. If neither
+kind exists, print exactly
 `Screen apps and HTTP entries open this way in the next release; for now run pdd simulate STORY.`
-and exit2. Never treat a named HTTP or mapped screen entry as a typed operation. Messages never tell people to add an adapter or cli convention.
+and exit2. C owns screen/HTTP classification; B must not duplicate it using
+schema titles or app-map guesses. For deterministic tests, ports.programApp may
+supply that module's public exports instead of loading it; both paths use the
+same classification precedence and arguments. Never edit C's module. Messages
+never tell people to add an adapter or cli convention.
 
 ## Entry and input
 
@@ -22,6 +30,9 @@ default) with a real command launcher on PATH, without executing the program.
 First stdout line: `Answers come from prompts on the PDD interpreter, not installed code.`
 Then say `NAME works only in this shell; exit removes its PATH context. Another terminal: export PATH=...`
 with correctly shell-quoted launcher directory. Exit restores the caller's PATH.
+Invoking that launcher with zero words calls the CLI once with empty argv; it
+never opens another shell. Prefix fresh/data options select the shell's data
+before its commands run, including that zero-word invocation.
 Never open a browser for CLI or typed input.
 
 For typed input, --name value fills input_schema fields. Parse integers, finite

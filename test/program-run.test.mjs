@@ -24,6 +24,9 @@ function fixture(t, cli = true, multi = false, stdin = true) {
 async function harness(t, cli=true, options={}) {
   const setup=fixture(t,cli,options.multi,options.stdin!==false);
   const fake=await fakeRuntime(t,(e,f)=>{
+    if(e.method==='DELETE') return {status:202,json:{...f.job(e.headers['x-request-id'],'stop','running'),session_id:e.url.split('/').at(-1)}};
+    const stop=f.deletes.find(item=>item.headers['x-request-id']===e.url.split('/').at(-1));
+    if(stop) return {status:200,json:f.stopJob(e.url.split('/').at(-1),stop.url.split('/').at(-1))};
     if(e.json){
       const result=cli?{stdout:'answer\n',stderr:options.stderr??'',exit_code:options.exit??0}:{ok:true};
       const report=options.report??{result,world:{tasks:['saved']},remaining_calls:39};
