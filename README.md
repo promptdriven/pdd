@@ -185,6 +185,7 @@ pdd makes the code only after you approve each draft prompt. pdd never merges. Y
 | `pdd workflow open ISSUE` | Open the chat of a run. |
 | `pdd workflow approve [ISSUE]` | Approve the gate of a run, or start code space. |
 | `pdd help` | Show all commands. |
+| `pdd help prompting` | Show how to write a prompt, a Story and its test, and where the Prompting guide and RUNBOOK are. |
 
 The [CLI reference](docs/cli.md) has every command and option.
 

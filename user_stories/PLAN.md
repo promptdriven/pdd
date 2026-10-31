@@ -106,3 +106,6 @@ The seven workflow Stories retain their separately approved contracts and all 28
 ## Reuse unchanged Story checks (#2707, step D)
 
 1. [Reuse unchanged Story checks](test-cache.md). Cases: `test/runtime/test-cache.json`; native adapter: `test/test-cache.test.mjs`. Prompt tests: NOT RUN; native-only orchestration/filesystem/Git behavior, no AI calls.
+## pdd help teaches PDD (#2769)
+
+1. [Learn PDD from pdd help](help-teaches-pdd.md): root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) names `pdd help prompting` and the full paths of the installed Prompting guide and RUNBOOK. `pdd help prompting` is a help topic: it shows how to write a prompt, a Story and its test, names `pdd test`, `pdd lint` and `pdd approve`, and prints the two paths. `pdd prompting` stays an unknown command. Test: `test/runtime/help-teaches-pdd.json`. The interpreter cannot know the install folder, so the test checks the file names; Node tests in the code area check that both paths are absolute and exist on disk, and that help works with no network and no PDD skills.

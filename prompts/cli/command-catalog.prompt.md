@@ -101,6 +101,8 @@ interpreter calls, and their help says "no interpreter calls". [Product](product
 
 `PUBLIC_COMMAND_MANIFEST` holds exactly the forms and descriptions of the [help forms](pdd-cli.prompt.md#help-forms) that the CLI prompt lists, in the same order. Each route owns the lines whose form starts with its prefix.
 
+The `help` route owns the forms `pdd`, `pdd --help`, `pdd -h`, `pdd help` and `pdd help prompting`, and lists one help topic: `prompting`. A topic is no route prefix, so `prompting` alone is no command. The [CLI](pdd-cli.prompt.md#learn-pdd) owns the topic's text; the [parser](argument-parser.prompt.md#help-topics) owns its syntax.
+
 ## Dependencies
 
 No outside values or callback replies are required for this data-only module. All runtime route IDs, prefixes, dispositions, operand/option types, forms and help facts are owned here. Native authoring/generation uses the repository contracts linked above to identify the receiving modules and public boundary; links in route descriptions are native integration/ownership navigation, not a request to load their unrelated implementation/runtime policies when parsing catalog data.

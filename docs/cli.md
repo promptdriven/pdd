@@ -108,7 +108,8 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 
 | Command | What it does |
 |---|---|
-| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands |
+| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
+| `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
 | `pdd --version` | Print the version, `0.1.12`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
 | `pdd jobs` | List active slots and waiting interpreter jobs on this machine, including kind, PID, age and request IDs. Local and read-only; no repository, authentication or interpreter call |
@@ -198,3 +199,5 @@ approved interface set it to draft; review the preview and approve it as usual.
 | `pdd product start RUN [--no-run] [--agent codex\|claude]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue |
 
 See [Build a whole product](build-a-whole-product.md).
+
+`pdd workflow ack REQUEST_ID --summary TEXT` records the agent’s uptake of a delivered change request from its active run worktree. The first note and time are retained on repeat calls. Delivery and this explicit agent claim do not prove the request was fully addressed. Status shows delivered requests still awaiting uptake; done warns without blocking progress.

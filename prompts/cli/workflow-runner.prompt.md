@@ -57,6 +57,79 @@ Public detailed, list, all-repository and JSON status group this failure as wait
 
 Only a successful start/open or positive observation of the same current chat clears its active failure/unconfirmed flag. Restore `running` only when no person question or approval gate is waiting; recovery never approves, advances an area or discards decisions. If Herdr remains unavailable, keep the precise external failure and preserve custody rather than claiming recovery.
 
+## Preserve concurrent progress
+
+Use the [run-record update boundary](workflow-runs.prompt.md#concurrent-record-updates)
+for every modification of an existing ordinary run record: startup follow-up,
+chat recovery/failure, evidence and replay metadata, steps, questions, decisions,
+area/gate transitions, publication, change-delivery effects, cancellation and
+status refresh, including adopted-corpus blocked and publication evidence saves.
+These saves retain their intended blocked/publication-pending/replay evidence
+while preserving unrelated progress; frozen adoption authority and anchor remain
+governed by the adoption rules above. Initial creation retains the explicit
+whole-record save. Each
+update callback checks the latest `runId` and record/worktree identity against the
+run selected by this invocation before changing anything. A replacement run at
+the same path is not that run: fail without modifying it. This adds no step-order
+or approval gate and does not change existing command validation.
+
+Before `stepDone`, `askPerson` or `approveRun` commits any progress or gate
+transition or begins publication, branch or chat effects, check the latest owned
+run: cancelled or completed runs stay ended.
+For a run newly ended since this invocation selected it, refuse with a nonzero
+reply saying the run ended; preserve state, gate, question,
+steps and decisions and start no chat. This check wins over stale command intent,
+including cancellation or completion while the command waited. The explicit
+existing done-at-PR-1 code continuation described below remains available for a
+new approval invocation; it does not authorize a stale approval to revive a run.
+Preserve existing already-ended early-return results, including successful done/ask
+stop replies without reading the delivery journal.
+
+Approval applies only to the gate actually shown for this invocation. Recheck its
+area, kind and time against the latest gate before recording approval or doing
+approval-triggered publication, branch or chat effects. If it changed or vanished,
+refuse with "the gate changed, look again", preserving the new gate and recording
+no approval. An unchanged gate keeps existing approval/evidence behavior.
+
+Apply only this invocation's intended effects to the latest record. Retain
+unrelated newer completed steps, questions, gates, decisions, area progress,
+chats, evidence and PR fields; never publish an old whole snapshot. Distinct
+successful concurrent completions retain both records unless the existing rerun
+rule intentionally invalidates one. A known completed step running again clears
+all later known steps of its own area in the latest record, including a later
+step newly added or replaced since the command loaded; unrelated steps survive.
+Done clears only the question it observed, leaving an independently newer
+question intact. Ask deliberately saves its own requested question and derives
+its existing waiting effect from the current gate. Preserve newer gates when
+this invocation has no intentional gate transition.
+
+Status applies its actual fetched PR/CI observations to the matching PR identity
+without replacing unrelated newer PR fields or entries, and retains existing
+completion consequences. Collect external observations before the short local
+update; do not perform Git, GitHub, Herdr or model work under ordinary-record
+ownership. All callers continue from the committed record, not their stale copy.
+A failed existing-record update returns a finite nonzero diagnostic and never
+claims that its progress was saved. Best-effort index failure after a committed
+save remains harmless. No new ordering is promised for competing intentional
+changes to the same field beyond these existing command effects.
+
+Ordinary updates leave accepted requests and acknowledgement fields in the
+authoritative journal untouched. Change delivery retains its existing
+journal-then-ordinary update order; no ordinary update acquires a journal claim.
+Keep existing custody, uptake warnings, side-effect order and approval rules.
+`runStatus` uses `readRunOwnership` from the run-record owner before any
+write-capable PR/chat refresh and skips those refreshes while ownership is held.
+JSON adds `ordinaryOwnership` with that snapshot or `null` when absent; detailed,
+list/all/cancelled text and JSON identify the held ownership path and its available
+PID, hostname and token, or say ownership is unreadable/malformed. No owner means
+no held-lock claim. For unverifiable ownership, give the path and explain manual
+removal only after verifying no pdd command is running; do not recommend removal
+while a live owner works. Reading status never reclaims ownership; busy ownership cannot
+hide the saved run or turn status into a failed save. Cancellation uses the same
+recoverable ownership boundary and can proceed after confirmed-dead reclamation.
+The native callback, ownership and overlapping public saves remain unbound to
+the Interpreter entries below.
+
 ## Commands
 
 Each workflow command export takes `(input, ports)` and returns `{exitCode, message}`. The CLI prints the message.
@@ -269,6 +342,6 @@ The Interpreter entries below name the actual public `changeRun` and `acknowledg
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"779127846334d70ff296ae794761216dacbec269721d321efb31261baf8bfdd6","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"b5dcb4eb76f91a9aa90331dc9a4684d06702622891daa9d89fd7ee2701b7b672","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
