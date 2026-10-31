@@ -1,9 +1,9 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a194f7556546773474f53959069fdc5d1c171df1e70dbd938ec3725164b6ba5e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 4c20eceb40c9cb3846e47d7832f7669961eb3758f15071c233a212739467b420).
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as nativeDeliveryFiles from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +19,7 @@ import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { causeText } from './runtime-output.mjs';
 import { preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
-import {REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
+import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,readReplayEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CHANGE_PREFIX = 'The person asks for changes';
@@ -119,14 +119,30 @@ async function scenarioInventory(run, p) {
   return paths;
 }
 const replayEnabled = run => run.areas.some(area => area.replay_evidence === REPLAY_POLICY);
+async function adoptionFailure(run,p) {
+  const blocked=reason=>{
+    run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason};
+    const step=run.areas[run.area]?.steps.filter(step=>run.done[step]).at(-1);
+    if(step)run.done[step].replayEvidence=run.replayEvidence;
+    if(p)writeRun(run,p);return reason;
+  };
+  if (!run.replayAdoption) return null;
+  const result = await adoptReplayCorpus(run.root,join(run.runDir,'replay-adoption.json'));
+  if (result.outcome !== 'adopted' || JSON.stringify(result.provenance) !== JSON.stringify(run.replayAdoption.provenance))
+    return blocked(`Corpus adoption cannot be reused (${result.reason || 'frozen provenance changed'}${result.cause ? `: ${result.cause}` : ''}). Start an ordinary approval workflow for changed requirements.`);
+  const anchor=pinReplayVectors(run.root,result.paths);
+  if(anchor.outcome || JSON.stringify(anchor)!==JSON.stringify(run.replayBaseline))
+    return blocked('The adopted original anchor changed. Start an ordinary approval workflow for changed requirements.');
+  return null;
+}
 async function refreshReplayBaseline(run,p) {
-  if (!replayEnabled(run)) return;
+  if (!replayEnabled(run) || run.replayAdoption) return;
   try { run.replayBaseline = pinReplayVectors(run.root,await scenarioInventory(run,p)); }
   catch { run.replayBaseline = {schema_version:'pdd.replay-vectors.v1',vectors:[],outcome:'blocked',reason:'The changed scenario inventory is unavailable; repair unreadable or malformed JSON candidates and Git listing failures.'}; }
   writeRun(run,p);
 }
-async function currentReplayEvidence(run,p) {
-  let reason;
+async function currentReplayEvidence(run,p,validated=false) {
+  let reason = validated ? null : await adoptionFailure(run,p);
   try {
     const saved = new Set(run.replayBaseline?.vectors?.map(vector=>vector.path) ?? []);
     const missing = (await scenarioInventory(run,p)).filter(path=>!saved.has(path));
@@ -263,10 +279,11 @@ function describe(run, chat = null, { drafts = [], nothing = false } = {}) {
   return step ? `the agent works on ${step}` : 'the agent works';
 }
 
-export async function startRun({ name, issue, agent = 'codex', base, cwd, packageRoot = PACKAGE_ROOT }, ports) {
+export async function startRun({ name, issue, agent = 'codex', base, adoptCorpus, cwd, packageRoot = PACKAGE_ROOT }, ports) {
   const p = deps(ports); p.pdd = pddFor(p, packageRoot);
   let workflow;
   try { workflow = readWorkflowAreas({ packageRoot, name, cwd, home: p.env.HOME || homedir() }); } catch (error) { return fail(error.message); }
+  if (adoptCorpus !== undefined && (typeof adoptCorpus !== 'string' || !adoptCorpus.trim() || !workflow.areas.some(area=>area.replay_evidence===REPLAY_POLICY))) return {exitCode:2,message:'--adopt-corpus requires a declaration path and an explicitly replay-evidence-enabled workflow.'};
   if (!['codex', 'claude'].includes(agent)) return fail('Choose --agent codex or --agent claude.');
   // Every chat of the run uses this config folder; a missing one makes the agent stop at once (0.1.6 tester).
   const variable = homeVariable(agent), configDir = p.env[variable] ? resolve(cwd, expandHome(p.env[variable], p.env)) : null;
@@ -300,12 +317,27 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
       return fail(`Could not fetch --base ${baseBranch} from origin. Check that origin has this branch and Git can fetch it, then run again. No new run was started.`);
     }
   }
+  let adoption, adoptionSnapshot, declarationBytes, frozenFolder;
+  try {
+  if(adoptCorpus !== undefined) {
+    try {
+      if(!explicitBase) {
+        try {await rawGit(p,context.toplevel,'fetch','origin',baseBranch);}
+        catch {return {exitCode:2,message:'Cannot adopt the approved corpus (unavailable: startup fetch failed). Repair the source or start an ordinary approval workflow. No new run was started.'};}
+      }
+      const selectedBase=await git(p,context.toplevel,'rev-parse','--verify','--end-of-options',`refs/remotes/origin/${baseBranch}^{commit}`);
+      adoption=await adoptReplayCorpus(context.toplevel,resolve(cwd,adoptCorpus),{currentRef:selectedBase,onSnapshot:s=>{adoptionSnapshot=s;},onNativeDeclaration:bytes=>{declarationBytes=bytes;}});
+      if(adoption.outcome!=='adopted')return {exitCode:2,message:`Cannot adopt the approved corpus (${adoption.reason}${adoption.cause ? `: ${adoption.cause}` : ''}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};
+      frozenFolder=realpathSync(mkdtempSync(join(tmpdir(),'pdd-adoption-declaration-')));
+      writeFileSync(join(frozenFolder,'declaration.json'),declarationBytes,{mode:0o600});
+    } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
+  }
   if (existing) {
     const released = await releaseIssueClaim({ cwd: context.toplevel, runId: existing.runId, issueNumber: number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Issue #${number} has a cancelled run, but pdd could not free the issue: ${released.message}`);
     warnings.push(`Issue #${number} had a cancelled run. Its worktree stays at ${existing.root} (branch ${existing.branch}). This run gets a new worktree and branch.`);
   }
-  if (!explicitBase) {
+  if (!explicitBase && adoptCorpus === undefined) {
     p.say(`Fetching origin/${baseBranch}…`);
     try { await p.execFile('git', ['fetch', 'origin', baseBranch], { cwd: context.toplevel }); }
     catch { warnings.push(`warning: "git fetch origin ${baseBranch}" failed; the worktree starts from the last fetched ${baseBranch}.`); }
@@ -314,8 +346,19 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
   p.say(`Making the worktree and branch for #${number}…`);
   const allocated = await allocateIssueWorktree({ cwd: context.toplevel, repository: binding.repository, issueNumber: number, runId,
     workflowName: name, baseRef: `refs/remotes/origin/${baseBranch}` }, p.commandPorts);
-  if (allocated.state !== 'ready' || !allocated.assignment) return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);
+  if (allocated.state !== 'ready' || !allocated.assignment) {if(frozenFolder)rmSync(frozenFolder,{recursive:true,force:true});return fail(`pdd could not make the worktree for #${number}: ${allocated.message}`);}
   const a = allocated.assignment;
+  let adoptedAnchor;
+  if(adoption) {
+    try {
+      const actual=await adoptReplayCorpus(a.worktreePath,join(frozenFolder,'declaration.json'));
+      adoptedAnchor=pinReplayVectors(a.worktreePath,adoption.paths);
+      if(actual.outcome!=='adopted' || JSON.stringify(actual)!==JSON.stringify(adoption) || adoptedAnchor.outcome) {
+        const released=await releaseIssueClaim({cwd:context.toplevel,runId,issueNumber:number},p.commandPorts);
+        return {exitCode:2,message:`The allocated worktree differs from the approved corpus. No active run or chat was saved. Retained worktree: ${a.worktreePath}; branch: ${a.branch}. ${released.state==='released' ? 'The new issue claim was released; the retained files and branch are available for inspection.' : `The new issue claim ${runId} could not be released: ${released.message}. Inspect it before retrying.`} Start an ordinary approval workflow for changed requirements.`};
+      }
+    } finally {rmSync(frozenFolder,{recursive:true,force:true});}
+  }
   // Keep the cancelled run's record next to the new one; only a plain issue number names the active run.
   if (existing) renameSync(runDir, `${runDir}-cancelled-${existing.runId.slice(0, 8)}`);
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
@@ -329,6 +372,12 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     approvalRecord: null, pr: [], prState: null, cancelled: null, warnings, journalSeq: 0,
     previous: existing ? [...(existing.previous ?? []), { runId: existing.runId, root: existing.root, branch: existing.branch, runDir: `${runDir}-cancelled-${existing.runId.slice(0, 8)}` }] : [] };
   mkdirSync(runDir, { recursive: true });
+  if(adoption) {
+    writeFileSync(join(runDir,'replay-adoption.json'),declarationBytes,{mode:0o600,flag:'wx'});
+    run.replayAdoption={declaration:adoptionSnapshot.declaration, declaration_sha256:adoption.provenance.declaration_sha256, provenance:adoption.provenance};
+    run.replayBaseline=adoptedAnchor;
+    warnings.push(`Adopted ${adoption.paths.length} unchanged scenarios from ${adoption.provenance.repository}@${adoption.provenance.commit}. External authorization: external-assertion-unverified; reference ${adoption.provenance.reference}; asserted by ${adoption.provenance.asserted_by}. pdd cannot independently authenticate that authorization; adoption does not prove execution.`);
+  }
   writeRun(run, p);
   const first = workflow.areas[0];
   try { await startNextChat(run, p, packageRoot); }
@@ -350,6 +399,7 @@ export async function startRun({ name, issue, agent = 'codex', base, cwd, packag
     `Status:         pdd workflow status ${number}`,
     `When the ${first.name} area is ready, approve it in the chat or run: pdd workflow approve ${number}`,
     'You can close this terminal. The chat keeps working in Herdr.'].join('\n'));
+  } finally {if(frozenFolder)rmSync(frozenFolder,{recursive:true,force:true});}
 }
 
 // A runtime report link has a /r/ path segment, or starts with PDD_RUNTIME_URL when that is set. No host is fixed here.
@@ -632,6 +682,8 @@ async function publishAreaPr(run, area, p, lines, retry) {
     await git(p, run.root, 'commit', '-q', '-m', `${oneLine(run.issue.title)} (#${run.number})`);
     lines.push(`warning: pdd committed ${files.length} uncommitted file(s): ${files.slice(0, 10).join(', ')}${files.length > 10 ? ', …' : ''}.`);
   }
+  const changedAdoption = await adoptionFailure(run,p);
+  if(changedAdoption) {run.replayEvidence={...readReplayEvidence(run),outcome:'blocked',reason:changedAdoption};writeRun(run,p);return fail(changedAdoption);}
   const codePr = label !== 'PR 1';
   if (codePr) {
     let baseSha = '', headSha = '', result;
@@ -657,7 +709,11 @@ async function publishAreaPr(run, area, p, lines, retry) {
   }
   const opted = area.replay_evidence === REPLAY_POLICY;
   let prepared = await publicationEvidence(run, area, p);
-  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p);writeRun(run,p);}
+  if (opted) {run.replayEvidence=await currentReplayEvidence(run,p,true);
+    const last=area.steps.filter(step=>run.done[step]).at(-1);if(last)run.done[last].replayEvidence=run.replayEvidence;
+    writeRun(run,p);
+    if(run.replayAdoption && /(?:missing from the approved anchor|changed scenario inventory is unavailable)/.test(run.replayEvidence.reason))return fail(`${run.replayEvidence.reason} Start an ordinary approval workflow for changed requirements.`);
+  }
   const bodyBase = run.prBase ?? run.baseBranch;
   const bodyDrafts = label === 'PR 1' ? await draftPrompts(run, p, run.branch, bodyBase) : [];
   const bodyTests = label === 'PR 1' ? (await worktreeContents(run, p)).tests.length > 0 : true;
@@ -758,6 +814,7 @@ async function finishPr(run, area, step, p, lines) {
   lines.push(`pdd recorded ${step}. pdd opens ${label} now.`);
   const failed = await publishAreaPr(run, area, p, lines, `run done ${step} again`);
   if (failed) return failed;
+  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
@@ -825,7 +882,7 @@ export async function stepDone({ step, summary, cwd, packageRoot = PACKAGE_ROOT 
     record.source = { kind: 'git-content-v1', sha256: gitFingerprint(run.root) };
     (run.runtimeHistory ??= []).push({ ...record, step });
   }
-  if (area.replay_evidence === REPLAY_POLICY) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
+  if (area.replay_evidence === REPLAY_POLICY && (area.steps.some(item=>item!==step && !run.done[item]) || area.gate!=='pr' || area.before==='approve' && !prOf(run,area.name))) { run.replayEvidence=await currentReplayEvidence(run,p); record.replayEvidence=run.replayEvidence;lines.push(formatReplayEvidence(run.replayEvidence)); }
   run.done[step] = record;
   const next = area.steps.find(item => !run.done[item]);
   if (next) {
@@ -918,6 +975,7 @@ async function syncPr1(run, p) {
     const drafts = approved.length ? await pr1Drafts(run, p) : before;
     return { drafts, lines: await draftDescription(run, pr1, drafts, p) };
   }
+  const adoption=await adoptionFailure(run,p);if(adoption)return {failed:adoption};
   try { await rawGit(p,run.root,'push','origin',`HEAD:refs/heads/${run.branch}`); }
   catch { return { failed: `pdd could not push ${what ?? `the worktree's new commit${ahead > 1 ? 's' : ''}`} to PR 1. Run: ${go}git push origin HEAD:refs/heads/${run.branch}\n${again}` }; }
   await refreshReplayBaseline(run,p);
@@ -994,6 +1052,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let carried = [];
+  const adoptedFailure=await adoptionFailure(run,p); if(adoptedFailure)return fail(adoptedFailure);
   if (askCode && run.gate?.kind === 'ask-code') {
     if (replayEnabled(run)) {
       try {
@@ -1063,6 +1122,7 @@ export async function approveRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports
   }
   let based = '';
   if (askCode) {
+    const adoptedFailure=await adoptionFailure(run,p);if(adoptedFailure)return fail(adoptedFailure);
     // Reached at the code gate, or right after PR 1 opened when the terminal said yes to the code PR.
     p.say('Making the code branch…');
     try { based = await codeBranch(run, area, p); }

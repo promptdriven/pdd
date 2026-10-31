@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f0e2412333caebd2fef797d4f89065e4414232bbe60b9c84da478ea8c18a443f).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: e990f8ea57fbceae9c6027ee0f2707f1bf9e1a7e66bdf19683fba0b400206f13).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run' });
@@ -14,8 +14,8 @@ const routes = [
   // `workflow start` is a quiet word for now; a later change moves it to `removed`: one data edit.
   { id: 'workflow.run', prefix: ['workflow', run], local: 'workflow-run', quiet: ['workflow', 'start'],
     operands: [{name:'name',type:'workflow-name'},{name:'issue',type:'issue'}],
-    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'}],
-    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); pdd later pushes the issue branch and opens a real PR.')] },
+    options:[{name:'--agent',kind:'value',choices:['codex','claude']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'}],
+    forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude] [--base BRANCH]`, 'Start the first area chat for a GitHub issue in Herdr and exit; --base selects an existing origin branch (default: repository default); --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.prove', prefix: ['workflow', 'prove'], local: 'workflow-prove',
     operands: [{name:'issue',type:'issue'}], options: [{name:'--test',kind:'text'},{name:'--expect',kind:'text'}],
     forms: [form('pdd workflow prove ISSUE --test COMMAND --expect TEXT', 'Run committed changed tests on the fetched base branch merge-base and committed head with a 120-second limit per phase; save a non-gating report.')] },
