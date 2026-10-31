@@ -302,7 +302,9 @@ test('TEST-CACHE lf forgets deleted failed Stories and runs normal remaining sel
   assert.equal(result.sent, 2, 'deleted failure cannot make a cold remaining scope empty');
   assert.equal(result.json.rows.length, 2);
   for (const name of ['stories', 'lastfailed']) {
-    const metadata = read(join(ctx.repo, `.pdd/cache/test/${name}.json`));
+    const path = join(ctx.repo, `.pdd/cache/test/${name}.json`);
+    assert.ok(existsSync(path), `${name} metadata persists completed selection`);
+    const metadata = read(path);
     assert.ok(!JSON.stringify(metadata).includes('user_stories/independent.md'), `${name} forgets deleted Story`);
   }
 });
