@@ -2,7 +2,7 @@
 
 Own `src/argument-parser.mjs`; export `CommandInputError` (exitCode2) and `parseArgv(argv)`. Use only `PUBLIC_COMMAND_ROUTES` to resolve exact prefixes and declared operand/flag types. Return a fresh immutable local plan `{commandId,local,operands,options}`. Do not emit service-adapter arguments or dispositions, private validators or an execution-service enum.
 
-Empty argv, root --help/-h/-help/help, and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. `--version` accepts no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` takes no operands and no options. No route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
+Empty argv, root --help/-h/-help/help, a [help topic](#help-topics), and known exact command/group help succeed; `-help` is accepted wherever `--help` is. Unknown command plus --help/-h still refuses2. A first word that is no known command and no option refuses with exactly `Unknown command "WORD". Run pdd --help to see the commands.`, with control characters in WORD shown as spaces. `--version` accepts no unrelated arguments. `completion` requires exactly bash or zsh. `workflow list` accepts one optional --json and no operands. `setup` takes no operands and no options. No route forwards native flags. Unknown/duplicate options, NUL/nonstrings, missing/extra operands and excluded commands refuse clearly without printing raw invalid input. Never mutate the caller's array. A help flag cannot hide invalid trailing arguments.
 
 ## Authoring
 
@@ -19,6 +19,10 @@ Check for the catalog's removed words ([Names](command-catalog.prompt.md#names))
 | `try`, any words | `pdd try was removed. Use pdd simulate.` |
 
 The line names the old and the new command, with no backticks or quotes, and repeats no other word of the input. Forbidden: help, a plan, a usage error about another word, or a second line.
+
+## Help topics
+
+A help topic is a word after `help` that the catalog's `help` route lists as a topic ([help forms](command-catalog.prompt.md#help-forms)). Today the one topic is `prompting`. `pdd help prompting`, exactly these two words, returns the help plan with an empty `helpPrefix` and `topic: 'prompting'`. Any other word after the topic, also a help flag, is unsupported input (exit 2). A topic is no command: `pdd prompting` still gets `Unknown command`, and `pdd prompting --help` still refuses with exit 2. Forbidden: a plan that runs a command for a topic word, or a topic plan with extra words.
 
 ## Quiet names
 
