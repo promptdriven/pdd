@@ -182,3 +182,13 @@ test('Try accepts named local launchers while workflow agent choices stay bounde
     assert.match(completion,/workflow:--agent\)/);
   }
 });
+
+test('2640 CLI parses and forwards --adopt-corpus exactly and retains startup exit 2',async t=>{
+  const cwd=temp(t),stdout=capture(),stderr=capture();let input;
+  const args=['workflow','run','replay','17','--base','main','--adopt-corpus','/approval folder/corpus.json'];
+  assert.equal(parseArgv(args).options['--adopt-corpus'],'/approval folder/corpus.json');
+  const code=await runPdd(args,{cwd,stdout,stderr,env:{HOME:cwd,PATH:''},workflowRunner:{startRun:async value=>{input=value;return {exitCode:2,message:'Cannot adopt (content-mismatch).'};}}});
+  assert.equal(code,2);assert.equal(input.adoptCorpus,'/approval folder/corpus.json');assert.equal(input.name,'replay');assert.equal(input.base,'main');assert.match(stderr.text,/Cannot adopt/);assert.equal(stdout.text,'');
+  for(const option of [[],[''],['a','--adopt-corpus','b']])assert.throws(()=>parseArgv(['workflow','run','replay','17','--adopt-corpus',...option]),CommandInputError);
+  for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/--adopt-corpus/);
+});
