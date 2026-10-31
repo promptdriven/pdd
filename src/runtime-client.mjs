@@ -1807,12 +1807,15 @@ function oneTest(found, words, root) {
 // Read the authored interfaces, never scenario output, to choose an interaction.
 function programEntries(root, found, test) {
   const cli = new Set(), http = new Set();
-  for (const step of test.doc?.steps ?? []) {
+  for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) {
+    if (!step || typeof step.entry_path !== 'string' || typeof step.operation !== 'string') continue;
     const prompt = readPrompt(root, found.visible, step.entry_path);
-    const index = prompt.interface?.entries?.findIndex(entry => entry.operation === step.operation);
+    const entries = Array.isArray(prompt.interface?.entries) ? prompt.interface.entries : [];
+    const conventions = Array.isArray(prompt.interface?.conventions) ? prompt.interface.conventions : [];
+    const index = entries.findIndex(entry => entry?.operation === step.operation);
     if (!(index >= 0)) continue;
-    const entry = prompt.interface.entries[index], key = `${step.entry_path}#${step.operation}`;
-    if (['input_schema', 'result_schema'].every(name => prompt.interface.conventions?.some(c => c.path === `/entries/${index}/${name}` && c.convention === 'cli'))) cli.add(key);
+    const entry = entries[index], key = `${step.entry_path}#${step.operation}`;
+    if (['input_schema', 'result_schema'].every(name => conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'))) cli.add(key);
     if (/^HTTP (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/.test(entry.input_schema?.title ?? '')) http.add(key);
   }
   return { test, cli, http };
@@ -1827,7 +1830,7 @@ function simulationSelection(root, found, words, appMap, options) {
   const cli = new Set(rows.flatMap(row => [...row.cli]));
   const hasHttp = rows.some(row => row.http.size);
   const screens = appMap ? JSON.parse(readFileSync(join(root, appMap), 'utf8')).screens : [];
-  const mapped = Array.isArray(screens) && selected.some(test => (test.doc?.steps ?? []).some(step => screens.some(screen => screen?.source === 'operation' && screen.prompt_path === step.entry_path && screen.operation === step.operation)));
+  const mapped = Array.isArray(screens) && selected.some(test => (Array.isArray(test.doc?.steps) ? test.doc.steps : []).some(step => step && screens.some(screen => screen?.source === 'operation' && screen.prompt_path === step.entry_path && screen.operation === step.operation)));
   const typed = words.length && !cli.size && !hasHttp && !mapped;
   const page = options['--page'] || options['--agent'] !== undefined || options['--tab'] !== undefined;
   const forcedCli = options['--cli'] || options['--shell'];

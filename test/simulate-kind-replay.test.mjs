@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { proseSha256 } from '../src/runtime-preflight.mjs';
+import { findTests, gitFiles, proseSha256 } from '../src/runtime-preflight.mjs';
 import { runTry } from '../src/runtime-client.mjs';
+import { openCli } from '../src/try-doors.mjs';
 import { openServe } from '../src/try-http.mjs';
 import { harbor, fakeRuntime, portsFor } from './runtime-fake.mjs';
 
@@ -93,4 +94,45 @@ test('2760 replay: no CLI choices explains quoted typed Story recovery before si
   assert.match(ports.stderr.text, /This Story is not a command-line program\. No Stories are command-line programs\./);
   assert.ok(ports.stderr.text.includes("pdd simulate 'resolver'\\''s input' opens its Form tab."), ports.stderr.text);
   assert.doesNotMatch(ports.stderr.text, /RUNBOOK|convention|adapter/);
+});
+
+function malformedReplay(t, change) {
+  return harbor(t, root => {
+    const source = readFileSync(join(root, 'prompts/place_order.prompt.md'), 'utf8');
+    const iface = JSON.parse(source.match(/```json\s*([\s\S]*?)```/)[1]);
+    change(iface);
+    writeFileSync(join(root, 'prompts/broken.prompt.md'), source.replace(/(```json\s*)[\s\S]*?(```)/, (_, open, close) => open + JSON.stringify(iface) + '\n' + close));
+    const path = join(root, 'tests/unknown-item.json'), doc = JSON.parse(readFileSync(path));
+    for (const step of doc.steps) step.entry_path = 'prompts/broken.prompt.md';
+    writeFileSync(path, JSON.stringify(doc));
+  });
+}
+
+// Eligibility is an advisory inspection of authored source before validation.
+// A broken unselected prompt cannot prevent a valid named Story from opening.
+for (const [shape, change] of [
+  ['non-array entries', iface => { iface.entries = {}; }],
+  ['null entry', iface => { iface.entries = [null]; }],
+  ['non-array conventions', iface => { iface.conventions = {}; }],
+  ['null convention', iface => { iface.conventions = [null]; }],
+]) {
+  test(`2760 replay: unrelated ${shape} cannot crash named selection or direct CLI choices`, async t => {
+    const setup = malformedReplay(t, change);
+    const fake = await fakeRuntime(t, (entry, f) => entry.command === 'lint' ? { status: 200, json: f.lint(entry.request.requestId) } : entry.command === 'try' ? { status: 200, json: f.tryJob(entry.request.requestId) } : { status: 404, json: {} });
+    const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: fake.origin }, { openUrl: async () => true });
+    assert.equal(await runTry({ cwd: setup.repo, words: ['place-order'] }, ports), 0, ports.stderr.text + ports.stdout.text);
+    assert.equal(fake.posts.filter(entry => entry.command === 'try').length, 1);
+    const visible = new Set(gitFiles(setup.repo)), found = findTests({ root: setup.repo, files: [...visible] });
+    await assert.rejects(openCli({ root: setup.repo, visible, found, ports }, found.tests.find(row => row.story === 'place-order'), 'unused', {}), error => error.exitCode === 125 && /This Story is not a command-line program/.test(error.message));
+  });
+}
+
+test('2760 replay: selected malformed entries retain local preflight refusal without authentication', async t => {
+  const setup = malformedReplay(t, iface => { iface.entries = {}; });
+  const { ports } = portsFor({ HOME: setup.home, PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('malformed selected source must not authenticate'), fetch: () => assert.fail('malformed selected source must not contact runtime') });
+  assert.equal(await runTry({ cwd: setup.repo, words: ['unknown-item'] }, ports), 4);
+  assert.match(ports.stdout.text, /refused/i);
+  assert.match(ports.stdout.text, /broken\.prompt\.md.*no operation/);
+  const visible = new Set(gitFiles(setup.repo)), found = findTests({ root: setup.repo, files: [...visible] });
+  await assert.rejects(openCli({ root: setup.repo, visible, found, ports }, found.tests.find(row => row.story === 'unknown-item'), 'unused', {}), error => error.exitCode === 125 && /This Story is not a command-line program/.test(error.message));
 });

@@ -49,13 +49,15 @@ function safeBin(root) {
 
 function cliEntries(context, test) {
   const entries = new Map();
-  for (const step of test.doc?.steps ?? []) {
+  for (const step of Array.isArray(test.doc?.steps) ? test.doc.steps : []) {
+    if (!step || typeof step.entry_path !== 'string' || typeof step.operation !== 'string') continue;
     const prompt = readPrompt(context.root, context.visible, step.entry_path);
-    const index = prompt.interface?.entries?.findIndex(e => e.operation === step.operation);
+    const authoredEntries = Array.isArray(prompt.interface?.entries) ? prompt.interface.entries : [];
+    const index = authoredEntries.findIndex(e => e?.operation === step.operation);
     if (!(index >= 0)) continue;
-    const conventions = prompt.interface.conventions ?? [];
-    if (!['input_schema', 'result_schema'].every(key => conventions.some(c => c.path === `/entries/${index}/${key}` && c.convention === 'cli'))) continue;
-    entries.set(`${step.entry_path}#${step.operation}`, { step, prompt, entry: prompt.interface.entries[index] });
+    const conventions = Array.isArray(prompt.interface.conventions) ? prompt.interface.conventions : [];
+    if (!['input_schema', 'result_schema'].every(key => conventions.some(c => c?.path === `/entries/${index}/${key}` && c.convention === 'cli'))) continue;
+    entries.set(`${step.entry_path}#${step.operation}`, { step, prompt, entry: authoredEntries[index] });
   }
   return entries;
 }
