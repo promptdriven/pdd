@@ -125,7 +125,7 @@ for(const newcomer of ['place_order','later/place_order'])test(`base folder owne
 
 test('base owner survives removal of its prompt when a sole visible newcomer arrives',async t=>{
  const {programData}=await helpers();const h=repository(t);
- mkdirSync(join(h.repo,'prompts'));const oldPath=join(h.repo,'prompts/place_order.prompt.md');
+ mkdirSync(join(h.repo,'prompts'),{recursive:true});const oldPath=join(h.repo,'prompts/place_order.prompt.md');
  writeFileSync(oldPath,'# Old owner\n');const owner=selection(programData,h.repo,'prompts/place_order');
  const bytes='{"old":"preserve exact bytes"}\n';writeFileSync(join(owner.dir,'world.json'),bytes);
  unlinkSync(oldPath);mkdirSync(join(h.repo,'later'));

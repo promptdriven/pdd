@@ -281,6 +281,7 @@ for(const mixed of [false,true])for(const differentSuffix of [false,true])test(`
  assert.deepEqual(h.stored('world.json'),{confirmed:'typed recovery'});
  assert.equal(h.stored('session.json').pending,undefined);
  assert.deepEqual(h.stored('last-run.json').output,{});
+ assert.equal(h.stored('last-run.json').operation,'quote');assert.deepEqual(h.stored('last-run.json').input,{});
  assert.equal(h.fake.posts.length,posts,'recovery sends no setup POST');
  assert.equal(h.fake.jsonPosts.length,1,'recovery never repeats the accepted call');
  assert.ok(h.fake.gets.slice(gets).some(e=>e.url.endsWith(accepted)),'read fetches the accepted ID');
