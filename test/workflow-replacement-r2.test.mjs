@@ -69,9 +69,14 @@ for(const boundary of ['close','allocation-check','create','launch-check'])test(
    return reply;};
  // Empty prepared panes throw agent_not_found, so publish progress before returning that inspection too.
  if(boundary==='launch-check')f.ports.herdr=async args=>{if(!advanced&&args[0]==='agent'&&args[1]==='get'&&f.record().chatReplacement?.phase==='prepared')advance();return healthy(args);};
+ // Lead's historical cleanup rule now requires positive evidence of the owned empty shell.
+ const observing=f.ports.herdr;
+ f.ports.herdr=args=>args[0]==='pane'&&args[1]==='process-info' ? Promise.resolve({result:{type:'pane_process_info',process_info:{pane_id:args[3],shell_pid:41,foreground_process_group_id:41,foreground_processes:[{pid:41,name:'bash'}]}}}) : observing(args);
  const before=runs(f).length,out=await open(f,{newSession:true});assert.equal(advanced,true);
  assert.equal(runs(f).length,before,'Checkpoint reread must prevent dispatch after concurrent area progress');
  assert.equal(out.exitCode,0,out.message);assert.equal(f.record().chatReplacement.phase,'ended');assert.equal(f.record().area,1);
+ const prepared=f.record().chatReplacement.replacement;
+ if(prepared)assert.equal(f.herdr.tabs.some(tab=>tab.tab_id===prepared.tabId),false,'Historical empty owned tab is closed');
 });
 test('cancellation before final launch checkpoint prevents dispatch',async t=>{
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;let cancelled=false;

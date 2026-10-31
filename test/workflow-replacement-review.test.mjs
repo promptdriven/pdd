@@ -57,15 +57,17 @@ for (const command of ['approve','done','ask','changes','evidence','cancel','ope
  if(['open','area','status'].includes(command))assert.match(out.message,/open 17 --new/);
  if(command==='cancel')assert.equal(f.record().state,'cancelled');
 });
-test('stopped exact replacement session resumes without fresh identity',async t=>{
+test('alive replacement with unknown process stays pending despite exact session file',async t=>{
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('lost'),{code:'lost'});return healthy(args);};
  await open(f,{newSession:true});const pending=attempt(f);
  f.tick(30_000); // Approved startup grace expires before exact-session recovery.
  f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}]; f.ports.herdr=healthy;
- const out=await open(f,{newSession:true});assert.equal(out.exitCode,0,out.message);
+ const count=f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run').length;
+ const out=await open(f,{newSession:true});assert.notEqual(out.exitCode,0,out.message);
  const after=f.record();assert.equal(after.chatReplacement.id,pending.id);assert.equal(after.chats.at(-1).session.id,pending.replacement.session.id);
- assert.match(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run').at(-1)[3],/--resume/);
+ assert.equal(after.chatReplacement.phase,'launchRequested');assert.match(out.message,/cancel/);
+ assert.equal(f.herdr.calls.filter(args=>args[0]==='pane'&&args[1]==='run').length,count,'Exact native file cannot authorize dispatch into an unknown live process');
 });
 test('lost create reply adopts one allocated container in same attempt',async t=>{
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
@@ -118,6 +120,9 @@ test('lost exact-session resume cannot dispatch twice before observation',async 
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('lost'),{code:'lost'});return healthy(args);};
  await open(f,{newSession:true});const pending=attempt(f);let resumes=0;
+ // Complete inventory proves the old container absent; exact saved-session recovery may resume.
+ f.herdr.tabs=f.herdr.tabs.filter(tab=>tab.tab_id!==pending.replacement.tabId);
+ f.herdr.panes=f.herdr.panes.filter(pane=>pane.pane_id!==pending.replacement.paneId);
  f.tick(30_000); // Approved startup grace expires before exact-session recovery.
  f.ports.findNativeSessions=async()=>[{id:pending.replacement.session.id}];
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run'){resumes++;throw Object.assign(Error('lost'),{code:'lost'});}return healthy(args);};

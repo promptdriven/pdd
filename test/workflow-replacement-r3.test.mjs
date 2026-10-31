@@ -4,10 +4,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {openRun} from '../src/workflow-runner.mjs';
 import {fixture,packageRoot} from './helpers/workflow-runner-fixture.mjs';
+const vectors=JSON.parse(readFileSync(new URL('./fixtures/workflow-open-replacement.json',import.meta.url),'utf8'));
+const scenarioTitle=id=>{const scenario=vectors.cases.find(item=>item.id===id);return scenario ? `${scenario.id}: ${scenario.action}` : id;};
 const opts = f => ({ref:'17',cwd:f.source,packageRoot});
 const runs = f => f.herdr.calls.filter(a=>a[0]==='pane'&&a[1]==='run');
 // Expected results are the lead decisions in RECHECK-2627.md, fix round 3.
-for (const newSession of [false,true]) test(`D attached terminal permits ${newSession?'--new':'second plain open'}`, async t=>{
+for (const newSession of [false,true]) test(`${scenarioTitle('attached-open-releases-lock')} (${newSession?'--new':'second plain open'})`, async t=>{
  const f=await fixture(t); await f.run();
  let detach,entered;
  const hold=new Promise(r=>detach=r), entering=new Promise(r=>entered=r);
@@ -18,11 +20,12 @@ for (const newSession of [false,true]) test(`D attached terminal permits ${newSe
   assert.equal(result.exitCode,0,result.message);
  } finally {detach();await watching;}
 });
-for(const mode of ['shell','agent','unknown']) test(`E never-sent launch recovery: ${mode}`,async t=>{
+for(const mode of ['shell','agent','unknown']) test(`${scenarioTitle({shell:'shell-proves-launch-unsent',agent:'agent-process-forbids-launch',unknown:'unknown-process-stays-pending'}[mode])} (${mode})`,async t=>{
  const f=await fixture(t);await f.run(); const healthy=f.ports.herdr;
  // The throw happens before the shared fake receives pane run: dispatch never occurred.
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw Object.assign(Error('lost before dispatch'),{code:'server_unavailable'});return healthy(args);};
  await openRun({...opts(f),newSession:true},f.ports);
+ assert.ok(f.record().chatReplacement,'Lost replacement retains durable custody');
  assert.equal(f.record().chatReplacement.phase,'launchRequested');
  const target=f.record().chatReplacement.replacement;
  const count=runs(f).length;
@@ -91,11 +94,14 @@ const lost=()=>Object.assign(Error('lost dispatch'),{code:'server_unavailable'})
 async function pending(t){
  const f=await fixture(t);await f.run();const healthy=f.ports.herdr;
  f.ports.herdr=async args=>{if(args[0]==='pane'&&args[1]==='run')throw lost();return healthy(args);};
- await openRun({...opts(f),newSession:true},f.ports);f.ports.findNativeSessions=async()=>[];
+ await openRun({...opts(f),newSession:true},f.ports);
+ assert.ok(f.record().chatReplacement,'Explicit replacement records durable launch custody');
+ assert.ok(f.record().chatReplacement.replacement,'Replacement prepares an exact native identity');
+ f.ports.findNativeSessions=async()=>[];
  return {f,healthy,target:f.record().chatReplacement.replacement};
 }
 const shellInfo=target=>({result:{type:'pane_process_info',process_info:{pane_id:target.paneId,shell_pid:41,foreground_process_group_id:41,foreground_processes:[{pid:41,name:'bash'}]}}});
-for(const variant of ['wrong-pane','missing-group','wrong-group','extra-agent','wrong-shell','bad-type','empty','resume-pending'])test(`recovery refuses ${variant} process evidence`,async t=>{
+for(const variant of ['wrong-pane','missing-group','wrong-group','extra-agent','wrong-shell','bad-type','empty','resume-pending','resume-prepared'])test(`recovery refuses ${variant} process evidence`,async t=>{
  const {f,healthy,target}=await pending(t);f.tick(31_000);let info=shellInfo(target);
  if(variant==='wrong-pane')info.result.process_info.pane_id='other';
  if(variant==='missing-group')delete info.result.process_info.foreground_process_group_id;
@@ -104,17 +110,18 @@ for(const variant of ['wrong-pane','missing-group','wrong-group','extra-agent','
  if(variant==='wrong-shell')info.result.process_info.foreground_processes[0].name='python';
  if(variant==='bad-type')info.result.type='other';
  if(variant==='empty')info.result.process_info.foreground_processes=[];
- if(variant==='resume-pending'){
+ if(variant==='resume-pending'||variant==='resume-prepared'){
   const record=f.record();record.chatReplacement.recovery.resumeRequested=true;
+  if(variant==='resume-prepared'){record.chatReplacement.phase='prepared';delete record.chatReplacement.replacement.startUnconfirmed;}
   writeFileSync(join(record.runDir,'status.json'),JSON.stringify(record));
  }
  const count=runs(f).length;
  f.ports.herdr=args=>args[0]==='pane'&&args[1]==='process-info'?Promise.resolve(info):healthy(args);
  assert.notEqual((await openRun({...opts(f),newSession:true},f.ports)).exitCode,0);
- assert.equal(runs(f).length,count);assert.equal(f.record().chatReplacement.phase,'launchRequested');
+ assert.equal(runs(f).length,count);assert.equal(f.record().chatReplacement.phase,variant==='resume-prepared'?'prepared':'launchRequested');
 });
 
-test('each proven-unsent retry records fresh request before dispatch and waits a fresh grace',async t=>{
+test(scenarioTitle('recovery-dispatch-lost-once'),async t=>{
  const {f,healthy,target}=await pending(t);let processCalls=0,dispatches=0,previous=f.record().chatReplacement.recovery.latestLaunchRequest?.id??f.record().chatReplacement.id;
  f.ports.herdr=async args=>{
   if(args[0]==='pane'&&args[1]==='process-info'){processCalls++;assert.deepEqual(args,['pane','process-info','--pane',target.paneId]);return shellInfo(target);}
@@ -133,4 +140,83 @@ test('each proven-unsent retry records fresh request before dispatch and waits a
   if(attempt<2){await openRun({...opts(f),newSession:true},f.ports);assert.equal(dispatches,attempt+1,'old proof never dispatches twice');}
  }
  assert.equal(processCalls,3);assert.equal(f.record().chatReplacement.phase,'launched');
+});
+
+for(const mode of ['shell','unknown','agent'])test(`${scenarioTitle('historical-empty-prepared-tab')} (${mode})`,async t=>{
+ const {f,healthy,target}=await pending(t);
+ // Model the durable prepared checkpoint before any launch intent was saved.
+ const saved=f.record();saved.chatReplacement.phase='prepared';delete saved.chatReplacement.replacement.startUnconfirmed;
+ delete saved.chatReplacement.recovery.latestLaunchRequest;
+ saved.area=1;saved.done.scope={summary:'approved concurrent advancement'};
+ const current={...saved.chats.at(-1),area:'build',tabId:'current-tab',paneId:'current-pane'};
+ saved.chats=[current];writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));
+ const before=runs(f).length;
+ f.ports.herdr=async args=>{
+  if(args[0]==='pane'&&args[1]==='process-info'){
+   if(mode==='unknown')throw lost();const info=shellInfo(target);
+   if(mode==='agent')info.result.process_info.foreground_processes=[{pid:77,name:'codex'}];
+   return info;
+  }
+  return healthy(args);
+ };
+ const result=await openRun({...opts(f),newSession:true},f.ports);
+ assert.equal(runs(f).length,before);assert.deepEqual(f.record().chats,[current]);assert.equal(f.record().area,1);
+ if(mode==='shell'){
+  assert.equal(result.exitCode,0,result.message);assert.equal(f.record().chatReplacement.phase,'ended');
+  assert.equal(f.herdr.tabs.some(tab=>tab.tab_id===target.tabId),false);
+ }else{
+  assert.notEqual(result.exitCode,0);assert.equal(f.record().chatReplacement.phase,'prepared');
+  assert.equal(f.herdr.tabs.some(tab=>tab.tab_id===target.tabId),true);
+ }
+});
+
+test('absent replacement container retains exact saved-session resume recovery',async t=>{
+ const {f,healthy,target}=await pending(t);f.tick(31_000);
+ f.herdr.tabs=f.herdr.tabs.filter(tab=>tab.tab_id!==target.tabId);
+ f.herdr.panes=f.herdr.panes.filter(pane=>pane.pane_id!==target.paneId);
+ f.ports.findNativeSessions=async()=>[{id:target.session.id}];f.ports.herdr=healthy;
+ const count=runs(f).length,result=await openRun({...opts(f),newSession:true},f.ports);
+ assert.equal(result.exitCode,0,result.message);assert.equal(runs(f).length,count+1);
+ assert.match(runs(f).at(-1)[3],/--resume/);assert.equal(f.record().chats.at(-1).session.id,target.session.id);
+});
+
+test('rejected proven-unsent checkpoint prevents recovery dispatch',async t=>{
+ const {f,healthy,target}=await pending(t);f.tick(31_000);
+ const {restartChat}=await import('../src/workflow-chat.mjs');
+ assert.equal(typeof restartChat,'function','Replacement has a public recovery boundary');
+ const run=f.record(),record=run.chatReplacement;let rejected=false;
+ const count=runs(f).length;
+ await assert.rejects(()=>restartChat({run,chat:record.original,message:'Keep approved work.',pending:record},{...f.ports,
+  herdr:args=>args[0]==='pane'&&args[1]==='process-info'?Promise.resolve(shellInfo(target)):healthy(args),
+  checkpoint:async next=>{assert.ok(next.recovery?.unsentProof,'Proof precedes recovery dispatch');rejected=true;throw Error('checkpoint rejected');}
+ }));
+ assert.equal(rejected,true,'Recovery must attempt its durable proof checkpoint');assert.equal(runs(f).length,count);
+});
+
+for(const descriptor of [null,{kind:'id',value:'00000000-0000-4000-8000-000000000099'}])test(`prior resume requires exact target session observation: ${descriptor?'wrong id':'no id'}`,async t=>{
+ const {f,healthy,target}=await pending(t);const saved=f.record();saved.chatReplacement.recovery.resumeRequested=true;
+ writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));
+ f.herdr.paneOf(target).agent={agent:target.agent,agent_status:'working',agent_session:descriptor};
+ f.ports.herdr=healthy;const count=runs(f).length;
+ assert.notEqual((await openRun({...opts(f),newSession:true},f.ports)).exitCode,0);
+ assert.equal(f.record().chatReplacement.phase,'launchRequested');assert.equal(runs(f).length,count);
+});
+
+for(const anchor of ['resumedAt','latestLaunchRequest'])test(`recovery grace uses the newest ${anchor} timestamp`,async t=>{
+ const {f,healthy,target}=await pending(t);f.tick(31_000);const saved=f.record();
+ if(anchor==='resumedAt')saved.chatReplacement.replacement.resumedAt=f.clock;
+ else {assert.ok(saved.chatReplacement.recovery.latestLaunchRequest,'Fresh dispatch has a durable request timestamp');saved.chatReplacement.recovery.latestLaunchRequest.at=f.clock;}
+ writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));let inspections=0;
+ f.ports.herdr=args=>{if(args[0]==='pane'&&args[1]==='process-info'){inspections++;return Promise.resolve(shellInfo(target));}return healthy(args);};
+ const count=runs(f).length;await openRun({...opts(f),newSession:true},f.ports);
+ assert.equal(inspections,0);assert.equal(runs(f).length,count);assert.equal(f.record().chatReplacement.phase,'launchRequested');
+});
+
+test('legacy launch envelope derives proof identity without resetting its grace',async t=>{
+ const {f,healthy,target}=await pending(t),saved=f.record();delete saved.chatReplacement.recovery.latestLaunchRequest;
+ writeFileSync(join(saved.runDir,'status.json'),JSON.stringify(saved));f.tick(31_000);
+ f.ports.herdr=args=>args[0]==='pane'&&args[1]==='process-info'?Promise.resolve(shellInfo(target)):healthy(args);
+ const result=await openRun({...opts(f),newSession:true},f.ports);assert.equal(result.exitCode,0,result.message);
+ assert.equal(f.record().chatReplacement.recovery.unsentProof.requestId,saved.chatReplacement.id);
+ assert.equal(f.record().chatReplacement.recovery.unsentProof.requestAt,target.startedAt);
 });
