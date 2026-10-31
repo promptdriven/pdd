@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 01396279d4c7a2544548c6a824340fb37133a65634bf18feca99d273d0101be9).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a449f77854367aba224bdef755eec7cd122b2465b2c7dcf5f803dcfab41e43cc).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -182,9 +182,13 @@ async function areaMessage(run, index, p, packageRoot) {
 }
 
 // The one sentence a person gets when they stop at PR 1 (0.1.4: testers saw the chat drop it when it was a hint).
-const approvalGuide = (run, prefix = pddCommand(PACKAGE_ROOT)) => `Show the gate and ask the person. Relay their exact later words with:\n${prefix} workflow approve ${run.number} --said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID\nChoose a quoted delimiter absent as a whole payload line. Or the person can use terminal y/N: run ${prefix} workflow approve ${run.number} in a normal terminal.`;
-const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. Relay their exact later words with:', 'Use the saved words with:')}`;
-const codeLater = run => `To make the code PR later: ${approvalGuide(run)}`;
+const approvalGuide = run => `Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:
+<pdd> workflow approve ${run.number} --said - <<'PDD_SAID'
+<the person's exact words>
+PDD_SAID
+Choose a quoted delimiter absent as a whole payload line. Resolve <pdd> to this package's shell-quoted executable command when running it. Or the person can use terminal y/N: pdd workflow approve ${run.number} in a normal terminal.`;
+const approvalRetry = (run, prefix) => `The saved approval remains usable for this same gate. Retry with its exact recorded words; no new approval is needed. ${approvalGuide(run, prefix).replace('Show the gate and ask the person. One approval covers the gate and all its selected draft prompts. Relay their exact later words with:', 'Use the saved words with:')}`;
+const codeLater = run => `Tell your agent when you want the code PR, or run pdd workflow approve ${run.number} in a terminal.`;
 const prOf = (run, name) => (run.pr ?? []).find(pr => pr.stage === name) ?? null;
 const askArea = run => run.areas.find(area => area.then === 'ask-code') ?? null;
 // PR 1 is the ask-code area's prompt PR and PR 2 the code PR; a one-PR workflow says "the PR".
@@ -208,7 +212,7 @@ async function draftPrompts(run, p, branch, base) {
 const draftLine = drafts => `Draft prompts: ${drafts.join(', ')}. Approve them before you merge.`;
 // How the person approves PR 1's draft prompts before the code PR (0.1.6: pdd asked "Make the code PR now?" and then refused).
 // pdd approve works in the run worktree; approve then carries the approval to PR 1 (syncPr1).
-const approveFirst = (run, drafts) => `One workflow approval covers this gate and its draft prompts: ${drafts.join(', ')}. ${approvalGuide(run)}`;
+const approveFirst = (run, drafts) => `Approve this gate and its draft prompts (${drafts.join(', ')}) together. Tell your agent, or run pdd workflow approve ${run.number} in a terminal.`;
 
 // What PR 1 holds, read from the worktree before pdd opens it (files the chat did not commit count, because pdd commits
 // them first): the changed prompts by Runtime interface status, the test files (prompt-runtime.program-scenario JSON)
@@ -839,7 +843,7 @@ async function askCodeLines(run, area, p) {
   const drafts = await pr1Drafts(run, p), url = prOf(run, area.name).url;
   // The code is built only from approved prompts, so the code PR is not offered while PR 1 has a draft prompt.
   if (drafts.length) return [`PR 1: ${url}`, ...summaries, draftLine(drafts),
-    `Gate: show the person PR 1 and the Runtime check line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`];
+    `Gate: show the person PR 1 and the Runtime check line. Do not offer the code PR yet. Tell the person exactly: "PR 1 is open: ${url}. ${approveFirst(run, drafts)}" Stop there.`, approvalGuide(run)];
   return [`PR 1: ${url}`, ...summaries,
     `Gate: show the person PR 1, the Runtime check line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     approvalGuide(run, p.pdd),
@@ -1179,7 +1183,7 @@ export async function approveRun({ ref, cwd, said: approvalWords, packageRoot = 
   if (missing) return fail(missing);
   const agent = isAgentSession(p.env), pane = chatPane(run, p.env), viaChat = agent || !p.isTTY || Boolean(pane);
   let policy;
-  try { policy = readApprovalPolicy({root: run.root}, p); }
+  try { policy = readApprovalPolicy({root: run.sourceRoot}, p); }
   catch (error) { return fail(error.message); }
   if (policy.strictApprovals && (approvalWords !== undefined || viaChat)) return fail(`Only the person can approve in a terminal. Run pdd workflow approve ${run.number} in a normal terminal.`);
   if (approvalWords === undefined && viaChat) return fail(approvalGuide(run, p.pdd));
@@ -1381,7 +1385,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
   if (ended(run)) return fail(`The run for ${run.repo}#${run.number} is ${run.state}.`);
   const request = oneLine(text), answer = Boolean(openQuestion(run)), kind = answer ? 'answer' : 'change';
   if (!request) return fail('Write the change request after the issue number.');
-  if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. To approve: ${approvalGuide(run, p.pdd)}\nNothing was sent to the chat.` };
+  if (!answer && run.gate && looksLikeApproval(request)) return { exitCode: 2, message: `This looks like an approval. Tell your agent you approve this gate, or run pdd workflow approve ${run.number} in a terminal. Nothing was sent to the chat.` };
   const area = run.areas[run.area], chat = currentChat(run);
   if (!chat) return fail(`The ${area.name} area has no chat. Start it: pdd workflow open ${run.number}`);
   const latest = () => readRun(run.runDir), matches = entry => entry.area === area.name && entry.paneId === chat.paneId;
@@ -1479,7 +1483,7 @@ export async function changeRun({ ref, text, cwd }, ports) {
       return failure({ code: 'chat_target_changed' });
     }
     return done((answer ? `Sent your answer to the ${area.name} chat of #${run.number}. The agent goes on with the step.`
-      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ` The gate stays open. ${approvalGuide(run, p.pdd)}` : ''}`) + (warnings ? `\n${warning}` : ''));
+      : `Sent your change request to the ${area.name} chat of #${run.number}.${run.gate ? ' The gate stays open.' : ''}`) + (warnings ? `\n${warning}` : ''));
   } catch (error) { return fail(`Could not update the saved request. Wait briefly, then retry; check the original chat (${error.code ?? 'journal unavailable'}).`); }
   finally { activeDeliveries.delete(owner.token); }
 }
@@ -1637,7 +1641,7 @@ export async function openRun({ ref, cwd, packageRoot = PACKAGE_ROOT }, ports) {
     }
     clearChatFailure(run);
     writeRun(run, p);
-    const shownGate = run.gate ? await showGate(run, p) : [];
+    const shownGate = run.gate?.promptSnapshot ? snapshotLines(run.gate.promptSnapshot) : [];
     const where = `Herdr session pdd, tab "${chat.label}"`;
     return done([...shownGate, ...(run.gate ? [approvalGuide(run, p.pdd)] : []), started ? `Started the ${chat.area} chat in ${where}.` : opened.resumed ? `Resumed the ${chat.area} chat in ${where}.` : `The ${chat.area} chat is in ${where}.`,
       ...(opened.attached ? [] : [p.env.HERDR_ENV === '1' ? 'pdd focused that tab. If you are in another Herdr session, run: herdr session attach pdd' : 'See it with: herdr session attach pdd'])].join('\n'));

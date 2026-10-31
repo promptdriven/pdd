@@ -1,14 +1,14 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: e55af847ccc458e92b2892baf3edaf90d8e719633bdbd9173f42f0086ab22cfb).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 997cc1391fa249f631c778e374f66f9b357eb14b59fca9acc3128906c0c56287).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of four commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', start: 'start' });
 const { test, lint, simulate, start } = NAMES;
 export const BUNDLED_WORKFLOW_NAMES = Object.freeze(['feature', 'bug', 'small-change', 'product']);
-const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. An agent, non-TTY caller or caller in the current area pane must relay with --said. Chat alone never approves. Use this quoted heredoc by default:
+const approvalHelp = command => `Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default:
 ${command} --said - <<'PDD_SAID'
 <the person's exact words>
 PDD_SAID
-Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. Stdin preserves trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
+Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
   { id: 'product.status', prefix: ['product', 'status'], local: 'product-status', operands: [], options: [{name:'--json',kind:'flag'}],
     forms: [form('pdd product status [--json]', 'Count Stories by part and slice from the product plan; no interpreter calls.')] },

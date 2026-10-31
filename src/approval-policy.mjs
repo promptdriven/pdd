@@ -1,4 +1,4 @@
-// Generated from prompts/cli/approval-policy.prompt.md (sha256: 710d65f2f6451d4904bce7c2b7f7a8cc96cddbf37527a55baec3ce23eccb305d).
+// Generated from prompts/cli/approval-policy.prompt.md (sha256: 64a7ab10f72675b3c6f459cc221300bd33557aa1521de383586fa9023367d0e6).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -60,13 +60,11 @@ function claimJournal(lock, fs, ports) {
   const owner = { pid: ports.ownerPid ?? process.pid, hostname: host, token: randomUUID() };
   const busy = () => Object.assign(Error('pdd/approvals.json is busy; retry approval.'), { code: 'approval_busy' });
   if (!Number.isInteger(owner.pid) || owner.pid < 1 || typeof host !== 'string' || !host) throw Error('Cannot identify approval lock owner.');
-  let created = false;
-  try { fs.mkdirSync(lock, { mode: 0o700 }); created = true; } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  try { fs.mkdirSync(lock, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
   const observed = fs.lstatSync(lock);
   if (!observed.isDirectory()) throw busy();
-  const names = fs.readdirSync(lock);
-  // An old empty lock has no verifiable owner and must be preserved.
-  if (!created && !names.length) throw busy();
+  fs.readdirSync(lock);
+  // Publish our own token into an empty directory; never remove it to claim it.
   const leaf = join(lock, `owner-${owner.token}.json`), temporary = `${lock}.${owner.token}.tmp`, bytes = JSON.stringify(owner);
   try { fs.writeFileSync(temporary, bytes, { flag: 'wx', mode: 0o600 }); fs.renameSync(temporary, leaf); }
   finally { try { fs.unlinkSync(temporary); } catch {} }
@@ -99,7 +97,7 @@ export async function recordPromptApproval({ commonDir, evidence }, ports = {}) 
   let release;
   for (let attempt = 0; attempt < 500; attempt++) {
     try { release = claimJournal(lock, fs, ports); break; }
-    catch (error) { if (error.code !== 'approval_busy' || attempt === 499) throw error; await new Promise(done => setTimeout(done, 10)); }
+    catch (error) { if (!['approval_busy', 'ENOENT'].includes(error.code) || attempt === 499) throw error; await new Promise(done => setTimeout(done, 10)); }
   }
   const temporary = join(dir, `.approvals.${randomUUID()}.tmp`);
   try {
