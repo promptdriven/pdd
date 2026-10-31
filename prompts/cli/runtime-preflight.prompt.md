@@ -8,7 +8,7 @@ Own `src/runtime-preflight.mjs`. It does all local work for `pdd check` and `pdd
 - A test is a Git-visible `*.json` file of at most 1 MiB with the top-level `schema_version` `prompt-runtime.program-scenario.v1`. A `*.json` file that names `prompt-runtime.program-scenario` but is not valid JSON, or names another version, is a test that fails rule P1.
 - A story is a Git-visible `*.md` file in a `user_stories` folder that has a `## Acceptance` / `## Acceptance criteria` heading and is not `PLAN.md` or `README.md` (an index is skipped silently; 2048 session, 0.1.6). Its name is the file name without `.md`. Its title is its first `# ` line. A story with no test gives a warning. Discovery follows the [bounded-read rules](#source-capture).
 - No tests at all: say why, after `No tests found. …`, in at most 5 lines (then `…and N more`): each Git-visible `*.json` under a `tests` folder without the scenario `schema_version` (`tests/x.json is not a PDD test file (it has no "schema_version": "prompt-runtime.program-scenario.v1"). See RUNBOOK.md §2.`), each Git-visible `*.prompt` file (`PDD prompts must end in .prompt.md: rename prompts/board.prompt to prompts/board.prompt.md.`), and each `*.prompt.md` with no Runtime interface block (`prompts/x.prompt.md has no Runtime interface block. See RUNBOOK.md §2.`). Exit 2.
-- Select tests by STORY words: a test path, a story path, a story name or a test file name without `.json`. No word selects every test. An unknown word is a command error that lists the stories with tests.
+- Select tests by PATH or STORY words: a test path, a story path, a story name, a test file name without `.json`, or a repository directory. Resolve relative paths from invocation cwd, including `.`; directories select bounded descendants by path components, never similarly prefixed sibling directories or outside-repository paths. A directory containing Story files selects their tests. No word selects every test. Union multiple selections without duplicates. An unknown word is a command error that lists the stories with tests.
 
 ## Rules (engine eae2202a codes; `pdd-*` codes are pdd only)
 
@@ -60,6 +60,9 @@ Port the engine's `explicit_story_criteria` and its 4 regexes exactly: the `## A
 - For `draft`, replace only the string value of `"prose_sha256"` in its block and keep every other byte; a missing key is refused (`add "prose_sha256": ""`), as is a value that cannot be replaced safely. `approved` and current = no change; `approved` and stale = no change and a stale result, even when no test reaches that prompt. `--fill-hash` never sets `approved`.
 
 ## Source capture
+
+Return `raw_file_hashes`, keyed by repository-relative path, containing SHA-256 of exact authored Story, test and reached prompt bytes from the same captured snapshot. Keep these separate from effective source hashes, including when interface formatting or reference expansion changes effective bytes.
+
 
 Default shared-reference preparation uses the synchronous module function
 `expandSource` from [references](contract-refs.prompt.md). Expand before
