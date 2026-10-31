@@ -1,4 +1,4 @@
-// Generated from prompts/cli/program-run.prompt.md (sha256: 3d77d5042806ab9fc259ee3d1de603169d0d96bddd4492ddb82e29303be6e7d2).
+// Generated from prompts/cli/program-run.prompt.md (sha256: 576fd167342a7ade2891bc35b97c38593f7f39d6fe198589719b8517e279e874).
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, chmodSync, lstatSync, openSync, closeSync, constants } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
@@ -67,7 +67,7 @@ function estimate(root,visible,file,operation,simulation={}) {
 function trace(report,write,sanitize) {
   if(Array.isArray(report.call_chain)&&report.call_chain.length){write('Traceback (prompt calls, most recent call last):\n');for(const frame of report.call_chain)write(`  ${sanitize(frame.prompt)}, operation ${sanitize(frame.operation)}${frame.call_index!=null&&frame.max_calls!=null?` (call ${frame.call_index} of at most ${frame.max_calls})`:''}\n`);}
   if(report.call_chain_total>(report.call_chain?.length??0))write(`${report.call_chain_total} total prompt calls; ${report.call_chain_total-(report.call_chain?.length??0)} frames omitted.\n`);
-  const error=report.error??report.refusal;if(error)write(`Error ${sanitize(error.code)}: ${sanitize(error.message)}\n`);
+  const error=report.error??report.refusal;if(error)write(`Error ${sanitize(error.code)}${error.message===undefined?'':`: ${sanitize(error.message)}`}\n`);
 }
 function sessionRecord(session) {
   const {transport,capture,newSession,save,serve,...record}=session;return record;
@@ -89,7 +89,7 @@ async function shellProgram({root,file,name,env,flags,data},ports) {
 }
 export async function runProgram({file,args=[],root=process.cwd(),env=process.env,flags={},once=false},givenPorts={}) {
   const ports={stdout:process.stdout,stderr:process.stderr,stdin:process.stdin,...givenPorts,env};
-  const quiet=flags.q||flags.quiet;let usage,unlock,session,callCap,usagePrinted=false;
+  const quiet=flags.q||flags.quiet;const sessionPorts={...ports,programQuiet:!!quiet};let usage,unlock,session,callCap,usagePrinted=false;
   const summary=(cached=false)=>{if(!quiet){ports.stderr.write(cached?'pdd: cached · 0 AI calls\n':`pdd: ${usage?.calls??'unknown'} AI calls · ${usage?.seconds??'unknown'} s${session?.draft?' · DRAFT':''}${session?.newSession?' · prompt behavior, not tested code':''}\n`);}usagePrinted=true;};
   try {
     const found=spawnSync('git',['rev-parse','--show-toplevel'],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']});if(found.status!==0)throw localError('Run the prompt inside a Git repository.');
@@ -121,7 +121,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     unlock=acquireProgramLock(data.dir);
     if(cli&&!args.length&&!flags.read&&!once){
       writePrivate(join(data.dir,'launcher.json'),{...data.startingData,fresh:data.fresh,pending:true});
-      if(ports.stdin?.isTTY){session=await openProgramSession({root,file,program,data},ports);}
+      if(ports.stdin?.isTTY){session=await openProgramSession({root,file,program,data},sessionPorts);}
       unlock();unlock=undefined;
       const code=await shellProgram({root,file,name,env,flags,data},ports);if(ports.stdin?.isTTY&&!quiet)ports.stderr.write(`pdd: session ended. Data saved: ${relative(root,data.dir)}/world.json\n`);return code;
     }
@@ -129,7 +129,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     if(flags.read){
       const saved=readPrivate(join(data.dir,'session.json'),null);if(!saved?.pending||saved.pending.id!==flags.read)fail('No matching pending request belongs to this program.');
       
-      const transport=programTransport({root,expectedLogin:saved.login},ports);if(saved.origin!==transport.origin)fail('The saved request belongs to another interpreter origin.');
+      const transport=programTransport({root,expectedLogin:saved.login},sessionPorts);if(saved.origin!==transport.origin)fail('The saved request belongs to another interpreter origin.');
       session={...saved,transport,newSession:false,save:r=>writePrivate(join(data.dir,'session.json'),r)};
       if(saved.pending.command!=='call'){
         const command=saved.pending.command;
@@ -138,7 +138,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
         const updated={...saved};delete updated.pending;
         if(command==='stop'){delete updated.id;}
         if(command==='try'){if(answer.result?.session?.state!=='running')fail('Program setup did not confirm a running session. Read the saved setup again.');Object.assign(updated,{id:answer.result.session.id,url:answer.result.url,remaining:answer.result.session.remaining_calls});writePrivate(join(data.dir,'world.json'),saved.pending.initial_world);}
-        session.save(updated);ports.stderr.write('pdd: Program setup confirmed. Run the prompt again.\n');return 0;
+        session.save(updated);if(!quiet)ports.stderr.write('pdd: Program setup confirmed. Run the prompt again.\n');return 0;
       }
       input=saved.pending.input;entry=entries.find(e=>e.operation===saved.pending.operation);if(!entry)fail('The pending operation is no longer in this prompt. Restore its source before reading.');before=saved.pending.before;
       callCap=saved.pending.cap??Number(flags['max-calls']??Math.min(estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{}),100));
@@ -148,7 +148,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
       let cap=flags['max-calls']===undefined?undefined:Number(flags['max-calls']);
       if(flags['max-calls']!==undefined&&(!Number.isInteger(cap)||cap<1||cap>1000))throw localError('--max-calls must be from 1 to 1000.');
       usage=undefined;
-      session=await openProgramSession({root,file,program,data},ports);session.draft=session.capture.sources.filter(s=>s.path.endsWith('.prompt.md')).some(s=>/"status"\s*:\s*"draft"/.test(s.bytes.toString()));
+      session=await openProgramSession({root,file,program,data},sessionPorts);session.draft=session.capture.sources.filter(s=>s.path.endsWith('.prompt.md')).some(s=>/"status"\s*:\s*"draft"/.test(s.bytes.toString()));
       if(cap===undefined)cap=Math.min(estimate(root,visible,file,entry.operation,JSON.parse(session.simulation??'null')??{}),100);
       callCap=cap;if(cap>20&&!quiet)ports.stderr.write(`pdd: may use up to ${cap} AI calls.\n`);
       record=sessionRecord(session);
@@ -165,7 +165,7 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
         try{answer=await execute();}catch(error){
           if(!error.definiteAdmission){if(error.definiteRejection){const rejected=sessionRecord(session);delete rejected.pending;session.save(rejected);}throw error;}
           const stopped=sessionRecord(session);delete stopped.pending;delete stopped.id;session.save(stopped);
-          session=await openProgramSession({root,file,program,data:{...data,startingData:{...data.startingData,initial_world:before}}},ports);
+          session=await openProgramSession({root,file,program,data:{...data,startingData:{...data.startingData,initial_world:before}}},sessionPorts);
           record=sessionRecord(session);record.pending={id:session.transport.ports.randomUUID(),command:'call',input,operation:entry.operation,before,cap};session.save(record);
           answer=await execute();
         }
@@ -177,12 +177,12 @@ export async function runProgram({file,args=[],root=process.cwd(),env=process.en
     const validRefusals=Array.isArray(refusals)&&refusals.every(validRefusal);
     const verdict=report.verdict,refusal=Array.isArray(refusals)?refusals[0]??report.refusal:report.refusal;
     const recovery=`Read the accepted request with pdd --read ${session.pending?.id??record?.pending?.id??answer.requestId} ${file}; do not repeat it.`;
-    const validError=object(report.error)&&typeof report.error.code==='string'&&report.error.code.length>0&&typeof report.error.message==='string'&&report.error.message.length>0;
+    const validError=object(report.error)&&typeof report.error.code==='string'&&report.error.code.length>0&&(report.error.message===undefined||typeof report.error.message==='string');
     const outerValid=answer.state==='passed'||(['failed','refused'].includes(answer.state)&&answer.state===verdict);
     if(!object(report)||!validRefusals||!['passed','failed','refused'].includes(verdict)||!outerValid||
       (verdict==='failed'&&!validError)||
-      (report.error!==undefined&&!validError)||
-      (verdict==='passed'&&(report.error!==undefined||refusal!==undefined||refusals.length!==0)))fail(`Invalid interpreter terminal receipt. ${recovery}`);
+      (report.error!=null&&!validError)||
+      (verdict==='passed'&&(report.error!=null||refusal!==undefined||refusals.length!==0)))fail(`Invalid interpreter terminal receipt. ${recovery}`);
     if(verdict==='passed'){
       if(result===undefined)fail(`The interpreter result is missing. ${recovery}`);
       if(cli&&(typeof result?.stdout!=='string'||typeof result?.stderr!=='string'||!Number.isInteger(result?.exit_code)||result.exit_code<0||result.exit_code>255||result.exit_code===125))fail(`The CLI result must contain stdout, stderr and exit_code 0–255 except reserved 125. ${recovery}`);

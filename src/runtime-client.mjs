@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-client.prompt.md (sha256: 82de8198136f67d7654fc641bf72f3405e8e69cf52b3c8e2dfb335445efed6c2).
+// Generated from prompts/cli/runtime-client.prompt.md (sha256: 846a4d22c04b4921c00e3f704561ce2df6540023a7b11a30cd400fed4efe8539).
 import { acquireRuntimeSlot, recordRuntimeRequest, releaseRuntimeSlot, listRuntimeJobs } from './runtime-slots.mjs';
 import { bindingCoverage } from './runtime-bindings.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
@@ -2493,7 +2493,12 @@ export function programTransport({ root, expectedLogin }, givenPorts = {}) {
   const runtime=new Runtime({origin,token:identity.token,ports});
   const sanitize=value=>cleanText(value,[identity.token]);
   const redact=value=>JSON.parse(JSON.stringify(value).split(identity.token).join('[secret]'));
-  const context={ports,origin,identity,runtime,store:stateFor(ports.env,root),secrets:[identity.token],deadline:ports.now()+600_000,interrupted:false};
+  // Shared admission helpers emit status only through this direct-program sink.
+  // Keep the public program streams and legacy helper callers untouched.
+  const statusPorts={...ports,stderr:{write:text=>{
+    if(!givenPorts.programQuiet)for(const message of String(text).split('\n'))if(message)ports.stderr.write(`pdd: ${message}\n`);
+  }}};
+  const context={ports:statusPorts,origin,identity,runtime,store:stateFor(ports.env,root),secrets:[identity.token],deadline:ports.now()+600_000,interrupted:false};
   const targets=new Map();
   async function admit(id,kind='try') {
     const target={};const off=ports.onInterrupt(()=>{context.interrupted=true;});
