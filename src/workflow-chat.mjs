@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 2f04c9b212784d71ba0356992c0c6434b435f3a54e17c61e8526326496045c88).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 59ca82e402f63b431b42d821cbd6f796fc97d32287d98754338901432e171e57).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
@@ -8,6 +8,8 @@ import { promisify } from 'node:util';
 import { PDD_HERDR_SESSION, withHerdrLayoutLock, openHerdrRunLayout, closeHerdrRunLayout, closeHerdrRepoLayoutIfIdle } from './workflow-herdr-layout.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 
+export const START_GRACE_MS = 30_000;
+const SHELLS = new Set(['bash','zsh','sh','dash','fish','ksh','tcsh']);
 const ordinary = promisify(execFileCallback);
 const quote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const problem = (code, message) => Object.assign(Error(message ?? code), { code });
@@ -197,6 +199,7 @@ export async function openChat({ run, chat }, ports = {}) {
   }
   await herdr(['tab', 'focus', chat.tabId]);
   const attach = (ports.isTTY ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)) && env.HERDR_ENV !== '1';
+  if (ports.beforeAttach) await ports.beforeAttach(chat);
   if (attach) await (ports.attach ?? attachSession)();
   return { resumed, attached: attach };
 }
@@ -230,7 +233,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
   const fs = { readFileSync, writeFileSync, mkdirSync, ...ports.fs };
   const uuid = ports.randomUUID ?? randomUUID, now = ports.now ?? Date.now;
   const invalid = () => problem('chat_identity_changed', 'The saved chat ownership cannot be confirmed. Inspect its workspace, tab and pane.');
-  const uncertain = () => problem('replacement_pending', `Chat replacement is pending at ${record?.phase ?? 'unknown'}. Retry: pdd workflow open ${run.number} --new`);
+  const uncertain = () => problem('replacement_pending', `Chat replacement is pending at ${record?.phase ?? 'unknown'}. Retry: pdd workflow open ${run.number} --new. End the run with pdd workflow cancel ${run.number}.`);
   const inventory = async (kind, workspace) => {
     const reply = await herdr([kind, 'list', ...(workspace ? ['--workspace', workspace] : [])]);
     const rows = reply?.result?.[`${kind}s`];
@@ -265,6 +268,24 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       if(descriptor?.value && validSessionId(target.session?.id) && descriptor.value!==target.session.id) throw invalid();
       return native;
     };
+    const confirmsResume = (native,target) => !record?.recovery?.resumeRequested || validSessionId(target.session?.id) && native?.agent_session?.value===target.session.id;
+    const shellProof = async target => {
+      let reply;
+      try { reply = await herdr(['pane','process-info','--pane',target.paneId]); } catch { return null; }
+      const info=reply?.result?.process_info, rows=info?.foreground_processes;
+      if(reply?.result?.type!=='pane_process_info' || info?.pane_id!==target.paneId || !Number.isSafeInteger(info.shell_pid) || info.shell_pid<=0 ||
+        info.foreground_process_group_id!==info.shell_pid || !Array.isArray(rows) || rows.length!==1 || rows[0]?.pid!==info.shell_pid || !SHELLS.has(rows[0]?.name)) return null;
+      return {paneId:target.paneId,shellPid:info.shell_pid,foregroundProcessGroupId:info.foreground_process_group_id,shellName:rows[0].name};
+    };
+    const launchAnchor = target => {
+      const times=[target.startedAt,target.resumedAt,record.recovery?.latestLaunchRequest?.at].filter(Number.isFinite);
+      return times.length ? Math.max(...times) : null;
+    };
+    const requestIntent = () => {
+      const id=uuid(),at=now();
+      if(!validSessionId(id)||!Number.isFinite(at))throw problem('invalid_replacement_identity');
+      record.recovery={...record.recovery,latestLaunchRequest:{id,at}};
+    };
     const unexplainedAllocation = () => {
       const added=tabs.filter(row=>!record.recovery.tabIdsBefore.includes(row.tab_id));
       // Only a saved, completely verified other-area chat explains an added peer.
@@ -287,9 +308,10 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       tabs=await inventory('tab',original.workspaceId);panes=await inventory('pane',original.workspaceId);
       const present=owned(original), native=await observe(original);
       if (present && native && ['intent','closeRequested'].includes(record.phase)) {
+        if(!confirmsResume(native,original))throw uncertain();
         await save('rolledBack');throw {historicalChat:{...original,messageFile:original.originalMessageFile}};
       }
-      if (native) throw uncertain();
+      if (native || record.recovery?.resumeRequested && ['intent','closeRequested'].includes(record.phase)) throw uncertain();
       if (!present && ['intent','closeRequested'].includes(record.phase) && !record.recovery?.closeAcknowledged) {
         if (!validSessionId(original.session?.id)) throw uncertain();
         const sessions=await (ports.findNativeSessions??findNativeSessions)({agent:original.agent??run.agent,root:run.root,startedAt:original.startedAt??0,endedAt:now()},
@@ -308,17 +330,24 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
         }
       }
       if(record.replacement) {
-        owned(record.replacement);
+        const replacementPresent=owned(record.replacement);
         const live=await observe(record.replacement);
         if(live) {
+          if(!confirmsResume(live,record.replacement))throw uncertain();
           if(record.phase!=='launchRequested') throw invalid();
           if(live.agent_session?.value)record.replacement.session={agent:record.replacement.agent,id:live.agent_session.value};
           delete record.replacement.startUnconfirmed;await save('launched');throw {historicalChat:record.replacement};
         }
+        if(record.recovery?.resumeRequested) throw uncertain();
+        if((record.phase==='prepared' || freshDispatchNotSent) && replacementPresent) {
+          if(!await shellProof(record.replacement))throw uncertain();
+          const closed=await herdr(['tab','close',record.replacement.tabId]);
+          if(closed?.result?.type!=='ok')throw uncertain();
+        }
         if(record.phase==='launchRequested' && !freshDispatchNotSent) {
           const target=record.replacement;
-          const times=[target.startedAt,target.resumedAt].filter(Number.isFinite);
-          if(times.length && now()-Math.max(...times)<30_000)throw uncertain();
+          const anchor=launchAnchor(target);
+          if(anchor===null || now()-anchor<START_GRACE_MS)throw uncertain();
           if(!validSessionId(target.session?.id))throw uncertain();
           const sessions=await (ports.findNativeSessions??findNativeSessions)({agent:target.agent,root:run.root,startedAt:target.startedAt,endedAt:now()},
             {env,...(target.agent==='claude'?{claudeConfigDir:expandHome(target.configDir,env)}:{codexHome:expandHome(target.configDir,env)})});
@@ -327,6 +356,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
       }
       await save('ended');throw {historicalChat:original};
     };
+    if(record?.recovery?.resumeRequested && !['intent','closeRequested','launchRequested'].includes(record.phase))throw uncertain();
     await reconcileHistorical();
     if (!record) {
       if(!owned(chat)) throw invalid();
@@ -351,6 +381,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     } else if(['intent','closeRequested'].includes(record.phase)) {
       if(owned(original)) {
         const native=await observe(original);
+        if(native && !confirmsResume(native,original))throw uncertain();
         if(!native) {
           if(record.recovery?.resumeRequested) throw uncertain();
           if(!validSessionId(original.session?.id)) throw uncertain();
@@ -398,11 +429,24 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     if(record.phase==='launchRequested') {
       const containerPresent=owned(record.replacement);
       const native=await observe(record.replacement);
+      if(native && !confirmsResume(native,record.replacement))throw uncertain();
       if(!native) {
         if(record.recovery?.resumeRequested) throw uncertain();
         const target=record.replacement;
-        const times=[target.startedAt,target.resumedAt].filter(Number.isFinite);
-        if(times.length && now()-Math.max(...times)<30_000) throw uncertain();
+        const anchor=launchAnchor(target);
+        if(anchor===null || now()-anchor<START_GRACE_MS) throw uncertain();
+        const proof=containerPresent ? await shellProof(target) : null;
+        if(proof) {
+          const request=record.recovery?.latestLaunchRequest ?? {id:record.id,at:Math.max(...[target.startedAt,target.resumedAt].filter(Number.isFinite))};
+          record.recovery={...record.recovery,unsentProof:{requestId:request.id,requestAt:request.at,observedAt:now(),...proof}};
+          requestIntent();
+          await save('launchRequested');await reconcileHistorical();
+          try {await herdr(['pane','run',target.paneId,chatCommand({agent,cwd:run.root,messageFile:target.messageFile,sessionId:target.session?.id,configDir})]);}
+          catch(error){error.chat={...target};throw error;}
+          delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
+        }
+        // A live container with unknown/agent process information cannot authorize dispatch or resume.
+        if(containerPresent)throw uncertain();
         if(!validSessionId(target.session?.id)) throw uncertain();
         const sessions=await (ports.findNativeSessions??findNativeSessions)({agent,root:run.root,startedAt:target.startedAt,endedAt:now()},
           {env,...(agent==='claude'?{claudeConfigDir:configDir}:{codexHome:configDir})});
@@ -422,7 +466,7 @@ export async function restartChat({ run, chat, message, pending }, ports = {}) {
     if(!owned(record.replacement)) {await save('prepared');await allocate();await save('prepared');}
     if(await observe(record.replacement)) throw invalid();
     // The checkpoint rereads cancellation. Legacy cancel may still arrive after that check.
-    record.replacement.startUnconfirmed=true;await save('launchRequested');await reconcileHistorical(true);
+    record.replacement.startUnconfirmed=true;requestIntent();await save('launchRequested');await reconcileHistorical(true);
     try {await herdr(['pane','run',record.replacement.paneId,chatCommand({agent,cwd:run.root,messageFile:record.replacement.messageFile,sessionId:record.replacement.session?.id,configDir})]);}
     catch(error){error.chat={...record.replacement};throw error;}
     delete record.replacement.startUnconfirmed;await save('launched');return record.replacement;
